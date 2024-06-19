@@ -3,14 +3,17 @@
 import os
 import sys
 import subprocess
-import time
 
-def setup_virtualenv(packages, venv_name='myenv'):
+from list_required_packages import list_packages
+
+def setup_virtualenv(packages, script_dir, venv_name='myenv'):
+
     # Write the packages to requirements.txt
-    with open('requirements.txt', 'w') as f:
+    print(f"Writing packages to {os.path.join(script_dir, 'requirements.txt')}")
+    with open(os.path.join(script_dir, 'requirements.txt'), 'w') as f:
         for package in packages:
             f.write(f"{package}\n")
-    
+
     # Create virtual environment
     print("Creating virtual environment...")
     subprocess.check_call([sys.executable, '-m', 'venv', venv_name])
@@ -23,7 +26,7 @@ pip install --upgrade pip
 pip install -r requirements.txt
 """
 
-    script_path = 'install_packages.sh'
+    script_path = os.path.join(script_dir, 'install_packages.sh')
     with open(script_path, 'w') as f:
         f.write(install_script)
     
@@ -40,16 +43,28 @@ pip install -r requirements.txt
         print(f"Command output: {e.output}")
 
 def is_virtualenv():
-    return 'VIRTUAL_ENV' in os.environ
+    return sys.prefix != sys.base_prefix
 
 def main():
     if len(sys.argv) < 2:
         print("Usage: mypy <script.py> [args]")
         sys.exit(1)
 
-    script      = sys.argv[1]
+    script = sys.argv[1]
     script_args = sys.argv[2:]
 
+    # Print the directory name where the script to be run is located
+    script_dir = os.path.abspath(os.path.dirname(script))
+    print(f"Directory where the script to run is located: {script_dir}")
+
+    # List of local imports that I've created
+    print("!!! GET RID OF THIS LIST AND CHANGE THIS TO A SYSTEM THAT LOOKS FOR THESE FILES WITH THE .py EXTENSION SOMEWHERE IN THE PATH!!!")
+    local_imports = ['univ_defs', 'search_for_media_files', 'kill_switch', 'list_required_packages']
+
+    installed_imports, uninstalled_imports = list_packages(script_dir, local_imports)
+
+    print(f"  Installed Imports: {installed_imports}\n")
+    print(f"Uninstalled Imports: {uninstalled_imports}")
     print(f"Script to run: {script}")
     print(f"Script arguments: {script_args}")
 
@@ -61,23 +76,19 @@ def main():
         print("Not in a virtual environment.")
         if not os.path.isdir('myenv'):
             print("Creating virtual environment 'myenv'...")
-            packages = [
-                'torrentool', 'unidecode', 'urwid', 'langdetect', 'nltk', 'PySide6', 'tqdm', 'fasttext', 'bs4', 'bencodepy', 'kivy', 'matplotlib', 'moviepy'
-            ]
-            setup_virtualenv(packages)
+            setup_virtualenv(list(uninstalled_imports), script_dir)
         else:
             print("'myenv' directory already exists.")
 
         # Activate the virtual environment
         activate_script = os.path.join('myenv', 'bin', 'activate')
+        venv_python = os.path.join('myenv', 'bin', 'python')
         print(f"Activating virtual environment: {activate_script}")
-        activate_cmd = f"bash -c 'source {activate_script} && {sys.executable} {script} {' '.join(script_args)}'"
+
+        # Additional debug statement before activation
+        activate_cmd = f"bash -c 'source {activate_script} && echo \"Virtual environment activated.\" && {venv_python} {script} {' '.join(script_args)}'"
+        print(f"Activation command: {activate_cmd}")
         subprocess.run(activate_cmd, shell=True)
-        if is_virtualenv():
-            print("Virtual environment activated successfully.")
-            subprocess.run([sys.executable, script] + script_args)
-        else:
-            print("!!!WARNING!!! Still couldn't open venv!")
 
 if __name__ == "__main__":
     main()
