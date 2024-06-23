@@ -196,8 +196,8 @@ def setup_virtualenv(OPTIONS: Options) -> None:
     timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
     OPTIONS.pretty_list = pretty_packages_list(OPTIONS)
     OPTIONS.requirements_file = os.path.join(OPTIONS.mypy_dir, f"{OPTIONS.venv_name}-requirements-{timestamp}-versionless-{OPTIONS.pretty_list}.txt")
-    OPTIONS.packages_dir = os.path.join(OPTIONS.mypy_dir, f"{OPTIONS.venv_name}-packages-{timestamp}-{OPTIONS.pretty_list}")
-    OPTIONS.venv_dir = OPTIONS.packages_dir.replace('packages', 'venv')
+    OPTIONS.venv_dir = os.path.join(OPTIONS.mypy_dir, f"{OPTIONS.venv_name}-versionless-{timestamp}-{OPTIONS.pretty_list}")
+    OPTIONS.packages_dir = os.path.join(OPTIONS.mypy_dir, "packages")
 
     os.makedirs(OPTIONS.packages_dir, exist_ok=True)
 
