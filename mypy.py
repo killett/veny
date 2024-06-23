@@ -10,16 +10,23 @@ from typing import Dict, List
 from list_required_packages_03 import list_packages
 import ast
 import re
+import json
+
+class Options():
+    '''Class that has all global options in one place.'''
+    def __init__(self) -> None:
+        self.venv_name: str = 'myenv'
+        self.mypy_dir = os.path.expanduser(os.path.join('~','mypy'))
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def check_packages_in_venv(packages: List[str], options: Dict[str, str], script_dir: str) -> bool:
+def check_packages_in_venv(OPTIONS: Options) -> bool:
     """Create and run a script to test package imports in the virtual environment."""
-    packages_str = ", ".join(f"'{pkg}'" for pkg in packages)  # Properly format the list of packages as strings
+    packages_str = ", ".join(f"'{pkg}'" for pkg in OPTIONS.packages)  # Properly format the list of packages as strings
     test_script = f"""#!/bin/bash
-source {options['venv_name']}/bin/activate
+source {OPTIONS.venv_name}/bin/activate
 python - << END
 successes = []
 failures = []
@@ -33,14 +40,14 @@ for package in [{packages_str}]:
         failures.append(package)
 if failures:
     print("Failed packages: " + ", ".join(failures))
-elif len(successes) != counter:
-    print(f"Warning: Recorded {{len(successes)}} successes out of {{counter}} times through the loop.")
+elif len(successes) != counter: #This should never happen.
+    print(f"Warning: No failures, but only recorded {{len(successes)}} successes out of {{counter}} iterations through the loop.")
 else:
-    print(f"All {{len(successes)}} out of {{counter}} packages imported successfully.")
+    print(f"All {{len(successes)}} (out of {{counter}}) packages imported successfully.")
 END
 """
 
-    test_script_path = os.path.join(script_dir, f"test_imports.sh")
+    test_script_path = os.path.join(OPTIONS.script_dir, f"test_imports.sh")
     logger.info(f"Writing test script to {test_script_path}")
     with open(test_script_path, 'w') as f:
         f.write(test_script)
@@ -55,16 +62,16 @@ END
     # This returns true if all packages imported successfully
     return "packages imported successfully" in result.stdout 
 
-def install_packages(options: Dict[str, str]) -> None:
+def install_packages(OPTIONS: Options) -> None:
     """Create a script to install packages in a virtual environment."""
     install_script = f"""#!/bin/bash
-source {options['venv_name']}/bin/activate
+source {OPTIONS.venv_dir}/bin/activate
 pip install --upgrade pip
-pip download -r {requirements_file} -d {packages_dir}
-pip install --no-index --find-links={packages_dir} -r {requirements_file}
+pip download -r {OPTIONS.requirements_file} -d {OPTIONS.packages_dir}
+pip install --no-index --find-links={OPTIONS.packages_dir} -r {OPTIONS.requirements_file}
 """
 
-    install_script_path = os.path.join(packages_dir, f"install_packages.sh")
+    install_script_path = os.path.join(OPTIONS.packages_dir, f"install_packages.sh")
     logger.info(f"Writing installation script to {install_script_path}")
     with open(install_script_path, 'w') as f:
         f.write(install_script)
@@ -74,39 +81,39 @@ pip install --no-index --find-links={packages_dir} -r {requirements_file}
     subprocess.run([install_script_path], check=True)
 
     # Run the test script
-    check_packages_in_venv(packages, options, packages_dir)
+    check_packages_in_venv(OPTIONS)
 
-def pretty_packages_list(packages: List[str]) -> str:
+def pretty_packages_list(OPTIONS: Options) -> str:
     maxnum = 5
-    if len(packages) > maxnum:
-        first_five = '-'.join(packages[:maxnum])
-        suffix = f'-and-{len(packages) - maxnum}-more'
+    if len(OPTIONS.packages) > maxnum:
+        first_five = '-'.join(OPTIONS.packages[:maxnum])
+        suffix = f'-and-{len(OPTIONS.packages) - maxnum}-more'
     else:
-        first_five = '-'.join(packages)
+        first_five = '-'.join(OPTIONS.packages)
         suffix = ''
     
     return first_five + suffix
 
-def setup_virtualenv(packages: List[str], script_dir: str, options: Dict[str, str]) -> None:
+def setup_virtualenv(OPTIONS: Options) -> None:
     """Setup a virtual environment and install packages."""
     timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
-    options['pretty_list'] = pretty_packages_list(packages)
-    options['requirements_file'] = os.path.join(options['mypy_dir'], f"{options['venv_name']}-requirements-{timestamp}-versionless-{options['pretty_list']}.txt")
-    options['packages_dir'] = os.path.join(options['mypy_dir'], f"{options['venv_name']}-packages-{timestamp}-{options['pretty_list']}")
-    options['venv_dir'] = options['packages_dir'].replace('packages', 'venv')
+    OPTIONS.pretty_list = pretty_packages_list(OPTIONS)
+    OPTIONS.requirements_file = os.path.join(OPTIONS.mypy_dir, f"{OPTIONS.venv_name}-requirements-{timestamp}-versionless-{OPTIONS.pretty_list}.txt")
+    OPTIONS.packages_dir = os.path.join(OPTIONS.mypy_dir, f"{OPTIONS.venv_name}-packages-{timestamp}-{OPTIONS.pretty_list}")
+    OPTIONS.venv_dir = OPTIONS.packages_dir.replace('packages', 'venv')
 
-    os.makedirs(options['packages_dir'], exist_ok=True)
+    os.makedirs(OPTIONS.packages_dir, exist_ok=True)
 
-    logger.info(f"Writing packages to {options['requirements_file']}")
-    with open(options['requirements_file'], 'w') as f:
-        for package in packages:
+    logger.info(f"Writing packages to {OPTIONS.requirements_file}")
+    with open(OPTIONS.requirements_file, 'w') as f:
+        for package in OPTIONS.packages:
             f.write(f"{package}\n")
 
     logger.info("Creating virtual environment...")
-    subprocess.check_call([sys.executable, '-m', 'venv', options['venv_dir']])
+    subprocess.check_call([sys.executable, '-m', 'venv', OPTIONS.venv_dir])
     logger.info("Virtual environment created.")
 
-    install_packages(packages, requirements_file, packages_dir, options)
+    install_packages(OPTIONS)
 
 def is_virtualenv() -> bool:
     """Check if currently running in a virtual environment."""
@@ -213,42 +220,84 @@ def get_network_operations(script_path):
 
     return download_urls, upload_urls
 
+def guard_examines(OPTIONS: Options) -> None:
+    """Examine the script to determine what files are read and written, and what URLs are downloaded and uploaded."""
+    logger.error("Need to add script_args to the guard_examines function to let the guard know what the command line arguments are.")
+    read_files, write_files = get_file_operations(OPTIONS.python_script)
+    download_urls, upload_urls = get_network_operations(OPTIONS.python_script)
+    if read_files:
+        logger.info("Files read:", read_files)
+    if write_files:
+        logger.info("Files written:", write_files)
+    if download_urls:
+        logger.info("Download URLs:", download_urls)
+    if upload_urls:
+        logger.info("Upload URLs:", upload_urls)
+
+def save_options_to_json(OPTIONS: Options) -> None:
+    """Save the OPTIONS object to a JSON file."""
+    timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    OPTIONS.json_filename = os.path.join(OPTIONS.script_dir, f"{os.path.basename(OPTIONS.python_script)}-mypy-{timestamp}.json")
+    
+    # Convert OPTIONS to a dictionary
+    options_dict = OPTIONS.__dict__
+    
+    # Write the dictionary to a JSON file
+    with open(OPTIONS.json_filename, 'w') as json_file:
+        json.dump(options_dict, json_file, indent=4)
+    
+    logger.info(f"OPTIONS saved to {OPTIONS.json_filename}")
+
+def load_options_from_json(json_file: str) -> Options:
+    """Load the OPTIONS object from a JSON file."""
+    with open(json_file, 'r') as file:
+        options_dict = json.load(file)
+    
+    # Create a new Options object and set attributes from the dictionary
+    options = Options()
+    for key, value in options_dict.items():
+        setattr(options, key, value)
+    
+    logger.info(f"OPTIONS loaded from {json_file}")
+    return options
+
 def main():
     args = parse_arguments()
 
-    options = {}
-    options['venv_name']        = 'myenv'
-    options['mypy_dir']         = os.path.expanduser(os.path.join('~','mypy'))
-    #options['packages_dir']     = os.path.join(options['mypy_dir'], 'offline-packages')
-    #options['requirements_dir'] = os.path.join(options['mypy_dir'], 'requirements')
-    for key, value in options.items():
-        if key != 'venv_name' and not os.path.isdir(value):
-            logger.error(f"{key} directory {value} does not exist yet, so it is being created.")
-            os.makedirs(value)
+    OPTIONS = Options()
+    if not os.path.isdir(OPTIONS.mypy_dir):
+        logger.error(f"Directory {OPTIONS.mypy_dir} does not exist yet, so it is being created.")
+        os.makedirs(OPTIONS.mypy_dir, exist_ok=True)
         
-    options['script'] = args.script
-    options['script_args'] = args.script_args
+    OPTIONS.python_script = args.script
+    OPTIONS.script_args = args.script_args
 
-    options['script_dir'] = os.path.abspath(os.path.dirname(options['script']))
-    logger.info(f"Directory where the script to run is located: {options['script_dir']}")
+    OPTIONS.script_dir = os.path.abspath(os.path.dirname(OPTIONS.python_script))
+    logger.info(f"Directory where the script to run is located: {OPTIONS.script_dir}")
+
+    save_options_to_json(OPTIONS)
+    OPTIONS_FROM_CACHE = load_options_from_json(OPTIONS.json_filename)
 
     if args.full:
         logger.info("Building a virtual environment that can run every python script in this directory.")
-        script_dir_or_file = options['script_dir']
+        script_dir_or_file = OPTIONS.script_dir
     else:
-        script_dir_or_file = options['script']
+        script_dir_or_file = OPTIONS.python_script
 
     installed_imports, uninstalled_imports, bad_imports = list_packages(script_dir_or_file)
-    logger.info(f"Uninstalled imports: {uninstalled_imports}")
+    OPTIONS.uninstalled_imports = uninstalled_imports
+    OPTIONS.packages = list(uninstalled_imports)
+    logger.info(f"Uninstalled imports: {OPTIONS.uninstalled_imports}")
     if bad_imports:
         logger.error(f"Bad imports: {bad_imports}")
 
-
     if is_virtualenv():
         logger.info("Already in a virtual environment.")
-        packages_available = check_packages_in_venv(uninstalled_imports, options, options['script_dir'])
+        packages_available = check_packages_in_venv(uninstalled_imports, OPTIONS)
         if packages_available:
-            subprocess.run([sys.executable, options['script']] + options['script_args'])
+            logger.error("Need to add script_args to the guard_examines function to let the guard know what the command line arguments are.")
+            guard_examines(OPTIONS)
+            subprocess.run([sys.executable, OPTIONS.python_script] + OPTIONS.script_args)
         else:
             logger.error("The current virtual environment does not have all the required packages.")
             logger.info("Please deactivate the current virtual environment and run the script again.")
@@ -265,7 +314,7 @@ def main():
                 try:
                     # Load the last used venv in the cache
                     match_found = True
-                    match_dir = os.path.join(options['mypy_dir'], 'last_used')
+                    match_dir = os.path.join(OPTIONS.mypy_dir, 'last_used')
                     pass
                 except:
                     logger.error("The last used cache encountered a problem. Trying to load the latest matching venv now.")
@@ -274,40 +323,29 @@ def main():
             if args.latest and not args.last_used and not args.smallest:
                 # Load the latest venv in the cache which has all the packages needed now
                 match_found = True
-                match_dir = os.path.join(options['mypy_dir'], 'latest')
+                match_dir = os.path.join(OPTIONS.mypy_dir, 'latest')
                 pass
             elif args.smallest and not args.latest and not args.last_used:
                 # Load the smallest venv in the cache which has all the packages needed now
                 match_found = True
-                match_dir = os.path.join(options['mypy_dir'], 'smallest')
+                match_dir = os.path.join(OPTIONS.mypy_dir, 'smallest')
                 pass
             else: # This should never happen
                 logger.error(f"Invalid combination of flags. {args.latest = }, {args.last_used = }, {args.smallest = }")
         if not match_found:
-            logger.info(f"Creating new virtual environment '{options['venv_name']}'...")
-            setup_virtualenv(list(uninstalled_imports), script_dir, options)
+            logger.info(f"Creating new virtual environment '{OPTIONS.venv_name}'...")
+            setup_virtualenv(OPTIONS)
         else:
-            logger.info(f"{options['venv_name']} directory already exists in {match_dir}.")
+            logger.info(f"{OPTIONS.venv_name} directory already exists in {match_dir}.")
 
-        activate_script = os.path.join(script_dir, options['venv_name'], 'bin', 'activate')
-        venv_python = os.path.join(script_dir, options['venv_name'], 'bin', 'python')
+        activate_script = os.path.join(OPTIONS.script_dir, OPTIONS.venv_name, 'bin', 'activate')
+        venv_python = os.path.join(OPTIONS.script_dir, OPTIONS.venv_name, 'bin', 'python')
         logger.info(f"Activating virtual environment: {activate_script}")
 
-        activate_cmd = f"bash -c 'source {activate_script} && echo \"Virtual environment activated.\" && {venv_python} {script} {' '.join(script_args)}'"
+        activate_cmd = f"bash -c 'source {activate_script} && echo \"Virtual environment activated.\" && {venv_python} {OPTIONS.python_script} {' '.join(OPTIONS.script_args)}'"
         logger.info(f"{activate_cmd = }")
-        # Guard:
-        read_files, write_files = get_file_operations(script)
-        download_urls, upload_urls = get_network_operations(script)
-        if read_files:
-            logger.info("Files read:", read_files)
-        if write_files:
-            logger.info("Files written:", write_files)
-        if download_urls:
-            logger.info("Download URLs:", download_urls)
-        if upload_urls:
-            logger.info("Upload URLs:", upload_urls)
-
-        #breakpoint()
+        logger.error("Need to add script_args to the guard_examines function to let the guard know what the command line arguments are.")
+        guard_examines(OPTIONS)
         subprocess.run(activate_cmd, shell=True)
 
 if __name__ == "__main__":
