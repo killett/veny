@@ -11,6 +11,7 @@ from list_required_packages_03 import list_packages
 import ast
 import re
 import json
+import requests
 
 class Options():
     '''Class that has all global options in one place.'''
@@ -62,14 +63,83 @@ END
     # This returns true if all packages imported successfully
     return "packages imported successfully" in result.stdout 
 
+def get_latest_pip_version() -> str:
+    """Get the latest version of pip available on PyPI."""
+    response = requests.get('https://pypi.org/pypi/pip/json')
+    response.raise_for_status()
+    data = response.json()
+    return data['info']['version']
+
+def get_local_pip_version(packages_dir: str) -> str:
+    """Get the latest version of pip available in the local files."""
+    pip_files = [f for f in os.listdir(packages_dir) if f.startswith('pip-') and f.endswith('.whl')]
+    if not pip_files:
+        return None
+    
+    # Extract version from filename
+    versions = [re.search(r'pip-(.*?)-py3-none-any.whl', f).group(1) for f in pip_files if re.search(r'pip-(.*?)-py3-none-any.whl', f)]
+    return max(versions, key=lambda v: [int(part) for part in v.split('.')]) if versions else None
+
 def install_packages(OPTIONS: Options) -> None:
     """Create a script to install packages in a virtual environment."""
     install_script = f"""#!/bin/bash
 source {OPTIONS.venv_dir}/bin/activate
-pip install --upgrade pip
-pip download -r {OPTIONS.requirements_file} -d {OPTIONS.packages_dir}
-pip install --no-index --find-links={OPTIONS.packages_dir} -r {OPTIONS.requirements_file}
+
+# Check the current version of pip
+current_pip_version=$(pip --version)
+echo "Current pip version: $current_pip_version"
 """
+
+    # Get the latest pip version available on PyPI
+    latest_pip_version = get_latest_pip_version()
+    logger.info(f"Latest pip version available on PyPI: {latest_pip_version}")
+
+    # Get the current pip version from the environment
+    current_pip_version_output = subprocess.check_output(["pip", "--version"], text=True).strip()
+    logger.info(f"Current pip version output: {current_pip_version_output}")
+
+    current_pip_version_match = re.search(r'pip (\d+\.\d+(\.\d+)?)', current_pip_version_output)
+    if current_pip_version_match:
+        current_pip_version = current_pip_version_match.group(1)
+        logger.info(f"Currently installed pip version: {current_pip_version}")
+    else:
+        logger.error("Failed to parse the current pip version.")
+        current_pip_version = "0.0.0"  # Fallback to ensure the script continues
+
+    # Get the latest pip version from the local packages
+    local_pip_version = get_local_pip_version(OPTIONS.packages_dir)
+    logger.info(f"Latest pip version in local files: {local_pip_version}")
+
+    if current_pip_version >= latest_pip_version:
+        logger.info("Current pip version is up-to-date. No need to download or install.")
+    else:
+        if local_pip_version == latest_pip_version:
+            logger.info("Local pip version is up-to-date. Installing from local files.")
+        else:
+            logger.info("Downloading the latest pip version...")
+            download_script = f"""
+            pip download --only-binary=:all: pip -d {OPTIONS.packages_dir}
+            """
+            install_script += download_script
+
+        install_script += f"""
+        echo "Reinstalling the latest pip version from local files..."
+        pip install --force-reinstall --no-index --find-links={OPTIONS.packages_dir} pip
+
+        # Check the new version of pip
+        new_pip_version=$(pip --version)
+        echo "New pip version: $new_pip_version"
+        """
+
+    install_script += f"""
+    # Download required packages
+    echo "Downloading packages..."
+    pip download -r {OPTIONS.requirements_file} -d {OPTIONS.packages_dir}
+
+    # Install packages from the downloaded files
+    echo "Installing packages..."
+    pip install --no-index --find-links={OPTIONS.packages_dir} -r {OPTIONS.requirements_file}
+    """
 
     install_script_path = os.path.join(OPTIONS.packages_dir, f"install_packages.sh")
     logger.info(f"Writing installation script to {install_script_path}")
@@ -77,11 +147,38 @@ pip install --no-index --find-links={OPTIONS.packages_dir} -r {OPTIONS.requireme
         f.write(install_script)
     os.chmod(install_script_path, 0o755)
 
-    # Run the installation script
-    subprocess.run([install_script_path], check=True)
+    # Run the installation script and capture the output
+    result = subprocess.run([install_script_path], check=True, capture_output=True, text=True)
+    
+    logger.info(result.stdout)
+    if result.stderr:
+        logger.error(result.stderr)
+
+    # Recover pip versions from the output
+    recover_pip_versions(result.stdout, OPTIONS)
 
     # Run the test script
     check_packages_in_venv(OPTIONS)
+
+def recover_pip_versions(output: str, OPTIONS: Options) -> None:
+    """Parse the output to recover the current and new pip versions."""
+    current_version_pattern = re.compile(r"Current pip version: (.+)")
+    new_version_pattern = re.compile(r"New pip version: (.+)")
+
+    current_version_match = current_version_pattern.search(output)
+    new_version_match = new_version_pattern.search(output)
+
+    if current_version_match:
+        OPTIONS.current_pip_version = current_version_match.group(1)
+        logger.info(f"Recovered current pip version: {OPTIONS.current_pip_version}")
+    else:
+        logger.warning("Failed to recover current pip version from output.")
+    
+    if new_version_match:
+        OPTIONS.new_pip_version = new_version_match.group(1)
+        logger.info(f"Recovered new pip version: {OPTIONS.new_pip_version}")
+    else:
+        logger.warning("Failed to recover new pip version from output.")
 
 def pretty_packages_list(OPTIONS: Options) -> str:
     maxnum = 5
@@ -274,9 +371,6 @@ def main():
 
     OPTIONS.script_dir = os.path.abspath(os.path.dirname(OPTIONS.python_script))
     logger.info(f"Directory where the script to run is located: {OPTIONS.script_dir}")
-
-    save_options_to_json(OPTIONS)
-    OPTIONS_FROM_CACHE = load_options_from_json(OPTIONS.json_filename)
 
     if args.full:
         logger.info("Building a virtual environment that can run every python script in this directory.")
