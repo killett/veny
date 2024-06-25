@@ -6,11 +6,10 @@ import subprocess
 from datetime import datetime
 import argparse
 import logging
-from typing import Dict, List
-from list_required_packages_03 import list_packages
 import ast
 import re
 import json
+from typing import Dict, List, Set, Tuple
 
 class Options():
     '''Class that has all global options in one place.'''
@@ -22,6 +21,126 @@ class Options():
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Attempt to import pipreqs
+try:
+    import pipreqs
+    logger.info("NOTE: pipreqs is available.")
+    PIPREQS_AVAILABLE = True
+except ImportError:
+    logger.warning("NOTE: pipreqs is not available. Try installing it with 'pip install pipreqs'.")
+    PIPREQS_AVAILABLE = False
+
+def find_imports_in_script(file_path: str, all_imports: Set[str]) -> None:
+    with open(file_path, 'r') as file:
+        lines = file.readlines()
+        for line in lines:
+            line = line.strip()
+            if '#' in line:
+                line = line.split('#')[0].strip()  # Remove comments from the line
+
+            if line.startswith('import '):
+                # Handle multiple imports on the same line
+                parts = re.split(r'import ', line, maxsplit=1)
+                if len(parts) > 1:
+                    imports_list = parts[1].split(',')
+                else:
+                    imports_list = []
+            elif line.startswith('from '):
+                # Handle 'from X import Y' type of lines
+                parts = re.split(r'\s+', line, maxsplit=2)
+                imports_list = [parts[1]]
+            else:
+                continue
+
+            for imp in imports_list:
+                imp = imp.split(' as ')[0].strip()  # Remove "as alias" part
+                this_import = imp.split('.')[0].strip()
+                if this_import and this_import not in all_imports:
+                    all_imports.add(this_import)
+
+def get_all_imports(directory: str) -> Set[str]:
+
+    all_imports = set()
+    total_files = sum(len(files) for _, _, files in os.walk(directory) if 'myenv' not in _)
+    processed_files = 0
+
+    for root, _, files in os.walk(directory):
+        if 'myenv' in root:
+            continue
+        for file in files:
+            if file.endswith('.py'):
+                file_path = os.path.join(root, file)
+                find_imports_in_script(file_path, all_imports)
+                processed_files += 1
+                logger.info(f"Processing files in {directory}: {processed_files}/{total_files}")
+
+    logger.info(f"\nFinished processing files in {directory}.")
+    return all_imports
+
+def check_if_library_exists(library_name: str) -> bool:
+    try:
+        result = subprocess.run(
+            [sys.executable, '-c', f'import {library_name}'],
+            capture_output=True,
+            text=True
+        )
+        return result.returncode == 0
+    except Exception as e:
+        logger.error(f"Error checking library {library_name}: {e}")
+    return False
+
+def split_imports(all_imports: Set[str]) -> Tuple[Set[str], Set[str], Set[str]]:
+    known_bad_imports = {'bs4', 'snakeClass', 'pathfinding_salvo_rework', 'seaborn', 'tkinter', 'msvcrt', 'univ_defs', 'search_for_media_files', 'kill_switch', 'list_required_packages', 'crossover'}
+    bad_imports = known_bad_imports.intersection(all_imports)
+    all_imports = all_imports - bad_imports
+    installed_imports = set()
+    uninstalled_imports = set()
+    total_imports = len(all_imports)
+
+    for i, imp in enumerate(all_imports, 1):
+        if check_if_library_exists(imp):
+            installed_imports.add(imp)
+        else:
+            uninstalled_imports.add(imp)
+        logger.info(f"Checking imports: {i}/{total_imports}")
+
+    return installed_imports, uninstalled_imports, bad_imports
+
+def generate_requirements(directory: str) -> None:
+    try:
+        pipreqs.generate_requirements(directory)
+    except Exception as e:
+        logger.error(f"Error generating requirements file: {e}")
+
+def list_packages(python_dir_or_file: str) -> Tuple[Set[str], Set[str]]:
+
+    # Expand '~' to the full path
+    python_dir_or_file = os.path.expanduser(python_dir_or_file)
+
+    if os.path.isfile(python_dir_or_file):
+        logger.info("Processing a single Python script.")
+        python_file = python_dir_or_file
+        all_imports = set()
+        find_imports_in_script(python_file, all_imports)
+    elif os.path.isdir(python_dir_or_file):
+        logger.info("Processing an entire folder of Python scripts.")
+        python_dir = python_dir_or_file
+        if PIPREQS_AVAILABLE:
+            logger.info("Using pipreqs to generate requirements.")
+            generate_requirements(python_dir_or_file)
+            with open(os.path.join(python_dir, 'requirements.txt'), 'r') as f:
+                all_imports = set(line.strip() for line in f)
+        else:
+            logger.info("Using custom script to find imports.")
+            all_imports = get_all_imports(python_dir_or_file)
+    else:
+        logger.error(f"Error: The file or directory {python_dir_or_file} does not exist.")
+        sys.exit(1)
+
+    installed_imports, uninstalled_imports, bad_imports = split_imports(all_imports)
+
+    return installed_imports, uninstalled_imports, bad_imports
 
 def check_packages_in_venv(OPTIONS: Options) -> bool:
     """Create and run a script to test package imports in the virtual environment."""
@@ -411,7 +530,11 @@ def find_match_dir_in_cache(OPTIONS: Options) -> str:
                     json_files.sort(key=lambda x: x.split('-')[4], reverse=True)
                 OPTIONS_LAST_USED = load_options_from_json(os.path.join(OPTIONS.script_dir, json_files[0]))
                 if hasattr(OPTIONS_LAST_USED, 'venv_dir'):
-                    return OPTIONS_LAST_USED.venv_dir
+                    # Check if the last used venv is still valid using isdir:
+                    if os.path.isdir(OPTIONS_LAST_USED.venv_dir):
+                        return OPTIONS_LAST_USED.venv_dir
+                    else:
+                        logger.error(f"The last used venv directory {OPTIONS_LAST_USED.venv_dir} is no longer valid.")
         except:
             logger.error("The last used cache encountered a problem. Trying to load the latest matching venv now.")
         OPTIONS.args.latest    = True #If that didn't work, try to load the latest venv in the cache
@@ -444,8 +567,7 @@ def find_match_dir_in_cache(OPTIONS: Options) -> str:
             requirements = set(file.read().splitlines())
         if OPTIONS.uninstalled_imports.issubset(requirements):
             this_timestamp = folder.split('-')[2]+'-'+folder.split('-')[3]
-            final_venv_folders['folder'] = {'timestamp': this_timestamp, 'num_packages': len(requirements)}
-            breakpoint()
+            final_venv_folders[folder] = {'timestamp': this_timestamp, 'num_packages': len(requirements)}
     if not final_venv_folders:
         logger.info("No matching venv folders found in the cache.")
     else:
@@ -489,7 +611,7 @@ def main():
     OPTIONS.packages = list(uninstalled_imports)
     logger.info(f"Uninstalled imports: {OPTIONS.uninstalled_imports}")
     if bad_imports:
-        logger.error(f"Bad imports: {bad_imports}")
+        logger.warning(f"Bad imports: {bad_imports}")
 
     if not uninstalled_imports:
         logger.info("All required packages are already installed.")
