@@ -142,11 +142,11 @@ def list_packages(python_dir_or_file: str) -> Tuple[Set[str], Set[str]]:
 
     return installed_imports, uninstalled_imports, bad_imports
 
-def check_packages_in_venv(OPTIONS: Options) -> bool:
+def check_packages_in_venv(options: Options) -> bool:
     """Create and run a script to test package imports in the virtual environment."""
-    packages_str = ", ".join(f"'{pkg}'" for pkg in OPTIONS.packages)  # Properly format the list of packages as strings
+    packages_str = ", ".join(f"'{pkg}'" for pkg in options.packages)  # Properly format the list of packages as strings
     test_script = f"""#!/bin/bash
-source {OPTIONS.venv_dir}/bin/activate
+source {options.venv_dir}/bin/activate
 python - << END
 successes = []
 failures = []
@@ -167,7 +167,7 @@ else:
 END
 """
 
-    test_script_path = os.path.join(OPTIONS.script_dir, f"test_imports.sh")
+    test_script_path = os.path.join(options.script_dir, f"test_imports.sh")
     logger.info(f"Writing test script to {test_script_path}")
     with open(test_script_path, 'w') as f:
         f.write(test_script)
@@ -182,106 +182,83 @@ END
     # This returns true if all packages imported successfully
     return "packages imported successfully" in result.stdout 
 
-def install_packages(OPTIONS: Options) -> None:
-    """Create a script to install packages in a virtual environment."""
+def install_package(package_name: str, options: Options) -> bool:
+    """Install a single package and return the success status."""
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", package_name, "--no-index", "--find-links", options.packages_dir],
+            capture_output=True,
+            text=True
+        )
+        logger.info(result.stdout)
+        if result.stderr:
+            logger.error(result.stderr)
+        return result.returncode == 0
+    except Exception as e:
+        logger.error(f"Error installing package {package_name}: {e}")
+        return False
+
+def install_packages(options: Options) -> None:
+    """Install packages in a virtual environment."""
     install_script = f"""#!/bin/bash
-source {OPTIONS.venv_dir}/bin/activate
-
-# Check the current version of pip
-current_pip_version=$(pip --version | grep -oP '\\d+\\.\\d+(\\.\\d+)?' | head -1)
-echo "Current pip version: $current_pip_version"
-
-# Get the latest pip version available on PyPI
-latest_pip_version=$(curl -s https://pypi.org/pypi/pip/json | python3 -c "import sys, json; print(json.load(sys.stdin)['info']['version'])")
-echo "Latest pip version available on PyPI: $latest_pip_version"
-
-# Get the latest pip version from the local packages
-echo "Checking for local pip files in {OPTIONS.packages_dir}..."
-if ls {OPTIONS.packages_dir}/pip-*.whl 1> /dev/null 2>&1; then
-    echo "Local pip files found."
-    ls {OPTIONS.packages_dir}/pip-*.whl
-    local_pip_version=$(ls {OPTIONS.packages_dir}/pip-*.whl | grep -oP 'pip-\\K[0-9]+\\.[0-9]+(\\.[0-9]+)?(?=-py3-none-any\\.whl)' | sort -V | tail -1)
-    echo "Extracted local pip version: $local_pip_version"
-else
-    echo "No local pip files found."
-    local_pip_version=""
-fi
-echo "Latest pip version in local files: $local_pip_version"
-
-# Compare versions and decide whether to download and install
-if [ "$current_pip_version" = "$latest_pip_version" ]; then
-    echo "Current pip version is up-to-date. No need to download or install."
-else
-    if [ "$local_pip_version" = "$latest_pip_version" ]; then
-        echo "Local pip version is up-to-date. Installing from local files."
-    else
-        echo "Downloading the latest pip version..."
-        pip download --only-binary=:all: pip -d {OPTIONS.packages_dir}
-    fi
-
-    echo "Reinstalling the latest pip version from local files..."
-    pip install --force-reinstall --no-index --find-links={OPTIONS.packages_dir} pip
-
-    # Check the new version of pip
-    new_pip_version=$(pip --version | grep -oP '\\d+\\.\\d+(\\.\\d+)?' | head -1)
-    echo "New pip version: $new_pip_version"
-fi
+source {options.venv_dir}/bin/activate
 
 # Ensure setuptools is available locally
-if ls {OPTIONS.packages_dir}/setuptools-*.whl 1> /dev/null 2>&1; then
+if ls {options.packages_dir}/setuptools-*.whl 1> /dev/null 2>&1; then
     echo "Local setuptools files found."
 else
     echo "Downloading setuptools..."
-    pip download --only-binary=:all: setuptools -d {OPTIONS.packages_dir}
+    pip download --only-binary=:all: setuptools -d {options.packages_dir}
 fi
 
 # Download required packages
 echo "Downloading packages..."
-pip download -r {OPTIONS.requirements_file} -d {OPTIONS.packages_dir}
-
-# Install packages from the downloaded files
-echo "Installing packages..."
-pip install --no-index --find-links={OPTIONS.packages_dir} -r {OPTIONS.requirements_file}
+pip download -r {options.requirements_file} -d {options.packages_dir}
 """
 
-    OPTIONS.install_script_path = os.path.join(OPTIONS.venv_dir, f"install_packages.sh")
-    logger.info(f"Writing installation script to {OPTIONS.install_script_path}")
-    with open(OPTIONS.install_script_path, 'w') as f:
+    options.install_script_path = os.path.join(options.venv_dir, f"install_packages.sh")
+    logger.info(f"Writing installation script to {options.install_script_path}")
+    with open(options.install_script_path, 'w') as f:
         f.write(install_script)
-    os.chmod(OPTIONS.install_script_path, 0o755)
+    os.chmod(options.install_script_path, 0o755)
 
-    # Run the installation script and capture the output
+    # Run the initial installation script and capture the output
     process = subprocess.Popen(
-        [OPTIONS.install_script_path], 
-        stdout=subprocess.PIPE, 
-        stderr=subprocess.PIPE, 
+        [options.install_script_path],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True
     )
 
-    # Initialize an empty string to capture the output
     captured_output = ""
-
-    # Log stdout and stderr as they are produced
     for line in iter(process.stdout.readline, ''):
         logger.info(line.strip())
         captured_output += line
-
     for line in iter(process.stderr.readline, ''):
         logger.error(line.strip())
         captured_output += line
-
-    # Wait for the process to complete
     process.stdout.close()
     process.stderr.close()
     process.wait()
 
     # Recover pip versions from the captured output
-    recover_pip_versions(captured_output, OPTIONS)
+    recover_pip_versions(captured_output, options)
+
+    # Now, attempt to install each package individually
+    failed_packages = []
+    for package in options.packages:
+        if not install_package(package, options):
+            failed_packages.append(package)
+    
+    if failed_packages:
+        logger.error(f"Failed to install the following packages: {', '.join(failed_packages)}")
+    else:
+        logger.info("All packages installed successfully.")
 
     # Run the test script
-    check_packages_in_venv(OPTIONS)
+    check_packages_in_venv(options)
 
-def recover_pip_versions(output: str, OPTIONS: Options) -> None:
+def recover_pip_versions(output: str, options: Options) -> None:
     """Parse the output to recover the current and new pip versions."""
     if hasattr(output, 'read'):
         output = output.read()
@@ -292,46 +269,46 @@ def recover_pip_versions(output: str, OPTIONS: Options) -> None:
     new_version_match = new_version_pattern.search(output)
 
     if current_version_match:
-        OPTIONS.current_pip_version = current_version_match.group(1)
-        logger.info(f"Recovered current pip version: {OPTIONS.current_pip_version}")
+        options.current_pip_version = current_version_match.group(1)
+        logger.info(f"Recovered current pip version: {options.current_pip_version}")
     else:
         logger.warning("Failed to recover current pip version from output.")
     
     if new_version_match:
-        OPTIONS.new_pip_version = new_version_match.group(1)
-        logger.info(f"Recovered new pip version: {OPTIONS.new_pip_version}")
+        options.new_pip_version = new_version_match.group(1)
+        logger.info(f"Recovered new pip version: {options.new_pip_version}")
     else:
         logger.warning("Failed to recover new pip version from output.")
 
-def pretty_packages_list(OPTIONS: Options) -> str:
+def pretty_packages_list(options: Options) -> str:
     maxnum = 5
-    if len(OPTIONS.packages) > maxnum:
-        first_five = '-'.join(OPTIONS.packages[:maxnum])
-        suffix = f'-and-{len(OPTIONS.packages) - maxnum}-more'
+    if len(options.packages) > maxnum:
+        first_five = '-'.join(options.packages[:maxnum])
+        suffix = f'-and-{len(options.packages) - maxnum}-more'
     else:
-        first_five = '-'.join(OPTIONS.packages)
+        first_five = '-'.join(options.packages)
         suffix = ''
     
     return first_five + suffix
 
-def setup_virtualenv(OPTIONS: Options) -> None:
+def setup_virtualenv(options: Options) -> None:
     """Setup a virtual environment and install packages."""
-    OPTIONS.pretty_list = pretty_packages_list(OPTIONS)
-    OPTIONS.venv_dir = os.path.join(OPTIONS.mypy_dir, f"{OPTIONS.venv_name}-versionless-{OPTIONS.timestamp}-{OPTIONS.pretty_list}")
-    OPTIONS.requirements_file = os.path.join(OPTIONS.venv_dir, "requirements.txt")
+    options.pretty_list = pretty_packages_list(options)
+    options.venv_dir = os.path.join(options.mypy_dir, f"{options.venv_name}-versionless-{options.timestamp}-{options.pretty_list}")
+    options.requirements_file = os.path.join(options.venv_dir, "requirements.txt")
 
-    os.makedirs(OPTIONS.venv_dir, exist_ok=True)
+    os.makedirs(options.venv_dir, exist_ok=True)
 
-    logger.info(f"Writing packages to {OPTIONS.requirements_file}")
-    with open(OPTIONS.requirements_file, 'w') as f:
-        for package in OPTIONS.packages:
+    logger.info(f"Writing packages to {options.requirements_file}")
+    with open(options.requirements_file, 'w') as f:
+        for package in options.packages:
             f.write(f"{package}\n")
 
     logger.info("Creating virtual environment...")
-    subprocess.check_call([sys.executable, '-m', 'venv', OPTIONS.venv_dir])
+    subprocess.check_call([sys.executable, '-m', 'venv', options.venv_dir])
     logger.info("Virtual environment created.")
 
-    install_packages(OPTIONS)
+    install_packages(options)
 
 def is_virtualenv() -> bool:
     """Check if currently running in a virtual environment."""
@@ -438,10 +415,10 @@ def get_network_operations(script_path):
 
     return download_urls, upload_urls
 
-def guard_examines(OPTIONS: Options) -> None:
+def guard_examines(options: Options) -> None:
     """Examine the script to determine what files are read and written, and what URLs are downloaded and uploaded."""
-    read_files, write_files = get_file_operations(OPTIONS.python_script)
-    download_urls, upload_urls = get_network_operations(OPTIONS.python_script)
+    read_files, write_files = get_file_operations(options.python_script)
+    download_urls, upload_urls = get_network_operations(options.python_script)
     if read_files:
         logger.info("Files read:", read_files)
     if write_files:
@@ -451,12 +428,12 @@ def guard_examines(OPTIONS: Options) -> None:
     if upload_urls:
         logger.info("Upload URLs:", upload_urls)
 
-def save_options_to_json(OPTIONS) -> None:
-    """Save the OPTIONS object to a JSON file."""
-    OPTIONS.json_filename = os.path.join(OPTIONS.script_dir, f"{os.path.basename(OPTIONS.python_script)}-mypy-last-used-on-{OPTIONS.timestamp}.json")
+def save_options_to_json(options) -> None:
+    """Save the options object to a JSON file."""
+    options.json_filename = os.path.join(options.script_dir, f"{os.path.basename(options.python_script)}-mypy-last-used-on-{options.timestamp}.json")
     
-    # Convert OPTIONS to a dictionary and handle sets
-    options_dict = OPTIONS.__dict__
+    # Convert options to a dictionary and handle sets
+    options_dict = options.__dict__
 
     # Identify non-serializable types.
     these_sets = []
@@ -482,28 +459,28 @@ def save_options_to_json(OPTIONS) -> None:
     options_dict['sets'] = these_sets
 
     # Write the dictionary to a JSON file
-    with open(OPTIONS.json_filename, 'w') as json_file:
+    with open(options.json_filename, 'w') as json_file:
         json.dump(options_dict, json_file, indent=4)
 
 def load_options_from_json(json_file: str) -> Options:
-    """Load the OPTIONS object from a JSON file."""
+    """Load the options object from a JSON file."""
     with open(json_file, 'r') as file:
         options_dict = json.load(file)
     
     # Create a new Options object and set attributes from the dictionary
-    OPTIONS_FROM_JSON = Options()
+    options_FROM_JSON = Options()
     for key, value in options_dict.items():
-        setattr(OPTIONS_FROM_JSON, key, value)
+        setattr(options_FROM_JSON, key, value)
     
-    #If "sets" is in OPTIONS_FROM_JSON, then convert the lists back to sets.
+    #If "sets" is in options_FROM_JSON, then convert the lists back to sets.
     if 'sets' in options_dict:
         for key in options_dict['sets']:
-            setattr(OPTIONS_FROM_JSON, key, set(getattr(OPTIONS_FROM_JSON, key)))
+            setattr(options_FROM_JSON, key, set(getattr(options_FROM_JSON, key)))
     else:
         logger.warning(f"No 'sets' key found in {json_file}.")
     
-    logger.info(f"OPTIONS loaded from {json_file}")
-    return OPTIONS_FROM_JSON
+    logger.info(f"options loaded from {json_file}")
+    return options_FROM_JSON
 
 def latest_venv(final_venv_folders):
     latest_folder = None
@@ -527,32 +504,32 @@ def smallest_venv(final_venv_folders):
 
     return smallest_folder
 
-def find_match_dir_in_cache(OPTIONS: Options) -> str:
-    if not OPTIONS.args.latest and not OPTIONS.args.last_used and not OPTIONS.args.smallest:
-        OPTIONS.args.last_used = True #If no flags are set, then the default is to load the last used venv in the cache
-    if OPTIONS.args.last_used and not OPTIONS.args.latest and not OPTIONS.args.smallest:
+def find_match_dir_in_cache(options: Options) -> str:
+    if not options.args.latest and not options.args.last_used and not options.args.smallest:
+        options.args.last_used = True #If no flags are set, then the default is to load the last used venv in the cache
+    if options.args.last_used and not options.args.latest and not options.args.smallest:
         try: # Try to load the last used venv in the cache
-            json_files = [f for f in os.listdir(OPTIONS.script_dir) if f.startswith(os.path.basename(OPTIONS.python_script)) and f.endswith('.json')]
+            json_files = [f for f in os.listdir(options.script_dir) if f.startswith(os.path.basename(options.python_script)) and f.endswith('.json')]
             if json_files:
                 if len(json_files) > 1:
                     json_files.sort(key=lambda x: x.split('-')[4], reverse=True)
-                OPTIONS_LAST_USED = load_options_from_json(os.path.join(OPTIONS.script_dir, json_files[0]))
-                if hasattr(OPTIONS_LAST_USED, 'venv_dir'):
+                options_LAST_USED = load_options_from_json(os.path.join(options.script_dir, json_files[0]))
+                if hasattr(options_LAST_USED, 'venv_dir'):
                     # Check if the last used venv is still valid using isdir:
-                    if os.path.isdir(OPTIONS_LAST_USED.venv_dir):
-                        if OPTIONS.uninstalled_imports.issubset(OPTIONS_LAST_USED.uninstalled_imports):
-                            return OPTIONS_LAST_USED.venv_dir
+                    if os.path.isdir(options_LAST_USED.venv_dir):
+                        if options.uninstalled_imports.issubset(options_LAST_USED.uninstalled_imports):
+                            return options_LAST_USED.venv_dir
                         else:
-                            logger.error(f"The last used venv directory {OPTIONS_LAST_USED.venv_dir} does not have all the currently required packages.")
+                            logger.error(f"The last used venv directory {options_LAST_USED.venv_dir} does not have all the currently required packages.")
                     else:
-                        logger.error(f"The last used venv directory {OPTIONS_LAST_USED.venv_dir} is no longer valid.")
+                        logger.error(f"The last used venv directory {options_LAST_USED.venv_dir} is no longer valid.")
         except:
             logger.error("The last used cache encountered a problem. Trying to load the latest matching venv now.")
-        OPTIONS.args.latest    = True #If that didn't work, try to load the latest venv in the cache
-        OPTIONS.args.last_used = False #And set this to False because it failed
+        options.args.latest    = True #If that didn't work, try to load the latest venv in the cache
+        options.args.last_used = False #And set this to False because it failed
     logger.info("Checking the cache for a virtual environment with all the required packages...")
     #Search for all venv_name folders in mypy:
-    all_venv_folders = [f for f in os.listdir(OPTIONS.mypy_dir) if os.path.isdir(os.path.join(OPTIONS.mypy_dir, f)) and f.startswith(OPTIONS.venv_name)]
+    all_venv_folders = [f for f in os.listdir(options.mypy_dir) if os.path.isdir(os.path.join(options.mypy_dir, f)) and f.startswith(options.venv_name)]
     #Loop through the folders and eliminate folders that clearly don't have the right packages just based on their names:
     venv_folders = []
     for folder in all_venv_folders:
@@ -567,98 +544,96 @@ def find_match_dir_in_cache(OPTIONS: Options) -> str:
                 number_unknown_packages = int(pretty_list[-2].split('-')[0])
                 break
             known_packages.add(item)
-        missing_packages = OPTIONS.uninstalled_imports - known_packages
+        missing_packages = options.uninstalled_imports - known_packages
         if len(missing_packages) <= number_unknown_packages:
             venv_folders.append(folder)
     #Loop through possibly valid venv folders and compare requirements in detail.
     final_venv_folders = {}
     for folder in venv_folders:
-        this_requirements_file = os.path.join(OPTIONS.mypy_dir, folder, 'requirements.txt')
+        this_requirements_file = os.path.join(options.mypy_dir, folder, 'requirements.txt')
         with open(this_requirements_file, 'r') as file:
             requirements = set(file.read().splitlines())
-        if OPTIONS.uninstalled_imports.issubset(requirements):
+        if options.uninstalled_imports.issubset(requirements):
             this_timestamp = folder.split('-')[2]+'-'+folder.split('-')[3]
             final_venv_folders[folder] = {'timestamp': this_timestamp, 'num_packages': len(requirements)}
     if not final_venv_folders:
         logger.info("No matching venv folders found in the cache.")
     else:
         logger.info(f"Found {len(final_venv_folders)} matching venv folders in the cache.")
-        if OPTIONS.args.latest and not OPTIONS.args.last_used and not OPTIONS.args.smallest:
+        if options.args.latest and not options.args.last_used and not options.args.smallest:
             # Return the latest venv in the cache which has all the packages needed now
-            return os.path.join(OPTIONS.mypy_dir, latest_venv(final_venv_folders))
-        elif OPTIONS.args.smallest and not OPTIONS.args.latest and not OPTIONS.args.last_used:
+            return os.path.join(options.mypy_dir, latest_venv(final_venv_folders))
+        elif options.args.smallest and not options.args.latest and not options.args.last_used:
             # Return the smallest venv in the cache which has all the packages needed now
-            return os.path.join(OPTIONS.mypy_dir, smallest_venv(final_venv_folders))
+            return os.path.join(options.mypy_dir, smallest_venv(final_venv_folders))
         else: # This should never happen
-            logger.error(f"Invalid combination of flags. {OPTIONS.args.latest = }, {OPTIONS.args.last_used = }, {OPTIONS.args.smallest = }")
+            logger.error(f"Invalid combination of flags. {options.args.latest = }, {options.args.last_used = }, {options.args.smallest = }")
 
 def main():
+    options = Options()
+    options.args = parse_arguments()
+    options.timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
 
-    OPTIONS = Options()
-    OPTIONS.args = parse_arguments()
-    OPTIONS.timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    if not os.path.isdir(options.mypy_dir):
+        logger.warning(f"Directory {options.mypy_dir} does not exist yet, so it is being created.")
+        os.makedirs(options.mypy_dir, exist_ok=True)
+    if not os.path.isdir(options.packages_dir):
+        logger.warning(f"Directory {options.packages_dir} does not exist yet, so it is being created.")
+        os.makedirs(options.packages_dir, exist_ok=True)
 
-    if not os.path.isdir(OPTIONS.mypy_dir):
-        logger.warning(f"Directory {OPTIONS.mypy_dir} does not exist yet, so it is being created.")
-        os.makedirs(OPTIONS.mypy_dir, exist_ok=True)
-    if not os.path.isdir(OPTIONS.packages_dir):
-        logger.warning(f"Directory {OPTIONS.packages_dir} does not exist yet, so it is being created.")
-        os.makedirs(OPTIONS.packages_dir, exist_ok=True)
+    options.python_script = options.args.script
+    options.script_args = options.args.script_args
 
-    OPTIONS.python_script = OPTIONS.args.script
-    OPTIONS.script_args = OPTIONS.args.script_args
+    options.script_dir = os.path.abspath(os.path.dirname(options.python_script))
+    logger.info(f"Directory where the script to run is located: {options.script_dir}")
 
-    OPTIONS.script_dir = os.path.abspath(os.path.dirname(OPTIONS.python_script))
-    logger.info(f"Directory where the script to run is located: {OPTIONS.script_dir}")
-
-    if OPTIONS.args.full:
+    if options.args.full:
         logger.info("Building a virtual environment that can run every python script in this directory.")
-        script_dir_or_file = OPTIONS.script_dir
+        script_dir_or_file = options.script_dir
     else:
-        script_dir_or_file = OPTIONS.python_script
+        script_dir_or_file = options.python_script
 
     installed_imports, uninstalled_imports, bad_imports = list_packages(script_dir_or_file)
-    OPTIONS.uninstalled_imports = uninstalled_imports
-    OPTIONS.packages = list(uninstalled_imports)
-    logger.info(f"Uninstalled imports: {OPTIONS.uninstalled_imports}")
+    options.uninstalled_imports = uninstalled_imports
+    options.packages = list(uninstalled_imports)
+    logger.info(f"Uninstalled imports: {options.uninstalled_imports}")
     if bad_imports:
         logger.warning(f"Bad imports: {bad_imports}")
 
     if not uninstalled_imports:
         logger.info("All required packages are already installed.")
-        guard_examines(OPTIONS)
-        subprocess.run([sys.executable, OPTIONS.python_script] + OPTIONS.script_args)
+        guard_examines(options)
+        subprocess.run([sys.executable, options.python_script] + options.script_args)
     elif is_virtualenv():
         logger.info("Already in a virtual environment.")
-        packages_available = check_packages_in_venv(uninstalled_imports, OPTIONS)
-        if packages_available: #This should never happen because if it runs that means uninstalled_imports is empty, so the previous code block would have run. Paranoia!
-            guard_examines(OPTIONS)
-            subprocess.run([sys.executable, OPTIONS.python_script] + OPTIONS.script_args)
+        if check_packages_in_venv(options):
+            guard_examines(options)
+            subprocess.run([sys.executable, options.python_script] + options.script_args)
         else:
             logger.error("The current virtual environment does not have all the required packages.")
             logger.info("Please deactivate the current virtual environment and run the script again.")
     else:
         logger.info("Not in a virtual environment.")
-        if OPTIONS.args.no_cache:
+        if options.args.no_cache:
             match_dir = None
         else:
-            match_dir = find_match_dir_in_cache(OPTIONS)
+            match_dir = find_match_dir_in_cache(options)
         if not match_dir:
-            logger.info(f"Creating new virtual environment '{OPTIONS.venv_name}'...")
-            setup_virtualenv(OPTIONS)
-            match_dir = OPTIONS.venv_dir
+            logger.info(f"Creating new virtual environment '{options.venv_name}'...")
+            setup_virtualenv(options)
+            match_dir = options.venv_dir
         else:
             logger.info(f"Using directory: {match_dir}")
 
-        OPTIONS.venv_dir = match_dir
+        options.venv_dir = match_dir
         activate_script = os.path.join(match_dir, 'bin', 'activate')
-        venv_python = os.path.join(OPTIONS.venv_dir, 'bin', 'python')
+        venv_python = os.path.join(options.venv_dir, 'bin', 'python')
         logger.info(f"Activating virtual environment: {activate_script}")
 
-        activate_cmd = f"bash -c 'source {activate_script} && echo \"Virtual environment activated.\" && {venv_python} {OPTIONS.python_script} {' '.join(OPTIONS.script_args)}'"
-        guard_examines(OPTIONS)
+        activate_cmd = f"bash -c 'source {activate_script} && echo \"Virtual environment activated.\" && {venv_python} {options.python_script} {' '.join(options.script_args)}'"
+        guard_examines(options)
         subprocess.run(activate_cmd, shell=True)
-        save_options_to_json(OPTIONS)
+        save_options_to_json(options)
 
 if __name__ == "__main__":
     main()
