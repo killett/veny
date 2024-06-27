@@ -25,10 +25,10 @@ logger = logging.getLogger(__name__)
 # Attempt to import pipreqs
 try:
     import pipreqs
-    logger.info("NOTE: pipreqs is available.")
+    logger.info("pipreqs is available, so it will be used.")
     PIPREQS_AVAILABLE = True
 except ImportError:
-    logger.warning("NOTE: pipreqs is not available. Try installing it with 'pip install pipreqs'.")
+    logger.warning("pipreqs is not available. Try installing it with 'pip install pipreqs'.")
     PIPREQS_AVAILABLE = False
 
 def find_imports_in_script(file_path: str, all_imports: Set[str]) -> None:
@@ -91,7 +91,7 @@ def check_if_library_exists(library_name: str) -> bool:
     return False
 
 def split_imports(all_imports: Set[str]) -> Tuple[Set[str], Set[str], Set[str]]:
-    known_bad_imports = {'bs4', 'snakeClass', 'pathfinding_salvo_rework', 'seaborn', 'tkinter', 'msvcrt', 'univ_defs', 'search_for_media_files', 'kill_switch', 'list_required_packages', 'crossover'}
+    known_bad_imports = {'bs4', 'snakeClass', 'pathfinding_salvo_rework', 'seaborn', 'tkinter', 'msvcrt', 'univ_defs', 'search_for_media_files', 'kill_switch', 'list_required_packages', 'crossover', 'non_existent_module'}
     bad_imports = known_bad_imports.intersection(all_imports)
     all_imports = all_imports - bad_imports
     installed_imports = set()
@@ -146,7 +146,7 @@ def check_packages_in_venv(OPTIONS: Options) -> bool:
     """Create and run a script to test package imports in the virtual environment."""
     packages_str = ", ".join(f"'{pkg}'" for pkg in OPTIONS.packages)  # Properly format the list of packages as strings
     test_script = f"""#!/bin/bash
-source {OPTIONS.venv_name}/bin/activate
+source {OPTIONS.venv_dir}/bin/activate
 python - << END
 successes = []
 failures = []
@@ -225,6 +225,14 @@ else
     # Check the new version of pip
     new_pip_version=$(pip --version | grep -oP '\\d+\\.\\d+(\\.\\d+)?' | head -1)
     echo "New pip version: $new_pip_version"
+fi
+
+# Ensure setuptools is available locally
+if ls {OPTIONS.packages_dir}/setuptools-*.whl 1> /dev/null 2>&1; then
+    echo "Local setuptools files found."
+else
+    echo "Downloading setuptools..."
+    pip download --only-binary=:all: setuptools -d {OPTIONS.packages_dir}
 fi
 
 # Download required packages
@@ -532,7 +540,10 @@ def find_match_dir_in_cache(OPTIONS: Options) -> str:
                 if hasattr(OPTIONS_LAST_USED, 'venv_dir'):
                     # Check if the last used venv is still valid using isdir:
                     if os.path.isdir(OPTIONS_LAST_USED.venv_dir):
-                        return OPTIONS_LAST_USED.venv_dir
+                        if OPTIONS.uninstalled_imports.issubset(OPTIONS_LAST_USED.uninstalled_imports):
+                            return OPTIONS_LAST_USED.venv_dir
+                        else:
+                            logger.error(f"The last used venv directory {OPTIONS_LAST_USED.venv_dir} does not have all the currently required packages.")
                     else:
                         logger.error(f"The last used venv directory {OPTIONS_LAST_USED.venv_dir} is no longer valid.")
         except:
@@ -637,11 +648,11 @@ def main():
             setup_virtualenv(OPTIONS)
             match_dir = OPTIONS.venv_dir
         else:
-            logger.info(f"Using {OPTIONS.venv_name} directory: {match_dir}")
+            logger.info(f"Using directory: {match_dir}")
 
         OPTIONS.venv_dir = match_dir
         activate_script = os.path.join(match_dir, 'bin', 'activate')
-        venv_python = os.path.join(OPTIONS.script_dir, OPTIONS.venv_name, 'bin', 'python')
+        venv_python = os.path.join(OPTIONS.venv_dir, 'bin', 'python')
         logger.info(f"Activating virtual environment: {activate_script}")
 
         activate_cmd = f"bash -c 'source {activate_script} && echo \"Virtual environment activated.\" && {venv_python} {OPTIONS.python_script} {' '.join(OPTIONS.script_args)}'"
