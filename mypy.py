@@ -9,6 +9,7 @@ import logging
 import ast
 import re
 import json
+import copy
 from typing import Dict, List, Set, Tuple
 
 class Options():
@@ -17,6 +18,13 @@ class Options():
         self.venv_name: str = 'myenv' # Can NOT include dashes ('-')
         self.mypy_dir = os.path.expanduser(os.path.join('~','mypy'))
         self.packages_dir = os.path.join(self.mypy_dir, 'packages')
+
+    def set_venv_dir(self, venv_dir: str) -> None:
+        self.venv_dir = os.path.expanduser(venv_dir)
+        self.activate_script   = os.path.join(self.venv_dir, 'bin', 'activate')
+        self.venv_python       = os.path.join(self.venv_dir, 'bin', 'python')
+        self.venv_pip          = os.path.join(self.venv_dir, 'bin', 'pip')
+        self.requirements_file = os.path.join(self.venv_dir, "requirements.txt")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -147,7 +155,7 @@ def check_packages_in_venv(options: Options) -> bool:
     packages_str = ", ".join(f"'{pkg}'" for pkg in options.packages)  # Properly format the list of packages as strings
     test_script = f"""#!/bin/bash
 source {options.venv_dir}/bin/activate
-python - << END
+{options.venv_python} - << END
 successes = []
 failures = []
 counter = 0
@@ -186,7 +194,7 @@ def install_package(package_name: str, options: Options) -> bool:
     """Install a single package and return the success status."""
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", package_name, "--no-index", "--find-links", options.packages_dir],
+            [options.venv_python, "-m", "pip", "install", package_name, "--no-index", "--find-links", options.packages_dir],
             capture_output=True,
             text=True
         )
@@ -200,7 +208,7 @@ def install_package(package_name: str, options: Options) -> bool:
 
 def install_packages(options: Options) -> None:
     """Install packages in a virtual environment."""
-    install_script = f"""#!/bin/bash
+    download_script = f"""#!/bin/bash
 source {options.venv_dir}/bin/activate
 
 # Ensure setuptools is available locally
@@ -208,23 +216,23 @@ if ls {options.packages_dir}/setuptools-*.whl 1> /dev/null 2>&1; then
     echo "Local setuptools files found."
 else
     echo "Downloading setuptools..."
-    pip download --only-binary=:all: setuptools -d {options.packages_dir}
+    {options.venv_pip} download --only-binary=:all: setuptools -d {options.packages_dir}
 fi
 
 # Download required packages
 echo "Downloading packages..."
-pip download -r {options.requirements_file} -d {options.packages_dir}
+{options.venv_pip} download -r {options.requirements_file} -d {options.packages_dir}
 """
 
-    options.install_script_path = os.path.join(options.venv_dir, f"install_packages.sh")
-    logger.info(f"Writing installation script to {options.install_script_path}")
-    with open(options.install_script_path, 'w') as f:
-        f.write(install_script)
-    os.chmod(options.install_script_path, 0o755)
+    options.download_script_path = os.path.join(options.venv_dir, f"download_packages.sh")
+    logger.info(f"Writing download script to {options.download_script_path}")
+    with open(options.download_script_path, 'w') as f:
+        f.write(download_script)
+    os.chmod(options.download_script_path, 0o755)
 
-    # Run the initial installation script and capture the output
+    # Run the initial download script and capture the output
     process = subprocess.Popen(
-        [options.install_script_path],
+        [options.download_script_path],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True
@@ -294,9 +302,7 @@ def pretty_packages_list(options: Options) -> str:
 def setup_virtualenv(options: Options) -> None:
     """Setup a virtual environment and install packages."""
     options.pretty_list = pretty_packages_list(options)
-    options.venv_dir = os.path.join(options.mypy_dir, f"{options.venv_name}-versionless-{options.timestamp}-{options.pretty_list}")
-    options.requirements_file = os.path.join(options.venv_dir, "requirements.txt")
-
+    options.set_venv_dir(os.path.join(options.mypy_dir, f"{options.venv_name}-versionless-{options.timestamp}-{options.pretty_list}"))
     os.makedirs(options.venv_dir, exist_ok=True)
 
     logger.info(f"Writing packages to {options.requirements_file}")
@@ -327,7 +333,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument('-smallest', action='store_true', help="Load the smallest venv in the cache (with the fewest packages) which has all the packages needed now.")
     return parser.parse_args()
 
-def get_file_operations(script_path):
+def get_file_operations(script_path: str) -> Tuple[List[str], List[str]]:
+    """Find files that are read or written."""
     with open(script_path, 'r') as file:
         tree = ast.parse(file.read())
 
@@ -367,7 +374,8 @@ def get_file_operations(script_path):
 
     return read_files, write_files
 
-def get_network_operations(script_path):
+def get_network_operations(script_path: str) -> Tuple[List[str], List[str]]:
+    """Find URLs that are downloaded and uploaded"""
     with open(script_path, 'r') as file:
         tree = ast.parse(file.read())
 
@@ -428,7 +436,7 @@ def guard_examines(options: Options) -> None:
     if upload_urls:
         logger.info("Upload URLs:", upload_urls)
 
-def save_options_to_json(options) -> None:
+def save_options_to_json(options: Options) -> None:
     """Save the options object to a JSON file."""
     options.json_filename = os.path.join(options.script_dir, f"{os.path.basename(options.python_script)}-mypy-last-used-on-{options.timestamp}.json")
     
@@ -443,10 +451,10 @@ def save_options_to_json(options) -> None:
             json.dumps(value)
         except TypeError:
             non_serializable[key] = type(value).__name__
-            logger.info(f"Key '{key}' is of type {type(value).__name__}, so it needs to be modified for JSON serialization.")
+            #logger.info(f"Key '{key}' is of type {type(value).__name__}, so it needs to be modified for JSON serialization.")
 
     if non_serializable:
-        logger.info("Non-serializable keys being modified for JSON serialization...", non_serializable)
+        #logger.info("Non-serializable keys being modified for JSON serialization...", non_serializable)
         # Handle non-serializable objects as needed
         for key in non_serializable:
             if non_serializable[key] == 'set':
@@ -482,7 +490,8 @@ def load_options_from_json(json_file: str) -> Options:
     logger.info(f"options loaded from {json_file}")
     return options_FROM_JSON
 
-def latest_venv(final_venv_folders):
+def latest_venv(final_venv_folders: Dict[str, Dict[str, int]]) -> str:
+    """Return the folder with the latest timestamp."""
     latest_folder = None
     latest_timestamp = None
 
@@ -493,7 +502,8 @@ def latest_venv(final_venv_folders):
 
     return latest_folder
 
-def smallest_venv(final_venv_folders):
+def smallest_venv(final_venv_folders: Dict[str, Dict[str, int]]) -> str:
+    """Return the folder with the fewest packages."""
     smallest_folder = None
     smallest_num_packages = None
 
@@ -504,6 +514,25 @@ def smallest_venv(final_venv_folders):
 
     return smallest_folder
 
+def check_venv_dir(options: Options, options_from_cache: Options) -> bool:
+    """Check if the last used venv is still valid."""
+    if hasattr(options_from_cache, 'venv_dir'):
+        # Check if the last used venv is still valid using isdir:
+        if os.path.isdir(options_from_cache.venv_dir):
+            if options.uninstalled_imports.issubset(options_from_cache.uninstalled_imports):
+                options_from_cache.uninstalled_imports = options.uninstalled_imports
+                options_from_cache.packages = list(options.uninstalled_imports)
+                print(f"{options_from_cache.packages = }")
+                if check_packages_in_venv(options_from_cache):
+                    return 1
+                else:
+                    logger.error(f"The cached venv directory {options_from_cache.venv_dir} failed check_packages_in_venv.")
+            else:
+                logger.error(f"The cached venv directory {options_from_cache.venv_dir} does not have all the currently required packages.")
+        else:
+            logger.error(f"The cached venv directory {options_from_cache.venv_dir} is no longer valid.")
+    return 0
+    
 def find_match_dir_in_cache(options: Options) -> str:
     if not options.args.latest and not options.args.last_used and not options.args.smallest:
         options.args.last_used = True #If no flags are set, then the default is to load the last used venv in the cache
@@ -513,16 +542,11 @@ def find_match_dir_in_cache(options: Options) -> str:
             if json_files:
                 if len(json_files) > 1:
                     json_files.sort(key=lambda x: x.split('-')[4], reverse=True)
-                options_LAST_USED = load_options_from_json(os.path.join(options.script_dir, json_files[0]))
-                if hasattr(options_LAST_USED, 'venv_dir'):
-                    # Check if the last used venv is still valid using isdir:
-                    if os.path.isdir(options_LAST_USED.venv_dir):
-                        if options.uninstalled_imports.issubset(options_LAST_USED.uninstalled_imports):
-                            return options_LAST_USED.venv_dir
-                        else:
-                            logger.error(f"The last used venv directory {options_LAST_USED.venv_dir} does not have all the currently required packages.")
-                    else:
-                        logger.error(f"The last used venv directory {options_LAST_USED.venv_dir} is no longer valid.")
+                options_last_used = load_options_from_json(os.path.join(options.script_dir, json_files[0]))
+                if check_venv_dir(options, options_last_used):
+                    return options_last_used.venv_dir
+                else:
+                    logger.error("The last used cache is invalid. Trying to load the latest matching venv now.")
         except:
             logger.error("The last used cache encountered a problem. Trying to load the latest matching venv now.")
         options.args.latest    = True #If that didn't work, try to load the latest venv in the cache
@@ -562,10 +586,26 @@ def find_match_dir_in_cache(options: Options) -> str:
         logger.info(f"Found {len(final_venv_folders)} matching venv folders in the cache.")
         if options.args.latest and not options.args.last_used and not options.args.smallest:
             # Return the latest venv in the cache which has all the packages needed now
-            return os.path.join(options.mypy_dir, latest_venv(final_venv_folders))
+            options_latest = copy.deepcopy(options)
+            options_latest.set_venv_dir(os.path.join(options.mypy_dir, latest_venv(final_venv_folders)))
+            options_latest.uninstalled_imports = options.uninstalled_imports
+            options_latest.packages = list(options.uninstalled_imports)
+            if check_venv_dir(options, options_latest):
+                return options_latest.venv_dir
+            else:
+                logger.error("The latest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
+                return None
         elif options.args.smallest and not options.args.latest and not options.args.last_used:
             # Return the smallest venv in the cache which has all the packages needed now
-            return os.path.join(options.mypy_dir, smallest_venv(final_venv_folders))
+            options_smallest = copy.deepcopy(options)
+            options_smallest.set_venv_dir(os.path.join(options.mypy_dir, smallest_venv(final_venv_folders)))
+            options_smallest.uninstalled_imports = options.uninstalled_imports
+            options_smallest.packages = list(options.uninstalled_imports)
+            if check_venv_dir(options, options_smallest):
+                return options_smallest.venv_dir
+            else:
+                logger.error("The smallest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
+                return None
         else: # This should never happen
             logger.error(f"Invalid combination of flags. {options.args.latest = }, {options.args.last_used = }, {options.args.smallest = }")
 
@@ -625,15 +665,16 @@ def main():
         else:
             logger.info(f"Using directory: {match_dir}")
 
-        options.venv_dir = match_dir
-        activate_script = os.path.join(match_dir, 'bin', 'activate')
-        venv_python = os.path.join(options.venv_dir, 'bin', 'python')
-        logger.info(f"Activating virtual environment: {activate_script}")
+        options.set_venv_dir(match_dir)
+        logger.info(f"Activating virtual environment: {options.activate_script}")
 
-        activate_cmd = f"bash -c 'source {activate_script} && echo \"Virtual environment activated.\" && {venv_python} {options.python_script} {' '.join(options.script_args)}'"
+        activate_cmd = f"bash -c 'source {options.activate_script} && echo \"Virtual environment activated.\" && {options.venv_python} {options.python_script} {' '.join(options.script_args)}'"
         guard_examines(options)
         subprocess.run(activate_cmd, shell=True)
         save_options_to_json(options)
 
 if __name__ == "__main__":
     main()
+    print("REMINDER: also need to rename failed attempts to make venvs if they fail to avoid clogging mypy directory.")
+    print("REMINDER: also need to find that directory deletion code to use it to enable an \"erase-all\" option because sooner or later manually deleting all those files will cause a tragic accident")
+
