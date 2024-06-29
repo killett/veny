@@ -21,7 +21,7 @@ class Options():
 
     def set_venv_dir(self, venv_dir: str) -> None:
         self.venv_dir = os.path.expanduser(venv_dir)
-        self.activate_script   = os.path.join(self.venv_dir, 'bin', 'activate')
+        self.activate_script   = 'source ' + os.path.join(self.venv_dir, 'bin', 'activate')
         self.venv_python       = os.path.join(self.venv_dir, 'bin', 'python')
         self.venv_pip          = os.path.join(self.venv_dir, 'bin', 'pip')
         self.requirements_file = os.path.join(self.venv_dir, "requirements.txt")
@@ -99,7 +99,7 @@ def check_if_library_exists(library_name: str) -> bool:
     return False
 
 def split_imports(all_imports: Set[str]) -> Tuple[Set[str], Set[str], Set[str]]:
-    known_bad_imports = {'bs4', 'snakeClass', 'pathfinding_salvo_rework', 'seaborn', 'tkinter', 'msvcrt', 'univ_defs', 'search_for_media_files', 'kill_switch', 'list_required_packages', 'crossover', 'non_existent_module'}
+    known_bad_imports = {'bs4', 'snakeClass', 'pathfinding_salvo_rework', 'seaborn', 'DQN', 'bayesOpt', 'tkinter', 'msvcrt', 'univ_defs', 'search_for_media_files', 'kill_switch', 'list_required_packages', 'crossover', 'non_existent_module'}
     bad_imports = known_bad_imports.intersection(all_imports)
     all_imports = all_imports - bad_imports
     installed_imports = set()
@@ -179,7 +179,7 @@ END
     logger.info(f"Writing test script to {test_script_path}")
     with open(test_script_path, 'w') as f:
         f.write(test_script)
-    os.chmod(test_script_path, 0o755)
+    os.chmod(test_script_path, 0o755) #Permissions: -rwxr-xr-x, which means owner can read, write, and execute; group and others can read and execute.
 
     # Run the test script
     result = subprocess.run([test_script_path], check=True, capture_output=True, text=True)
@@ -188,7 +188,7 @@ END
         logger.error(result.stderr)
     
     # This returns true if all packages imported successfully
-    return "packages imported successfully" in result.stdout 
+    return "packages imported successfully" in result.stdout
 
 def install_package(package_name: str, options: Options) -> bool:
     """Install a single package and return the success status."""
@@ -201,6 +201,18 @@ def install_package(package_name: str, options: Options) -> bool:
         logger.info(result.stdout)
         if result.stderr:
             logger.error(result.stderr)
+        if result.returncode != 0:
+            # Try to install from PyPI if local installation fails
+            logger.info(f"Package {package_name} not found locally. Attempting to install from PyPI.")
+            result = subprocess.run(
+                [options.venv_python, "-m", "pip", "install", package_name],
+                capture_output=True,
+                text=True
+            )
+            logger.info(result.stdout)
+            if result.stderr:
+                logger.error(result.stderr)
+            return result.returncode == 0
         return result.returncode == 0
     except Exception as e:
         logger.error(f"Error installing package {package_name}: {e}")
@@ -211,12 +223,59 @@ def install_packages(options: Options) -> None:
     download_script = f"""#!/bin/bash
 source {options.venv_dir}/bin/activate
 
-# Ensure setuptools is available locally
+# Check the current version of pip
+current_pip_version=$(pip --version | grep -oP '\\d+\\.\\d+(\\.\\d+)?' | head -1)
+echo "Current pip version: $current_pip_version"
+
+# Get the latest pip version available on PyPI
+latest_pip_version=$(curl -s https://pypi.org/pypi/pip/json | python3 -c "import sys, json; print(json.load(sys.stdin)['info']['version'])")
+echo "Latest pip version available on PyPI: $latest_pip_version"
+
+# Get the latest pip version from the local packages
+echo "Checking for local pip files in {options.packages_dir}..."
+if ls {options.packages_dir}/pip-*.whl 1> /dev/null 2>&1; then
+    echo "Local pip files found."
+    ls {options.packages_dir}/pip-*.whl
+    local_pip_version=$(ls {options.packages_dir}/pip-*.whl | grep -oP 'pip-\\K[0-9]+\\.[0-9]+(\\.[0-9]+)?(?=-py3-none-any\\.whl)' | sort -V | tail -1)
+    echo "Extracted local pip version: $local_pip_version"
+else
+    echo "No local pip files found."
+    local_pip_version=""
+fi
+echo "Latest pip version in local files: $local_pip_version"
+
+# Compare versions and decide whether to download and install
+if [ "$current_pip_version" = "$latest_pip_version" ]; then
+    echo "Current pip version is up-to-date. No need to download or install."
+else
+    if [ "$local_pip_version" = "$latest_pip_version" ]; then
+        echo "Local pip version is up-to-date. Installing from local files."
+    else
+        echo "Downloading the latest pip version..."
+        pip download --only-binary=:all: pip -d {options.packages_dir}
+    fi
+
+    echo "Reinstalling the latest pip version from local files..."
+    pip install --force-reinstall --no-index --find-links={options.packages_dir} pip
+
+    # Check the new version of pip
+    new_pip_version=$(pip --version | grep -oP '\\d+\\.\\d+(\\.\\d+)?' | head -1)
+    echo "New pip version: $new_pip_version"
+fi
+
+# Ensure setuptools and wheel are available locally
 if ls {options.packages_dir}/setuptools-*.whl 1> /dev/null 2>&1; then
     echo "Local setuptools files found."
 else
     echo "Downloading setuptools..."
     {options.venv_pip} download --only-binary=:all: setuptools -d {options.packages_dir}
+fi
+
+if ls {options.packages_dir}/wheel-*.whl 1> /dev/null 2>&1; then
+    echo "Local wheel files found."
+else
+    echo "Downloading wheel..."
+    {options.venv_pip} download --only-binary=:all: wheel -d {options.packages_dir}
 fi
 
 # Download required packages
@@ -313,6 +372,11 @@ def setup_virtualenv(options: Options) -> None:
     logger.info("Creating virtual environment...")
     subprocess.check_call([sys.executable, '-m', 'venv', options.venv_dir])
     logger.info("Virtual environment created.")
+
+    # Activate virtual environment and install wheel
+    install_command = f"bash -c '{options.activate_script} && {options.venv_pip} install wheel'"
+    subprocess.run(install_command, shell=True, check=True)
+    logger.info("Wheel installed in the virtual environment.")
 
     install_packages(options)
 
@@ -668,13 +732,10 @@ def main():
         options.set_venv_dir(match_dir)
         logger.info(f"Activating virtual environment: {options.activate_script}")
 
-        activate_cmd = f"bash -c 'source {options.activate_script} && echo \"Virtual environment activated.\" && {options.venv_python} {options.python_script} {' '.join(options.script_args)}'"
+        activate_cmd = f"bash -c '{options.activate_script} && echo \"Virtual environment activated.\" && {options.venv_python} {options.python_script} {' '.join(options.script_args)}'"
         guard_examines(options)
         subprocess.run(activate_cmd, shell=True)
         save_options_to_json(options)
 
 if __name__ == "__main__":
     main()
-    print("REMINDER: also need to rename failed attempts to make venvs if they fail to avoid clogging mypy directory.")
-    print("REMINDER: also need to find that directory deletion code to use it to enable an \"erase-all\" option because sooner or later manually deleting all those files will cause a tragic accident")
-
