@@ -122,8 +122,6 @@ def generate_requirements(directory: str) -> None:
         logger.error(f"Error generating requirements file: {e}")
 
 def list_packages(python_dir_or_file: str) -> Tuple[Set[str], Set[str]]:
-
-    # Expand '~' to the full path
     python_dir_or_file = os.path.expanduser(python_dir_or_file)
 
     if os.path.isfile(python_dir_or_file):
@@ -146,122 +144,21 @@ def list_packages(python_dir_or_file: str) -> Tuple[Set[str], Set[str]]:
         logger.error(f"Error: The file or directory {python_dir_or_file} does not exist.")
         sys.exit(1)
 
+    # Filter out invalid imports before splitting
+    all_imports = {imp for imp in all_imports if re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', imp)}
+    
     installed_imports, uninstalled_imports, bad_imports = split_imports(all_imports)
 
     return installed_imports, uninstalled_imports, bad_imports
-
-def check_packages_in_venv(options: Options) -> bool:
-    """Create and run a script to test package imports in the virtual environment."""
-    packages_str = ", ".join(f"'{pkg}'" for pkg in options.packages)  # Properly format the list of packages as strings
-    test_script = f"""#!/bin/bash
-source {options.venv_dir}/bin/activate
-{options.venv_python} - << END
-successes = []
-failures = []
-counter = 0
-for package in [{packages_str}]:
-    counter += 1
-    try:
-        __import__(package)
-        successes.append(package)
-    except ImportError:
-        failures.append(package)
-if failures:
-    print("Failed packages: " + ", ".join(failures))
-elif len(successes) != counter: #This should never happen.
-    print(f"Warning: No failures, but only recorded {{len(successes)}} successes out of {{counter}} iterations through the loop.")
-else:
-    print(f"All {{len(successes)}} (out of {{counter}}) packages imported successfully.")
-END
-"""
-
-    test_script_path = os.path.join(options.script_dir, f"test_imports.sh")
-    logger.info(f"Writing test script to {test_script_path}")
-    with open(test_script_path, 'w') as f:
-        f.write(test_script)
-    os.chmod(test_script_path, 0o755) #Permissions: -rwxr-xr-x, which means owner can read, write, and execute; group and others can read and execute.
-
-    # Run the test script
-    result = subprocess.run([test_script_path], check=True, capture_output=True, text=True)
-    logger.info(result.stdout)
-    if result.stderr:
-        logger.error(result.stderr)
-    
-    # This returns true if all packages imported successfully
-    return "packages imported successfully" in result.stdout
-
-def install_package(package_name: str, options: Options) -> bool:
-    """Install a single package and return the success status."""
-    try:
-        result = subprocess.run(
-            [options.venv_python, "-m", "pip", "install", package_name, "--no-index", "--find-links", options.packages_dir],
-            capture_output=True,
-            text=True
-        )
-        logger.info(result.stdout)
-        if result.stderr:
-            logger.error(result.stderr)
-        if result.returncode != 0:
-            # Try to install from PyPI if local installation fails
-            logger.info(f"Package {package_name} not found locally. Attempting to install from PyPI.")
-            result = subprocess.run(
-                [options.venv_python, "-m", "pip", "install", package_name],
-                capture_output=True,
-                text=True
-            )
-            logger.info(result.stdout)
-            if result.stderr:
-                logger.error(result.stderr)
-            return result.returncode == 0
-        return result.returncode == 0
-    except Exception as e:
-        logger.error(f"Error installing package {package_name}: {e}")
-        return False
 
 def install_packages(options: Options) -> None:
     """Install packages in a virtual environment."""
     download_script = f"""#!/bin/bash
 source {options.venv_dir}/bin/activate
 
-# Check the current version of pip
-current_pip_version=$(pip --version | grep -oP '\\d+\\.\\d+(\\.\\d+)?' | head -1)
-echo "Current pip version: $current_pip_version"
-
-# Get the latest pip version available on PyPI
-latest_pip_version=$(curl -s https://pypi.org/pypi/pip/json | python3 -c "import sys, json; print(json.load(sys.stdin)['info']['version'])")
-echo "Latest pip version available on PyPI: $latest_pip_version"
-
-# Get the latest pip version from the local packages
-echo "Checking for local pip files in {options.packages_dir}..."
-if ls {options.packages_dir}/pip-*.whl 1> /dev/null 2>&1; then
-    echo "Local pip files found."
-    ls {options.packages_dir}/pip-*.whl
-    local_pip_version=$(ls {options.packages_dir}/pip-*.whl | grep -oP 'pip-\\K[0-9]+\\.[0-9]+(\\.[0-9]+)?(?=-py3-none-any\\.whl)' | sort -V | tail -1)
-    echo "Extracted local pip version: $local_pip_version"
-else
-    echo "No local pip files found."
-    local_pip_version=""
-fi
-echo "Latest pip version in local files: $local_pip_version"
-
-# Compare versions and decide whether to download and install
-if [ "$current_pip_version" = "$latest_pip_version" ]; then
-    echo "Current pip version is up-to-date. No need to download or install."
-else
-    if [ "$local_pip_version" = "$latest_pip_version" ]; then
-        echo "Local pip version is up-to-date. Installing from local files."
-    else
-        echo "Downloading the latest pip version..."
-        pip download --only-binary=:all: pip -d {options.packages_dir}
-    fi
-
-    echo "Reinstalling the latest pip version from local files..."
-    pip install --force-reinstall --no-index --find-links={options.packages_dir} pip
-
-    # Check the new version of pip
-    new_pip_version=$(pip --version | grep -oP '\\d+\\.\\d+(\\.\\d+)?' | head -1)
-    echo "New pip version: $new_pip_version"
-fi
+# Upgrade pip
+echo "Upgrading pip..."
+pip install --upgrade pip
 
 # Ensure setuptools and wheel are available locally
 if ls {options.packages_dir}/setuptools-*.whl 1> /dev/null 2>&1; then
@@ -308,9 +205,6 @@ echo "Downloading packages..."
     process.stderr.close()
     process.wait()
 
-    # Recover pip versions from the captured output
-    recover_pip_versions(captured_output, options)
-
     # Now, attempt to install each package individually
     failed_packages = []
     for package in options.packages:
@@ -324,6 +218,74 @@ echo "Downloading packages..."
 
     # Run the test script
     check_packages_in_venv(options)
+
+def install_package(package_name: str, options: Options) -> bool:
+    """Install a single package and return the success status."""
+    try:
+        result = subprocess.run(
+            [options.venv_python, "-m", "pip", "install", package_name, "--no-index", "--find-links", options.packages_dir],
+            capture_output=True,
+            text=True
+        )
+        logger.info(result.stdout)
+        if result.stderr:
+            logger.error(result.stderr)
+        if result.returncode != 0:
+            # Try to install from PyPI if local installation fails
+            logger.info(f"Package {package_name} not found locally. Attempting to install from PyPI.")
+            result = subprocess.run(
+                [options.venv_python, "-m", "pip", "install", package_name],
+                capture_output=True,
+                text=True
+            )
+            logger.info(result.stdout)
+            if result.stderr:
+                logger.error(result.stderr)
+            return result.returncode == 0
+        return result.returncode == 0
+    except Exception as e:
+        logger.error(f"Error installing package {package_name}: {e}")
+        return False
+
+def check_packages_in_venv(options: Options) -> bool:
+    """Create and run a script to test package imports in the virtual environment."""
+    packages_str = ", ".join(f"'{pkg}'" for pkg in options.packages)  # Properly format the list of packages as strings
+    test_script = f"""#!/bin/bash
+source {options.venv_dir}/bin/activate
+{options.venv_python} - << END
+successes = []
+failures = []
+counter = 0
+for package in [{packages_str}]:
+    counter += 1
+    try:
+        __import__(package)
+        successes.append(package)
+    except ImportError:
+        failures.append(package)
+if failures:
+    print("Failed packages: " + ", ".join(failures))
+elif len(successes) != counter: #This should never happen.
+    print(f"Warning: No failures, but only recorded {{len(successes)}} successes out of {{counter}} iterations through the loop.")
+else:
+    print(f"All {{len(successes)}} (out of {{counter}}) packages imported successfully.")
+END
+"""
+
+    test_script_path = os.path.join(options.script_dir, f"test_imports.sh")
+    logger.info(f"Writing test script to {test_script_path}")
+    with open(test_script_path, 'w') as f:
+        f.write(test_script)
+    os.chmod(test_script_path, 0o755) #Permissions: -rwxr-xr-x, which means owner can read, write, and execute; group and others can read and execute.
+
+    # Run the test script
+    result = subprocess.run([test_script_path], check=True, capture_output=True, text=True)
+    logger.info(result.stdout)
+    if result.stderr:
+        logger.error(result.stderr)
+    
+    # This returns true if all packages imported successfully
+    return "packages imported successfully" in result.stdout
 
 def recover_pip_versions(output: str, options: Options) -> None:
     """Parse the output to recover the current and new pip versions."""
