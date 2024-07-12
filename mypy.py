@@ -12,8 +12,12 @@ import json
 import copy
 from typing import Dict, List, Set, Tuple
 
+#DEBUGGING: BUILD A SYSTEM THAT CAN PLOT THE VALUES OF ALL VARIABLES AT ALL POINTS DURING A PROGRAM'S EXECUTION! SO I CAN SEE INITIALIZED VARIABLES AS A POINT ON THE LEFT OF A PLOT, AND THE FINAL VALUE ON THE RIGHT. 
+
+#LOOK FOR BAD PASSES BY DOING WHAT JOSH SUGGESTED IN THE EMAIL, BUT THEN ALSO 25 CROSSOVER POINTS AND 27 CM.
+
 class Options():
-    '''Class that has all global options in one place.'''
+    """Class that has all global options in one place."""
     def __init__(self) -> None:
         self.venv_name: str = 'myenv' # Can NOT include dashes ('-')
         self.mypy_dir = os.path.expanduser(os.path.join('~','mypy'))
@@ -46,6 +50,9 @@ def find_imports_in_script(file_path: str, all_imports: Set[str]) -> None:
             line = line.strip()
             if '#' in line:
                 line = line.split('#')[0].strip()  # Remove comments from the line
+            
+            if ';' in line:
+                line = line.split(';')[0].strip()  # Remove other commands from the line
 
             if line.startswith('import '):
                 # Handle multiple imports on the same line
@@ -68,7 +75,6 @@ def find_imports_in_script(file_path: str, all_imports: Set[str]) -> None:
                     all_imports.add(this_import)
 
 def get_all_imports(directory: str) -> Set[str]:
-
     all_imports = set()
     total_files = sum(len(files) for _, _, files in os.walk(directory) if 'myenv' not in _)
     processed_files = 0
@@ -250,7 +256,7 @@ def install_package(package_name: str, options: Options) -> bool:
 def check_packages_in_venv(options: Options) -> bool:
     """Create and run a script to test package imports in the virtual environment."""
     packages_str = ", ".join(f"'{pkg}'" for pkg in options.packages)  # Properly format the list of packages as strings
-    test_script = f"""#!/bin/bash
+    test_script = f"""
 source {options.venv_dir}/bin/activate
 {options.venv_python} - << END
 successes = []
@@ -272,14 +278,8 @@ else:
 END
 """
 
-    test_script_path = os.path.join(options.script_dir, f"test_imports.sh")
-    logger.info(f"Writing test script to {test_script_path}")
-    with open(test_script_path, 'w') as f:
-        f.write(test_script)
-    os.chmod(test_script_path, 0o755) #Permissions: -rwxr-xr-x, which means owner can read, write, and execute; group and others can read and execute.
-
     # Run the test script
-    result = subprocess.run([test_script_path], check=True, capture_output=True, text=True)
+    result = subprocess.run(test_script, shell=True, executable='/bin/bash', check=True, capture_output=True, text=True)
     logger.info(result.stdout)
     if result.stderr:
         logger.error(result.stderr)
