@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+# Emmy Killett
+
 import os
 import sys
 import subprocess
@@ -12,12 +14,8 @@ import json
 import copy
 from typing import Dict, List, Set, Tuple
 
-#DEBUGGING: BUILD A SYSTEM THAT CAN PLOT THE VALUES OF ALL VARIABLES AT ALL POINTS DURING A PROGRAM'S EXECUTION! SO I CAN SEE INITIALIZED VARIABLES AS A POINT ON THE LEFT OF A PLOT, AND THE FINAL VALUE ON THE RIGHT. 
-
-#LOOK FOR BAD PASSES BY DOING WHAT JOSH SUGGESTED IN THE EMAIL, BUT THEN ALSO 25 CROSSOVER POINTS AND 27 CM.
-
 class Options():
-    """Class that has all global options in one place."""
+    '''Class that has all global options in one place.'''
     def __init__(self) -> None:
         self.venv_name: str = 'myenv' # Can NOT include dashes ('-')
         self.mypy_dir = os.path.expanduser(os.path.join('~','mypy'))
@@ -31,8 +29,48 @@ class Options():
         self.requirements_file = os.path.join(self.venv_dir, "requirements.txt")
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+#logging.basicConfig(level=logging.INFO)
+#logger = logging.getLogger(__name__)
+def logging_setup(basename: str) -> None:
+    """
+    Set up logging to write to a file and the console.
+    Args:
+        basename (str): The base name for the log files. The current date/time will be appended to this name.
+    Returns:
+        None
+    """
+    # Create a custom logger
+    global logger
+    logger = logging.getLogger("my_logger")
+    logger.setLevel(logging.DEBUG)
+    # Create a file handler
+    global now
+    now = datetime.now()
+    log_base = "."+basename+"-log-"+now.strftime('%Y%m%d-%H%M%S')
+    log_info = log_base+".out"
+    log_errors = log_base+".err"
+    # Create a file handler for debug and info messages
+    debug_info_handler = logging.FileHandler(log_info)
+    debug_info_handler.setLevel(logging.DEBUG)
+    # Create a file handler for warning, error, and critical messages
+    warning_error_handler = logging.FileHandler(log_errors)
+    warning_error_handler.setLevel(logging.WARNING)
+    # Create a stream handler (console)
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG)
+    # Set a log format
+    log_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    # Apply the format to all handlers
+    debug_info_handler.setFormatter(log_format)
+    warning_error_handler.setFormatter(log_format)
+    console_handler.setFormatter(log_format)
+    # Add the handlers to the logger
+    logger.addHandler(debug_info_handler)
+    logger.addHandler(warning_error_handler)
+    logger.addHandler(console_handler)
+
+print(__name__)
+logging_setup(__name__)
 
 # Attempt to import pipreqs
 try:
@@ -40,41 +78,66 @@ try:
     logger.info("pipreqs is available, so it will be used.")
     PIPREQS_AVAILABLE = True
 except ImportError:
-    logger.warning("pipreqs is not available. Try installing it with 'pip install pipreqs'.")
+    #This used to be a logger.warning() but I changed it to logger.info() because it's not really a warning.
+    logger.info("pipreqs is not available. Try installing it with 'pip install pipreqs'.")
     PIPREQS_AVAILABLE = False
 
 def find_imports_in_script(file_path: str, all_imports: Set[str]) -> None:
-    with open(file_path, 'r') as file:
-        lines = file.readlines()
-        for line in lines:
-            line = line.strip()
-            if '#' in line:
-                line = line.split('#')[0].strip()  # Remove comments from the line
-            
-            if ';' in line:
-                line = line.split(';')[0].strip()  # Remove other commands from the line
+    encodings = [
+    'utf_8', 'latin_1', 'ascii', 'iso8859_1', 'big5', 'utf_8_sig', 'utf_16', 'utf_16_be', 'utf_16_le', 'utf_32', 'utf_32_be', 'utf_32_le',
+    'cp1252', 'cp1251', 'cp1250', 'cp1253', 'cp1254', 'cp1255', 'cp1256', 'cp1257', 'cp1258',
+    'iso8859_2', 'iso8859_3', 'iso8859_4', 'iso8859_5', 'iso8859_6', 'iso8859_7', 'iso8859_8', 'iso8859_9', 
+    'iso8859_10', 'iso8859_11', 'iso8859_13', 'iso8859_14', 'iso8859_15', 'iso8859_16',
+    'cp437', 'cp850', 'cp852', 'cp855', 'cp857', 'cp858', 'cp860', 'cp861', 'cp862', 'cp863', 'cp864', 'cp865', 'cp866', 'cp869',
+    'cp037', 'cp424', 'cp500', 'cp720', 'cp737', 'cp775', 'cp874', 'cp875', 'cp932', 'cp949', 'cp950', 'cp1006', 'cp1026', 
+    'cp1125', 'cp1140',
+    'big5hkscs', 'gb2312', 'gbk', 'gb18030', 'euc_jp', 'euc_jis_2004', 'euc_jisx0213', 'euc_kr', 
+    'iso2022_jp', 'iso2022_jp_1', 'iso2022_jp_2', 'iso2022_jp_2004', 'iso2022_jp_3', 'iso2022_jp_ext', 'iso2022_kr', 
+    'johab', 'koi8_r', 'koi8_t', 'koi8_u', 'kz1048', 'mac_cyrillic', 'mac_greek', 'mac_iceland', 'mac_latin2', 'mac_roman', 
+    'mac_turkish', 'ptcp154', 'shift_jis', 'shift_jis_2004', 'shift_jisx0213', 'hz', 'tis_620', 'euc_tw', 'iso2022_tw',]
 
-            if line.startswith('import '):
-                # Handle multiple imports on the same line
-                parts = re.split(r'import ', line, maxsplit=1)
-                if len(parts) > 1:
-                    imports_list = parts[1].split(',')
-                else:
-                    imports_list = []
-            elif line.startswith('from '):
-                # Handle 'from X import Y' type of lines
-                parts = re.split(r'\s+', line, maxsplit=2)
-                imports_list = [parts[1]]
+    for encoding in encodings:
+        try:
+            with open(file_path, 'r', encoding=encoding) as file:
+                lines = file.readlines()
+            break  # Exit the loop if reading is successful
+        except UnicodeDecodeError:
+            logger.error(f"Unicode decode error with encoding {encoding} reading file {file_path}")
+            continue  # Try the next encoding
+        except Exception as e:
+            logger.error(f"Error reading file {file_path} with encoding {encoding}: {str(e)}")
+            return
+
+    for line in lines:
+        line = line.strip()
+        if '#' in line:
+            line = line.split('#')[0].strip()  # Remove comments from the line
+        
+        if ';' in line:
+            line = line.split(';')[0].strip()  # Remove other commands from the line
+
+        if line.startswith('import '):
+            # Handle multiple imports on the same line
+            parts = re.split(r'import ', line, maxsplit=1)
+            if len(parts) > 1:
+                imports_list = parts[1].split(',')
             else:
-                continue
+                imports_list = []
+        elif line.startswith('from '):
+            # Handle 'from X import Y' type of lines
+            parts = re.split(r'\s+', line, maxsplit=2)
+            imports_list = [parts[1]]
+        else:
+            continue
 
-            for imp in imports_list:
-                imp = imp.split(' as ')[0].strip()  # Remove "as alias" part
-                this_import = imp.split('.')[0].strip()
-                if this_import and this_import not in all_imports:
-                    all_imports.add(this_import)
+        for imp in imports_list:
+            imp = imp.split(' as ')[0].strip()  # Remove "as alias" part
+            this_import = imp.split('.')[0].strip()
+            if this_import and this_import not in all_imports:
+                all_imports.add(this_import)
 
 def get_all_imports(directory: str) -> Set[str]:
+
     all_imports = set()
     total_files = sum(len(files) for _, _, files in os.walk(directory) if 'myenv' not in _)
     processed_files = 0
@@ -636,6 +699,7 @@ def find_match_dir_in_cache(options: Options) -> str:
             logger.error(f"Invalid combination of flags. {options.args.latest = }, {options.args.last_used = }, {options.args.smallest = }")
 
 def main():
+    start_time = datetime.now()
     options = Options()
     options.args = parse_arguments()
     options.timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
@@ -692,11 +756,17 @@ def main():
             logger.info(f"Using directory: {match_dir}")
 
         options.set_venv_dir(match_dir)
+        start_venv_time = datetime.now()
+        elapsed_time = start_venv_time - start_time
+        logger.info(f"Elapsed time: {elapsed_time}")
         logger.info(f"Activating virtual environment: {options.activate_script}")
 
         activate_cmd = f"bash -c '{options.activate_script} && echo \"Virtual environment activated.\" && {options.venv_python} {options.python_script} {' '.join(options.script_args)}'"
         guard_examines(options)
         subprocess.run(activate_cmd, shell=True)
+        end_time = datetime.now()
+        elapsed_time = end_time - start_venv_time
+        logger.info(f"Elapsed time since activation of virtual environment: {elapsed_time}")
         save_options_to_json(options)
 
 if __name__ == "__main__":
