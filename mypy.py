@@ -28,9 +28,15 @@ class Options():
         self.venv_pip          = os.path.join(self.venv_dir, 'bin', 'pip')
         self.requirements_file = os.path.join(self.venv_dir, "requirements.txt")
 
+class MemoryHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.logs = []
+
+    def emit(self, record):
+        self.logs.append(self.format(record))
+
 # Configure logging
-#logging.basicConfig(level=logging.INFO)
-#logger = logging.getLogger(__name__)
 def logging_setup(basename: str) -> None:
     """
     Set up logging to write to a file and the console.
@@ -39,8 +45,8 @@ def logging_setup(basename: str) -> None:
     Returns:
         None
     """
+    global logger, memory_handler
     # Create a custom logger
-    global logger
     logger = logging.getLogger("my_logger")
     logger.setLevel(logging.DEBUG)
     # Create a file handler
@@ -58,16 +64,21 @@ def logging_setup(basename: str) -> None:
     # Create a stream handler (console)
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.DEBUG)
+    # Create a memory handler for capturing error messages
+    memory_handler = MemoryHandler()
+    memory_handler.setLevel(logging.ERROR)
     # Set a log format
     log_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     # Apply the format to all handlers
     debug_info_handler.setFormatter(log_format)
     warning_error_handler.setFormatter(log_format)
     console_handler.setFormatter(log_format)
+    memory_handler.setFormatter(log_format)
     # Add the handlers to the logger
     logger.addHandler(debug_info_handler)
     logger.addHandler(warning_error_handler)
     logger.addHandler(console_handler)
+    logger.addHandler(memory_handler)
 
 print(__name__)
 logging_setup(__name__)
@@ -83,6 +94,9 @@ except ImportError:
     PIPREQS_AVAILABLE = False
 
 def find_imports_in_script(file_path: str, all_imports: Set[str]) -> None:
+    if os.path.islink(file_path):
+        logger.info(f"Skipping symbolic link {file_path}")
+        return
     encodings = [
     'utf_8', 'latin_1', 'ascii', 'iso8859_1', 'big5', 'utf_8_sig', 'utf_16', 'utf_16_be', 'utf_16_le', 'utf_32', 'utf_32_be', 'utf_32_le',
     'cp1252', 'cp1251', 'cp1250', 'cp1253', 'cp1254', 'cp1255', 'cp1256', 'cp1257', 'cp1258',
@@ -134,6 +148,8 @@ def find_imports_in_script(file_path: str, all_imports: Set[str]) -> None:
             imp = imp.split(' as ')[0].strip()  # Remove "as alias" part
             this_import = imp.split('.')[0].strip()
             if this_import and this_import not in all_imports:
+                if this_import in ['a', 'an', 'dl', 'the', 'it', 'x', 'xx', 'above', 'another', '__builtin__', 'within',]:
+                    logger.warning(f"Unusual import: {this_import} from line {line} in file {file_path}")
                 all_imports.add(this_import)
 
 def get_all_imports(directory: str) -> Set[str]:
@@ -143,7 +159,7 @@ def get_all_imports(directory: str) -> Set[str]:
     processed_files = 0
 
     for root, _, files in os.walk(directory):
-        if 'myenv' in root:
+        if 'myenv' in root or 'anaconda3' in root or '.conda' in root:
             continue
         for file in files:
             if file.endswith('.py'):
@@ -606,7 +622,6 @@ def smallest_venv(final_venv_folders: Dict[str, Dict[str, int]]) -> str:
 def check_venv_dir(options: Options, options_from_cache: Options) -> bool:
     """Check if the last used venv is still valid."""
     if hasattr(options_from_cache, 'venv_dir'):
-        # Check if the last used venv is still valid using isdir:
         if os.path.isdir(options_from_cache.venv_dir):
             if options.uninstalled_imports.issubset(options_from_cache.uninstalled_imports):
                 options_from_cache.uninstalled_imports = options.uninstalled_imports
@@ -766,8 +781,13 @@ def main():
         subprocess.run(activate_cmd, shell=True)
         end_time = datetime.now()
         elapsed_time = end_time - start_venv_time
-        logger.info(f"Elapsed time since activation of virtual environment: {elapsed_time}")
+        logger.info(f"Elapsed time since activating virtual environment: {elapsed_time}")
         save_options_to_json(options)
+
+    # Print all captured error messages at the end
+    print("\nCaptured error messages:")
+    for log in memory_handler.logs:
+        print(log)
 
 if __name__ == "__main__":
     main()
