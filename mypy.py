@@ -13,6 +13,7 @@ import re
 import json
 import copy
 import shutil
+import venv
 from typing import Dict, List, Set, Tuple
 
 class Options():
@@ -21,13 +22,15 @@ class Options():
         self.venv_name: str = 'myenv' # Can NOT include dashes ('-')
         self.mypy_dir = os.path.expanduser(os.path.join('~','mypy'))
         self.packages_dir = os.path.join(self.mypy_dir, 'packages')
+        self.test_dir = os.path.join(self.mypy_dir, 'test')
 
     def set_venv_dir(self, venv_dir: str) -> None:
         self.venv_dir = os.path.expanduser(venv_dir)
         self.activate_script   = 'source ' + os.path.join(self.venv_dir, 'bin', 'activate')
-        self.venv_python       = os.path.join(self.venv_dir, 'bin', 'python')
-        self.venv_pip          = os.path.join(self.venv_dir, 'bin', 'pip')
-        self.requirements_file = os.path.join(self.venv_dir, "requirements.txt")
+        self.venv_python          = os.path.join(self.venv_dir, 'bin', 'python')
+        self.venv_pip             = os.path.join(self.venv_dir, 'bin', 'pip')
+        self.requirements_file    = os.path.join(self.venv_dir, "requirements.txt")
+        self.download_script_path = os.path.join(self.venv_dir, "download_packages.sh")
 
 class MemoryHandler(logging.Handler):
     def __init__(self):
@@ -266,7 +269,6 @@ echo "Downloading packages..."
 {options.venv_pip} download -r {options.requirements_file} -d {options.packages_dir}
 """
 
-    options.download_script_path = os.path.join(options.venv_dir, f"download_packages.sh")
     logger.info(f"Writing download script to {options.download_script_path}")
     with open(options.download_script_path, 'w') as f:
         f.write(download_script)
@@ -293,7 +295,7 @@ echo "Downloading packages..."
 
     # Now, attempt to install each package individually
     failed_packages = []
-    for package in options.packages:
+    for package in options.uninstalled_imports:
         if not install_package(package, options):
             failed_packages.append(package)
     
@@ -335,7 +337,8 @@ def install_package(package_name: str, options: Options) -> bool:
 
 def check_packages_in_venv(options: Options) -> bool:
     """Create and run a script to test package imports in the virtual environment."""
-    packages_str = ", ".join(f"'{pkg}'" for pkg in options.packages)  # Properly format the list of packages as strings
+    use_pip_list(options)
+    packages_str = ", ".join(f"'{pkg}'" for pkg in options.uninstalled_imports)  # Properly format the set as strings
     test_script = f"""
 source {options.venv_dir}/bin/activate
 {options.venv_python} - << END
@@ -391,16 +394,73 @@ def recover_pip_versions(output: str, options: Options) -> None:
 
 def pretty_packages_list(options: Options) -> str:
     maxnum = 5
-    if len(options.packages) > maxnum:
-        first_five = '-'.join(options.packages[:maxnum])
-        suffix = f'-and-{len(options.packages) - maxnum}-more'
+    packages_list = list(options.uninstalled_imports)
+    if len(packages_list) > maxnum:
+        first_five = '-'.join(packages_list[:maxnum])
+        suffix = f'-and-{len(packages_list) - maxnum}-more'
     else:
-        first_five = '-'.join(options.packages)
+        first_five = '-'.join(packages_list)
         suffix = ''
     
     return first_five + suffix
 
+def use_pip_list(options: Options) -> None:
+    """Use the pip list command to find all installed packages and use that pip list to modify the uninstalled and installed imports."""
+    if len(options.pip_list) == 0:
+        # Create virtual environment
+        venv.create(options.test_dir, with_pip=True)
+        python_executable = os.path.join(options.test_dir, 'bin', 'python')
+
+        # Run custom list command using the Python executable from the virtual environment
+        list_command_script = """
+import importlib.metadata
+import pkgutil
+import sys
+
+def list_installed_packages():
+    installed_packages = [dist.metadata['Name'] for dist in importlib.metadata.distributions()]
+    return installed_packages
+
+def list_available_modules():
+    available_modules = [module.name for module in pkgutil.iter_modules()]
+    return available_modules
+
+def list_builtin_modules():
+    builtin_modules = sys.builtin_module_names
+    return builtin_modules
+
+installed_packages = list_installed_packages()
+available_modules = list_available_modules()
+builtin_modules = list_builtin_modules()
+
+print("\\n".join(installed_packages + available_modules + list(builtin_modules)))
+"""
+
+        list_command = [python_executable, "-c", list_command_script]
+
+        try:
+            result = subprocess.run(list_command, check=True, capture_output=True, text=True)
+            #logger.info(f"Output:\n{result.stdout}")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"{e}")
+
+        # Use regular expressions to find all package names
+        options.pip_list = re.findall(r'^[^\s]+', result.stdout, re.MULTILINE)
+        options.pip_list = [pkg for pkg in options.pip_list if pkg != 'Package' and not all(c == '-' for c in pkg)]
+        #logger.info(f"\n{options.pip_list = }")
+
+        pip_list_filename = os.path.join(options.mypy_dir, f"pip_list_{options.timestamp}.txt")
+        with open(pip_list_filename, 'w') as f:
+            f.write('\n'.join(options.pip_list))
+    
+    new_uninstalled_imports = options.installed_imports - set(options.pip_list)
+    logger.info(f"{new_uninstalled_imports = }")
+    options.uninstalled_imports = options.uninstalled_imports.union(new_uninstalled_imports)
+    options.installed_imports = options.installed_imports - new_uninstalled_imports
+
 def setup_virtualenv(options: Options) -> None:
+    use_pip_list(options)
+
     """Setup a virtual environment and install packages."""
     options.pretty_list = pretty_packages_list(options)
     # Create a virtual environment directory that starts with 'failed' in case the process fails. Only remove the 'failed' part if this process completes successfully.
@@ -409,7 +469,7 @@ def setup_virtualenv(options: Options) -> None:
 
     logger.info(f"Writing packages to {options.requirements_file}")
     with open(options.requirements_file, 'w') as f:
-        for package in options.packages:
+        for package in options.uninstalled_imports:
             f.write(f"{package}\n")
 
     logger.info("Creating virtual environment...")
@@ -628,8 +688,7 @@ def check_venv_dir(options: Options, options_from_cache: Options) -> bool:
         if os.path.isdir(options_from_cache.venv_dir):
             if options.uninstalled_imports.issubset(options_from_cache.uninstalled_imports):
                 options_from_cache.uninstalled_imports = options.uninstalled_imports
-                options_from_cache.packages = list(options.uninstalled_imports)
-                print(f"{options_from_cache.packages = }")
+                options_from_cache.installed_imports = options.installed_imports
                 if check_packages_in_venv(options_from_cache):
                     return 1
                 else:
@@ -696,7 +755,6 @@ def find_match_dir_in_cache(options: Options) -> str:
             options_latest = copy.deepcopy(options)
             options_latest.set_venv_dir(os.path.join(options.mypy_dir, latest_venv(final_venv_folders)))
             options_latest.uninstalled_imports = options.uninstalled_imports
-            options_latest.packages = list(options.uninstalled_imports)
             if check_venv_dir(options, options_latest):
                 return options_latest.venv_dir
             else:
@@ -707,7 +765,6 @@ def find_match_dir_in_cache(options: Options) -> str:
             options_smallest = copy.deepcopy(options)
             options_smallest.set_venv_dir(os.path.join(options.mypy_dir, smallest_venv(final_venv_folders)))
             options_smallest.uninstalled_imports = options.uninstalled_imports
-            options_smallest.packages = list(options.uninstalled_imports)
             if check_venv_dir(options, options_smallest):
                 return options_smallest.venv_dir
             else:
@@ -749,6 +806,17 @@ def main():
     if not os.path.isdir(options.packages_dir):
         logger.info(f"Directory {options.packages_dir} does not exist yet, so it is being created.")
         os.makedirs(options.packages_dir, exist_ok=True)
+    
+    #Look for files in options.mypy_dir that start with pip_list and load the most recent one.
+    options.pip_list = []
+    pip_list_files = sorted([f for f in os.listdir(options.mypy_dir) if f.startswith('pip_list')],reverse=True)
+    if pip_list_files:
+        try:
+            with open(os.path.join(options.mypy_dir, pip_list_files[0]), 'r') as file:
+                for line in file:
+                    options.pip_list.append(line.strip())
+        except:
+            logger.error(f"Error reading {pip_list_files[0]}")
 
     if options.args.full:
         logger.info("Building a virtual environment that can run every python script in this directory.")
@@ -759,7 +827,6 @@ def main():
     installed_imports, uninstalled_imports, bad_imports = list_packages(script_dir_or_file)
     options.installed_imports = installed_imports
     options.uninstalled_imports = uninstalled_imports
-    options.packages = list(uninstalled_imports)
     logger.info(f"Uninstalled imports: {options.uninstalled_imports}")
     if bad_imports:
         logger.warning(f"Bad imports: {bad_imports}")
@@ -804,11 +871,38 @@ def main():
         logger.info(f"Elapsed time since activating virtual environment: {elapsed_time}")
         if result.returncode != 0:
             logger.error(f"Error running script: {result.stderr}")
-        else:
+        elif options.venv_dir.startswith('failed-'):
             #If the program has made it to this point, it has run successfully, so the venv directory can be renamed.
             os.rename(options.venv_dir, options.venv_dir.replace('failed-', ''))
-            #Also need to change the venv_dir in options to reflect the new name:
-            options.set_venv_dir(options.venv_dir.replace('failed-', ''))
+            options.set_venv_dir(       options.venv_dir.replace('failed-', ''))
+            #Now edit the pyvenv.cfg file inside it:
+            cfg_file_path = os.path.join(options.venv_dir, 'pyvenv.cfg')
+            # Read the content of the file
+            with open(cfg_file_path, 'r') as file:
+                lines = file.readlines()
+            # Modify the command line
+            modified_lines = []
+            for line in lines:
+                if line.startswith("command = "):
+                    line = line.replace("/failed-", "/")
+                modified_lines.append(line)
+            # Write the modified content back to the file
+            with open(cfg_file_path, 'w') as file:
+                file.writelines(modified_lines)
+            print(f"Updated {cfg_file_path} successfully.")
+            # Read the content of the file
+            with open(options.download_script_path, 'r') as file:
+                lines = file.readlines()
+            # Modify the command line
+            modified_lines = []
+            for line in lines:
+                line = line.replace("/failed-", "/")
+                modified_lines.append(line)
+            # Write the modified content back to the file
+            with open(options.download_script_path , 'w') as file:
+                file.writelines(modified_lines)
+            print(f"Updated {options.download_script_path} successfully.")
+
         save_options_to_json(options)
 
     # Print all captured error messages at the end
