@@ -12,6 +12,7 @@ import ast
 import re
 import json
 import copy
+import shutil
 from typing import Dict, List, Set, Tuple
 
 class Options():
@@ -67,6 +68,7 @@ def logging_setup(basename: str) -> None:
     # Create a memory handler for capturing error messages
     memory_handler = MemoryHandler()
     memory_handler.setLevel(logging.ERROR)
+    memory_handler.setLevel(logging.WARNING)
     # Set a log format
     log_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     # Apply the format to all handlers
@@ -80,8 +82,7 @@ def logging_setup(basename: str) -> None:
     logger.addHandler(console_handler)
     logger.addHandler(memory_handler)
 
-print(__name__)
-logging_setup(__name__)
+logging_setup("mypy")
 
 # Attempt to import pipreqs
 try:
@@ -108,7 +109,7 @@ def find_imports_in_script(file_path: str, all_imports: Set[str]) -> None:
     'big5hkscs', 'gb2312', 'gbk', 'gb18030', 'euc_jp', 'euc_jis_2004', 'euc_jisx0213', 'euc_kr', 
     'iso2022_jp', 'iso2022_jp_1', 'iso2022_jp_2', 'iso2022_jp_2004', 'iso2022_jp_3', 'iso2022_jp_ext', 'iso2022_kr', 
     'johab', 'koi8_r', 'koi8_t', 'koi8_u', 'kz1048', 'mac_cyrillic', 'mac_greek', 'mac_iceland', 'mac_latin2', 'mac_roman', 
-    'mac_turkish', 'ptcp154', 'shift_jis', 'shift_jis_2004', 'shift_jisx0213', 'hz', 'tis_620', 'euc_tw', 'iso2022_tw',]
+    'mac_turkish', 'ptcp154', 'shift_jis', 'shift_jis_2004', 'shift_jisx0213', 'hz', 'tis_620', 'euc_tw', 'iso2022_tw']
 
     for encoding in encodings:
         try:
@@ -116,7 +117,7 @@ def find_imports_in_script(file_path: str, all_imports: Set[str]) -> None:
                 lines = file.readlines()
             break  # Exit the loop if reading is successful
         except UnicodeDecodeError:
-            logger.error(f"Unicode decode error with encoding {encoding} reading file {file_path}")
+            logger.warning(f"Unicode decode error with encoding {encoding} reading file {file_path}")
             continue  # Try the next encoding
         except Exception as e:
             logger.error(f"Error reading file {file_path} with encoding {encoding}: {str(e)}")
@@ -402,7 +403,8 @@ def pretty_packages_list(options: Options) -> str:
 def setup_virtualenv(options: Options) -> None:
     """Setup a virtual environment and install packages."""
     options.pretty_list = pretty_packages_list(options)
-    options.set_venv_dir(os.path.join(options.mypy_dir, f"{options.venv_name}-versionless-{options.timestamp}-{options.pretty_list}"))
+    # Create a virtual environment directory that starts with 'failed' in case the process fails. Only remove the 'failed' part if this process completes successfully.
+    options.set_venv_dir(os.path.join(options.mypy_dir, f"failed-{options.venv_name}-versionless-{options.timestamp}-{options.pretty_list}"))
     os.makedirs(options.venv_dir, exist_ok=True)
 
     logger.info(f"Writing packages to {options.requirements_file}")
@@ -430,8 +432,9 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a python script with optional flags.")
     parser.add_argument('script', help="The python script to run.")
     parser.add_argument('script_args', nargs='*', help="Optional arguments for the python script.")
-    parser.add_argument('-full', action='store_true', help="Build a virtual environment that can run every python script in this directory.")
-    parser.add_argument('-blank-slate', action='store_true', help="Delete everything in ~/mypy/.")
+    parser.add_argument('-full', action='store_true', help="Build a virtual environment (venv) that can run every python script in this directory.")
+    parser.add_argument('-blank-slate', action='store_true', help="Delete everything in ~/mypy/ and all mypy .json files and all mypy .out and .err files in the current directory.")
+    parser.add_argument('-y', action='store_true', help='Automatically say yes to the prompt')
     parser.add_argument('-no-cache', action='store_true', help="Don't use the cache.")
     parser.add_argument('-latest', action='store_true', help="Load the latest venv in the cache which has all the packages needed now.")
     parser.add_argument('-last-used', action='store_true', help="Load the last used venv in the cache, but if that fails try the latest venv which has all the packages needed now.")
@@ -543,7 +546,7 @@ def guard_examines(options: Options) -> None:
 
 def save_options_to_json(options: Options) -> None:
     """Save the options object to a JSON file."""
-    options.json_filename = os.path.join(options.script_dir, f"{os.path.basename(options.python_script)}-mypy-last-used-on-{options.timestamp}.json")
+    options.json_filename = os.path.join(options.script_dir, f".{os.path.basename(options.python_script)}-mypy-last-used-on-{options.timestamp}.json")
     
     # Convert options to a dictionary and handle sets
     options_dict = options.__dict__
@@ -632,7 +635,7 @@ def check_venv_dir(options: Options, options_from_cache: Options) -> bool:
                 else:
                     logger.error(f"The cached venv directory {options_from_cache.venv_dir} failed check_packages_in_venv.")
             else:
-                logger.error(f"The cached venv directory {options_from_cache.venv_dir} does not have all the currently required packages.")
+                logger.info(f"The cached venv directory {options_from_cache.venv_dir} does not have all the currently required packages.")
         else:
             logger.error(f"The cached venv directory {options_from_cache.venv_dir} is no longer valid.")
     return 0
@@ -642,7 +645,7 @@ def find_match_dir_in_cache(options: Options) -> str:
         options.args.last_used = True #If no flags are set, then the default is to load the last used venv in the cache
     if options.args.last_used and not options.args.latest and not options.args.smallest:
         try: # Try to load the last used venv in the cache
-            json_files = [f for f in os.listdir(options.script_dir) if f.startswith(os.path.basename(options.python_script)) and f.endswith('.json')]
+            json_files = [f for f in os.listdir(options.script_dir) if f.startswith("."+os.path.basename(options.python_script)) and f.endswith('.json')]
             if json_files:
                 if len(json_files) > 1:
                     json_files.sort(key=lambda x: x.split('-')[4], reverse=True)
@@ -650,7 +653,7 @@ def find_match_dir_in_cache(options: Options) -> str:
                 if check_venv_dir(options, options_last_used):
                     return options_last_used.venv_dir
                 else:
-                    logger.error("The last used cache is invalid. Trying to load the latest matching venv now.")
+                    logger.info("Trying to load the latest matching venv now.")
         except:
             logger.error("The last used cache encountered a problem. Trying to load the latest matching venv now.")
         options.args.latest    = True #If that didn't work, try to load the latest venv in the cache
@@ -719,18 +722,33 @@ def main():
     options.args = parse_arguments()
     options.timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
 
-    if not os.path.isdir(options.mypy_dir):
-        logger.warning(f"Directory {options.mypy_dir} does not exist yet, so it is being created.")
-        os.makedirs(options.mypy_dir, exist_ok=True)
-    if not os.path.isdir(options.packages_dir):
-        logger.warning(f"Directory {options.packages_dir} does not exist yet, so it is being created.")
-        os.makedirs(options.packages_dir, exist_ok=True)
-
     options.python_script = options.args.script
     options.script_args = options.args.script_args
 
     options.script_dir = os.path.abspath(os.path.dirname(options.python_script))
     logger.info(f"Directory where the script to run is located: {options.script_dir}")
+
+    if options.args.blank_slate:
+        if not options.args.y:
+            response = input("Are you sure you want to delete everything in ~/mypy/ and all mypy .json files in the current directory? (y/n) ")
+            if response.casefold() != 'y':
+                logger.info("Exiting without deleting anything.")
+                sys.exit(0)
+        logger.info("Deleting everything in ~/mypy/ and all mypy .json files and all mypy .out and .err files in the current directory.")
+        shutil.rmtree(options.mypy_dir, ignore_errors=True)
+        for file in os.listdir(options.script_dir):
+            if (file.startswith('.mypy-') and file.endswith('.out')) or \
+               (file.startswith('.mypy-') and file.endswith('.err')) or \
+               (file.startswith('.'+os.path.basename(options.python_script)) and file.endswith('.json')):
+                logger.info(f"Deleting {file}")
+                os.remove(os.path.join(options.script_dir, file))
+
+    if not os.path.isdir(options.mypy_dir):
+        logger.info(f"Directory {options.mypy_dir} does not exist yet, so it is being created.")
+        os.makedirs(options.mypy_dir, exist_ok=True)
+    if not os.path.isdir(options.packages_dir):
+        logger.info(f"Directory {options.packages_dir} does not exist yet, so it is being created.")
+        os.makedirs(options.packages_dir, exist_ok=True)
 
     if options.args.full:
         logger.info("Building a virtual environment that can run every python script in this directory.")
@@ -739,6 +757,7 @@ def main():
         script_dir_or_file = options.python_script
 
     installed_imports, uninstalled_imports, bad_imports = list_packages(script_dir_or_file)
+    options.installed_imports = installed_imports
     options.uninstalled_imports = uninstalled_imports
     options.packages = list(uninstalled_imports)
     logger.info(f"Uninstalled imports: {options.uninstalled_imports}")
@@ -778,14 +797,22 @@ def main():
 
         activate_cmd = f"bash -c '{options.activate_script} && echo \"Virtual environment activated.\" && {options.venv_python} {options.python_script} {' '.join(options.script_args)}'"
         guard_examines(options)
-        subprocess.run(activate_cmd, shell=True)
+        #I want to capture the output of the subprocess.run() so that I can print it at the end.
+        result = subprocess.run(activate_cmd, shell=True)
         end_time = datetime.now()
         elapsed_time = end_time - start_venv_time
         logger.info(f"Elapsed time since activating virtual environment: {elapsed_time}")
+        if result.returncode != 0:
+            logger.error(f"Error running script: {result.stderr}")
+        else:
+            #If the program has made it to this point, it has run successfully, so the venv directory can be renamed.
+            os.rename(options.venv_dir, options.venv_dir.replace('failed-', ''))
+            #Also need to change the venv_dir in options to reflect the new name:
+            options.set_venv_dir(options.venv_dir.replace('failed-', ''))
         save_options_to_json(options)
 
     # Print all captured error messages at the end
-    print("\nCaptured error messages:")
+    if memory_handler.logs: print("\nCaptured error messages:")
     for log in memory_handler.logs:
         print(log)
 
