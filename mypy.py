@@ -1,23 +1,50 @@
 #!/usr/bin/env python3
 
-# Emmy Killett
+# Written by Emmy Killett and ChatGPT 4o.
+
+manual_instructions = """
+It's convenient to add an alias to the shell configuration file so that typing ALIAS anywhere runs this program. The following steps assume this program is saved as mypy.py in the home directory (~), but you can adjust the path and filename to match your setup.
+
+If you're using bash, follow these steps to add the alias manually:
+1. Open your bash configuration file (~/.bashrc) in a text editor. For example:
+   nano ~/.bashrc
+2. Add the following line to the end of the file:
+   alias mypy="python3 ~/mypy.py"
+3. Save the file and exit the text editor.
+4. Reload your bash configuration by running the following command:
+   source ~/.bashrc
+
+If you're using zsh, follow these steps to add the alias manually:
+1. Open your zsh configuration file (~/.zshrc) in a text editor. For example:
+   nano ~/.zshrc
+2. Add the following line to the end of the file:
+   alias mypy="python3 ~/mypy.py"
+3. Save the file and exit the text editor.
+4. Reload your zsh configuration by running the following command:
+   source ~/.zshrc
+"""
 
 import os
 import sys
 import subprocess
 from datetime import datetime
 import argparse
-import logging
 import ast
 import re
 import json
 import copy
 import shutil
 import venv
+import pickle
 from typing import Dict, List, Set, Tuple
 
+from univ_defs import *
+logging_setup = LoggerSetup("mypy")
+logger = logging_setup.get_logger()
+memory_handler = logging_setup.get_memory_handler()
+
 class Options():
-    '''Class that has all global options in one place.'''
+    """Class that has all global options in one place."""
     def __init__(self) -> None:
         self.venv_name: str = 'myenv' # Can NOT include dashes ('-')
         self.mypy_dir = os.path.expanduser(os.path.join('~','mypy'))
@@ -32,61 +59,6 @@ class Options():
         self.requirements_file    = os.path.join(self.venv_dir, "requirements.txt")
         self.download_script_path = os.path.join(self.venv_dir, "download_packages.sh")
 
-class MemoryHandler(logging.Handler):
-    def __init__(self):
-        super().__init__()
-        self.logs = []
-
-    def emit(self, record):
-        self.logs.append(self.format(record))
-
-# Configure logging
-def logging_setup(basename: str) -> None:
-    """
-    Set up logging to write to a file and the console.
-    Args:
-        basename (str): The base name for the log files. The current date/time will be appended to this name.
-    Returns:
-        None
-    """
-    global logger, memory_handler
-    # Create a custom logger
-    logger = logging.getLogger("my_logger")
-    logger.setLevel(logging.DEBUG)
-    # Create a file handler
-    global now
-    now = datetime.now()
-    log_base = "."+basename+"-log-"+now.strftime('%Y%m%d-%H%M%S')
-    log_info = log_base+".out"
-    log_errors = log_base+".err"
-    # Create a file handler for debug and info messages
-    debug_info_handler = logging.FileHandler(log_info)
-    debug_info_handler.setLevel(logging.DEBUG)
-    # Create a file handler for warning, error, and critical messages
-    warning_error_handler = logging.FileHandler(log_errors)
-    warning_error_handler.setLevel(logging.WARNING)
-    # Create a stream handler (console)
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.DEBUG)
-    # Create a memory handler for capturing error messages
-    memory_handler = MemoryHandler()
-    memory_handler.setLevel(logging.ERROR)
-    memory_handler.setLevel(logging.WARNING)
-    # Set a log format
-    log_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    # Apply the format to all handlers
-    debug_info_handler.setFormatter(log_format)
-    warning_error_handler.setFormatter(log_format)
-    console_handler.setFormatter(log_format)
-    memory_handler.setFormatter(log_format)
-    # Add the handlers to the logger
-    logger.addHandler(debug_info_handler)
-    logger.addHandler(warning_error_handler)
-    logger.addHandler(console_handler)
-    logger.addHandler(memory_handler)
-
-logging_setup("mypy")
-
 # Attempt to import pipreqs
 try:
     import pipreqs
@@ -97,7 +69,102 @@ except ImportError:
     logger.info("pipreqs is not available. Try installing it with 'pip install pipreqs'.")
     PIPREQS_AVAILABLE = False
 
-def find_imports_in_script(file_path: str, all_imports: Set[str]) -> None:
+def detect_shell() -> str:
+    """Detect the current shell."""
+    shell = os.getenv("SHELL")
+    if shell:
+        return os.path.basename(shell)
+    return None
+
+def get_shell_rc_file(shell: str) -> str:
+    """Get the shell configuration file for the current user."""
+    home = os.path.expanduser("~")
+    if shell == "bash":
+        return os.path.join(home, ".bashrc")
+    elif shell == "zsh":
+        return os.path.join(home, ".zshrc")
+    elif shell == "fish":
+        return os.path.join(home, ".config", "fish", "config.fish")
+    elif shell == "csh":
+        return os.path.join(home, ".cshrc")
+    elif shell == "tcsh":
+        return os.path.join(home, ".tcshrc")
+    return None
+
+def get_alias_command(shell: str, alias_name: str, script_path: str) -> str:
+    """Get the alias command for the shell."""
+    if shell in ["bash", "zsh"]:
+        return f'alias {alias_name}="python3 {script_path}"'
+    elif shell == "fish":
+        return f'alias {alias_name} "python3 {script_path}"'
+    elif shell in ["csh", "tcsh"]:
+        return f"alias {alias_name} 'python3 {script_path}'"
+    return None
+
+def alias_exists(rc_file: str, alias_pattern: str) -> bool:
+    """Check if an alias exists in a file using a pattern."""
+    try:
+        with open(rc_file, "r") as file:
+            lines = file.readlines()
+        return any(re.search(alias_pattern, line) for line in lines)
+    except FileNotFoundError:
+        return False
+
+def alias_exists_in_files(files: List[str], alias_pattern: str) -> bool:
+    """Check if an alias exists in any of the files using a pattern."""
+    for file in files:
+        if alias_exists(file, alias_pattern):
+            return True
+    return False
+
+def get_additional_alias_files(shell: str) -> List[str]:
+    """Get additional alias files for the shell."""
+    home = os.path.expanduser("~")
+    if shell == "bash":
+        return [os.path.join(home, ".bash_aliases")]
+    elif shell == "zsh":
+        return [os.path.join(home, ".zsh_aliases")]
+    # Add other shells if they have alias files
+    return []
+
+def add_alias_to_rc(rc_file: str, alias_command: str, alias_name: str, additional_files: List[str] = []) -> None:
+    """Add an alias to the shell configuration file."""
+    try:
+        all_files = [rc_file] + additional_files
+        alias_pattern = rf"alias\s+{alias_name}\s*=.*"
+        if alias_exists_in_files(all_files, alias_pattern):
+            print(f"Alias already exists in one of the configuration files: {all_files}")
+        else:
+            try:
+                with open(rc_file, "a") as file:
+                    file.write(f"\n{alias_command}\n")
+                print(f"Alias added to {rc_file}")
+            except Exception as e:
+                logger.error(f"Failed to write alias to {rc_file}: {e}")
+                logger.error(manual_instructions)
+    except Exception as e:
+        logger.error(f"An error occurred while adding the alias: {e}")
+        logger.error(manual_instructions)
+
+def add_alias(mypy_path: str, alias_name: str) -> None:
+    """Add an alias to the shell configuration file."""
+    shell = detect_shell()
+    if shell:
+        rc_file = get_shell_rc_file(shell)
+        additional_files = get_additional_alias_files(shell)
+        if rc_file:
+            alias_command = get_alias_command(shell, alias_name, mypy_path)
+            if alias_command:
+                add_alias_to_rc(rc_file, alias_command, alias_name, additional_files)
+            else:
+                print(f"Unsupported shell: {shell}")
+        else:
+            print(f"Unsupported shell configuration file for shell: {shell}")
+    else:
+        print("Could not detect shell")
+
+def find_imports_in_script(options: Options, file_path: str, all_imports: Set[str]) -> None:
+    """Find all imports in a Python script and add them to a set. Recursively check local imports in any custom modules that are imported."""
     if os.path.islink(file_path):
         logger.info(f"Skipping symbolic link {file_path}")
         return
@@ -154,10 +221,24 @@ def find_imports_in_script(file_path: str, all_imports: Set[str]) -> None:
             if this_import and this_import not in all_imports:
                 if this_import in ['a', 'an', 'dl', 'the', 'it', 'x', 'xx', 'above', 'another', '__builtin__', 'within',]:
                     logger.warning(f"Unusual import: {this_import} from line {line} in file {file_path}")
-                all_imports.add(this_import)
+                if this_import in options.custom_modules.keys():
+                    if options.custom_modules[this_import] == file_path:
+                        logger.warning(f"Local import: {this_import} from line {line} in file {file_path} loads itself.")
+                    elif os.path.isdir(options.custom_modules[this_import]):
+                        #logger.warning(f"Local import: {this_import} from line {line} in file {file_path} loads a directory.")
+                        pass
+                    elif is_standard_path(options.custom_modules[this_import]):
+                        #logger.warning(f"Local import: {this_import} from line {line} in file {file_path} loads a standard library module.")
+                        pass
+                    else:
+                        logger.info(f"Local import: {this_import} from line {line} in file {file_path} loads {options.custom_modules[this_import]} so that file is being checked now:")
+                        options.loaded_custom_modules.add(this_import)
+                        find_imports_in_script(options, options.custom_modules[this_import], all_imports)
+                else:
+                    all_imports.add(this_import)
 
-def get_all_imports(directory: str) -> Set[str]:
-
+def get_all_imports(options: Options, directory: str) -> Set[str]:
+    """Get all imports from all Python scripts in a directory."""
     all_imports = set()
     total_files = sum(len(files) for _, _, files in os.walk(directory) if 'myenv' not in _)
     processed_files = 0
@@ -168,7 +249,7 @@ def get_all_imports(directory: str) -> Set[str]:
         for file in files:
             if file.endswith('.py'):
                 file_path = os.path.join(root, file)
-                find_imports_in_script(file_path, all_imports)
+                find_imports_in_script(options, file_path, all_imports)
                 processed_files += 1
                 logger.info(f"Processing files in {directory}: {processed_files}/{total_files}")
 
@@ -176,6 +257,7 @@ def get_all_imports(directory: str) -> Set[str]:
     return all_imports
 
 def check_if_library_exists(library_name: str) -> bool:
+    """Check if a library exists by attempting to import it."""
     try:
         result = subprocess.run(
             [sys.executable, '-c', f'import {library_name}'],
@@ -187,58 +269,60 @@ def check_if_library_exists(library_name: str) -> bool:
         logger.error(f"Error checking library {library_name}: {e}")
     return False
 
-def split_imports(all_imports: Set[str]) -> Tuple[Set[str], Set[str], Set[str]]:
-    known_bad_imports = {'bs4', 'snakeClass', 'pathfinding_salvo_rework', 'seaborn', 'DQN', 'bayesOpt', 'tkinter', 'msvcrt', 'univ_defs', 'search_for_media_files', 'kill_switch', 'list_required_packages', 'crossover', 'non_existent_module'}
+def split_imports(options: Options, all_imports: Set[str]) -> Tuple[Set[str], Set[str], Set[str]]:
+    """Split imports into installed, uninstalled, and bad imports."""
+    known_bad_imports = {'bs4', 'snakeClass', 'pathfinding_salvo_rework', 'seaborn', 'DQN', 'bayesOpt', 'tkinter', 'msvcrt', 'non_existent_module'}
     bad_imports = known_bad_imports.intersection(all_imports)
     all_imports = all_imports - bad_imports
     installed_imports = set()
     uninstalled_imports = set()
     total_imports = len(all_imports)
+    max_length = max(len(imp) for imp in all_imports)
 
     for i, imp in enumerate(all_imports, 1):
-        if check_if_library_exists(imp):
+        if check_if_library_exists(imp) or imp in options.custom_modules.keys():
             installed_imports.add(imp)
         else:
             uninstalled_imports.add(imp)
-        logger.info(f"Checking imports: {i}/{total_imports}")
+        logger.info(f"Checking import {imp:{max_length}} : {i}/{total_imports}")
 
     return installed_imports, uninstalled_imports, bad_imports
 
 def generate_requirements(directory: str) -> None:
+    """Generate a requirements file using pipreqs."""
     try:
         pipreqs.generate_requirements(directory)
     except Exception as e:
         logger.error(f"Error generating requirements file: {e}")
 
-def list_packages(python_dir_or_file: str) -> Tuple[Set[str], Set[str]]:
-    python_dir_or_file = os.path.expanduser(python_dir_or_file)
-
-    if os.path.isfile(python_dir_or_file):
+def list_packages(options: Options) -> None:
+    """List all installed and uninstalled packages that are imported in a directory or file. Return these sets inside the options object."""
+    options.script_dir_or_file = os.path.expanduser(options.script_dir_or_file)
+    options.loaded_custom_modules = set()
+    if os.path.isfile(options.script_dir_or_file):
         logger.info("Processing a single Python script.")
-        python_file = python_dir_or_file
+        python_file = options.script_dir_or_file
         all_imports = set()
-        find_imports_in_script(python_file, all_imports)
-    elif os.path.isdir(python_dir_or_file):
+        find_imports_in_script(options, python_file, all_imports)
+    elif os.path.isdir(options.script_dir_or_file):
         logger.info("Processing an entire folder of Python scripts.")
-        python_dir = python_dir_or_file
+        python_dir = options.script_dir_or_file
         if PIPREQS_AVAILABLE:
             logger.info("Using pipreqs to generate requirements.")
-            generate_requirements(python_dir_or_file)
+            generate_requirements(options.script_dir_or_file)
             with open(os.path.join(python_dir, 'requirements.txt'), 'r') as f:
                 all_imports = set(line.strip() for line in f)
         else:
             logger.info("Using custom script to find imports.")
-            all_imports = get_all_imports(python_dir_or_file)
+            all_imports = get_all_imports(options, options.script_dir_or_file)
     else:
-        logger.error(f"Error: The file or directory {python_dir_or_file} does not exist.")
+        logger.error(f"Error: The file or directory {options.script_dir_or_file} does not exist.")
         sys.exit(1)
 
     # Filter out invalid imports before splitting
     all_imports = {imp for imp in all_imports if re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', imp)}
     
-    installed_imports, uninstalled_imports, bad_imports = split_imports(all_imports)
-
-    return installed_imports, uninstalled_imports, bad_imports
+    options.installed_imports, options.uninstalled_imports, options.bad_imports = split_imports(options, all_imports)
 
 def install_packages(options: Options) -> None:
     """Install packages in a virtual environment."""
@@ -319,16 +403,35 @@ def install_package(package_name: str, options: Options) -> bool:
         if result.stderr:
             logger.error(result.stderr)
         if result.returncode != 0:
-            # Try to install from PyPI if local installation fails
-            logger.info(f"Package {package_name} not found locally. Attempting to install from PyPI.")
-            result = subprocess.run(
-                [options.venv_python, "-m", "pip", "install", package_name],
-                capture_output=True,
-                text=True
-            )
-            logger.info(result.stdout)
-            if result.stderr:
-                logger.error(result.stderr)
+            # Step 1: Use pip to download files for package_name to options.packages_dir
+            download_command = [
+                options.venv_python, "-m", "pip", "download", 
+                "--dest", options.packages_dir, package_name
+            ]
+            download_result = subprocess.run(download_command, capture_output=True, text=True)
+            if download_result.returncode != 0:
+                logger.error(f"Failed to download {package_name}. Error: {download_result.stderr}")
+                exit(1)
+            # Step 2: Use pip to install package_name from the file that was just downloaded to options.packages_dir
+            install_command = [
+                options.venv_python, "-m", "pip", "install", 
+                "--no-index", "--find-links", options.packages_dir, package_name
+            ]
+            install_result = subprocess.run(install_command, capture_output=True, text=True)
+            if install_result.returncode != 0:
+                logger.error(f"Failed to install {package_name}. Error: {install_result.stderr}")
+            else:
+                logger.info(f"Successfully installed {package_name}")
+            # # Try to install from PyPI if local installation fails
+            # logger.info(f"Package {package_name} not found locally. Attempting to install from PyPI.")
+            # result = subprocess.run(
+            #     [options.venv_python, "-m", "pip", "install", package_name],
+            #     capture_output=True,
+            #     text=True
+            # )
+            # logger.info(result.stdout)
+            # if result.stderr:
+            #     logger.error(result.stderr)
             return result.returncode == 0
         return result.returncode == 0
     except Exception as e:
@@ -393,6 +496,7 @@ def recover_pip_versions(output: str, options: Options) -> None:
         logger.warning("Failed to recover new pip version from output.")
 
 def pretty_packages_list(options: Options) -> str:
+    """Create a pretty string of the first five package names and the number of remaining packages."""
     maxnum = 5
     packages_list = list(options.uninstalled_imports)
     if len(packages_list) > maxnum:
@@ -459,9 +563,8 @@ print("\\n".join(installed_packages + available_modules + list(builtin_modules))
     options.installed_imports = options.installed_imports - new_uninstalled_imports
 
 def setup_virtualenv(options: Options) -> None:
-    use_pip_list(options)
-
     """Setup a virtual environment and install packages."""
+    use_pip_list(options)
     options.pretty_list = pretty_packages_list(options)
     # Create a virtual environment directory that starts with 'failed' in case the process fails. Only remove the 'failed' part if this process completes successfully.
     options.set_venv_dir(os.path.join(options.mypy_dir, f"failed-{options.venv_name}-versionless-{options.timestamp}-{options.pretty_list}"))
@@ -490,15 +593,30 @@ def is_virtualenv() -> bool:
 def parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Run a python script with optional flags.")
-    parser.add_argument('script', help="The python script to run.")
+    
+    # Create a mutually exclusive group
+    group = parser.add_mutually_exclusive_group(required=True)
+    
+    # Add the script argument to the mutually exclusive group
+    group.add_argument('script', nargs='?', help="The python script to run.")
     parser.add_argument('script_args', nargs='*', help="Optional arguments for the python script.")
+    
+    # Add the alias argument to the mutually exclusive group
+    group.add_argument('-alias', type=str, help='Add an alias to the shell configuration file so that typing ALIAS anywhere runs this program.')
+
+    # Add the manual argument to the mutually exclusive group
+    group.add_argument('-manual', action='store_true', help='Print instructions for manually adding the alias to the shell configuration file.')
+    
+    # Add additional arguments to the parser (not part of the mutually exclusive group)
     parser.add_argument('-full', action='store_true', help="Build a virtual environment (venv) that can run every python script in this directory.")
-    parser.add_argument('-blank-slate', action='store_true', help="Delete everything in ~/mypy/ and all mypy .json files and all mypy .out and .err files in the current directory.")
-    parser.add_argument('-y', action='store_true', help='Automatically say yes to the prompt')
-    parser.add_argument('-no-cache', action='store_true', help="Don't use the cache.")
+    parser.add_argument('-blank-slate', action='store_true', help="Delete ~/mypy/ and all mypy .out and .err and .json and .pkl files in the current directory.")
+    parser.add_argument('-y', action='store_true', help='Automatically say yes to any prompts.')
+    parser.add_argument('-no-cache', action='store_true', help="Don't search the cache. Instead, create a new virtual environment.")
     parser.add_argument('-latest', action='store_true', help="Load the latest venv in the cache which has all the packages needed now.")
     parser.add_argument('-last-used', action='store_true', help="Load the last used venv in the cache, but if that fails try the latest venv which has all the packages needed now.")
     parser.add_argument('-smallest', action='store_true', help="Load the smallest venv in the cache (with the fewest packages) which has all the packages needed now.")
+    parser.add_argument('-rc', action='store_true', help='Refresh the custom modules cache.')
+    
     return parser.parse_args()
 
 def get_file_operations(script_path: str) -> Tuple[List[str], List[str]]:
@@ -593,8 +711,29 @@ def get_network_operations(script_path: str) -> Tuple[List[str], List[str]]:
 
 def guard_examines(options: Options) -> None:
     """Examine the script to determine what files are read and written, and what URLs are downloaded and uploaded."""
-    read_files, write_files = get_file_operations(options.python_script)
-    download_urls, upload_urls = get_network_operations(options.python_script)
+    read_files = []
+    write_files = []
+    download_urls = []
+    upload_urls = []
+
+    def aggregate_operations(script_path: str):
+        """Aggregate file and network operations from script_path."""
+        nonlocal read_files, write_files, download_urls, upload_urls
+        r_files, w_files = get_file_operations(script_path)
+        d_urls, u_urls = get_network_operations(script_path)
+        read_files.extend(r_files)
+        write_files.extend(w_files)
+        download_urls.extend(d_urls)
+        upload_urls.extend(u_urls)
+
+    # Examine the main script
+    aggregate_operations(options.python_script)
+
+    # Examine each custom module
+    for custom_load in options.loaded_custom_modules:
+        module_path = options.custom_modules[custom_load]
+        aggregate_operations(module_path)
+
     if read_files:
         logger.info("Files read:", read_files)
     if write_files:
@@ -606,10 +745,23 @@ def guard_examines(options: Options) -> None:
 
 def save_options_to_json(options: Options) -> None:
     """Save the options object to a JSON file."""
-    options.json_filename = os.path.join(options.script_dir, f".{os.path.basename(options.python_script)}-mypy-last-used-on-{options.timestamp}.json")
+    options.json_filename = os.path.join(options.script_dir, f"{os.path.basename(options.python_script)}_options.json")
     
+    logger.info(f"Saving options to JSON file: {options.json_filename}")
+
     # Convert options to a dictionary and handle sets
     options_dict = options.__dict__
+
+    # Convert PosixPath to string
+    for key, value in options_dict.items():
+        if isinstance(value, PosixPath):
+            logger.info(f"Converting PosixPath to string for key '{key}' and value '{value}'")
+            options_dict[key] = str(value)
+
+    # Ensure directory exists
+    json_file_path = Path(options.json_filename)
+    logger.info(f"Ensuring directory exists: {json_file_path.parent}")
+    json_file_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Identify non-serializable types.
     these_sets = []
@@ -635,8 +787,12 @@ def save_options_to_json(options: Options) -> None:
     options_dict['sets'] = these_sets
 
     # Write the dictionary to a JSON file
-    with open(options.json_filename, 'w') as json_file:
-        json.dump(options_dict, json_file, indent=4)
+    try:
+        with open(options.json_filename, 'w') as json_file:
+            json.dump(options_dict, json_file, indent=4)
+        logger.info(f"Options successfully saved to {options.json_filename}")
+    except Exception as e:
+        logger.error(f"Error saving options to JSON: {e}")
 
 def load_options_from_json(json_file: str) -> Options:
     """Load the options object from a JSON file."""
@@ -698,8 +854,9 @@ def check_venv_dir(options: Options, options_from_cache: Options) -> bool:
         else:
             logger.error(f"The cached venv directory {options_from_cache.venv_dir} is no longer valid.")
     return 0
-    
+
 def find_match_dir_in_cache(options: Options) -> str:
+    """Find a matching virtual environment directory in the cache."""
     if not options.args.latest and not options.args.last_used and not options.args.smallest:
         options.args.last_used = True #If no flags are set, then the default is to load the last used venv in the cache
     if options.args.last_used and not options.args.latest and not options.args.smallest:
@@ -773,6 +930,57 @@ def find_match_dir_in_cache(options: Options) -> str:
         else: # This should never happen
             logger.error(f"Invalid combination of flags. {options.args.latest = }, {options.args.last_used = }, {options.args.smallest = }")
 
+def is_standard_path(path: str) -> bool:
+    """Check if the given path is a standard system path or part of a virtual environment."""
+    standard_paths = [os.path.join(os.sep, 'usr', 'lib'), os.path.join(os.sep, 'usr', 'local', 'lib')]
+    # Check if path starts with standard system paths
+    if any(path.startswith(standard) for standard in standard_paths):
+        return True
+    # Check if path contains virtual environment indicators
+    if 'site-packages' in path and (os.path.join('lib','python') in path or os.path.join('lib64','python') in path):
+        return True
+    return False
+
+def dict_of_custom_modules(options: Options) -> Dict[str, str]:
+    """Create a dictionary of all local custom modules in the non-standard sys.path directories and their associated filepaths."""
+    #If -rc was not specified, look for a pickle file with the custom modules dictionary the last time this script was run.
+    if not options.args.rc:
+        for file in os.listdir('.'):
+            if file.startswith('.mypy_custom_modules_') and file.endswith('.pkl'):
+                logger.info(f"Loading custom modules from {file}")
+                with open(file, 'rb') as f:
+                    custom_modules = pickle.load(f)
+                return custom_modules
+
+    custom_modules = {}
+    for path in sys.path:
+        if not is_standard_path(path) and os.path.isdir(path):
+            for root, dirs, files in os.walk(path):
+                for file in files:
+                    if file.endswith('.py') and file != '__init__.py':
+                        module_name = os.path.splitext(file)[0]
+                        if module_name not in custom_modules:
+                            full_path = os.path.join(root, file)
+                            custom_modules[module_name] = full_path
+                for dir in dirs:
+                    if not is_standard_path(os.path.join(root, dir)):
+                        package_path = os.path.join(root, dir)
+                        if os.path.isfile(os.path.join(package_path, '__init__.py')):
+                            if dir not in custom_modules:
+                                custom_modules[dir] = package_path + os.sep
+                            # Remove any individual module entries within the package directory
+                            for file in os.listdir(package_path):
+                                module_name = os.path.splitext(file)[0]
+                                if module_name in custom_modules:
+                                    del custom_modules[module_name]
+    #Now save to a pickle file:
+    current_time = datetime.now().strftime('%Y%m%d-%H%M%S')
+    custom_filename = f'.mypy_custom_modules_{current_time}.pkl'
+    with open(custom_filename, 'wb') as f:
+        logger.info(f"Saving custom modules to {custom_filename}")
+        pickle.dump(custom_modules, f)
+    return custom_modules
+
 def main():
     start_time = datetime.now()
     options = Options()
@@ -782,8 +990,23 @@ def main():
     options.python_script = options.args.script
     options.script_args = options.args.script_args
 
+    if options.args.alias:
+        # The alias was specified, add the alias
+        mypy_path = os.path.abspath(__file__)  # Use this file's path and filename for the alias
+        add_alias(mypy_path, options.args.alias)
+        sys.exit(0)
+    elif options.args.script:
+        # A script was specified, run the script with the provided arguments
+        script_path = os.path.abspath(options.args.script)
+    elif options.args.manual:
+        # Print instructions for manually adding the alias to the shell configuration file
+        print(manual_instructions)
+        sys.exit(0)
+    else:
+        print("You must specify either a script to run or the -alias option.")
+
     options.script_dir = os.path.abspath(os.path.dirname(options.python_script))
-    logger.info(f"Directory where the script to run is located: {options.script_dir}")
+    #logger.info(f"Directory where the script to run is located: {options.script_dir}")
 
     if options.args.blank_slate:
         if not options.args.y:
@@ -791,11 +1014,12 @@ def main():
             if response.casefold() != 'y':
                 logger.info("Exiting without deleting anything.")
                 sys.exit(0)
-        logger.info("Deleting everything in ~/mypy/ and all mypy .json files and all mypy .out and .err files in the current directory.")
+        logger.info("Deleting everything in ~/mypy/ and all mypy .out and .err and .json and .pkl files in the current directory.")
         shutil.rmtree(options.mypy_dir, ignore_errors=True)
         for file in os.listdir(options.script_dir):
             if (file.startswith('.mypy-') and file.endswith('.out')) or \
                (file.startswith('.mypy-') and file.endswith('.err')) or \
+               (file.startswith('.mypy_custom_modules_') and file.endswith('.pkl')) or \
                (file.startswith('.'+os.path.basename(options.python_script)) and file.endswith('.json')):
                 logger.info(f"Deleting {file}")
                 os.remove(os.path.join(options.script_dir, file))
@@ -806,6 +1030,12 @@ def main():
     if not os.path.isdir(options.packages_dir):
         logger.info(f"Directory {options.packages_dir} does not exist yet, so it is being created.")
         os.makedirs(options.packages_dir, exist_ok=True)
+
+    time1 = datetime.now()
+    options.custom_modules = dict_of_custom_modules(options)
+    time2 = datetime.now()
+    elapsed_time = time2 - time1
+    logger.info(f"dict_of_custom_modules() took {elapsed_time}")
     
     #Look for files in options.mypy_dir that start with pip_list and load the most recent one.
     options.pip_list = []
@@ -820,18 +1050,20 @@ def main():
 
     if options.args.full:
         logger.info("Building a virtual environment that can run every python script in this directory.")
-        script_dir_or_file = options.script_dir
+        options.script_dir_or_file = options.script_dir
     else:
-        script_dir_or_file = options.python_script
+        options.script_dir_or_file = options.python_script
 
-    installed_imports, uninstalled_imports, bad_imports = list_packages(script_dir_or_file)
-    options.installed_imports = installed_imports
-    options.uninstalled_imports = uninstalled_imports
+    start_list_packages_time = datetime.now()
+    elapsed_time = start_list_packages_time - start_time
+    logger.info(f"Elapsed time: {elapsed_time}")
+
+    list_packages(options)
     logger.info(f"Uninstalled imports: {options.uninstalled_imports}")
-    if bad_imports:
-        logger.warning(f"Bad imports: {bad_imports}")
+    if options.bad_imports:
+        logger.warning(f"Bad imports: {options.bad_imports}")
 
-    if not uninstalled_imports:
+    if not options.uninstalled_imports:
         logger.info("All required packages are already installed.")
         guard_examines(options)
         subprocess.run([sys.executable, options.python_script] + options.script_args)
@@ -871,8 +1103,8 @@ def main():
         logger.info(f"Elapsed time since activating virtual environment: {elapsed_time}")
         if result.returncode != 0:
             logger.error(f"Error running script: {result.stderr}")
-        elif options.venv_dir.startswith('failed-'):
-            #If the program has made it to this point, it has run successfully, so the venv directory can be renamed.
+        elif os.path.basename(options.venv_dir).startswith('failed-'):
+            #If the program has made it to this point, it has run successfully, so the venv directory can be renamed. It HASN'T failed.
             os.rename(options.venv_dir, options.venv_dir.replace('failed-', ''))
             options.set_venv_dir(       options.venv_dir.replace('failed-', ''))
             #Now edit the pyvenv.cfg file inside it:
@@ -884,31 +1116,31 @@ def main():
             modified_lines = []
             for line in lines:
                 if line.startswith("command = "):
-                    line = line.replace("/failed-", "/")
+                    line = line.replace(os.sep+"failed-", os.sep)
                 modified_lines.append(line)
             # Write the modified content back to the file
             with open(cfg_file_path, 'w') as file:
                 file.writelines(modified_lines)
-            print(f"Updated {cfg_file_path} successfully.")
+            logger.info(f"Updated {cfg_file_path} successfully.")
             # Read the content of the file
             with open(options.download_script_path, 'r') as file:
                 lines = file.readlines()
             # Modify the command line
             modified_lines = []
             for line in lines:
-                line = line.replace("/failed-", "/")
+                line = line.replace(os.sep+"failed-", os.sep)
                 modified_lines.append(line)
             # Write the modified content back to the file
             with open(options.download_script_path , 'w') as file:
                 file.writelines(modified_lines)
-            print(f"Updated {options.download_script_path} successfully.")
+            logger.info(f"Updated {options.download_script_path} successfully.")
 
         save_options_to_json(options)
 
     # Print all captured error messages at the end
     if memory_handler.logs: print("\nCaptured error messages:")
     for log in memory_handler.logs:
-        print(log)
+        logger.info(log)
 
 if __name__ == "__main__":
     main()
