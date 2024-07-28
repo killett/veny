@@ -36,9 +36,11 @@ import copy
 import shutil
 import venv
 import pickle
+from pathlib import Path, PosixPath
 from typing import Dict, List, Set, Tuple
 
 from univ_defs import *
+#if __name__ == '__main__':
 logging_setup = LoggerSetup("mypy")
 logger = logging_setup.get_logger()
 memory_handler = logging_setup.get_memory_handler()
@@ -47,9 +49,31 @@ class Options():
     """Class that has all global options in one place."""
     def __init__(self) -> None:
         self.venv_name: str = 'myenv' # Can NOT include dashes ('-')
-        self.mypy_dir = os.path.expanduser(os.path.join('~','mypy'))
-        self.packages_dir = os.path.join(self.mypy_dir, 'packages')
-        self.test_dir = os.path.join(self.mypy_dir, 'test')
+        self.mypy_dir: str = os.path.expanduser(os.path.join('~','mypy'))
+        self.packages_dir: str = os.path.join(self.mypy_dir, 'packages')
+        self.test_dir: str = os.path.join(self.mypy_dir, 'test')
+        self.uninstalled_imports: Set[str] = set()
+        self.installed_imports: Set[str] = set()
+        self.bad_imports: Set[str] = set()
+        self.custom_modules: Dict[str, str] = {}
+        self.pip_list: List[str] = []
+        self.loaded_custom_modules: Set[str] = set()
+        self.pretty_list: str = ''
+        self.timestamp: str = datetime.now().strftime('%Y%m%d%H%M%S')
+        self.python_script: str = ''
+        self.script_dir: str = ''
+        self.json_filename: str = ''
+        self.script_dir_or_file: str = ''
+        self.current_pip_version: str = ''
+        self.new_pip_version: str = ''
+        self.activate_script: str = ''
+        self.venv_dir: str = ''
+        self.venv_python: str = ''
+        self.venv_pip: str = ''
+        self.requirements_file: str = ''
+        self.download_script_path: str = ''
+        self.script_args: List[str] = []
+        self.new_local_paths: Set[str] = set()
 
     def set_venv_dir(self, venv_dir: str) -> None:
         self.venv_dir = os.path.expanduser(venv_dir)
@@ -68,6 +92,35 @@ except ImportError:
     #This used to be a logger.warning() but I changed it to logger.info() because it's not really a warning.
     logger.info("pipreqs is not available. Try installing it with 'pip install pipreqs'.")
     PIPREQS_AVAILABLE = False
+
+def parse_arguments() -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(description="Run a python script with optional flags.")
+    
+    # Create a mutually exclusive group
+    group = parser.add_mutually_exclusive_group(required=True)
+    
+    # Add the script argument to the mutually exclusive group
+    group.add_argument('script', nargs='?', help="The python script to run.")
+    parser.add_argument('script_args', nargs='*', help="Optional arguments for the python script.")
+    
+    # Add the alias argument to the mutually exclusive group
+    group.add_argument('-alias', type=str, help='Add an alias to the shell configuration file so that typing ALIAS anywhere runs this program.')
+
+    # Add the manual argument to the mutually exclusive group
+    group.add_argument('-manual', action='store_true', help='Print instructions for manually adding the alias to the shell configuration file.')
+    
+    # Add additional arguments to the parser (not part of the mutually exclusive group)
+    parser.add_argument('-full', action='store_true', help="Build a virtual environment (venv) that can run every python script in this directory.")
+    parser.add_argument('-blank-slate', action='store_true', help="Delete ~/mypy/ and all mypy .out and .err and .json and .pkl files in the current directory.")
+    parser.add_argument('-y', action='store_true', help='Automatically say yes to any prompts.')
+    parser.add_argument('-no-cache', action='store_true', help="Don't search the cache. Instead, create a new virtual environment.")
+    parser.add_argument('-latest', action='store_true', help="Load the latest venv in the cache which has all the packages needed now.")
+    parser.add_argument('-last-used', action='store_true', help="Load the last used venv in the cache, but if that fails try the latest venv which has all the packages needed now.")
+    parser.add_argument('-smallest', action='store_true', help="Load the smallest venv in the cache (with the fewest packages) which has all the packages needed now.")
+    parser.add_argument('-rc', action='store_true', help='Refresh the custom modules cache and the pip list.')
+    
+    return parser.parse_args()
 
 def detect_shell() -> str:
     """Detect the current shell."""
@@ -168,6 +221,15 @@ def find_imports_in_script(options: Options, file_path: str, all_imports: Set[st
     if os.path.islink(file_path):
         logger.info(f"Skipping symbolic link {file_path}")
         return
+
+    # Regular expressions to match various sys.path modifications
+    patterns = [
+        r"sys\.path\.(?:insert|append)\(\d*,\s*(.*)\)",  # Matches sys.path.insert/append with or without os.path.abspath
+        r"sys\.path\s*=\s*\[\s*(.*)\s*\]",  # Matches sys.path = [...]
+        r"sys\.path\.\+=\s*\[\s*(.*)\s*\]"   # Matches sys.path += [...]
+    ]
+
+    # Attempt to read the file with various encodings
     encodings = [
     'utf_8', 'latin_1', 'ascii', 'iso8859_1', 'big5', 'utf_8_sig', 'utf_16', 'utf_16_be', 'utf_16_le', 'utf_32', 'utf_32_be', 'utf_32_le',
     'cp1252', 'cp1251', 'cp1250', 'cp1253', 'cp1254', 'cp1255', 'cp1256', 'cp1257', 'cp1258',
@@ -195,6 +257,7 @@ def find_imports_in_script(options: Options, file_path: str, all_imports: Set[st
 
     for line in lines:
         line = line.strip()
+        imports_list = []
         if '#' in line:
             line = line.split('#')[0].strip()  # Remove comments from the line
         
@@ -212,6 +275,26 @@ def find_imports_in_script(options: Options, file_path: str, all_imports: Set[st
             # Handle 'from X import Y' type of lines
             parts = re.split(r'\s+', line, maxsplit=2)
             imports_list = [parts[1]]
+        elif 1:
+            for pattern in patterns:
+                # Search for the pattern
+                match = re.search(pattern, line)
+                if match:
+                    # Extract the path(s)
+                    paths_str = match.group(1).strip()
+                    # Remove square brackets if present
+                    if paths_str.startswith('[') and paths_str.endswith(']'):
+                        paths_str = paths_str[1:-1].strip()
+                    # Split the paths by comma and process each one
+                    paths = [path.strip("'\"") for path in paths_str.split(',')]
+                    for path in paths:
+                        # Resolve the path if os.path.abspath is not used
+                        if not path.startswith('os.path.abspath'):
+                            resolved_path = os.path.abspath(path)
+                        else:
+                            resolved_path = eval(path)  # Evaluate the os.path.abspath expression
+                        options.new_local_paths.add(resolved_path)
+                        logger.info(f"Adding new local path: {resolved_path}")
         else:
             continue
 
@@ -590,35 +673,6 @@ def is_virtualenv() -> bool:
     """Check if currently running in a virtual environment."""
     return sys.prefix != sys.base_prefix
 
-def parse_arguments() -> argparse.Namespace:
-    """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(description="Run a python script with optional flags.")
-    
-    # Create a mutually exclusive group
-    group = parser.add_mutually_exclusive_group(required=True)
-    
-    # Add the script argument to the mutually exclusive group
-    group.add_argument('script', nargs='?', help="The python script to run.")
-    parser.add_argument('script_args', nargs='*', help="Optional arguments for the python script.")
-    
-    # Add the alias argument to the mutually exclusive group
-    group.add_argument('-alias', type=str, help='Add an alias to the shell configuration file so that typing ALIAS anywhere runs this program.')
-
-    # Add the manual argument to the mutually exclusive group
-    group.add_argument('-manual', action='store_true', help='Print instructions for manually adding the alias to the shell configuration file.')
-    
-    # Add additional arguments to the parser (not part of the mutually exclusive group)
-    parser.add_argument('-full', action='store_true', help="Build a virtual environment (venv) that can run every python script in this directory.")
-    parser.add_argument('-blank-slate', action='store_true', help="Delete ~/mypy/ and all mypy .out and .err and .json and .pkl files in the current directory.")
-    parser.add_argument('-y', action='store_true', help='Automatically say yes to any prompts.')
-    parser.add_argument('-no-cache', action='store_true', help="Don't search the cache. Instead, create a new virtual environment.")
-    parser.add_argument('-latest', action='store_true', help="Load the latest venv in the cache which has all the packages needed now.")
-    parser.add_argument('-last-used', action='store_true', help="Load the last used venv in the cache, but if that fails try the latest venv which has all the packages needed now.")
-    parser.add_argument('-smallest', action='store_true', help="Load the smallest venv in the cache (with the fewest packages) which has all the packages needed now.")
-    parser.add_argument('-rc', action='store_true', help='Refresh the custom modules cache.')
-    
-    return parser.parse_args()
-
 def get_file_operations(script_path: str) -> Tuple[List[str], List[str]]:
     """Find files that are read or written."""
     with open(script_path, 'r') as file:
@@ -745,10 +799,8 @@ def guard_examines(options: Options) -> None:
 
 def save_options_to_json(options: Options) -> None:
     """Save the options object to a JSON file."""
-    options.json_filename = os.path.join(options.script_dir, f"{os.path.basename(options.python_script)}_options.json")
+    options.json_filename = os.path.join(options.script_dir, f".{os.path.basename(options.python_script)}-mypy-last-used-on-{options.timestamp}.json")
     
-    logger.info(f"Saving options to JSON file: {options.json_filename}")
-
     # Convert options to a dictionary and handle sets
     options_dict = options.__dict__
 
@@ -787,12 +839,8 @@ def save_options_to_json(options: Options) -> None:
     options_dict['sets'] = these_sets
 
     # Write the dictionary to a JSON file
-    try:
-        with open(options.json_filename, 'w') as json_file:
-            json.dump(options_dict, json_file, indent=4)
-        logger.info(f"Options successfully saved to {options.json_filename}")
-    except Exception as e:
-        logger.error(f"Error saving options to JSON: {e}")
+    with open(options.json_filename, 'w') as json_file:
+        json.dump(options_dict, json_file, indent=4)
 
 def load_options_from_json(json_file: str) -> Options:
     """Load the options object from a JSON file."""
@@ -953,6 +1001,7 @@ def dict_of_custom_modules(options: Options) -> Dict[str, str]:
                 return custom_modules
 
     custom_modules = {}
+    logger.info(f"IN dict_of_custom_modules: {options.new_local_paths = }")
     for path in sys.path:
         if not is_standard_path(path) and os.path.isdir(path):
             for root, dirs, files in os.walk(path):
@@ -985,7 +1034,6 @@ def main():
     start_time = datetime.now()
     options = Options()
     options.args = parse_arguments()
-    options.timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
 
     options.python_script = options.args.script
     options.script_args = options.args.script_args
@@ -1040,7 +1088,9 @@ def main():
     #Look for files in options.mypy_dir that start with pip_list and load the most recent one.
     options.pip_list = []
     pip_list_files = sorted([f for f in os.listdir(options.mypy_dir) if f.startswith('pip_list')],reverse=True)
-    if pip_list_files:
+    #logger.info(f"{pip_list_files = }")
+    #If -rc was not specified, look for a text file with the pip list the last time this script was run.
+    if not options.args.rc and pip_list_files:
         try:
             with open(os.path.join(options.mypy_dir, pip_list_files[0]), 'r') as file:
                 for line in file:
