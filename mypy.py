@@ -1,20 +1,13 @@
 #!/usr/bin/env python3
 
-# Written by Emmy Killett and ChatGPT 4o.
+# Written by Emmy Killett, ChatGPT 4o, and GitHub Copilot.
 
 manual_instructions = """
-It's convenient to add an alias to the shell configuration file so that typing ALIAS anywhere runs this program. The following steps assume this program is saved as mypy.py in the home directory (~), but you can adjust the path and filename to match your setup.
+This program acts as a wrapper around Python to automate the creation of virtual environments and the installation of any required packages. Instead of typing "python3 script.py", you can type "mypy script.py" to run script.py in a virtual environment which has all the required packages.
 
-If you're using bash, follow these steps to add the alias manually:
-1. Open your bash configuration file (~/.bashrc) in a text editor. For example:
-   nano ~/.bashrc
-2. Add the following line to the end of the file:
-   alias mypy="python3 ~/mypy.py"
-3. Save the file and exit the text editor.
-4. Reload your bash configuration by running the following command:
-   source ~/.bashrc
+It's convenient to add an alias to the shell configuration file so that typing ALIAS anywhere runs this program. This can either be done by running this program with the "-alias ALIAS" command line argument (for example: "python3 mypy.py -alias mypy") or by following the manual instructions below. The following steps assume this program is saved as mypy.py in your home directory (~), but you can adjust the path and filename to match your setup.
 
-If you're using zsh, follow these steps to add the alias manually:
+If you're on a Mac you're probably using the zsh shell, so follow these steps to add the alias manually:
 1. Open your zsh configuration file (~/.zshrc) in a text editor. For example:
    nano ~/.zshrc
 2. Add the following line to the end of the file:
@@ -22,6 +15,15 @@ If you're using zsh, follow these steps to add the alias manually:
 3. Save the file and exit the text editor.
 4. Reload your zsh configuration by running the following command:
    source ~/.zshrc
+
+If you're using the bash shell, follow these steps to add the alias manually:
+1. Open your bash configuration file (~/.bashrc) in a text editor. For example:
+   nano ~/.bashrc
+2. Add the following line to the end of the file:
+   alias mypy="python3 ~/mypy.py"
+3. Save the file and exit the text editor.
+4. Reload your bash configuration by running the following command:
+   source ~/.bashrc
 """
 
 import os
@@ -44,6 +46,18 @@ from univ_defs import *
 logging_setup = LoggerSetup("mypy")
 logger = logging_setup.get_logger()
 memory_handler = logging_setup.get_memory_handler()
+
+# Sometimes, a module is imported in python using a different name than is required in the "pip install" command. Keep track of these exceptions here.
+module_aliases = {
+    'ffmpeg': 'ffmpeg-python',
+    'cv2': 'opencv-python',
+    'PIL': 'Pillow',
+    'bs4': 'beautifulsoup4',
+    'sklearn': 'scikit-learn',
+    'yaml': 'PyYAML',
+    'jnp': 'jax.numpy',
+    'sm': 'statsmodels',
+}
 
 class Options():
     """Class that has all global options in one place."""
@@ -363,10 +377,15 @@ def split_imports(options: Options, all_imports: Set[str]) -> Tuple[Set[str], Se
     max_length = max(len(imp) for imp in all_imports)
 
     for i, imp in enumerate(all_imports, 1):
-        if check_if_library_exists(imp) or imp in options.custom_modules.keys():
+        if imp in module_aliases:
+            package_name = module_aliases[imp]
+        else:
+            package_name = imp
+
+        if check_if_library_exists(package_name) or imp in options.custom_modules.keys():
             installed_imports.add(imp)
         else:
-            uninstalled_imports.add(imp)
+            uninstalled_imports.add(package_name)
         logger.info(f"Checking import {imp:{max_length}} : {i}/{total_imports}")
 
     return installed_imports, uninstalled_imports, bad_imports
@@ -410,31 +429,31 @@ def list_packages(options: Options) -> None:
 def install_packages(options: Options) -> None:
     """Install packages in a virtual environment."""
     download_script = f"""#!/bin/bash
-source {options.venv_dir}/bin/activate
+    source {options.venv_dir}/bin/activate
 
-# Upgrade pip
-echo "Upgrading pip..."
-pip install --upgrade pip
+    # Upgrade pip
+    echo "Upgrading pip..."
+    pip install --upgrade pip
 
-# Ensure setuptools and wheel are available locally
-if ls {options.packages_dir}/setuptools-*.whl 1> /dev/null 2>&1; then
-    echo "Local setuptools files found."
-else
-    echo "Downloading setuptools..."
-    {options.venv_pip} download --only-binary=:all: setuptools -d {options.packages_dir}
-fi
+    # Ensure setuptools and wheel are available locally
+    if ls {options.packages_dir}/setuptools-*.whl 1> /dev/null 2>&1; then
+        echo "Local setuptools files found."
+    else
+        echo "Downloading setuptools..."
+        {options.venv_pip} download --only-binary=:all: setuptools -d {options.packages_dir}
+    fi
 
-if ls {options.packages_dir}/wheel-*.whl 1> /dev/null 2>&1; then
-    echo "Local wheel files found."
-else
-    echo "Downloading wheel..."
-    {options.venv_pip} download --only-binary=:all: wheel -d {options.packages_dir}
-fi
+    if ls {options.packages_dir}/wheel-*.whl 1> /dev/null 2>&1; then
+        echo "Local wheel files found."
+    else
+        echo "Downloading wheel..."
+        {options.venv_pip} download --only-binary=:all: wheel -d {options.packages_dir}
+    fi
 
-# Download required packages
-echo "Downloading packages..."
-{options.venv_pip} download -r {options.requirements_file} -d {options.packages_dir}
-"""
+    # Download required packages
+    echo "Downloading packages..."
+    {options.venv_pip} download -r {options.requirements_file} -d {options.packages_dir}
+    """
 
     logger.info(f"Writing download script to {options.download_script_path}")
     with open(options.download_script_path, 'w') as f:
@@ -505,16 +524,6 @@ def install_package(package_name: str, options: Options) -> bool:
                 logger.error(f"Failed to install {package_name}. Error: {install_result.stderr}")
             else:
                 logger.info(f"Successfully installed {package_name}")
-            # # Try to install from PyPI if local installation fails
-            # logger.info(f"Package {package_name} not found locally. Attempting to install from PyPI.")
-            # result = subprocess.run(
-            #     [options.venv_python, "-m", "pip", "install", package_name],
-            #     capture_output=True,
-            #     text=True
-            # )
-            # logger.info(result.stdout)
-            # if result.stderr:
-            #     logger.error(result.stderr)
             return result.returncode == 0
         return result.returncode == 0
     except Exception as e:
@@ -812,7 +821,7 @@ def save_options_to_json(options: Options) -> None:
 
     # Ensure directory exists
     json_file_path = Path(options.json_filename)
-    logger.info(f"Ensuring directory exists: {json_file_path.parent}")
+    #logger.info(f"Ensuring directory exists: {json_file_path.parent}")
     json_file_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Identify non-serializable types.
