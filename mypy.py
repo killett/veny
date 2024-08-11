@@ -86,28 +86,6 @@ class LoggerSetup:
     def get_memory_handler(self):
         return self.memory_handler
 
-logging_setup = LoggerSetup("mypy")
-logger = logging_setup.get_logger()
-memory_handler = logging_setup.get_memory_handler()
-
-# Sometimes, a module is imported in python using a different name than is required in the "pip install" command. Keep track of these exceptions here.
-module_aliases = {
-    'ffmpeg': 'ffmpeg-python',
-    'cv2': 'opencv-python',
-    'PIL': 'Pillow',
-    'bs4': 'beautifulsoup4',
-    'sklearn': 'scikit-learn',
-    'yaml': 'PyYAML',
-    'jnp': 'jax.numpy',
-    'sm': 'statsmodels',
-}
-
-# List of unusual imports that are not standard library modules or packages.
-unusual_imports = ['a', 'an', 'dl', 'the', 'it', 'x', 'xx', 'above', 'another', '__builtin__', 'within',]
-
-# List of directories to stay out of when searching for local custom imports because they're filled with standard library modules or other irrelevant files.
-stay_out_list = ['myenv', 'anaconda3', '.conda']
-
 class Options():
     """Class that has all global options in one place."""
     def __init__(self) -> None:
@@ -138,6 +116,21 @@ class Options():
         self.download_script_path: str = ''
         self.script_args: List[str] = []
         self.new_local_paths: Set[str] = set()
+        # Sometimes, a module is imported in python using a different name than is required in the "pip install" command. Keep track of these exceptions here.
+        self.module_aliases: Dict[str, str] = {
+            'ffmpeg': 'ffmpeg-python',
+            'cv2': 'opencv-python',
+            'PIL': 'Pillow',
+            'bs4': 'beautifulsoup4',
+            'sklearn': 'scikit-learn',
+            'yaml': 'PyYAML',
+            'jnp': 'jax.numpy',
+            'sm': 'statsmodels',
+        }
+        # List of unusual imports that are not standard library modules or packages.
+        self.unusual_imports: List[str] = ['a', 'an', 'dl', 'the', 'it', 'x', 'xx', 'above', 'another', '__builtin__', 'within']
+        # List of directories to stay out of when searching for local custom imports because they're filled with standard library modules or other irrelevant files.
+        self.stay_out_list: List[str] = ['myenv', 'anaconda3', '.conda']
 
     def set_venv_dir(self, venv_dir: str) -> None:
         self.venv_dir = os.path.expanduser(venv_dir)
@@ -146,16 +139,6 @@ class Options():
         self.venv_pip             = os.path.join(self.venv_dir, 'bin', 'pip')
         self.requirements_file    = os.path.join(self.venv_dir, "requirements.txt")
         self.download_script_path = os.path.join(self.venv_dir, "download_packages.sh")
-
-# Attempt to import pipreqs
-try:
-    import pipreqs
-    logger.info("pipreqs is available, so it will be used.")
-    PIPREQS_AVAILABLE = True
-except ImportError:
-    #This used to be a logger.warning() but I changed it to logger.info() because it's not really a warning.
-    logger.info("pipreqs is not available. Try installing it with 'pip install pipreqs'.")
-    PIPREQS_AVAILABLE = False
 
 def parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments."""
@@ -369,12 +352,12 @@ def find_imports_in_script(options: Options, file_path: str, all_imports: Set[st
             imp = imp.split(' as ')[0].strip()  # Remove "as alias" part
             this_import = imp.split('.')[0].strip()
             if this_import and this_import not in all_imports:
-                if this_import in unusual_imports:
+                if this_import in options.unusual_imports:
                     logger.warning(f"Unusual import: {this_import} from line {line} in file {file_path}")
                 if this_import in options.custom_modules.keys():
                     if options.custom_modules[this_import] == file_path:
                         logger.warning(f"Local import: {this_import} from line {line} in file {file_path} loads itself.")
-                    elif any(substring in options.custom_modules[this_import] for substring in stay_out_list):
+                    elif any(substring in options.custom_modules[this_import] for substring in options.stay_out_list):
                         pass
                     elif os.path.isdir(options.custom_modules[this_import]):
                         #logger.warning(f"Local import: {this_import} from line {line} in file {file_path} loads a directory.")
@@ -396,7 +379,7 @@ def get_all_imports(options: Options, directory: str) -> Set[str]:
     processed_files = 0
 
     for root, _, files in os.walk(directory):
-        if any(substring in root for substring in stay_out_list):
+        if any(substring in root for substring in options.stay_out_list):
             continue
         for file in files:
             if file.endswith('.py'):
@@ -437,8 +420,8 @@ def split_imports(options: Options, all_imports: Set[str]) -> Tuple[Set[str], Se
     max_length = max(len(imp) for imp in all_imports)
 
     for i, imp in enumerate(all_imports, 1):
-        if imp in module_aliases:
-            package_name = module_aliases[imp]
+        if imp in options.module_aliases:
+            package_name = options.module_aliases[imp]
         else:
             package_name = imp
 
@@ -1121,7 +1104,21 @@ def dict_of_custom_modules(options: Options) -> Dict[str, str]:
         pickle.dump(custom_modules, f)
     return custom_modules
 
-def main():
+def main() -> None:
+    logging_setup = LoggerSetup("mypy")
+    logger = logging_setup.get_logger()
+    memory_handler = logging_setup.get_memory_handler()
+
+    # Attempt to import pipreqs
+    try:
+        import pipreqs
+        logger.info("pipreqs is available, so it will be used.")
+        PIPREQS_AVAILABLE = True
+    except ImportError:
+        #This used to be a logger.warning() but I changed it to logger.info() because it's not really a warning.
+        logger.info("pipreqs is not available. Try installing it with 'pip install pipreqs'.")
+        PIPREQS_AVAILABLE = False
+
     start_time = datetime.now()
     options = Options()
     options.args = parse_arguments()
