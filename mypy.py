@@ -41,8 +41,51 @@ import pickle
 from pathlib import Path, PosixPath
 from typing import Dict, List, Set, Tuple
 
-from univ_defs import *
-#if __name__ == '__main__':
+import logging
+
+class MemoryHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.logs = []
+
+    def emit(self, record):
+        self.logs.append(self.format(record))
+
+class LoggerSetup:
+    def __init__(self, basename: str):
+        self.logger = logging.getLogger("my_logger")
+        self.memory_handler = MemoryHandler()
+        self._setup_logging(basename)
+
+    def _setup_logging(self, basename: str):
+        self.logger.setLevel(logging.DEBUG)
+        now = datetime.now()
+        log_base = "."+basename+"-log-"+now.strftime('%Y%m%d-%H%M%S')
+        log_info = log_base+".out"
+        log_errors = log_base+".err"
+        debug_info_handler = logging.FileHandler(log_info)
+        debug_info_handler.setLevel(logging.DEBUG)
+        warning_error_handler = logging.FileHandler(log_errors)
+        warning_error_handler.setLevel(logging.WARNING)
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.DEBUG)
+        self.memory_handler.setLevel(logging.WARNING)
+        log_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        debug_info_handler.setFormatter(log_format)
+        warning_error_handler.setFormatter(log_format)
+        console_handler.setFormatter(log_format)
+        self.memory_handler.setFormatter(log_format)
+        self.logger.addHandler(debug_info_handler)
+        self.logger.addHandler(warning_error_handler)
+        self.logger.addHandler(console_handler)
+        self.logger.addHandler(self.memory_handler)
+
+    def get_logger(self):
+        return self.logger
+
+    def get_memory_handler(self):
+        return self.memory_handler
+
 logging_setup = LoggerSetup("mypy")
 logger = logging_setup.get_logger()
 memory_handler = logging_setup.get_memory_handler()
@@ -59,9 +102,16 @@ module_aliases = {
     'sm': 'statsmodels',
 }
 
+# List of unusual imports that are not standard library modules or packages.
+unusual_imports = ['a', 'an', 'dl', 'the', 'it', 'x', 'xx', 'above', 'another', '__builtin__', 'within',]
+
+# List of directories to stay out of when searching for local custom imports because they're filled with standard library modules or other irrelevant files.
+stay_out_list = ['myenv', 'anaconda3', '.conda']
+
 class Options():
     """Class that has all global options in one place."""
     def __init__(self) -> None:
+        self.current_dir: str = os.getcwd()
         self.venv_name: str = 'myenv' # Can NOT include dashes ('-')
         self.mypy_dir: str = os.path.expanduser(os.path.join('~','mypy'))
         self.packages_dir: str = os.path.join(self.mypy_dir, 'packages')
@@ -73,7 +123,7 @@ class Options():
         self.pip_list: List[str] = []
         self.loaded_custom_modules: Set[str] = set()
         self.pretty_list: str = ''
-        self.timestamp: str = datetime.now().strftime('%Y%m%d%H%M%S')
+        self.timestamp: str = datetime.now().strftime('%Y%m%d-%H%M%S')
         self.python_script: str = ''
         self.script_dir: str = ''
         self.json_filename: str = ''
@@ -123,13 +173,16 @@ def parse_arguments() -> argparse.Namespace:
 
     # Add the manual argument to the mutually exclusive group
     group.add_argument('-manual', action='store_true', help='Print instructions for manually adding the alias to the shell configuration file.')
-    
+
+    # Add the blank-slate argument to the mutually exclusive group
+    group.add_argument('-blank-slate', action='store_true', help="Delete ~/mypy/ and all mypy .out and .err and .json and .pkl files in the current directory.")
+
     # Add additional arguments to the parser (not part of the mutually exclusive group)
     parser.add_argument('-full', action='store_true', help="Build a virtual environment (venv) that can run every python script in this directory.")
-    parser.add_argument('-blank-slate', action='store_true', help="Delete ~/mypy/ and all mypy .out and .err and .json and .pkl files in the current directory.")
     parser.add_argument('-y', action='store_true', help='Automatically say yes to any prompts.')
     parser.add_argument('-no-cache', action='store_true', help="Don't search the cache. Instead, create a new virtual environment.")
     parser.add_argument('-latest', action='store_true', help="Load the latest venv in the cache which has all the packages needed now.")
+    parser.add_argument('-oldest', action='store_true', help="Load the oldest venv in the cache which has all the packages needed now.")
     parser.add_argument('-last-used', action='store_true', help="Load the last used venv in the cache, but if that fails try the latest venv which has all the packages needed now.")
     parser.add_argument('-smallest', action='store_true', help="Load the smallest venv in the cache (with the fewest packages) which has all the packages needed now.")
     parser.add_argument('-rc', action='store_true', help='Refresh the custom modules cache and the pip list.')
@@ -316,11 +369,13 @@ def find_imports_in_script(options: Options, file_path: str, all_imports: Set[st
             imp = imp.split(' as ')[0].strip()  # Remove "as alias" part
             this_import = imp.split('.')[0].strip()
             if this_import and this_import not in all_imports:
-                if this_import in ['a', 'an', 'dl', 'the', 'it', 'x', 'xx', 'above', 'another', '__builtin__', 'within',]:
+                if this_import in unusual_imports:
                     logger.warning(f"Unusual import: {this_import} from line {line} in file {file_path}")
                 if this_import in options.custom_modules.keys():
                     if options.custom_modules[this_import] == file_path:
                         logger.warning(f"Local import: {this_import} from line {line} in file {file_path} loads itself.")
+                    elif any(substring in options.custom_modules[this_import] for substring in stay_out_list):
+                        pass
                     elif os.path.isdir(options.custom_modules[this_import]):
                         #logger.warning(f"Local import: {this_import} from line {line} in file {file_path} loads a directory.")
                         pass
@@ -341,7 +396,7 @@ def get_all_imports(options: Options, directory: str) -> Set[str]:
     processed_files = 0
 
     for root, _, files in os.walk(directory):
-        if 'myenv' in root or 'anaconda3' in root or '.conda' in root:
+        if any(substring in root for substring in stay_out_list):
             continue
         for file in files:
             if file.endswith('.py'):
@@ -368,12 +423,17 @@ def check_if_library_exists(library_name: str) -> bool:
 
 def split_imports(options: Options, all_imports: Set[str]) -> Tuple[Set[str], Set[str], Set[str]]:
     """Split imports into installed, uninstalled, and bad imports."""
-    known_bad_imports = {'bs4', 'snakeClass', 'pathfinding_salvo_rework', 'seaborn', 'DQN', 'bayesOpt', 'tkinter', 'msvcrt', 'non_existent_module'}
+    known_bad_imports = {'__builtin__', 'bs4', 'snakeClass', 'pathfinding_salvo_rework', 'seaborn', 'DQN', 'bayesOpt', 'tkinter', 'msvcrt', 'non_existent_module'}
     bad_imports = known_bad_imports.intersection(all_imports)
+    #Any import that starts with "_" is a bad import:
+    bad_imports.update({imp for imp in all_imports if imp.startswith('_')})
     all_imports = all_imports - bad_imports
     installed_imports = set()
     uninstalled_imports = set()
     total_imports = len(all_imports)
+    if not total_imports:
+        logger.info("No imports found.")
+        return installed_imports, uninstalled_imports, bad_imports
     max_length = max(len(imp) for imp in all_imports)
 
     for i, imp in enumerate(all_imports, 1):
@@ -798,14 +858,14 @@ def guard_examines(options: Options) -> None:
         aggregate_operations(module_path)
 
     if read_files:
-        logger.info("Files read:", read_files)
+        logger.info("Files read: " + ", ".join(read_files))
     if write_files:
-        logger.info("Files written:", write_files)
+        logger.info("Files written: " + ", ".join(write_files))
     if download_urls:
-        logger.info("Download URLs:", download_urls)
+        logger.info("Download URLs: " + ", ".join(download_urls))
     if upload_urls:
-        logger.info("Upload URLs:", upload_urls)
-
+        logger.info("Upload URLs: " + ", ".join(upload_urls))
+    
 def save_options_to_json(options: Options) -> None:
     """Save the options object to a JSON file."""
     options.json_filename = os.path.join(options.script_dir, f".{os.path.basename(options.python_script)}-mypy-last-used-on-{options.timestamp}.json")
@@ -883,6 +943,18 @@ def latest_venv(final_venv_folders: Dict[str, Dict[str, int]]) -> str:
 
     return latest_folder
 
+def oldest_venv(final_venv_folders: Dict[str, Dict[str, int]]) -> str:
+    """Return the folder with the oldest timestamp."""
+    oldest_folder = None
+    oldest_timestamp = None
+
+    for folder, data in final_venv_folders.items():
+        if oldest_timestamp is None or data['timestamp'] > oldest_timestamp:
+            oldest_timestamp = data['timestamp']
+            oldest_folder = folder
+
+    return oldest_folder
+
 def smallest_venv(final_venv_folders: Dict[str, Dict[str, int]]) -> str:
     """Return the folder with the fewest packages."""
     smallest_folder = None
@@ -914,7 +986,7 @@ def check_venv_dir(options: Options, options_from_cache: Options) -> bool:
 
 def find_match_dir_in_cache(options: Options) -> str:
     """Find a matching virtual environment directory in the cache."""
-    if not options.args.latest and not options.args.last_used and not options.args.smallest:
+    if not options.args.latest and not options.args.oldest and not options.args.last_used and not options.args.smallest:
         options.args.last_used = True #If no flags are set, then the default is to load the last used venv in the cache
     if options.args.last_used and not options.args.latest and not options.args.smallest:
         try: # Try to load the last used venv in the cache
@@ -964,7 +1036,7 @@ def find_match_dir_in_cache(options: Options) -> str:
         logger.info("No matching venv folders found in the cache.")
     else:
         logger.info(f"Found {len(final_venv_folders)} matching venv folders in the cache.")
-        if options.args.latest and not options.args.last_used and not options.args.smallest:
+        if options.args.latest and not options.args.oldest and not options.args.last_used and not options.args.smallest:
             # Return the latest venv in the cache which has all the packages needed now
             options_latest = copy.deepcopy(options)
             options_latest.set_venv_dir(os.path.join(options.mypy_dir, latest_venv(final_venv_folders)))
@@ -974,7 +1046,17 @@ def find_match_dir_in_cache(options: Options) -> str:
             else:
                 logger.error("The latest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
                 return None
-        elif options.args.smallest and not options.args.latest and not options.args.last_used:
+        elif options.args.oldest and not options.args.latest and not options.args.last_used and not options.args.smallest:
+            # Return the oldest venv in the cache which has all the packages needed now
+            options_oldest = copy.deepcopy(options)
+            options_oldest.set_venv_dir(os.path.join(options.mypy_dir, oldest_venv(final_venv_folders)))
+            options_oldest.uninstalled_imports = options.uninstalled_imports
+            if check_venv_dir(options, options_oldest):
+                return options_oldest.venv_dir
+            else:
+                logger.error("The oldest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
+                return None
+        elif options.args.smallest and not options.args.latest and not options.args.oldest and not options.args.last_used:
             # Return the smallest venv in the cache which has all the packages needed now
             options_smallest = copy.deepcopy(options)
             options_smallest.set_venv_dir(os.path.join(options.mypy_dir, smallest_venv(final_venv_folders)))
@@ -985,7 +1067,7 @@ def find_match_dir_in_cache(options: Options) -> str:
                 logger.error("The smallest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
                 return None
         else: # This should never happen
-            logger.error(f"Invalid combination of flags. {options.args.latest = }, {options.args.last_used = }, {options.args.smallest = }")
+            logger.error(f"Invalid combination of flags. {options.args.latest = }, {options.args.oldest = }, {options.args.last_used = }, {options.args.smallest = }")
 
 def is_standard_path(path: str) -> bool:
     """Check if the given path is a standard system path or part of a virtual environment."""
@@ -1059,13 +1141,7 @@ def main():
         # Print instructions for manually adding the alias to the shell configuration file
         print(manual_instructions)
         sys.exit(0)
-    else:
-        print("You must specify either a script to run or the -alias option.")
-
-    options.script_dir = os.path.abspath(os.path.dirname(options.python_script))
-    #logger.info(f"Directory where the script to run is located: {options.script_dir}")
-
-    if options.args.blank_slate:
+    elif options.args.blank_slate:
         if not options.args.y:
             response = input("Are you sure you want to delete everything in ~/mypy/ and all mypy .json files in the current directory? (y/n) ")
             if response.casefold() != 'y':
@@ -1073,13 +1149,22 @@ def main():
                 sys.exit(0)
         logger.info("Deleting everything in ~/mypy/ and all mypy .out and .err and .json and .pkl files in the current directory.")
         shutil.rmtree(options.mypy_dir, ignore_errors=True)
-        for file in os.listdir(options.script_dir):
-            if (file.startswith('.mypy-') and file.endswith('.out')) or \
-               (file.startswith('.mypy-') and file.endswith('.err')) or \
-               (file.startswith('.mypy_custom_modules_') and file.endswith('.pkl')) or \
-               (file.startswith('.'+os.path.basename(options.python_script)) and file.endswith('.json')):
-                logger.info(f"Deleting {file}")
-                os.remove(os.path.join(options.script_dir, file))
+        for file in os.listdir(options.current_dir):
+            try:
+                if (file.startswith('.mypy-') and file.endswith('.out')) or \
+                (file.startswith('.mypy-') and file.endswith('.err')) or \
+                (file.startswith('.mypy_custom_modules_') and file.endswith('.pkl')) or \
+                (file.startswith('.'+os.path.basename(options.python_script)) and file.endswith('.json')):
+                    logger.info(f"Deleting {file}")
+                    os.remove(os.path.join(options.script_dir, file))
+            except:
+                logger.error(f"Error deleting {file}")
+        sys.exit(0)
+    else:
+        print("You must specify either a script to run or these options: alias, manual, blank-slate (be careful using blank-slate because it deletes all the virtual environments you've made, among other things!) .")
+
+    options.script_dir = os.path.abspath(os.path.dirname(options.python_script))
+    #logger.info(f"Directory where the script to run is located: {options.script_dir}")
 
     if not os.path.isdir(options.mypy_dir):
         logger.info(f"Directory {options.mypy_dir} does not exist yet, so it is being created.")
@@ -1125,12 +1210,18 @@ def main():
     if not options.uninstalled_imports:
         logger.info("All required packages are already installed.")
         guard_examines(options)
+        start_raw_time = datetime.now()
         subprocess.run([sys.executable, options.python_script] + options.script_args)
+        elapsed_raw_time = datetime.now() - start_raw_time
+        logger.info(f"Runtime: {elapsed_raw_time}")
     elif is_virtualenv():
         logger.info("Already in a virtual environment.")
         if check_packages_in_venv(options):
             guard_examines(options)
+            start_raw_time = datetime.now()
             subprocess.run([sys.executable, options.python_script] + options.script_args)
+            elapsed_raw_time = datetime.now() - start_raw_time
+            logger.info(f"Runtime: {elapsed_raw_time}")
         else:
             logger.error("The current virtual environment does not have all the required packages.")
             logger.info("Please deactivate the current virtual environment and run the script again.")
@@ -1180,7 +1271,6 @@ def main():
             # Write the modified content back to the file
             with open(cfg_file_path, 'w') as file:
                 file.writelines(modified_lines)
-            logger.info(f"Updated {cfg_file_path} successfully.")
             # Read the content of the file
             with open(options.download_script_path, 'r') as file:
                 lines = file.readlines()
@@ -1192,7 +1282,6 @@ def main():
             # Write the modified content back to the file
             with open(options.download_script_path , 'w') as file:
                 file.writelines(modified_lines)
-            logger.info(f"Updated {options.download_script_path} successfully.")
 
         save_options_to_json(options)
 
