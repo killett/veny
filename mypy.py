@@ -290,6 +290,22 @@ def find_imports_in_script(options: Options, file_path: str) -> None:
             # Handle 'from X import Y' type of lines
             parts = re.split(r'\s+', line, maxsplit=2)
             imports_list = [parts[1]]
+            module_path = parts[1].replace('.', os.sep) + ".py"
+            logging.info(f"Module path: {module_path}")
+            base_dir = os.path.dirname(file_path)
+            logging.info(f"file_path: {file_path}")
+            logging.info(f"Base directory: {base_dir}")
+            potential_file_path = os.path.join(base_dir, module_path)
+            logging.info(f"Potential file path: {potential_file_path}")
+            # Wait for input to continue
+            input("Press Enter to continue...")
+            if os.path.isfile(potential_file_path):
+                resolved_path = os.path.abspath(potential_file_path)
+                options.custom_modules[parts[1].split('.')[0]] = resolved_path
+                logging.info(f"Resolved import to: {resolved_path} and saved in options.custom_modules with key {parts[1].split('.')[0]}")
+                # Continue with processing this custom module as you do for others
+                options.loaded_custom_modules.add(parts[1].split('.')[0])
+                find_imports_in_script(options, resolved_path)
         elif 1: # Look for sys.path modifications:
             for pattern in patterns:
                 # Search for the pattern
@@ -321,7 +337,8 @@ def find_imports_in_script(options: Options, file_path: str) -> None:
                 if this_import in options.unusual_imports:
                     logging.warning(f"Unusual import: {this_import} from line {line} in file {file_path}")
                 if this_import in options.custom_modules.keys():
-                    if options.custom_modules[this_import] == file_path:
+                    if options.custom_modules[this_import] == file_path and this_import == os.path.basename(file_path).split('.')[0] and not line.startswith(f'from {this_import}.'):
+                        logging.warning(f"{os.path.basename(file_path).split('.')[0] = }")
                         logging.warning(f"Local import: {this_import} from line {line} in file {file_path} loads itself.")
                     elif any(substring in options.custom_modules[this_import] for substring in options.stay_out_list):
                         pass
