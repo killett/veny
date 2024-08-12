@@ -15,7 +15,7 @@ import shutil
 import venv
 import pickle
 from pathlib import Path, PosixPath
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Set, Tuple, Union, Iterable
 import logging
 
 from univ_defs import *
@@ -63,7 +63,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.python_script: str = ''
         self.script_dir: str = ''
         self.json_filename: str = ''
-        self.script_dir_or_file: str = ''
+        self.script_dir_or_file_or_list: Union[str, Iterable[str]] = ''
         self.current_pip_version: str = ''
         self.new_pip_version: str = ''
         self.activate_script: str = ''
@@ -290,7 +290,7 @@ def find_imports_in_script(options: Options, file_path: str) -> None:
             # Handle 'from X import Y' type of lines
             parts = re.split(r'\s+', line, maxsplit=2)
             imports_list = [parts[1]]
-        elif 1:
+        elif 1: # Look for sys.path modifications:
             for pattern in patterns:
                 # Search for the pattern
                 match = re.search(pattern, line)
@@ -316,6 +316,7 @@ def find_imports_in_script(options: Options, file_path: str) -> None:
         for imp in imports_list:
             imp = imp.split(' as ')[0].strip()  # Remove "as alias" part
             this_import = imp.split('.')[0].strip()
+            logging.info(f"Found import: {this_import} from line {line} in file {file_path}")
             if this_import and this_import not in options.all_imports:
                 if this_import in options.unusual_imports:
                     logging.warning(f"Unusual import: {this_import} from line {line} in file {file_path}")
@@ -404,27 +405,33 @@ def generate_requirements(directory: str) -> None:
 
 def list_packages(options: Options) -> None:
     """List all installed and uninstalled packages that are imported in a directory or file. Return these sets inside the options object."""
-    options.script_dir_or_file = os.path.expanduser(options.script_dir_or_file)
-    options.loaded_custom_modules = set()
-    if os.path.isfile(options.script_dir_or_file):
-        logging.info("Processing a single Python script.")
-        python_file = options.script_dir_or_file
-        options.all_imports = set()
-        find_imports_in_script(options, python_file)
-    elif os.path.isdir(options.script_dir_or_file):
-        logging.info("Processing an entire folder of Python scripts.")
-        python_dir = options.script_dir_or_file
-        if PIPREQS_AVAILABLE:
-            logging.info("Using pipreqs to generate requirements.")
-            generate_requirements(options.script_dir_or_file)
-            with open(os.path.join(python_dir, 'requirements.txt'), 'r') as f:
-                options.all_imports = set(line.strip() for line in f)
+    if type(options.script_dir_or_file_or_list) == str:
+        options.script_dir_or_file_or_list = os.path.expanduser(options.script_dir_or_file_or_list)
+        options.loaded_custom_modules = set()
+        if os.path.isfile(options.script_dir_or_file_or_list):
+            logging.info("Processing a single Python script.")
+            python_file = options.script_dir_or_file_or_list
+            options.all_imports = set()
+            find_imports_in_script(options, python_file)
+        elif os.path.isdir(options.script_dir_or_file_or_list):
+            logging.info("Processing an entire folder of Python scripts.")
+            python_dir = options.script_dir_or_file_or_list
+            if PIPREQS_AVAILABLE:
+                logging.info("Using pipreqs to generate requirements.")
+                generate_requirements(options.script_dir_or_file_or_list)
+                with open(os.path.join(python_dir, 'requirements.txt'), 'r') as f:
+                    options.all_imports = set(line.strip() for line in f)
+            else:
+                logging.info("Using custom script to find imports.")
+                options.all_imports = get_all_imports(options, options.script_dir_or_file_or_list)
         else:
-            logging.info("Using custom script to find imports.")
-            options.all_imports = get_all_imports(options, options.script_dir_or_file)
+            logging.error(f"Error: The file or directory {options.script_dir_or_file_or_list} does not exist.")
+            sys.exit(1)
     else:
-        logging.error(f"Error: The file or directory {options.script_dir_or_file} does not exist.")
-        sys.exit(1)
+        logging.info("Processing a list of Python scripts.")
+        options.all_imports = set()
+        for python_file in options.script_dir_or_file_or_list:
+            find_imports_in_script(options, python_file)
 
     # Filter out invalid imports before splitting
     options.all_imports = {imp for imp in options.all_imports if re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', imp)}
@@ -1069,17 +1076,16 @@ def dict_of_custom_modules(options: Options) -> Dict[str, str]:
 def main() -> None:
     memory_handler = configure_logging("mypy", log_level="INFO")
 
-    # Attempt to import pipreqs
+    start_time = datetime.now()
+
     try:
         import pipreqs
         logging.info("pipreqs is available, so it will be used.")
         PIPREQS_AVAILABLE = True
     except ImportError:
-        #This used to be a logging.warning() but I changed it to logging.info() because it's not really a warning.
         logging.info("pipreqs is not available. Try installing it with 'pip install pipreqs'.")
         PIPREQS_AVAILABLE = False
 
-    start_time = datetime.now()
     options = Options()
     options.args = parse_arguments()
 
@@ -1091,7 +1097,7 @@ def main() -> None:
         add_alias(options)
         sys.exit(0)
     elif options.args.script:
-        # A script was specified, run the script with the provided arguments
+        # Run the specified script with the provided arguments
         script_path = os.path.abspath(options.args.script)
     elif options.args.manual:
         # Print instructions for manually adding the alias to the shell configuration file
@@ -1150,9 +1156,20 @@ def main() -> None:
 
     if options.args.full:
         logging.info("Building a virtual environment that can run every python script in this directory.")
-        options.script_dir_or_file = options.script_dir
+        options.script_dir_or_file_or_list = options.script_dir
     else:
-        options.script_dir_or_file = options.python_script
+        if not options.args.script_args:
+            options.script_dir_or_file_or_list = options.python_script
+        else:
+            #Loop through all the script arguments and see if any of them are local python scripts.
+            options.script_dir_or_file_or_list = [options.python_script]
+            for arg in options.script_args:
+                if arg.endswith('.py'):
+                   if arg.replace('.py','') in options.custom_modules:
+                       options.script_dir_or_file_or_list.append(arg)
+            if len(options.script_dir_or_file_or_list) == 1:
+                options.script_dir_or_file_or_list = options.python_script
+    logging.info(f"{options.script_dir_or_file_or_list = }")
 
     start_list_packages_time = datetime.now()
     elapsed_time = start_list_packages_time - start_time
