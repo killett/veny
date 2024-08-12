@@ -74,6 +74,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.download_script_path: str = ''
         self.script_args: List[str] = []
         self.new_local_paths: Set[str] = set()
+        self.processed_files: Set[str] = set()
         self.all_imports: Set[str] = set()
         self.installed_imports: Set[str] = set()
         self.uninstalled_imports: Set[str] = set()
@@ -233,6 +234,11 @@ def add_alias(options: Options) -> None:
 
 def find_imports_in_script(options: Options, file_path: str) -> None:
     """Find all imports in a Python script and add them to a set. Recursively check local imports in any custom modules that are imported."""
+    # Prevent processing the same file repeatedly
+    if file_path in options.processed_files:
+        return
+    options.processed_files.add(file_path)
+
     if os.path.islink(file_path):
         logging.info(f"Skipping symbolic link {file_path}")
         return
@@ -448,7 +454,8 @@ def list_packages(options: Options) -> None:
         logging.info("Processing a list of Python scripts.")
         options.all_imports = set()
         for python_file in options.script_dir_or_file_or_list:
-            find_imports_in_script(options, python_file)
+            python_filepath = os.path.join(options.script_dir, python_file)
+            find_imports_in_script(options, python_filepath)
 
     # Filter out invalid imports before splitting
     options.all_imports = {imp for imp in options.all_imports if re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', imp)}
