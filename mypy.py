@@ -293,25 +293,69 @@ def find_imports_in_script(options: Options, file_path: str) -> None:
             else:
                 imports_list = []
         elif line.startswith('from '):
-            # Handle 'from X import Y' type of lines
+            #This next line is a little confusing. It splits the line into three parts: the 'from' part, the module part, and the 'import' part.
+            #For example, if line were "from simple_gridder.utils.logconfig import configure_logging", the result of the split would be:
+            # parts = ['from', 'simple_gridder.utils.logconfig', 'import configure_logging']
+            # This split allows you to easily identify the components of the from ... import ... statement:
+            #     parts[0]: "from"
+            #     parts[1]: "simple_gridder.utils.logconfig"
+            #     parts[2]: "import configure_logging"
             parts = re.split(r'\s+', line, maxsplit=2)
+
             imports_list = [parts[1]]
-            module_path = parts[1].replace('.', os.sep) + ".py"
-            logging.info(f"Module path: {module_path}")
+            
+            logging.info(f"Processing 'from' import: {line}")
+            logging.info(f"Extracted parts: {parts}")
+            logging.info(f"Imports list: {imports_list}")
+
+            module_path = os.path.join(parts[1].replace('.', os.sep), parts[2].split('import ')[-1].strip()) + ".py"
+
             base_dir = os.path.dirname(file_path)
-            logging.info(f"file_path: {file_path}")
-            logging.info(f"Base directory: {base_dir}")
+            
+            logging.info(f"Base directory of the current file: {base_dir}")
+            logging.info(f"Module path: {module_path}")
+            
+            # First, try to resolve the import relative to the base directory of the current file
             potential_file_path = os.path.join(base_dir, module_path)
-            logging.info(f"Potential file path: {potential_file_path}")
-            # Wait for input to continue
-            input("Press Enter to continue...")
+            
+            logging.info(f"Constructed potential file path: {potential_file_path}")
             if os.path.isfile(potential_file_path):
                 resolved_path = os.path.abspath(potential_file_path)
+                logging.info(f"Resolved local import to: {resolved_path}")
                 options.custom_modules[parts[1].split('.')[0]] = resolved_path
-                logging.info(f"Resolved import to: {resolved_path} and saved in options.custom_modules with key {parts[1].split('.')[0]}")
-                # Continue with processing this custom module as you do for others
+                logging.info(f"Updated custom_modules with key {parts[1].split('.')[0]}: {resolved_path}")
                 options.loaded_custom_modules.add(parts[1].split('.')[0])
+                logging.info(f"Added {parts[1].split('.')[0]} to loaded_custom_modules")
                 find_imports_in_script(options, resolved_path)
+            elif module_path.split(os.sep)[0] == base_dir.split(os.sep)[-1] and os.path.isfile(os.path.join(base_dir, '__init__.py')):
+                # If the module is in the same directory as the current file and the current directory is a package, try to resolve the import
+                # Remove the package name from the module path because it's in there twice:
+                module_path = module_path.replace(module_path.split(os.sep)[0]+os.sep,'')
+                # Since we're loading from a module, the parts[2] will be the function name, not the file name. So remove that: 
+                module_path = module_path.replace(os.sep+parts[2].split('import ')[-1].strip(),'')
+                resolved_path = os.path.abspath(os.path.join(base_dir, module_path))
+                logging.info(f"Resolved local import to: {resolved_path}")
+                options.custom_modules[parts[1].split('.')[0]] = resolved_path
+                logging.info(f"Updated custom_modules with key {parts[1].split('.')[0]}: {resolved_path}")
+                options.loaded_custom_modules.add(parts[1].split('.')[0])
+                logging.info(f"Added {parts[1].split('.')[0]} to loaded_custom_modules")
+                find_imports_in_script(options, resolved_path)
+            else:
+                logging.warning(f"Local path does not exist: {potential_file_path}")
+                # Only if the local resolution fails, fall back to checking the custom_modules
+                if parts[1].split('.')[0] in options.custom_modules:
+                    logging.info(f"{parts[1].split('.')[0]} found in custom_modules")
+                    # Ensure we're not looping back to the same file
+                    resolved_path = options.custom_modules[parts[1].split('.')[0]]
+                    if resolved_path == file_path:
+                        logging.warning(f"Avoiding loopback to the same file: {resolved_path}")
+                    else:
+                        logging.info(f"Using existing resolved path from custom_modules: {resolved_path}")
+                        options.loaded_custom_modules.add(parts[1].split('.')[0])
+                        logging.info(f"Added {parts[1].split('.')[0]} to loaded_custom_modules")
+                        find_imports_in_script(options, resolved_path)
+                else:
+                    logging.warning(f"Could not resolve import: {parts[1]} in file {file_path}")
         elif 1: # Look for sys.path modifications:
             for pattern in patterns:
                 # Search for the pattern
