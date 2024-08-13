@@ -506,7 +506,7 @@ def list_packages(options: Options) -> None:
     
     split_imports(options)
 
-def install_packages(options: Options) -> None:
+def download_packages(options: Options) -> None:
     """Install packages in a virtual environment."""
     download_script = f"""#!/bin/bash
     source {options.venv_dir}/bin/activate
@@ -532,8 +532,7 @@ def install_packages(options: Options) -> None:
 
     # Download required packages
     echo "Downloading packages..."
-    {options.venv_pip} download -r {options.requirements_file} -d {options.packages_dir}
-    """
+    {options.venv_pip} download -r {options.requirements_file} -d {options.packages_dir}"""
 
     logging.info(f"Writing download script to {options.download_script_path}")
     with open(options.download_script_path, 'w') as f:
@@ -559,7 +558,50 @@ def install_packages(options: Options) -> None:
     process.stderr.close()
     process.wait()
 
-    # Now, attempt to install each package individually
+def install_packages_simultaneously(options: Options) -> bool:
+    """Install all packages simultaneously in the virtual environment."""
+    try:
+        # Construct the install command
+        install_command = [
+            options.venv_python, "-m", "pip", "install",
+            "--no-index", "--find-links", options.packages_dir,
+            "-r", options.requirements_file
+        ]
+
+        logging.info("Installing all packages simultaneously...")
+
+        # Run the command and capture the output line by line
+        process = subprocess.Popen(
+            install_command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+
+        captured_output = ""
+        for line in iter(process.stdout.readline, ''):
+            logging.info(line.strip())
+            captured_output += line
+        for line in iter(process.stderr.readline, ''):
+            logging.error(line.strip())
+            captured_output += line
+        process.stdout.close()
+        process.stderr.close()
+        process.wait()
+
+        # Check the return code for success
+        if process.returncode == 0:
+            logging.info("All packages installed successfully.")
+            return True
+        else:
+            logging.error("Failed to install some packages.")
+            return False
+    except Exception as e:
+        logging.error(f"Error during simultaneous installation: {e}")
+        return False
+
+def install_packages_individually(options: Options) -> None:
+    """Install packages individually in the virtual environment."""
     failed_packages = []
     for package in options.uninstalled_imports:
         if not install_package(package, options):
@@ -756,7 +798,9 @@ def setup_virtualenv(options: Options) -> None:
     subprocess.run(install_command, shell=True, check=True)
     logging.info("Wheel installed in the virtual environment.")
 
-    install_packages(options)
+    download_packages(options)
+    if not install_packages_simultaneously(options):
+        install_packages_individually(options)
 
 def is_virtualenv() -> bool:
     """Check if currently running in a virtual environment."""
