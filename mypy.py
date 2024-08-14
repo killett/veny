@@ -100,6 +100,8 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.unusual_imports: List[str] = ['a', 'an', 'dl', 'the', 'it', 'x', 'xx', 'above', 'another', '__builtin__', 'within']
         # List of directories to stay out of when searching for local custom imports because they're filled with standard library modules or other irrelevant files.
         self.stay_out_list: List[str] = ['myenv', 'anaconda3', '.conda']
+        # List of encodings to try when reading files, in order from most to least likely.
+        self.encodings: List[str] = ['utf_8', 'latin_1', 'ascii', 'iso8859_1', 'big5', 'utf_8_sig', 'utf_16', 'utf_16_be', 'utf_16_le', 'utf_32', 'utf_32_be', 'utf_32_le', 'cp1252', 'cp1251', 'cp1250', 'cp1253', 'cp1254', 'cp1255', 'cp1256', 'cp1257', 'cp1258', 'iso8859_2', 'iso8859_3', 'iso8859_4', 'iso8859_5', 'iso8859_6', 'iso8859_7', 'iso8859_8', 'iso8859_9', 'iso8859_10', 'iso8859_11', 'iso8859_13', 'iso8859_14', 'iso8859_15', 'iso8859_16', 'cp437', 'cp850', 'cp852', 'cp855', 'cp857', 'cp858', 'cp860', 'cp861', 'cp862', 'cp863', 'cp864', 'cp865', 'cp866', 'cp869','cp037', 'cp424', 'cp500', 'cp720', 'cp737', 'cp775', 'cp874', 'cp875', 'cp932', 'cp949', 'cp950', 'cp1006', 'cp1026', 'cp1125', 'cp1140','big5hkscs', 'gb2312', 'gbk', 'gb18030', 'euc_jp', 'euc_jis_2004', 'euc_jisx0213', 'euc_kr', 'iso2022_jp', 'iso2022_jp_1', 'iso2022_jp_2', 'iso2022_jp_2004', 'iso2022_jp_3', 'iso2022_jp_ext', 'iso2022_kr', 'johab', 'koi8_r', 'koi8_t', 'koi8_u', 'kz1048', 'mac_cyrillic', 'mac_greek', 'mac_iceland', 'mac_latin2', 'mac_roman', 'mac_turkish', 'ptcp154', 'shift_jis', 'shift_jis_2004', 'shift_jisx0213', 'hz', 'tis_620', 'euc_tw', 'iso2022_tw']
 
     def set_venv_dir(self, venv_dir: str) -> None:
         self.venv_dir = os.path.expanduser(venv_dir)
@@ -254,20 +256,7 @@ def find_imports_in_script(options: Options, file_path: str) -> None:
     ]
 
     # Attempt to read the file with various encodings
-    encodings = [
-    'utf_8', 'latin_1', 'ascii', 'iso8859_1', 'big5', 'utf_8_sig', 'utf_16', 'utf_16_be', 'utf_16_le', 'utf_32', 'utf_32_be', 'utf_32_le',
-    'cp1252', 'cp1251', 'cp1250', 'cp1253', 'cp1254', 'cp1255', 'cp1256', 'cp1257', 'cp1258',
-    'iso8859_2', 'iso8859_3', 'iso8859_4', 'iso8859_5', 'iso8859_6', 'iso8859_7', 'iso8859_8', 'iso8859_9', 
-    'iso8859_10', 'iso8859_11', 'iso8859_13', 'iso8859_14', 'iso8859_15', 'iso8859_16',
-    'cp437', 'cp850', 'cp852', 'cp855', 'cp857', 'cp858', 'cp860', 'cp861', 'cp862', 'cp863', 'cp864', 'cp865', 'cp866', 'cp869',
-    'cp037', 'cp424', 'cp500', 'cp720', 'cp737', 'cp775', 'cp874', 'cp875', 'cp932', 'cp949', 'cp950', 'cp1006', 'cp1026', 
-    'cp1125', 'cp1140',
-    'big5hkscs', 'gb2312', 'gbk', 'gb18030', 'euc_jp', 'euc_jis_2004', 'euc_jisx0213', 'euc_kr', 
-    'iso2022_jp', 'iso2022_jp_1', 'iso2022_jp_2', 'iso2022_jp_2004', 'iso2022_jp_3', 'iso2022_jp_ext', 'iso2022_kr', 
-    'johab', 'koi8_r', 'koi8_t', 'koi8_u', 'kz1048', 'mac_cyrillic', 'mac_greek', 'mac_iceland', 'mac_latin2', 'mac_roman', 
-    'mac_turkish', 'ptcp154', 'shift_jis', 'shift_jis_2004', 'shift_jisx0213', 'hz', 'tis_620', 'euc_tw', 'iso2022_tw']
-
-    for encoding in encodings:
+    for encoding in options.encodings:
         try:
             with open(file_path, 'r', encoding=encoding) as file:
                 lines = file.readlines()
@@ -309,11 +298,9 @@ def find_imports_in_script(options: Options, file_path: str) -> None:
 
             module_name = parts[2].split('import ')[-1].strip()
             if ',' in module_name:
-                logging.warning(f"Multiple imports on one line: {module_name} from line {line} in file {file_path} so only the first is being tested: {module_name.split(',')[0]}")
-                module_name = module_name.split(',')[0]
+                logging.warning(f"Multiple imports on one line: {module_name} from line {line} in file {file_path}")
             
-            #module_path = os.path.join(parts[1].replace('.', os.sep), module_name) + ".py"
-            module_path = parts[1].replace('.', os.sep) + ".py"
+            module_path = os.path.join(parts[1].replace('.', os.sep), module_name) + ".py"
 
             base_dir = os.path.dirname(file_path)
             
@@ -325,9 +312,9 @@ def find_imports_in_script(options: Options, file_path: str) -> None:
                 resolved_path = os.path.abspath(potential_file_path)
                 logging.info(f"Resolved local import to: {resolved_path}")
                 options.custom_modules[parts[1].split('.')[0]] = resolved_path
-                #logging.info(f"Updated custom_modules with key {parts[1].split('.')[0]}: {resolved_path}")
+                logging.info(f"Updated custom_modules with key {parts[1].split('.')[0]}: {resolved_path}")
                 options.loaded_custom_modules.add(parts[1].split('.')[0])
-                #logging.info(f"Added {parts[1].split('.')[0]} to loaded_custom_modules")
+                logging.info(f"Added {parts[1].split('.')[0]} to loaded_custom_modules")
                 find_imports_in_script(options, resolved_path)
             elif module_path.split(os.sep)[0] == base_dir.split(os.sep)[-1] and os.path.isfile(os.path.join(base_dir, '__init__.py')):
                 # If the module is in the same directory as the current file and the current directory is a package, try to resolve the import
@@ -338,27 +325,27 @@ def find_imports_in_script(options: Options, file_path: str) -> None:
                 resolved_path = os.path.abspath(os.path.join(base_dir, module_path))
                 logging.info(f"Resolved local import to: {resolved_path}")
                 options.custom_modules[parts[1].split('.')[0]] = resolved_path
-                #logging.info(f"Updated custom_modules with key {parts[1].split('.')[0]}: {resolved_path}")
+                logging.info(f"Updated custom_modules with key {parts[1].split('.')[0]}: {resolved_path}")
                 options.loaded_custom_modules.add(parts[1].split('.')[0])
-                #logging.info(f"Added {parts[1].split('.')[0]} to loaded_custom_modules")
+                logging.info(f"Added {parts[1].split('.')[0]} to loaded_custom_modules")
                 find_imports_in_script(options, resolved_path)
             else:
-                #logging.info(f"Local path does not exist: {potential_file_path}")
+                logging.info(f"Local path does not exist: {potential_file_path}")
                 # Only if the local resolution fails, fall back to checking the custom_modules
                 if parts[1].split('.')[0] in options.custom_modules:
-                    #logging.info(f"{parts[1].split('.')[0]} found in custom_modules")
+                    logging.info(f"{parts[1].split('.')[0]} found in custom_modules")
                     # Ensure we're not looping back to the same file
                     resolved_path = options.custom_modules[parts[1].split('.')[0]]
                     if resolved_path == file_path:
-                        #logging.info(f"Avoiding loopback to the same file: {resolved_path}")
+                        logging.info(f"Avoiding loopback to the same file: {resolved_path}")
                         pass
                     else:
-                        #logging.info(f"Using existing resolved path from custom_modules: {resolved_path}")
+                        logging.info(f"Using existing resolved path from custom_modules: {resolved_path}")
                         options.loaded_custom_modules.add(parts[1].split('.')[0])
-                        #logging.info(f"Added {parts[1].split('.')[0]} to loaded_custom_modules")
+                        logging.info(f"Added {parts[1].split('.')[0]} to loaded_custom_modules")
                         find_imports_in_script(options, resolved_path)
                 else:
-                    #logging.info(f"Could not resolve import: {parts[1]} in file {file_path}")
+                    logging.info(f"Could not resolve import: {parts[1]} in file {file_path}")
                     pass
         elif 1: # Look for sys.path modifications:
             for pattern in patterns:
@@ -386,21 +373,21 @@ def find_imports_in_script(options: Options, file_path: str) -> None:
         for imp in imports_list:
             imp = imp.split(' as ')[0].strip()  # Remove "as alias" part
             this_import = imp.split('.')[0].strip()
-            #logging.info(f"Found import: {this_import} from line {line} in file {file_path}")
+            logging.info(f"Found import: {this_import} from line {line} in file {file_path}")
             if this_import and this_import not in options.all_imports:
                 if this_import in options.unusual_imports:
                     logging.warning(f"Unusual import: {this_import} from line {line} in file {file_path}")
                 if this_import in options.custom_modules.keys():
                     if options.custom_modules[this_import] == file_path and this_import == os.path.basename(file_path).split('.')[0] and not line.startswith(f'from {this_import}.'):
-                        #logging.info(f"{os.path.basename(file_path).split('.')[0] = }")
+                        logging.info(f"{os.path.basename(file_path).split('.')[0] = }")
                         logging.info(f"Local import: {this_import} from line {line} in file {file_path} loads itself.")
                     elif any(substring in options.custom_modules[this_import] for substring in options.stay_out_list):
                         pass
                     elif os.path.isdir(options.custom_modules[this_import]):
-                        #logging.warning(f"Local import: {this_import} from line {line} in file {file_path} loads a directory.")
+                        logging.warning(f"Local import: {this_import} from line {line} in file {file_path} loads a directory.")
                         pass
                     elif is_standard_path(options.custom_modules[this_import]):
-                        #logging.warning(f"Local import: {this_import} from line {line} in file {file_path} loads a standard library module.")
+                        logging.warning(f"Local import: {this_import} from line {line} in file {file_path} loads a standard library module.")
                         pass
                     else:
                         logging.info(f"Local import: {this_import} from line {line} in file {file_path} loads {options.custom_modules[this_import]} so that file is being checked now:")
@@ -530,9 +517,6 @@ def list_packages(options: Options) -> None:
     options.all_imports = {imp for imp in options.all_imports if re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', imp)}
     
     split_imports(options)
-
-import subprocess
-import logging
 
 class MyPopenResult:
     def __init__(self, stdout, stderr, returncode):
