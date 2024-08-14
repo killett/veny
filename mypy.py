@@ -56,11 +56,13 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.installed_imports: Set[str] = set()
         self.bad_imports: Set[str] = set()
         self.custom_modules: Dict[str, str] = {}
+        self.subfolders: List[str] = []
         self.pip_list: List[str] = []
         self.loaded_custom_modules: Set[str] = set()
         self.pretty_list: str = ''
         self.timestamp: str = datetime.now().strftime('%Y%m%d-%H%M%S')
         self.python_script: str = ''
+        self.script_name: str = '' # python_script without the .py extension
         self.script_dir: str = ''
         self.json_filename: str = ''
         self.script_dir_or_file_or_list: Union[str, Iterable[str]] = ''
@@ -72,6 +74,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.venv_pip: str = ''
         self.requirements_file: str = ''
         self.download_script_path: str = ''
+        self.simultaneous_success: bool = False
         self.script_args: List[str] = []
         self.new_local_paths: Set[str] = set()
         self.processed_files: Set[str] = set()
@@ -129,7 +132,7 @@ def parse_arguments() -> argparse.Namespace:
     # Add additional arguments to the parser (not part of the mutually exclusive group)
     parser.add_argument('-full', action='store_true', help="Build a virtual environment (venv) that can run every python script in this directory.")
     parser.add_argument('-y', action='store_true', help='Automatically say yes to any prompts.')
-    parser.add_argument('-no-cache', action='store_true', help="Don't search the cache. Instead, create a new virtual environment.")
+    parser.add_argument('-no-cache', action='store_true', help="Don't search the cache. Instead, create a new virtual environment. Also, refresh the custom modules cache and the pip list.")
     parser.add_argument('-latest', action='store_true', help="Load the latest venv in the cache which has all the packages needed now.")
     parser.add_argument('-oldest', action='store_true', help="Load the oldest venv in the cache which has all the packages needed now.")
     parser.add_argument('-last-used', action='store_true', help="Load the last used venv in the cache, but if that fails try the latest venv which has all the packages needed now.")
@@ -303,17 +306,16 @@ def find_imports_in_script(options: Options, file_path: str) -> None:
             parts = re.split(r'\s+', line, maxsplit=2)
 
             imports_list = [parts[1]]
-            
-            logging.info(f"Processing 'from' import: {line}")
-            logging.info(f"Extracted parts: {parts}")
-            logging.info(f"Imports list: {imports_list}")
 
-            module_path = os.path.join(parts[1].replace('.', os.sep), parts[2].split('import ')[-1].strip()) + ".py"
+            module_name = parts[2].split('import ')[-1].strip()
+            if ',' in module_name:
+                logging.warning(f"Multiple imports on one line: {module_name} from line {line} in file {file_path} so only the first is being tested: {module_name.split(',')[0]}")
+                module_name = module_name.split(',')[0]
+            
+            #module_path = os.path.join(parts[1].replace('.', os.sep), module_name) + ".py"
+            module_path = parts[1].replace('.', os.sep) + ".py"
 
             base_dir = os.path.dirname(file_path)
-            
-            logging.info(f"Base directory of the current file: {base_dir}")
-            logging.info(f"Module path: {module_path}")
             
             # First, try to resolve the import relative to the base directory of the current file
             potential_file_path = os.path.join(base_dir, module_path)
@@ -323,9 +325,9 @@ def find_imports_in_script(options: Options, file_path: str) -> None:
                 resolved_path = os.path.abspath(potential_file_path)
                 logging.info(f"Resolved local import to: {resolved_path}")
                 options.custom_modules[parts[1].split('.')[0]] = resolved_path
-                logging.info(f"Updated custom_modules with key {parts[1].split('.')[0]}: {resolved_path}")
+                #logging.info(f"Updated custom_modules with key {parts[1].split('.')[0]}: {resolved_path}")
                 options.loaded_custom_modules.add(parts[1].split('.')[0])
-                logging.info(f"Added {parts[1].split('.')[0]} to loaded_custom_modules")
+                #logging.info(f"Added {parts[1].split('.')[0]} to loaded_custom_modules")
                 find_imports_in_script(options, resolved_path)
             elif module_path.split(os.sep)[0] == base_dir.split(os.sep)[-1] and os.path.isfile(os.path.join(base_dir, '__init__.py')):
                 # If the module is in the same directory as the current file and the current directory is a package, try to resolve the import
@@ -336,26 +338,28 @@ def find_imports_in_script(options: Options, file_path: str) -> None:
                 resolved_path = os.path.abspath(os.path.join(base_dir, module_path))
                 logging.info(f"Resolved local import to: {resolved_path}")
                 options.custom_modules[parts[1].split('.')[0]] = resolved_path
-                logging.info(f"Updated custom_modules with key {parts[1].split('.')[0]}: {resolved_path}")
+                #logging.info(f"Updated custom_modules with key {parts[1].split('.')[0]}: {resolved_path}")
                 options.loaded_custom_modules.add(parts[1].split('.')[0])
-                logging.info(f"Added {parts[1].split('.')[0]} to loaded_custom_modules")
+                #logging.info(f"Added {parts[1].split('.')[0]} to loaded_custom_modules")
                 find_imports_in_script(options, resolved_path)
             else:
-                logging.warning(f"Local path does not exist: {potential_file_path}")
+                #logging.info(f"Local path does not exist: {potential_file_path}")
                 # Only if the local resolution fails, fall back to checking the custom_modules
                 if parts[1].split('.')[0] in options.custom_modules:
-                    logging.info(f"{parts[1].split('.')[0]} found in custom_modules")
+                    #logging.info(f"{parts[1].split('.')[0]} found in custom_modules")
                     # Ensure we're not looping back to the same file
                     resolved_path = options.custom_modules[parts[1].split('.')[0]]
                     if resolved_path == file_path:
-                        logging.warning(f"Avoiding loopback to the same file: {resolved_path}")
+                        #logging.info(f"Avoiding loopback to the same file: {resolved_path}")
+                        pass
                     else:
-                        logging.info(f"Using existing resolved path from custom_modules: {resolved_path}")
+                        #logging.info(f"Using existing resolved path from custom_modules: {resolved_path}")
                         options.loaded_custom_modules.add(parts[1].split('.')[0])
-                        logging.info(f"Added {parts[1].split('.')[0]} to loaded_custom_modules")
+                        #logging.info(f"Added {parts[1].split('.')[0]} to loaded_custom_modules")
                         find_imports_in_script(options, resolved_path)
                 else:
-                    logging.warning(f"Could not resolve import: {parts[1]} in file {file_path}")
+                    #logging.info(f"Could not resolve import: {parts[1]} in file {file_path}")
+                    pass
         elif 1: # Look for sys.path modifications:
             for pattern in patterns:
                 # Search for the pattern
@@ -382,14 +386,14 @@ def find_imports_in_script(options: Options, file_path: str) -> None:
         for imp in imports_list:
             imp = imp.split(' as ')[0].strip()  # Remove "as alias" part
             this_import = imp.split('.')[0].strip()
-            logging.info(f"Found import: {this_import} from line {line} in file {file_path}")
+            #logging.info(f"Found import: {this_import} from line {line} in file {file_path}")
             if this_import and this_import not in options.all_imports:
                 if this_import in options.unusual_imports:
                     logging.warning(f"Unusual import: {this_import} from line {line} in file {file_path}")
                 if this_import in options.custom_modules.keys():
                     if options.custom_modules[this_import] == file_path and this_import == os.path.basename(file_path).split('.')[0] and not line.startswith(f'from {this_import}.'):
-                        logging.warning(f"{os.path.basename(file_path).split('.')[0] = }")
-                        logging.warning(f"Local import: {this_import} from line {line} in file {file_path} loads itself.")
+                        #logging.info(f"{os.path.basename(file_path).split('.')[0] = }")
+                        logging.info(f"Local import: {this_import} from line {line} in file {file_path} loads itself.")
                     elif any(substring in options.custom_modules[this_import] for substring in options.stay_out_list):
                         pass
                     elif os.path.isdir(options.custom_modules[this_import]):
@@ -422,6 +426,27 @@ def get_all_imports(options: Options, directory: str) -> None:
                 logging.info(f"Processing files in {directory}: {processed_files}/{total_files}")
 
     logging.info(f"\nFinished processing files in {directory}.")
+
+def find_subfolders(options: Options) -> None:
+    """Find the subfolders of the current directory that contain custom modules."""
+    current_dir = os.path.normpath(options.current_dir)
+    print(f"{current_dir=}")
+    one_level_deep_subfolders = set()
+
+    for module_name, module_path in options.custom_modules.items():
+        module_dir = os.path.normpath(os.path.dirname(module_path))
+        print(f"{module_dir=}")
+
+        if module_dir.startswith(current_dir):
+            # Calculate relative path from current_dir
+            relative_path = os.path.relpath(module_dir, current_dir)
+            # Extract the first part (one level deeper)
+            first_dir = relative_path.split(os.sep)[0]
+            # Construct the subfolder path
+            subfolder_path = os.path.join(current_dir, first_dir) + os.sep
+            one_level_deep_subfolders.add(subfolder_path)
+
+    options.subfolders = list(one_level_deep_subfolders)
 
 def check_if_library_exists(library_name: str) -> bool:
     """Check if a library exists by attempting to import it."""
@@ -506,7 +531,46 @@ def list_packages(options: Options) -> None:
     
     split_imports(options)
 
-def download_packages(options: Options) -> None:
+import subprocess
+import logging
+
+class MyPopenResult:
+    def __init__(self, stdout, stderr, returncode):
+        self.stdout = stdout
+        self.stderr = stderr
+        self.returncode = returncode
+        self.success = (returncode == 0)
+
+def my_popen(command_list: list) -> MyPopenResult:
+    """Execute a command using subprocess.Popen and capture the output line by line."""
+    # Convert any bytes elements in the command list to strings for logging
+    command_list_str = [item.decode('utf-8') if isinstance(item, bytes) else item for item in command_list]
+    logging.info("Executing command: " + ' '.join(command_list_str))
+
+    try:
+        process = subprocess.Popen(command_list,
+                                   stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE,
+                                   text=True)
+        stdout = ""
+        stderr = ""
+        # Capture stdout line by line
+        for line in iter(process.stdout.readline, ''):
+            logging.info(line.strip())
+            stdout += line
+        # Capture stderr line by line
+        for line in iter(process.stderr.readline, ''):
+            logging.error(line.strip())
+            stderr += line
+        process.stdout.close()
+        process.stderr.close()
+        process.wait()
+        return MyPopenResult(stdout=stdout, stderr=stderr, returncode=process.returncode)
+    except Exception as e:
+        logging.error(f"An error occurred: {e}")
+        return MyPopenResult(stdout="", stderr=str(e), returncode=-1)
+
+def download_packages(options: Options) -> bool:
     """Install packages in a virtual environment."""
     download_script = f"""#!/bin/bash
     source {options.venv_dir}/bin/activate
@@ -534,29 +598,34 @@ def download_packages(options: Options) -> None:
     echo "Downloading packages..."
     {options.venv_pip} download -r {options.requirements_file} -d {options.packages_dir}"""
 
-    logging.info(f"Writing download script to {options.download_script_path}")
-    with open(options.download_script_path, 'w') as f:
-        f.write(download_script)
-    os.chmod(options.download_script_path, 0o755)
+    try:
+        logging.info(f"Writing download script to {options.download_script_path}")
+        with open(options.download_script_path, 'w') as f:
+            f.write(download_script)
+        os.chmod(options.download_script_path, 0o755)
 
-    # Run the initial download script and capture the output
-    process = subprocess.Popen(
-        [options.download_script_path],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
-    )
+        # Run the initial download script and capture the output
+        process = subprocess.Popen(
+            [options.download_script_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
 
-    captured_output = ""
-    for line in iter(process.stdout.readline, ''):
-        logging.info(line.strip())
-        captured_output += line
-    for line in iter(process.stderr.readline, ''):
-        logging.error(line.strip())
-        captured_output += line
-    process.stdout.close()
-    process.stderr.close()
-    process.wait()
+        captured_output = ""
+        for line in iter(process.stdout.readline, ''):
+            logging.info(line.strip())
+            captured_output += line
+        for line in iter(process.stderr.readline, ''):
+            logging.error(line.strip())
+            captured_output += line
+        process.stdout.close()
+        process.stderr.close()
+        process.wait()
+        return process.returncode == 0
+    except Exception as e:
+        logging.error(f"Error downloading packages: {e}")
+        return False
 
 def install_packages_simultaneously(options: Options) -> bool:
     """Install all packages simultaneously in the virtual environment."""
@@ -600,7 +669,7 @@ def install_packages_simultaneously(options: Options) -> bool:
         logging.error(f"Error during simultaneous installation: {e}")
         return False
 
-def install_packages_individually(options: Options) -> None:
+def install_packages_individually(options: Options) -> bool:
     """Install packages individually in the virtual environment."""
     failed_packages = []
     for package in options.uninstalled_imports:
@@ -611,9 +680,6 @@ def install_packages_individually(options: Options) -> None:
         logging.error(f"Failed to install the following packages: {', '.join(failed_packages)}")
     else:
         logging.info("All packages installed successfully.")
-
-    # Run the test script
-    check_packages_in_venv(options)
 
 def install_package(package_name: str, options: Options) -> bool:
     """Install a single package and return the success status."""
@@ -679,13 +745,17 @@ END
 """
 
     # Run the test script
-    result = subprocess.run(test_script, shell=True, executable='/bin/bash', check=True, capture_output=True, text=True)
-    logging.info(result.stdout)
-    if result.stderr:
-        logging.error(result.stderr)
-    
-    # This returns true if all packages imported successfully
-    return "packages imported successfully" in result.stdout
+    try:
+        result = subprocess.run(test_script, shell=True, executable='/bin/bash', check=True, capture_output=True, text=True)
+        logging.info(result.stdout)
+        if result.stderr:
+            logging.error(result.stderr)
+        
+        # This returns true if all packages imported successfully
+        return "packages imported successfully" in result.stdout
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error running test script: {e}")
+        return False
 
 def recover_pip_versions(output: str, options: Options) -> None:
     """Parse the output to recover the current and new pip versions."""
@@ -776,7 +846,7 @@ print("\\n".join(installed_packages + available_modules + list(builtin_modules))
     options.uninstalled_imports = options.uninstalled_imports.union(new_uninstalled_imports)
     options.installed_imports = options.installed_imports - new_uninstalled_imports
 
-def setup_virtualenv(options: Options) -> None:
+def setup_virtualenv(options: Options) -> bool:
     """Setup a virtual environment and install packages."""
     use_pip_list(options)
     options.pretty_list = pretty_packages_list(options)
@@ -799,8 +869,16 @@ def setup_virtualenv(options: Options) -> None:
     logging.info("Wheel installed in the virtual environment.")
 
     download_packages(options)
-    if not install_packages_simultaneously(options):
-        install_packages_individually(options)
+    if install_packages_simultaneously(options):
+        options.simultaneous_success = True
+    else:
+        options.simultaneous_success = False #This is redundant, but it's here for clarity. The 'failed' part of the venv_dir will not be removed if this is False.
+        logging.error("Failed to install packages simultaneously. Trying to install packages individually to see which is wrong, but this venv folder will still have 'failed-' in its name...")
+        if not install_packages_individually(options):
+            logging.error("Failed to install packages individually.")
+
+    # Check that all packages can be imported in the venv.
+    return check_packages_in_venv(options)
 
 def is_virtualenv() -> bool:
     """Check if currently running in a virtual environment."""
@@ -1146,8 +1224,8 @@ def is_standard_path(path: str) -> bool:
 
 def dict_of_custom_modules(options: Options) -> Dict[str, str]:
     """Create a dictionary of all local custom modules in the non-standard sys.path directories and their associated filepaths."""
-    #If -rc was not specified, look for a pickle file with the custom modules dictionary the last time this script was run.
-    if not options.args.rc:
+    #If -rc and -no-cache were not specified, look for a pickle file with the custom modules dictionary the last time this script was run.
+    if not options.args.rc and not options.args.no_cache:
         for file in os.listdir('.'):
             if file.startswith('.mypy_custom_modules_') and file.endswith('.pkl'):
                 logging.info(f"Loading custom modules from {file}")
@@ -1318,60 +1396,64 @@ def main() -> None:
             match_dir = find_match_dir_in_cache(options)
         if not match_dir:
             logging.info(f"Creating new virtual environment '{options.venv_name}'...")
-            setup_virtualenv(options)
-            match_dir = options.venv_dir
+            if setup_virtualenv(options):
+                match_dir = options.venv_dir
+            else:
+                logging.error("Failed to create a virtual environment.")
+                match_dir = None
         else:
             logging.info(f"Using directory: {match_dir}")
 
-        options.set_venv_dir(match_dir)
-        start_venv_time = datetime.now()
-        elapsed_time = start_venv_time - start_time
-        logging.info(f"Elapsed time: {elapsed_time}")
-        logging.info(f"Activating virtual environment: {options.activate_script}")
+        if match_dir:
+            options.set_venv_dir(match_dir)
+            start_venv_time = datetime.now()
+            elapsed_time = start_venv_time - start_time
+            logging.info(f"Elapsed time: {elapsed_time}")
+            logging.info(f"Activating virtual environment: {options.activate_script}")
 
-        activate_cmd = f"bash -c '{options.activate_script} && echo \"Virtual environment activated.\" && {options.venv_python} {options.python_script} {' '.join(options.script_args)}'"
-        guard_examines(options)
-        #I want to capture the output of the subprocess.run() so that I can print it at the end.
-        result = subprocess.run(activate_cmd, shell=True)
-        end_time = datetime.now()
-        elapsed_time = end_time - start_venv_time
-        logging.info(f"Elapsed time since activating virtual environment: {elapsed_time}")
-        if result.returncode != 0:
-            logging.error(f"Error running script: {result.stderr}")
-        elif os.path.basename(options.venv_dir).startswith('failed-'):
-            #If the program has made it to this point, it has run successfully, so the venv directory can be renamed. It HASN'T failed.
-            os.rename(options.venv_dir, options.venv_dir.replace('failed-', ''))
-            options.set_venv_dir(       options.venv_dir.replace('failed-', ''))
-            #Now edit the pyvenv.cfg file inside it:
-            cfg_file_path = os.path.join(options.venv_dir, 'pyvenv.cfg')
-            # Read the content of the file
-            with open(cfg_file_path, 'r') as file:
-                lines = file.readlines()
-            # Modify the command line
-            modified_lines = []
-            for line in lines:
-                if line.startswith("command = "):
+            activate_cmd = f"bash -c '{options.activate_script} && echo \"Virtual environment activated.\" && {options.venv_python} {options.python_script} {' '.join(options.script_args)}'"
+            guard_examines(options)
+            #I want to capture the output of the subprocess.run() so that I can print it at the end.
+            result = subprocess.run(activate_cmd, shell=True)
+            end_time = datetime.now()
+            elapsed_time = end_time - start_venv_time
+            logging.info(f"Elapsed time since activating virtual environment: {elapsed_time}")
+            if result.returncode != 0:
+                logging.error(f"Error running script: {result.stderr}")
+            elif os.path.basename(options.venv_dir).startswith('failed-') and options.simultaneous_success:
+                #If the program has made it to this point, it has run successfully, so the venv directory can be renamed. It HASN'T failed. However, if it couldn't install simultaneously, then it's still a failed venv.
+                os.rename(options.venv_dir, options.venv_dir.replace('failed-', ''))
+                options.set_venv_dir(       options.venv_dir.replace('failed-', ''))
+                #Now edit the pyvenv.cfg file inside it:
+                cfg_file_path = os.path.join(options.venv_dir, 'pyvenv.cfg')
+                # Read the content of the file
+                with open(cfg_file_path, 'r') as file:
+                    lines = file.readlines()
+                # Modify the command line
+                modified_lines = []
+                for line in lines:
+                    if line.startswith("command = "):
+                        line = line.replace(os.sep+"failed-", os.sep)
+                    modified_lines.append(line)
+                # Write the modified content back to the file
+                with open(cfg_file_path, 'w') as file:
+                    file.writelines(modified_lines)
+                # Read the content of the file
+                with open(options.download_script_path, 'r') as file:
+                    lines = file.readlines()
+                # Modify the command line
+                modified_lines = []
+                for line in lines:
                     line = line.replace(os.sep+"failed-", os.sep)
-                modified_lines.append(line)
-            # Write the modified content back to the file
-            with open(cfg_file_path, 'w') as file:
-                file.writelines(modified_lines)
-            # Read the content of the file
-            with open(options.download_script_path, 'r') as file:
-                lines = file.readlines()
-            # Modify the command line
-            modified_lines = []
-            for line in lines:
-                line = line.replace(os.sep+"failed-", os.sep)
-                modified_lines.append(line)
-            # Write the modified content back to the file
-            with open(options.download_script_path , 'w') as file:
-                file.writelines(modified_lines)
+                    modified_lines.append(line)
+                # Write the modified content back to the file
+                with open(options.download_script_path , 'w') as file:
+                    file.writelines(modified_lines)
 
-        save_options_to_json(options)
+            save_options_to_json(options)
 
     # Print all captured error messages at the end
-    if memory_handler.logs: print("\nCaptured error messages:")
+    if memory_handler.logs: print("\n****************************\nCaptured error messages:")
     for log in memory_handler.logs:
         logging.info(log)
 
