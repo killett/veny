@@ -17,6 +17,7 @@ import pickle
 from pathlib import Path, PosixPath
 from typing import Dict, List, Set, Tuple, Union, Iterable
 import logging
+import ast
 
 from univ_defs import *
 
@@ -237,9 +238,101 @@ def add_alias(options: Options) -> None:
     else:
         print("Could not detect shell")
 
-def find_imports_in_script(options: Options, file_path: str) -> None:
+def safe_eval(expr):
+    """Safely evaluate a Python expression using ast.literal_eval or custom parsing."""
+    try:
+        return ast.literal_eval(expr)
+    except Exception:
+        if expr.startswith('os.path.abspath'):
+            inner_expr = expr[len('os.path.abspath('):-1]
+            path = safe_eval(inner_expr)
+            if path:
+                return os.path.abspath(path)
+        # Add more handling as needed
+    return None
+
+class SysPathVisitor(ast.NodeVisitor):
+    """Visitor class to extract sys.path modifications."""
+    def __init__(self):
+        self.paths = set()
+
+    def visit_Assign(self, node):
+        if isinstance(node.targets[0], ast.Attribute) and \
+           isinstance(node.targets[0].value, ast.Name) and \
+           node.targets[0].value.id == 'sys' and \
+           node.targets[0].attr == 'path':
+            paths = safe_eval(ast.unparse(node.value))
+            if isinstance(paths, list):
+                for path in paths:
+                    self.paths.add(path)
+        self.generic_visit(node)
+
+    def visit_Call(self, node):
+        if isinstance(node.func, ast.Attribute) and \
+           isinstance(node.func.value, ast.Attribute) and \
+           isinstance(node.func.value.value, ast.Name) and \
+           node.func.value.value.id == 'sys' and \
+           node.func.value.attr == 'path' and \
+           node.func.attr in {'append', 'insert'}:
+            if node.args:
+                path = safe_eval(ast.unparse(node.args[-1]))
+                if path:
+                    self.paths.add(path)
+        self.generic_visit(node)
+
+def process_import(module_name: str, options: 'Options', file_path: str) -> None:
+    """Process an import by checking if it's a local custom module or a standard import, and handle it accordingly."""
+    logging.info(f"Processing import: {module_name} from file {file_path}")
+    
+    if module_name in options.all_imports:
+        logging.info(f"Skipping already processed import: {module_name}")
+        return
+
+    base_dir = os.path.dirname(file_path)
+    module_path = module_name.replace('.', os.sep) + ".py"
+
+    # First, try to resolve the import relative to the base directory of the current file
+    potential_file_path = os.path.join(base_dir, module_path)
+    logging.info(f"Constructed potential file path: {potential_file_path}")
+
+    if os.path.isfile(potential_file_path):
+        resolved_path = os.path.abspath(potential_file_path)
+        logging.info(f"Resolved local import to: {resolved_path}")
+        options.custom_modules[module_name.split('.')[0]] = resolved_path
+        options.loaded_custom_modules.add(module_name.split('.')[0])
+        find_imports_in_script(options, resolved_path)
+        return  # Exit after finding the file to avoid unnecessary checks
+
+    # Second, check if the module is part of a package in the current directory
+    package_name = base_dir.split(os.sep)[-1]  # Current directory name
+    if module_path.split(os.sep)[0] == package_name and os.path.isfile(os.path.join(base_dir, '__init__.py')):
+        # Modify module_path to adjust for package resolution
+        adjusted_module_path = module_path.replace(package_name + os.sep, '', 1)
+        resolved_path = os.path.abspath(os.path.join(base_dir, adjusted_module_path))
+        print(f"Constructed adjusted file path: {resolved_path}")
+        
+        if os.path.isfile(resolved_path):
+            logging.info(f"Resolved local import within package to: {resolved_path}")
+            options.custom_modules[module_name.split('.')[0]] = resolved_path
+            options.loaded_custom_modules.add(module_name.split('.')[0])
+            find_imports_in_script(options, resolved_path)
+            return  # Exit after finding the file to avoid unnecessary checks
+
+    # If not found locally, fall back to checking options.custom_modules
+    if module_name in options.custom_modules:
+        resolved_path = options.custom_modules[module_name]
+        if resolved_path == file_path:
+            logging.info(f"Avoiding loopback to the same file: {resolved_path}")
+            return
+        logging.info(f"Using existing resolved path from custom_modules: {resolved_path}")
+        options.loaded_custom_modules.add(module_name.split('.')[0])
+        if not any(substring in resolved_path for substring in options.stay_out_list):
+            find_imports_in_script(options, resolved_path)
+    else:
+        options.all_imports.add(module_name)
+
+def find_imports_in_script(options: 'Options', file_path: str) -> None:
     """Find all imports in a Python script and add them to a set. Recursively check local imports in any custom modules that are imported."""
-    # Prevent processing the same file repeatedly
     if file_path in options.processed_files:
         return
     options.processed_files.add(file_path)
@@ -248,153 +341,52 @@ def find_imports_in_script(options: Options, file_path: str) -> None:
         logging.info(f"Skipping symbolic link {file_path}")
         return
 
-    # Regular expressions to match various sys.path modifications
-    patterns = [
-        r"sys\.path\.(?:insert|append)\(\d*,\s*(.*)\)",  # Matches sys.path.insert/append with or without os.path.abspath
-        r"sys\.path\s*=\s*\[\s*(.*)\s*\]",  # Matches sys.path = [...]
-        r"sys\.path\.\+=\s*\[\s*(.*)\s*\]"   # Matches sys.path += [...]
-    ]
-
     # Attempt to read the file with various encodings
     for encoding in options.encodings:
         try:
             with open(file_path, 'r', encoding=encoding) as file:
-                lines = file.readlines()
+                file_content = file.read()
             break  # Exit the loop if reading is successful
         except UnicodeDecodeError:
             logging.warning(f"Unicode decode error with encoding {encoding} reading file {file_path}")
-            continue  # Try the next encoding
+            continue
         except Exception as e:
             logging.error(f"Error reading file {file_path} with encoding {encoding}: {str(e)}")
             return
 
-    for line in lines:
-        line = line.strip()
-        imports_list = []
-        if '#' in line:
-            line = line.split('#')[0].strip()  # Remove comments from the line
-        
-        if ';' in line:
-            line = line.split(';')[0].strip()  # Remove other commands from the line
+    try:
+        tree = ast.parse(file_content, filename=file_path)
+    except SyntaxError as e:
+        logging.error(f"Syntax error parsing file {file_path}: {str(e)}")
+        return
 
-        if line.startswith('import '):
-            # Handle multiple imports on the same line
-            parts = re.split(r'import ', line, maxsplit=1)
-            if len(parts) > 1:
-                imports_list = parts[1].split(',')
-            else:
-                imports_list = []
-        elif line.startswith('from '):
-            #This next line is a little confusing. It splits the line into three parts: the 'from' part, the module part, and the 'import' part.
-            #For example, if line were "from simple_gridder.utils.logconfig import configure_logging", the result of the split would be:
-            # parts = ['from', 'simple_gridder.utils.logconfig', 'import configure_logging']
-            # This split allows you to easily identify the components of the from ... import ... statement:
-            #     parts[0]: "from"
-            #     parts[1]: "simple_gridder.utils.logconfig"
-            #     parts[2]: "import configure_logging"
-            parts = re.split(r'\s+', line, maxsplit=2)
+    # Track sys.path modifications
+    sys_path_visitor = SysPathVisitor()
+    sys_path_visitor.visit(tree)
+    options.new_local_paths.update(sys_path_visitor.paths)
+    for path in sys_path_visitor.paths:
+        logging.info(f"Adding new local path: {path}")
 
-            imports_list = [parts[1]]
-
-            module_name = parts[2].split('import ')[-1].strip()
-            if ',' in module_name:
-                logging.warning(f"Multiple imports on one line: {module_name} from line {line} in file {file_path}")
-            
-            module_path = os.path.join(parts[1].replace('.', os.sep), module_name) + ".py"
-
-            base_dir = os.path.dirname(file_path)
-            
-            # First, try to resolve the import relative to the base directory of the current file
-            potential_file_path = os.path.join(base_dir, module_path)
-            
-            logging.info(f"Constructed potential file path: {potential_file_path}")
-            if os.path.isfile(potential_file_path):
-                resolved_path = os.path.abspath(potential_file_path)
-                logging.info(f"Resolved local import to: {resolved_path}")
-                options.custom_modules[parts[1].split('.')[0]] = resolved_path
-                logging.info(f"Updated custom_modules with key {parts[1].split('.')[0]}: {resolved_path}")
-                options.loaded_custom_modules.add(parts[1].split('.')[0])
-                logging.info(f"Added {parts[1].split('.')[0]} to loaded_custom_modules")
-                find_imports_in_script(options, resolved_path)
-            elif module_path.split(os.sep)[0] == base_dir.split(os.sep)[-1] and os.path.isfile(os.path.join(base_dir, '__init__.py')):
-                # If the module is in the same directory as the current file and the current directory is a package, try to resolve the import
-                # Remove the package name from the module path because it's in there twice:
-                module_path = module_path.replace(module_path.split(os.sep)[0]+os.sep,'')
-                # Since we're loading from a module, the parts[2] will be the function name, not the file name. So remove that: 
-                module_path = module_path.replace(os.sep+parts[2].split('import ')[-1].strip(),'')
-                resolved_path = os.path.abspath(os.path.join(base_dir, module_path))
-                logging.info(f"Resolved local import to: {resolved_path}")
-                options.custom_modules[parts[1].split('.')[0]] = resolved_path
-                logging.info(f"Updated custom_modules with key {parts[1].split('.')[0]}: {resolved_path}")
-                options.loaded_custom_modules.add(parts[1].split('.')[0])
-                logging.info(f"Added {parts[1].split('.')[0]} to loaded_custom_modules")
-                find_imports_in_script(options, resolved_path)
-            else:
-                logging.info(f"Local path does not exist: {potential_file_path}")
-                # Only if the local resolution fails, fall back to checking the custom_modules
-                if parts[1].split('.')[0] in options.custom_modules:
-                    logging.info(f"{parts[1].split('.')[0]} found in custom_modules")
-                    # Ensure we're not looping back to the same file
-                    resolved_path = options.custom_modules[parts[1].split('.')[0]]
-                    if resolved_path == file_path:
-                        logging.info(f"Avoiding loopback to the same file: {resolved_path}")
-                        pass
-                    else:
-                        logging.info(f"Using existing resolved path from custom_modules: {resolved_path}")
-                        options.loaded_custom_modules.add(parts[1].split('.')[0])
-                        logging.info(f"Added {parts[1].split('.')[0]} to loaded_custom_modules")
-                        find_imports_in_script(options, resolved_path)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                module_name = alias.name.split('.')[0]
+                process_import(module_name, options, file_path)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level == 0 and node.module:
+                module_name = node.module.split('.')[0]
+                process_import(module_name, options, file_path)
+            elif node.level > 0:
+                # Handle relative imports
+                base_dir = os.path.dirname(file_path)
+                rel_path = os.path.join(base_dir, *(['..'] * (node.level - 1)), node.module or '')
+                resolved_path = os.path.abspath(rel_path)
+                if os.path.isdir(resolved_path):
+                    resolved_path = os.path.join(resolved_path, '__init__.py')
                 else:
-                    logging.info(f"Could not resolve import: {parts[1]} in file {file_path}")
-                    pass
-        elif 1: # Look for sys.path modifications:
-            for pattern in patterns:
-                # Search for the pattern
-                match = re.search(pattern, line)
-                if match:
-                    # Extract the path(s)
-                    paths_str = match.group(1).strip()
-                    # Remove square brackets if present
-                    if paths_str.startswith('[') and paths_str.endswith(']'):
-                        paths_str = paths_str[1:-1].strip()
-                    # Split the paths by comma and process each one
-                    paths = [path.strip("'\"") for path in paths_str.split(',')]
-                    for path in paths:
-                        # Resolve the path if os.path.abspath is not used
-                        if not path.startswith('os.path.abspath'):
-                            resolved_path = os.path.abspath(path)
-                        else:
-                            resolved_path = eval(path)  # Evaluate the os.path.abspath expression
-                        options.new_local_paths.add(resolved_path)
-                        logging.info(f"Adding new local path: {resolved_path}")
-        else:
-            continue
-
-        for imp in imports_list:
-            imp = imp.split(' as ')[0].strip()  # Remove "as alias" part
-            this_import = imp.split('.')[0].strip()
-            logging.info(f"Found import: {this_import} from line {line} in file {file_path}")
-            if this_import and this_import not in options.all_imports:
-                if this_import in options.unusual_imports:
-                    logging.warning(f"Unusual import: {this_import} from line {line} in file {file_path}")
-                if this_import in options.custom_modules.keys():
-                    if options.custom_modules[this_import] == file_path and this_import == os.path.basename(file_path).split('.')[0] and not line.startswith(f'from {this_import}.'):
-                        logging.info(f"{os.path.basename(file_path).split('.')[0] = }")
-                        logging.info(f"Local import: {this_import} from line {line} in file {file_path} loads itself.")
-                    elif any(substring in options.custom_modules[this_import] for substring in options.stay_out_list):
-                        pass
-                    elif os.path.isdir(options.custom_modules[this_import]):
-                        logging.warning(f"Local import: {this_import} from line {line} in file {file_path} loads a directory.")
-                        pass
-                    elif is_standard_path(options.custom_modules[this_import]):
-                        logging.warning(f"Local import: {this_import} from line {line} in file {file_path} loads a standard library module.")
-                        pass
-                    else:
-                        logging.info(f"Local import: {this_import} from line {line} in file {file_path} loads {options.custom_modules[this_import]} so that file is being checked now:")
-                        options.loaded_custom_modules.add(this_import)
-                        find_imports_in_script(options, options.custom_modules[this_import])
-                else:
-                    options.all_imports.add(this_import)
+                    resolved_path += '.py'
+                if os.path.isfile(resolved_path):
+                    find_imports_in_script(options, resolved_path)
 
 def get_all_imports(options: Options, directory: str) -> None:
     """Get all imports from all Python scripts in a directory."""
@@ -420,7 +412,7 @@ def find_subfolders(options: Options) -> None:
     print(f"{current_dir=}")
     one_level_deep_subfolders = set()
 
-    for module_name, module_path in options.custom_modules.items():
+    for _, module_path in options.custom_modules.items():
         module_dir = os.path.normpath(os.path.dirname(module_path))
         print(f"{module_dir=}")
 
@@ -429,11 +421,9 @@ def find_subfolders(options: Options) -> None:
             relative_path = os.path.relpath(module_dir, current_dir)
             # Extract the first part (one level deeper)
             first_dir = relative_path.split(os.sep)[0]
-            # Construct the subfolder path
-            subfolder_path = os.path.join(current_dir, first_dir) + os.sep
-            one_level_deep_subfolders.add(subfolder_path)
+            one_level_deep_subfolders.add(first_dir)
 
-    options.subfolders = list(one_level_deep_subfolders)
+    options.subfolders.extend(list(one_level_deep_subfolders))
 
 def check_if_library_exists(library_name: str) -> bool:
     """Check if a library exists by attempting to import it."""
@@ -526,7 +516,7 @@ class MyPopenResult:
         self.success = (returncode == 0)
 
 def my_popen(command_list: list) -> MyPopenResult:
-    """Execute a command using subprocess.Popen and capture the output line by line."""
+    """Execute a command using subprocess.Popen. Display and capture the output line by line as it appears."""
     # Convert any bytes elements in the command list to strings for logging
     command_list_str = [item.decode('utf-8') if isinstance(item, bytes) else item for item in command_list]
     logging.info("Executing command: " + ' '.join(command_list_str))
@@ -587,26 +577,9 @@ def download_packages(options: Options) -> bool:
         with open(options.download_script_path, 'w') as f:
             f.write(download_script)
         os.chmod(options.download_script_path, 0o755)
-
         # Run the initial download script and capture the output
-        process = subprocess.Popen(
-            [options.download_script_path],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-
-        captured_output = ""
-        for line in iter(process.stdout.readline, ''):
-            logging.info(line.strip())
-            captured_output += line
-        for line in iter(process.stderr.readline, ''):
-            logging.error(line.strip())
-            captured_output += line
-        process.stdout.close()
-        process.stderr.close()
-        process.wait()
-        return process.returncode == 0
+        result = my_popen([options.download_script_path])
+        return result.returncode == 0
     except Exception as e:
         logging.error(f"Error downloading packages: {e}")
         return False
@@ -620,30 +593,10 @@ def install_packages_simultaneously(options: Options) -> bool:
             "--no-index", "--find-links", options.packages_dir,
             "-r", options.requirements_file
         ]
-
         logging.info("Installing all packages simultaneously...")
-
-        # Run the command and capture the output line by line
-        process = subprocess.Popen(
-            install_command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-
-        captured_output = ""
-        for line in iter(process.stdout.readline, ''):
-            logging.info(line.strip())
-            captured_output += line
-        for line in iter(process.stderr.readline, ''):
-            logging.error(line.strip())
-            captured_output += line
-        process.stdout.close()
-        process.stderr.close()
-        process.wait()
-
-        # Check the return code for success
-        if process.returncode == 0:
+        # Run the command and capture the output line by line using my_popen
+        result = my_popen(install_command)
+        if result.returncode == 0:
             logging.info("All packages installed successfully.")
             return True
         else:
