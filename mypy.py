@@ -18,6 +18,7 @@ from pathlib import Path, PosixPath
 from typing import Dict, List, Set, Tuple, Union, Iterable
 import logging
 import tempfile
+import ast
 
 from univ_defs import *
 
@@ -311,11 +312,9 @@ def find_imports_in_script(options: Options, file_path: str) -> None:
                 else:
                     module_name = parts[2].strip()
                     logging.warning(f"Import statement without 'import' keyword so {module_name = } from line \"{line}\" in file {file_path}")
-                    breakpoint()
             else:
                 module_name = parts
                 logging.warning(f"Import statement with fewer than three parts so {module_name = } from line \"{line}\" in file {file_path}")
-                breakpoint()
             if ',' in module_name:
                 logging.warning(f"Multiple imports on one line: {module_name} from line {line} in file {file_path}")
             
@@ -450,9 +449,6 @@ def split_imports(options: 'Options') -> None:
         return
 
     max_length = max(len(imp) for imp in options.all_imports)
-
-    logging.error(f"{options.all_imports = }")
-    breakpoint()
 
     with tempfile.TemporaryDirectory() as venv_dir:
         venv.create(venv_dir, with_pip=True)
