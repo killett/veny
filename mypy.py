@@ -17,6 +17,7 @@ import pickle
 from pathlib import Path, PosixPath
 from typing import Dict, List, Set, Tuple, Union, Iterable
 import logging
+import tempfile
 
 from univ_defs import *
 
@@ -240,14 +241,15 @@ def add_alias(options: Options) -> None:
 
 def find_imports_in_script(options: Options, file_path: str) -> None:
     """Find all imports in a Python script and add them to a set. Recursively check local imports in any custom modules that are imported."""
+    logging.info(f"Processing file: {file_path}. Already processed: {options.processed_files}")
     # Prevent processing the same file repeatedly
     if file_path in options.processed_files:
         return
-    options.processed_files.add(file_path)
-
     # Skip files in directories to stay out of
     if any(substring in file_path for substring in options.stay_out_list):
         return
+
+    options.processed_files.add(file_path)
 
     if os.path.islink(file_path):
         logging.info(f"Skipping symbolic link {file_path}")
@@ -283,6 +285,7 @@ def find_imports_in_script(options: Options, file_path: str) -> None:
             line = line.split(';')[0].strip()  # Remove other commands from the line
 
         if line.startswith('import '):
+            logging.info(f"Processing import line: {line} in file {file_path}")  # New logging
             # Handle multiple imports on the same line
             parts = re.split(r'import ', line, maxsplit=1)
             if len(parts) > 1:
@@ -290,6 +293,7 @@ def find_imports_in_script(options: Options, file_path: str) -> None:
             else:
                 imports_list = []
         elif line.startswith('from '):
+            logging.info(f"Processing import line: {line} in file {file_path}")  # New logging
             #This next line is a little confusing. It splits the line into three parts: the 'from' part, the module part, and the 'import' part.
             #For example, if line were "from simple_gridder.utils.logconfig import configure_logging", the result of the split would be:
             # parts = ['from', 'simple_gridder.utils.logconfig', 'import configure_logging']
@@ -392,7 +396,10 @@ def find_imports_in_script(options: Options, file_path: str) -> None:
             if this_import and this_import not in options.all_imports:
                 if this_import in options.unusual_imports:
                     logging.warning(f"Unusual import: {this_import} from line {line} in file {file_path}")
+                logging.info(f"Evaluating import: {this_import} from line {line} in file {file_path}")
                 if this_import in options.custom_modules.keys():
+                    logging.info(f"Import {this_import} found in custom_modules with path {options.custom_modules[this_import]}")  # New logging
+
                     if options.custom_modules[this_import] == file_path and this_import == os.path.basename(file_path).split('.')[0] and not line.startswith(f'from {this_import}.'):
                         logging.info(f"{os.path.basename(file_path).split('.')[0] = }")
                         logging.info(f"Local import: {this_import} from line {line} in file {file_path} loads itself.")
@@ -410,6 +417,102 @@ def find_imports_in_script(options: Options, file_path: str) -> None:
                         find_imports_in_script(options, options.custom_modules[this_import])
                 else:
                     options.all_imports.add(this_import)
+
+def check_if_library_exists_in_venv(library_name: str, venv_dir: str) -> bool:
+    """Check if a library exists in the virtual environment."""
+    try:
+        venv_python = os.path.join(venv_dir, 'bin', 'python')
+        if sys.platform == "win32":
+            venv_python = os.path.join(venv_dir, 'Scripts', 'python.exe')
+        
+        result = subprocess.run(
+            [venv_python, '-c', f'import {library_name}'],
+            capture_output=True,
+            text=True
+        )
+        return result.returncode == 0
+    except Exception as e:
+        logging.error(f"Error checking library {library_name} in virtual environment: {e}")
+        return False
+
+def split_imports(options: 'Options') -> None:
+    """Split imports into installed, uninstalled, and bad imports."""
+    logging.info(f"Before filtering: all_imports={options.all_imports}")  # New logging
+    options.bad_imports = options.known_bad_imports.intersection(options.all_imports)
+    logging.info(f"Identified bad imports: {options.bad_imports}")  # New logging
+    options.bad_imports.update({imp for imp in options.all_imports if imp.startswith('_')})
+    options.all_imports = options.all_imports - options.bad_imports
+    options.installed_imports = set()
+    options.uninstalled_imports = set()
+    options.total_imports = len(options.all_imports)
+    if not options.total_imports:
+        logging.info("No imports found.")
+        return
+
+    max_length = max(len(imp) for imp in options.all_imports)
+
+    logging.error(f"{options.all_imports = }")
+    breakpoint()
+
+    with tempfile.TemporaryDirectory() as venv_dir:
+        venv.create(venv_dir, with_pip=True)
+        for i, imp in enumerate(options.all_imports, 1):
+            if imp in options.module_aliases:
+                package_name = options.module_aliases[imp]
+            else:
+                package_name = imp
+            logging.info(f"Checking if import {imp} is installed or uninstalled")  # New logging
+            if check_if_library_exists_in_venv(package_name, venv_dir) or imp in options.custom_modules.keys():
+                if check_if_library_exists_in_venv(package_name, venv_dir):
+                    logging.info(f"Import {imp} is installed")
+                elif imp in options.custom_modules.keys():
+                    logging.info(f"Custom module {imp} is installed")
+                else:
+                    logging.error("Error: This should never happen.")
+                logging.info(f"Import {imp} is installed or a custom module with path {options.custom_modules.get(imp, 'N/A')}")  # New logging
+                options.installed_imports.add(imp)
+            else:
+                logging.info(f"Import {imp} is not installed and not a custom module")  # New logging
+                options.uninstalled_imports.add(package_name)
+            logging.info(f"Checking import {imp:{max_length}} : {i}/{options.total_imports}")
+    return
+
+def list_packages(options: Options) -> None:
+    """List all installed and uninstalled packages that are imported in a directory or file. Return these sets inside the options object."""
+    if type(options.script_dir_or_file_or_list) == str:
+        options.script_dir_or_file_or_list = os.path.expanduser(options.script_dir_or_file_or_list)
+        options.loaded_custom_modules = set()
+        if os.path.isfile(options.script_dir_or_file_or_list):
+            logging.info("Processing a single Python script.")
+            python_file = options.script_dir_or_file_or_list
+            options.all_imports = set()
+            find_imports_in_script(options, python_file)
+        elif os.path.isdir(options.script_dir_or_file_or_list):
+            logging.info("Processing an entire folder of Python scripts.")
+            python_dir = options.script_dir_or_file_or_list
+            if PIPREQS_AVAILABLE:
+                logging.info("Using pipreqs to generate requirements.")
+                generate_requirements(options.script_dir_or_file_or_list)
+                with open(os.path.join(python_dir, 'requirements.txt'), 'r') as f:
+                    options.all_imports = set(line.strip() for line in f)
+            else:
+                logging.info("Using custom script to find imports.")
+                options.all_imports = get_all_imports(options, options.script_dir_or_file_or_list)
+        else:
+            logging.error(f"Error: The file or directory {options.script_dir_or_file_or_list} does not exist.")
+            sys.exit(1)
+    else:
+        logging.info("Processing a list of Python scripts.")
+        options.all_imports = set()
+        for python_file in options.script_dir_or_file_or_list:
+            python_filepath = os.path.join(options.script_dir, python_file)
+            find_imports_in_script(options, python_filepath)
+
+    # Filter out invalid imports before splitting
+    options.all_imports = {imp for imp in options.all_imports if re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', imp)}
+    
+    logging.info(f"Finished finding imports: all_imports={options.all_imports}, total_imports={len(options.all_imports)}")  # New logging
+    split_imports(options)
 
 def get_all_imports(options: Options, directory: str) -> None:
     """Get all imports from all Python scripts in a directory."""
@@ -448,88 +551,12 @@ def find_subfolders(options: Options) -> None:
 
     options.subfolders.extend(list(one_level_deep_subfolders))
 
-def check_if_library_exists(library_name: str) -> bool:
-    """Check if a library exists by attempting to import it."""
-    try:
-        result = subprocess.run(
-            [sys.executable, '-c', f'import {library_name}'],
-            capture_output=True,
-            text=True
-        )
-        return result.returncode == 0
-    except Exception as e:
-        logging.error(f"Error checking library {library_name}: {e}")
-    return False
-
-def split_imports(options: Options) -> None:
-    """Split imports into installed, uninstalled, and bad imports."""
-    options.bad_imports = options.known_bad_imports.intersection(options.all_imports)
-    #Any import that starts with "_" is a bad import:
-    options.bad_imports.update({imp for imp in options.all_imports if imp.startswith('_')})
-    options.all_imports = options.all_imports - options.bad_imports
-    options.installed_imports = set()
-    options.uninstalled_imports = set()
-    options.total_imports = len(options.all_imports)
-    if not options.total_imports:
-        logging.info("No imports found.")
-        return
-    max_length = max(len(imp) for imp in options.all_imports)
-
-    for i, imp in enumerate(options.all_imports, 1):
-        if imp in options.module_aliases:
-            package_name = options.module_aliases[imp]
-        else:
-            package_name = imp
-
-        if check_if_library_exists(package_name) or imp in options.custom_modules.keys():
-            options.installed_imports.add(imp)
-        else:
-            options.uninstalled_imports.add(package_name)
-        logging.info(f"Checking import {imp:{max_length}} : {i}/{options.total_imports}")
-    return
-
 def generate_requirements(directory: str) -> None:
     """Generate a requirements file using pipreqs."""
     try:
         pipreqs.generate_requirements(directory)
     except Exception as e:
         logging.error(f"Error generating requirements file: {e}")
-
-def list_packages(options: Options) -> None:
-    """List all installed and uninstalled packages that are imported in a directory or file. Return these sets inside the options object."""
-    if type(options.script_dir_or_file_or_list) == str:
-        options.script_dir_or_file_or_list = os.path.expanduser(options.script_dir_or_file_or_list)
-        options.loaded_custom_modules = set()
-        if os.path.isfile(options.script_dir_or_file_or_list):
-            logging.info("Processing a single Python script.")
-            python_file = options.script_dir_or_file_or_list
-            options.all_imports = set()
-            find_imports_in_script(options, python_file)
-        elif os.path.isdir(options.script_dir_or_file_or_list):
-            logging.info("Processing an entire folder of Python scripts.")
-            python_dir = options.script_dir_or_file_or_list
-            if PIPREQS_AVAILABLE:
-                logging.info("Using pipreqs to generate requirements.")
-                generate_requirements(options.script_dir_or_file_or_list)
-                with open(os.path.join(python_dir, 'requirements.txt'), 'r') as f:
-                    options.all_imports = set(line.strip() for line in f)
-            else:
-                logging.info("Using custom script to find imports.")
-                options.all_imports = get_all_imports(options, options.script_dir_or_file_or_list)
-        else:
-            logging.error(f"Error: The file or directory {options.script_dir_or_file_or_list} does not exist.")
-            sys.exit(1)
-    else:
-        logging.info("Processing a list of Python scripts.")
-        options.all_imports = set()
-        for python_file in options.script_dir_or_file_or_list:
-            python_filepath = os.path.join(options.script_dir, python_file)
-            find_imports_in_script(options, python_filepath)
-
-    # Filter out invalid imports before splitting
-    options.all_imports = {imp for imp in options.all_imports if re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', imp)}
-    
-    split_imports(options)
 
 class MyPopenResult:
     def __init__(self, stdout, stderr, returncode):
@@ -600,26 +627,9 @@ def download_packages(options: Options) -> bool:
         with open(options.download_script_path, 'w') as f:
             f.write(download_script)
         os.chmod(options.download_script_path, 0o755)
-
         # Run the initial download script and capture the output
-        process = subprocess.Popen(
-            [options.download_script_path],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-
-        captured_output = ""
-        for line in iter(process.stdout.readline, ''):
-            logging.info(line.strip())
-            captured_output += line
-        for line in iter(process.stderr.readline, ''):
-            logging.error(line.strip())
-            captured_output += line
-        process.stdout.close()
-        process.stderr.close()
-        process.wait()
-        return process.returncode == 0
+        result = my_popen([options.download_script_path])
+        return result.returncode == 0
     except Exception as e:
         logging.error(f"Error downloading packages: {e}")
         return False
@@ -633,30 +643,10 @@ def install_packages_simultaneously(options: Options) -> bool:
             "--no-index", "--find-links", options.packages_dir,
             "-r", options.requirements_file
         ]
-
         logging.info("Installing all packages simultaneously...")
-
-        # Run the command and capture the output line by line
-        process = subprocess.Popen(
-            install_command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-
-        captured_output = ""
-        for line in iter(process.stdout.readline, ''):
-            logging.info(line.strip())
-            captured_output += line
-        for line in iter(process.stderr.readline, ''):
-            logging.error(line.strip())
-            captured_output += line
-        process.stdout.close()
-        process.stderr.close()
-        process.wait()
-
-        # Check the return code for success
-        if process.returncode == 0:
+        # Run the command and capture the output line by line using my_popen
+        result = my_popen(install_command)
+        if result.returncode == 0:
             logging.info("All packages installed successfully.")
             return True
         else:
