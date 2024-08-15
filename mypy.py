@@ -75,6 +75,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.requirements_file: str = ''
         self.download_script_path: str = ''
         self.simultaneous_success: bool = False
+        self.max_checks: int = 5 # Maximum number of times to check any repeated process.
         self.script_args: List[str] = []
         self.new_local_paths: Set[str] = set()
         self.processed_files: Set[str] = set()
@@ -244,6 +245,10 @@ def find_imports_in_script(options: Options, file_path: str) -> None:
         return
     options.processed_files.add(file_path)
 
+    # Skip files in directories to stay out of
+    if any(substring in file_path for substring in options.stay_out_list):
+        return
+
     if os.path.islink(file_path):
         logging.info(f"Skipping symbolic link {file_path}")
         return
@@ -296,7 +301,17 @@ def find_imports_in_script(options: Options, file_path: str) -> None:
 
             imports_list = [parts[1]]
 
-            module_name = parts[2].split('import ')[-1].strip()
+            if len(parts) > 2:
+                if 'import ' in parts[2]:
+                    module_name = parts[2].split('import ')[-1].strip()
+                else:
+                    module_name = parts[2].strip()
+                    logging.warning(f"Import statement without 'import' keyword so {module_name = } from line \"{line}\" in file {file_path}")
+                    breakpoint()
+            else:
+                module_name = parts
+                logging.warning(f"Import statement with fewer than three parts so {module_name = } from line \"{line}\" in file {file_path}")
+                breakpoint()
             if ',' in module_name:
                 logging.warning(f"Multiple imports on one line: {module_name} from line {line} in file {file_path}")
             
@@ -321,7 +336,7 @@ def find_imports_in_script(options: Options, file_path: str) -> None:
                 # Remove the package name from the module path because it's in there twice:
                 module_path = module_path.replace(module_path.split(os.sep)[0]+os.sep,'')
                 # Since we're loading from a module, the parts[2] will be the function name, not the file name. So remove that: 
-                module_path = module_path.replace(os.sep+parts[2].split('import ')[-1].strip(),'')
+                module_path = module_path.replace(os.sep+module_name,'')
                 resolved_path = os.path.abspath(os.path.join(base_dir, module_path))
                 logging.info(f"Resolved local import to: {resolved_path}")
                 options.custom_modules[parts[1].split('.')[0]] = resolved_path
