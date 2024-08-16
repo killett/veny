@@ -15,7 +15,7 @@ import shutil
 import venv
 import pickle
 from pathlib import Path, PosixPath
-from typing import Dict, List, Set, Tuple, Union, Iterable
+from typing import Dict, List, Set, Tuple, Union, Iterable, Optional
 import logging
 import tempfile
 import ast
@@ -79,6 +79,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.simultaneous_success: bool = False
         self.max_checks: int = 5 # Maximum number of times to check any repeated process.
         self.script_args: List[str] = []
+        self.file_stack: List[str] = [] # Use to store files that are being processed in find_imports_in_script()
         self.new_local_paths: Set[str] = set()
         self.processed_files: Set[str] = set()
         self.all_imports: Set[str] = set()
@@ -88,7 +89,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.bad_imports: Set[str] = set()
         # Keep a list of all python standard library modules.
         #This list is from the pipreqs repo in file "mapping", retrieved on 2024-08-15 from here: https://github.com/bndr/pipreqs
-        self.stdlib: List[str] = ['_abc', 'abc', 'aifc', 
+        self.standard_modules: List[str] = ['_abc', 'abc', 'aifc', 
             '_aix_support', 'antigravity', 'argparse', 'array', 
             '_ast', 'ast', 'asynchat', '_asyncio', 'asyncio', 
             'asyncio.base_events', 'asyncio.base_futures', 
@@ -2189,7 +2190,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.unusual_imports: List[str] = ['a', 'an', 'dl', 'the', 'it', 'x', 'xx', 'above', 'another', '__builtin__', 'within']
         # List of directories to stay out of when searching for local custom imports because they're filled with standard library modules or other irrelevant files.
         self.stay_out_list: List[str] = ['myenv', 'anaconda3', '.conda']
-        # List of encodings to try when reading files, in order from most to least likely.
+        # List of encodings to try when reading files, with most likely encodings first.
         self.encodings: List[str] = ['utf_8', 'latin_1', 'ascii', 'iso8859_1', 'big5', 'utf_8_sig', 'utf_16', 'utf_16_be', 'utf_16_le', 'utf_32', 'utf_32_be', 'utf_32_le', 'cp1252', 'cp1251', 'cp1250', 'cp1253', 'cp1254', 'cp1255', 'cp1256', 'cp1257', 'cp1258', 'iso8859_2', 'iso8859_3', 'iso8859_4', 'iso8859_5', 'iso8859_6', 'iso8859_7', 'iso8859_8', 'iso8859_9', 'iso8859_10', 'iso8859_11', 'iso8859_13', 'iso8859_14', 'iso8859_15', 'iso8859_16', 'cp437', 'cp850', 'cp852', 'cp855', 'cp857', 'cp858', 'cp860', 'cp861', 'cp862', 'cp863', 'cp864', 'cp865', 'cp866', 'cp869','cp037', 'cp424', 'cp500', 'cp720', 'cp737', 'cp775', 'cp874', 'cp875', 'cp932', 'cp949', 'cp950', 'cp1006', 'cp1026', 'cp1125', 'cp1140','big5hkscs', 'gb2312', 'gbk', 'gb18030', 'euc_jp', 'euc_jis_2004', 'euc_jisx0213', 'euc_kr', 'iso2022_jp', 'iso2022_jp_1', 'iso2022_jp_2', 'iso2022_jp_2004', 'iso2022_jp_3', 'iso2022_jp_ext', 'iso2022_kr', 'johab', 'koi8_r', 'koi8_t', 'koi8_u', 'kz1048', 'mac_cyrillic', 'mac_greek', 'mac_iceland', 'mac_latin2', 'mac_roman', 'mac_turkish', 'ptcp154', 'shift_jis', 'shift_jis_2004', 'shift_jisx0213', 'hz', 'tis_620', 'euc_tw', 'iso2022_tw']
 
     def set_venv_dir(self, venv_dir: str) -> None:
@@ -2368,59 +2369,11 @@ class SysPathVisitor(ast.NodeVisitor):
                     self.paths.add(path)
         self.generic_visit(node)
 
-def process_import(module_name: str, options: 'Options', file_path: str) -> None:
-    """Process an import by checking if it's a local custom module or a standard import, and handle it accordingly."""
-    logging.info(f"Processing import: {module_name} from file {file_path}")
-    
-    if module_name in options.all_imports:
-        logging.info(f"Skipping already processed import: {module_name}")
-        return
-
-    base_dir = os.path.dirname(file_path)
-    module_path = module_name.replace('.', os.sep) + ".py"
-
-    # First, try to resolve the import relative to the base directory of the current file
-    potential_file_path = os.path.join(base_dir, module_path)
-    logging.info(f"Constructed potential file path: {potential_file_path}")
-
-    if os.path.isfile(potential_file_path):
-        resolved_path = os.path.abspath(potential_file_path)
-        logging.info(f"Resolved local import to: {resolved_path}")
-        options.custom_modules[module_name.split('.')[0]] = resolved_path
-        options.loaded_custom_modules.add(module_name.split('.')[0])
-        find_imports_in_script(options, resolved_path)
-        return  # Exit after finding the file to avoid unnecessary checks
-
-    # Second, check if the module is part of a package in the current directory
-    package_name = base_dir.split(os.sep)[-1]  # Current directory name
-    if module_path.split(os.sep)[0] == package_name and os.path.isfile(os.path.join(base_dir, '__init__.py')):
-        # Modify module_path to adjust for package resolution
-        adjusted_module_path = module_path.replace(package_name + os.sep, '', 1)
-        resolved_path = os.path.abspath(os.path.join(base_dir, adjusted_module_path))
-        print(f"Constructed adjusted file path: {resolved_path}")
-        
-        if os.path.isfile(resolved_path):
-            logging.info(f"Resolved local import within package to: {resolved_path}")
-            options.custom_modules[module_name.split('.')[0]] = resolved_path
-            options.loaded_custom_modules.add(module_name.split('.')[0])
-            find_imports_in_script(options, resolved_path)
-            return  # Exit after finding the file to avoid unnecessary checks
-
-    # If not found locally, fall back to checking options.custom_modules
-    if module_name in options.custom_modules:
-        resolved_path = options.custom_modules[module_name]
-        if resolved_path == file_path:
-            logging.info(f"Avoiding loopback to the same file: {resolved_path}")
-            return
-        logging.info(f"Using existing resolved path from custom_modules: {resolved_path}")
-        options.loaded_custom_modules.add(module_name.split('.')[0])
-        if not any(substring in resolved_path for substring in options.stay_out_list):
-            find_imports_in_script(options, resolved_path)
-    else:
-        options.all_imports.add(module_name)
-
 def my_fopen(options: Options, file_path: str):
     """Attempt to read the file with various encodings and return the file content if successful."""
+    if not os.path.isfile(file_path):
+        logging.error(f"File does not exist: {file_path}")
+        return False
     for encoding in options.encodings:
         try:
             with open(file_path, 'r', encoding=encoding) as file:
@@ -2434,56 +2387,134 @@ def my_fopen(options: Options, file_path: str):
             return
     return False
 
-def find_imports_in_script(options: 'Options', file_path: str) -> None:
-    """Find all imports in a Python script and add them to a set. Recursively check local imports in any custom modules that are imported."""
-    if file_path in options.processed_files:
-        return
-    options.processed_files.add(file_path)
-
-    if os.path.islink(file_path):
-        logging.info(f"Skipping symbolic link {file_path}")
-        return
-
-    file_content = my_fopen(options, file_path)
-
+def my_ast_parse(file_content: str, file_path: str) -> Optional[ast.AST]:
+    """Attempt to parse the file with ast.parse and return the tree if successful."""
     try:
         tree = ast.parse(file_content, filename=file_path)
     except SyntaxError as e:
         logging.error(f"Syntax error parsing file {file_path}: {str(e)}")
         return
+    except Exception as e:
+        logging.error(f"Error parsing file {file_path}: {str(e)}")
+        return
+    return tree
 
-    # Track sys.path modifications
-    sys_path_visitor = SysPathVisitor()
-    sys_path_visitor.visit(tree)
-    options.new_local_paths.update(sys_path_visitor.paths)
-    for path in sys_path_visitor.paths:
-        logging.info(f"Adding new local path: {path}")
+def process_import(options: 'Options', module_name: str, file_path: str) -> None:
+    """Process an import by checking if it's a local custom module or a standard import, and handle it accordingly."""
+    if module_name in options.standard_modules:
+        logging.info(f"Skipping standard library import: {module_name}")
+        return
 
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            line = ast.unparse(node)
-            logging.info(f"Processing import statement: {line}")
-            response = input("Do you want to breakpoint() here? (y/n): ")
-            if response == 'y':
-                breakpoint()
-            for alias in node.names:
-                module_name = alias.name.split('.')[0]
-                process_import(module_name, options, file_path)
-        elif isinstance(node, ast.ImportFrom):
-            if node.level == 0 and node.module:
-                module_name = node.module.split('.')[0]
-                process_import(module_name, options, file_path)
-            elif node.level > 0:
-                # Handle relative imports
-                base_dir = os.path.dirname(file_path)
-                rel_path = os.path.join(base_dir, *(['..'] * (node.level - 1)), node.module or '')
-                resolved_path = os.path.abspath(rel_path)
-                if os.path.isdir(resolved_path):
-                    resolved_path = os.path.join(resolved_path, '__init__.py')
-                else:
-                    resolved_path += '.py'
-                if os.path.isfile(resolved_path):
-                    find_imports_in_script(options, resolved_path)
+    logging.info(f"Processing import: {module_name} from file {file_path}")
+    
+    if module_name in options.all_imports:
+        logging.info(f"Skipping already processed import: {module_name}")
+        return
+
+    base_dir = os.path.dirname(os.path.abspath(file_path))
+    module_path = module_name.replace('.', os.sep)
+    logging.info(f"Constructed module path: {module_path}")
+
+    # Is the import a file in the same directory?
+    potential_file_path = os.path.join(base_dir, module_path+'.py')
+    logging.info(f"Constructed potential file path: {potential_file_path}")
+    if os.path.isfile(potential_file_path):
+        resolved_path = os.path.abspath(potential_file_path)
+        logging.info(f"Resolved local import to: {resolved_path}")
+        options.custom_modules[module_name.split('.')[0]] = resolved_path
+        options.loaded_custom_modules.add(module_name.split('.')[0])
+        if resolved_path not in options.processed_files:
+            options.processed_files.add(resolved_path)
+            options.file_stack.append(resolved_path)
+        return  # Exit after finding the file to avoid unnecessary checks
+
+    # Is the import a subdirectory with python files in it?
+    potential_file_path = os.path.join(base_dir, module_path)
+    logging.info(f"Constructed potential file path: {potential_file_path}")
+    if os.path.isdir(potential_file_path):
+        resolved_path = os.path.abspath(potential_file_path)+os.sep
+        logging.info(f"Resolved local import to: {resolved_path}")
+        # List all files in resolved_path that have extensions of '.py':
+        py_files = [f for f in os.listdir(resolved_path) if os.path.isfile(os.path.join(resolved_path, f)) and f.endswith('.py')]
+        if not py_files:
+            logging.info(f"No python files found in subfolder: {resolved_path}")
+            return
+        logging.info(f"Found python files in {module_path}: {py_files}")
+        options.subfolders.append(module_path)
+        logging.info(f"Added subfolder: {module_path}")
+        for py_file in py_files:
+            this_resolved_path = os.path.join(resolved_path, py_file)
+            logging.info(f"Adding custom module with name {module_name.split('.')[0]} and path: {this_resolved_path}")
+            options.custom_modules[module_name.split('.')[0]] = this_resolved_path
+            options.loaded_custom_modules.add(module_name.split('.')[0])
+            if this_resolved_path not in options.processed_files:
+                options.processed_files.add(this_resolved_path)
+                options.file_stack.append(this_resolved_path)
+        return  # Exit after finding the subdirectory to avoid unnecessary checks
+
+    # If not found in this directory, check options.custom_modules
+    if module_name in options.custom_modules:
+        resolved_path = options.custom_modules[module_name]
+        if resolved_path == file_path:
+            logging.info(f"Avoiding loopback to the same file: {resolved_path}")
+            return
+        logging.info(f"Using existing resolved path from custom_modules: {resolved_path}")
+        options.loaded_custom_modules.add(module_name.split('.')[0])
+        if not any(substring in resolved_path for substring in options.stay_out_list):
+            find_imports_in_script(options, resolved_path)
+    else:
+        options.all_imports.add(module_name)
+
+def find_imports_in_script(options: 'Options', first_path: str) -> None:
+    """Find all imports in a Python script and add them to a set. Recursively check local imports in any custom modules that are imported."""
+    if first_path in options.processed_files:
+        return
+    options.processed_files.add(first_path)
+
+    if os.path.islink(first_path):
+        logging.info(f"Skipping symbolic link {first_path}")
+        return
+
+    options.file_stack = [first_path]
+    
+    while options.file_stack:
+        file_path = options.file_stack.pop()
+        file_content = my_fopen(options, file_path)
+        tree = my_ast_parse(file_content, file_path)
+        if not tree:
+            return
+
+        # Track sys.path modifications
+        sys_path_visitor = SysPathVisitor()
+        sys_path_visitor.visit(tree)
+        options.new_local_paths.update(sys_path_visitor.paths)
+        for path in sys_path_visitor.paths:
+            logging.info(f"Adding new local path: {path}")
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                line = ast.unparse(node)
+                logging.info(f"Processing import statement: {line}")
+                for alias in node.names:
+                    logging.info(f"Processing alias: {alias.name}")
+                    module_name = alias.name.split('.')[0]
+                    logging.info(f"Processing module name: {module_name}")
+                    process_import(options, module_name, file_path)
+            elif isinstance(node, ast.ImportFrom):
+                if node.level == 0 and node.module:
+                    module_name = node.module.split('.')[0]
+                    process_import(options, module_name, file_path)
+                elif node.level > 0:
+                    # Handle relative imports
+                    base_dir = os.path.dirname(file_path)
+                    rel_path = os.path.join(base_dir, *(['..'] * (node.level - 1)), node.module or '')
+                    resolved_path = os.path.abspath(rel_path)
+                    if os.path.isdir(resolved_path):
+                        resolved_path = os.path.join(resolved_path, '__init__.py')
+                    else:
+                        resolved_path += '.py'
+                    if os.path.isfile(resolved_path):
+                        options.file_stack.append(resolved_path)
 
 def check_if_library_exists_in_venv(library_name: str, venv_dir: str) -> bool:
     """Check if a library exists in the virtual environment."""
@@ -2521,10 +2552,7 @@ def split_imports(options: Options) -> None:
     with tempfile.TemporaryDirectory() as venv_dir:
         venv.create(venv_dir, with_pip=True)
         for i, imp in enumerate(options.all_imports, 1):
-            if imp in options.module_aliases:
-                package_name = options.module_aliases[imp]
-            else:
-                package_name = imp
+            package_name = options.module_aliases.get(imp, imp)
             logging.info(f"Checking if import {imp} is installed or uninstalled")  # New logging
             if imp in options.custom_modules.keys():
                 logging.info(f"Custom module {imp} has path {options.custom_modules[imp]}")
@@ -2591,25 +2619,6 @@ def get_all_imports(options: Options, directory: str) -> None:
                 logging.info(f"Processing files in {directory}: {processed_files}/{total_files}")
 
     logging.info(f"\nFinished processing files in {directory}.")
-
-def find_subfolders(options: Options) -> None:
-    """Find the subfolders of the current directory that contain custom modules."""
-    current_dir = os.path.normpath(options.current_dir)
-    print(f"{current_dir=}")
-    one_level_deep_subfolders = set()
-
-    for module_name, module_path in options.custom_modules.items():
-        module_dir = os.path.normpath(os.path.dirname(module_path))
-        print(f"{module_dir=}")
-
-        if module_dir.startswith(current_dir):
-            # Calculate relative path from current_dir
-            relative_path = os.path.relpath(module_dir, current_dir)
-            # Extract the first part (one level deeper)
-            first_dir = relative_path.split(os.sep)[0]
-            one_level_deep_subfolders.add(first_dir)
-
-    options.subfolders.extend(list(one_level_deep_subfolders))
 
 def generate_requirements(directory: str) -> None:
     """Generate a requirements file using pipreqs."""
@@ -2934,10 +2943,8 @@ def is_virtualenv() -> bool:
 def get_file_operations(options: Options, script_path: str) -> Tuple[List[str], List[str]]:
     """Find files that are read or written."""
     file_content = my_fopen(options, script_path)
-    try:
-        tree = ast.parse(file_content, filename=script_path)
-    except SyntaxError as e:
-        logging.error(f"Syntax error parsing file {script_path}: {str(e)}")
+    tree = my_ast_parse(file_content, script_path)
+    if not tree:
         return
 
     read_files = []
@@ -2979,10 +2986,8 @@ def get_file_operations(options: Options, script_path: str) -> Tuple[List[str], 
 def get_network_operations(options: Options, script_path: str) -> Tuple[List[str], List[str]]:
     """Find URLs that are downloaded and uploaded"""
     file_content = my_fopen(options, script_path)
-    try:
-        tree = ast.parse(file_content, filename=script_path)
-    except SyntaxError as e:
-        logging.error(f"Syntax error parsing file {script_path}: {str(e)}")
+    tree = my_ast_parse(file_content, script_path)
+    if not tree:
         return
 
     download_urls = []
