@@ -75,6 +75,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.venv_python: str = ''
         self.venv_pip: str = ''
         self.requirements_file: str = ''
+        self.extra_requirements: str = ''
         self.download_script_path: str = ''
         self.simultaneous_success: bool = False
         self.max_checks: int = 5 # Maximum number of times to check any repeated process.
@@ -2134,7 +2135,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
             'twitter': 'python_twitter',
             'txclib': 'transifex_client',
             'u115': '115wangpan',
-            'unidecode': 'Unidecode',
+            #'unidecode': 'Unidecode', # This doesn't work on my Ubuntu machine.
             'universe': 'ansible_universe',
             'usb': 'pyusb',
             'useless': 'useless.pipes',
@@ -2230,6 +2231,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument('-last-used', action='store_true', help="Load the last used venv in the cache, but if that fails try the latest venv which has all the packages needed now.")
     parser.add_argument('-smallest', action='store_true', help="Load the smallest venv in the cache (with the fewest packages) which has all the packages needed now.")
     parser.add_argument('-rc', action='store_true', help='Refresh the custom modules cache and the pip list.')
+    parser.add_argument('-aws', action='store_true', help='Configure the venv so it can be used on AWS, for instance as a lambda function. This requires using python 3.11 and telling pip to download manylinux wheels. It also names the venv directory in mypy/ with the keyword \'awsenv\' instead of \'myenv\'.')
+    parser.add_argument('-reqs', action='store_true', help='Read the requirements.txt file in the current directory and install the packages listed there (with specific versions if present in the file) into the venv (along with the other packages needed to run the script as determined elsewhere in this program).')
     
     return parser.parse_args()
 
@@ -2413,6 +2416,12 @@ def process_import(options: 'Options', module_name: str, file_path: str) -> None
 
     base_dir = os.path.dirname(os.path.abspath(file_path))
     module_path = module_name.replace('.', os.sep)
+    if module_path == options.script_name:
+        logging.info(f"Avoiding loopback to the same file: {module_path}")
+        return
+    if module_path == 'pipreqs' and 'mypy.py' in file_path:
+        logging.info(f"Avoiding loopback to pipreqs in mypy.py")
+        return
     logging.info(f"Constructed module path: {module_path}")
 
     # Is the import a file in the same directory?
@@ -2664,6 +2673,10 @@ def my_popen(command_list: list) -> MyPopenResult:
         return MyPopenResult(stdout="", stderr=str(e), returncode=-1)
 
 def download_packages(options: Options) -> bool:
+    if options.args.aws:
+        options.pip_options = "--platform manylinux1_x86_64 --python-version 3.11"
+    else:
+        options.pip_options = ""
     """Install packages in a virtual environment."""
     download_script = f"""#!/bin/bash
     source {options.venv_dir}/bin/activate
@@ -2689,7 +2702,7 @@ def download_packages(options: Options) -> bool:
 
     # Download required packages
     echo "Downloading packages..."
-    {options.venv_pip} download -r {options.requirements_file} -d {options.packages_dir}"""
+    {options.venv_pip} download {options.pip_options} -r {options.requirements_file} -d {options.packages_dir}"""
 
     try:
         logging.info(f"Writing download script to {options.download_script_path}")
@@ -2902,6 +2915,23 @@ print("\\n".join(installed_packages + available_modules + list(builtin_modules))
     options.uninstalled_imports = options.uninstalled_imports.union(new_uninstalled_imports)
     options.installed_imports = options.installed_imports - new_uninstalled_imports
 
+def parse_requirements(options: Options, file_path: str) -> Dict[str, Optional[str]]:
+    """Parse a requirements file and return a dictionary of package names (and versions, if present)."""
+    options.extra_requirements = {}
+    try:
+        if os.path.isfile(file_path):
+            with open(file_path, 'r') as file:
+                for line in file:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        if '==' in line:
+                            package, version = line.split('==')
+                            options.extra_requirements[package.strip()] = version.strip()
+                        else:
+                            options.extra_requirements[line] = None
+    except Exception as e:
+        logging.error(f"Error parsing requirements file: {e}")
+
 def setup_virtualenv(options: Options) -> bool:
     """Setup a virtual environment and install packages."""
     use_pip_list(options)
@@ -2945,7 +2975,7 @@ def get_file_operations(options: Options, script_path: str) -> Tuple[List[str], 
     file_content = my_fopen(options, script_path)
     tree = my_ast_parse(file_content, script_path)
     if not tree:
-        return
+        return [], []
 
     read_files = []
     write_files = []
@@ -2960,14 +2990,14 @@ def get_file_operations(options: Options, script_path: str) -> Tuple[List[str], 
                 elif isinstance(node.args[0], ast.Constant):  # For Python 3.8+
                     filename = node.args[0].value
                 else:
-                    return
+                    return [], []
 
                 # Determine if the file is being read or written
                 if len(node.args) > 1:
                     if isinstance(node.args[1], ast.Str) or isinstance(node.args[1], ast.Constant):
                         mode = node.args[1].s if isinstance(node.args[1], ast.Str) else node.args[1].value
                     else:
-                        return
+                        return [], []
                 else:
                     mode = 'r'  # Default mode
 
@@ -2988,7 +3018,7 @@ def get_network_operations(options: Options, script_path: str) -> Tuple[List[str
     file_content = my_fopen(options, script_path)
     tree = my_ast_parse(file_content, script_path)
     if not tree:
-        return
+        return [], []
 
     download_urls = []
     upload_urls   = []
@@ -3304,12 +3334,13 @@ def dict_of_custom_modules(options: Options) -> Dict[str, str]:
                         module_name = os.path.splitext(file)[0]
                         if module_name not in custom_modules:
                             full_path = os.path.join(root, file)
-                            custom_modules[module_name] = full_path
+                            if not is_standard_path(options, full_path):
+                                custom_modules[module_name] = full_path
                 for dir in dirs:
                     if not is_standard_path(options, os.path.join(root, dir)):
                         package_path = os.path.join(root, dir)
                         if os.path.isfile(os.path.join(package_path, '__init__.py')):
-                            if dir not in custom_modules:
+                            if dir not in custom_modules and not is_standard_path(options, package_path):
                                 custom_modules[dir] = package_path + os.sep
                             # Remove any individual module entries within the package directory
                             for file in os.listdir(package_path):
@@ -3325,9 +3356,19 @@ def dict_of_custom_modules(options: Options) -> Dict[str, str]:
     return custom_modules
 
 def main() -> None:
-    memory_handler = configure_logging("mypy", log_level="INFO")
-
     start_time = datetime.now()
+    options = Options()
+    options.args = parse_arguments()
+    options.python_script = options.args.script
+    options.script_args = options.args.script_args
+
+    # Autolambda requires script_args to be set, otherwise run to show info.
+    if 'autolambda' in options.python_script:
+        if not options.args.script_args:
+            subprocess.run([sys.executable, options.python_script] + options.script_args)
+            sys.exit(1)
+
+    memory_handler = configure_logging("mypy", log_level="INFO")
 
     try:
         import pipreqs
@@ -3337,19 +3378,14 @@ def main() -> None:
         logging.info("pipreqs is not available. Try installing it with 'pip install pipreqs'.")
         PIPREQS_AVAILABLE = False
 
-    options = Options()
-    options.args = parse_arguments()
-
-    options.python_script = options.args.script
-    options.script_args = options.args.script_args
+    if options.args.aws: options.venv_name = 'awsenv'
 
     if options.args.alias:
         # Add the alias to the shell configuration file
         add_alias(options)
         sys.exit(0)
     elif options.args.script:
-        # Run the specified script with the provided arguments
-        script_path = os.path.abspath(options.args.script)
+        pass
     elif options.args.manual:
         # Print instructions for manually adding the alias to the shell configuration file
         print(options.manual_instructions)
@@ -3378,6 +3414,11 @@ def main() -> None:
 
     options.script_dir = os.path.abspath(os.path.dirname(options.python_script))
     #logging.info(f"Directory where the script to run is located: {options.script_dir}")
+
+    if options.args.reqs:
+        parse_requirements(options,'requirements.txt')
+        print(f"Loaded extra requirements from requirements.txt in this directory:\n{options.extra_requirements}")
+    sys.exit(0)
 
     if not os.path.isdir(options.mypy_dir):
         logging.info(f"Directory {options.mypy_dir} does not exist yet, so it is being created.")
