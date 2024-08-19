@@ -76,6 +76,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.venv_pip: str = ''
         self.requirements_file: str = ''
         self.extra_requirements: str = ''
+        self.extra_requirements_file: str = 'extra_requirements.txt'
         self.download_script_path: str = ''
         self.simultaneous_success: bool = False
         self.max_checks: int = 5 # Maximum number of times to check any repeated process.
@@ -2232,7 +2233,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument('-smallest', action='store_true', help="Load the smallest venv in the cache (with the fewest packages) which has all the packages needed now.")
     parser.add_argument('-rc', action='store_true', help='Refresh the custom modules cache and the pip list.')
     parser.add_argument('-aws', action='store_true', help='Configure the venv so it can be used on AWS, for instance as a lambda function. This requires using python 3.11 and telling pip to download manylinux wheels. It also names the venv directory in mypy/ with the keyword \'awsenv\' instead of \'myenv\'.')
-    parser.add_argument('-reqs', action='store_true', help='Read the requirements.txt file in the current directory and install the packages listed there (with specific versions if present in the file) into the venv (along with the other packages needed to run the script as determined elsewhere in this program).')
+    parser.add_argument('-reqs', action='store_true', help='Read the extra_requirements.txt file in the current directory and install the packages listed there (with specific versions if present in the file) into the venv (along with the other packages needed to run the script as determined elsewhere in this program).')
     
     return parser.parse_args()
 
@@ -2402,15 +2403,31 @@ def my_ast_parse(file_content: str, file_path: str) -> Optional[ast.AST]:
         return
     return tree
 
-def corrective_join(base_dir: str, module_path: str) -> str:
-    """Join two paths, correcting for the case where the module_path starts with the last component of the base_dir."""
+def corrective_join(base_dir: str, module_path: str) -> Optional[str]:
+    """Join two paths, correcting for the case where the module_path starts with the last component of the base_dir. If that isn't the case, return None"""
     # Split both paths into their components
     base_components   =    base_dir.rstrip(os.path.sep).split(os.path.sep)
     module_components = module_path.lstrip(os.path.sep).split(os.path.sep)    
     # Handle the overlap case
     if base_components[-1] == module_components[0]:
         module_components = module_components[1:]
-    return os.path.join(base_dir, *module_components)
+        return os.path.join(base_dir, *module_components)
+    else:
+        return None
+
+def resolve_import(potential_file_path: str, module_name: str, options: Options) -> bool:
+    """Resolve an import by checking if it's a local custom module and handle it accordingly."""
+    logging.debug(f"Constructed potential file path: {potential_file_path}")
+    if os.path.isfile(potential_file_path):
+        resolved_path = os.path.abspath(potential_file_path)
+        logging.debug(f"Resolved local import to: {resolved_path}")
+        options.custom_modules[module_name.split('.')[0]] = resolved_path
+        options.loaded_custom_modules.add(module_name.split('.')[0])
+        if resolved_path not in options.processed_files:
+            options.processed_files.add(resolved_path)
+            options.file_stack.append(resolved_path)
+        return True
+    return False
 
 def process_import(options: Options, module_name: str, file_path: str) -> bool:
     """Process an import by checking if it's a local custom module or a standard import, and handle it accordingly."""
@@ -2436,29 +2453,15 @@ def process_import(options: Options, module_name: str, file_path: str) -> bool:
 
     # Is the import a file in the same directory?
     potential_file_path = os.path.join(base_dir, module_path+'.py')
-    logging.debug(f"Constructed potential file path: {potential_file_path}")
-    if os.path.isfile(potential_file_path):
-        resolved_path = os.path.abspath(potential_file_path)
-        logging.debug(f"Resolved local import to: {resolved_path}")
-        options.custom_modules[module_name.split('.')[0]] = resolved_path
-        options.loaded_custom_modules.add(module_name.split('.')[0])
-        if resolved_path not in options.processed_files:
-            options.processed_files.add(resolved_path)
-            options.file_stack.append(resolved_path)
-        return True # Exit after finding the file to avoid unnecessary checks
+    if resolve_import(potential_file_path, module_name, options):
+        return True
 
     # Is the import a file in a subdirectory that is mistakenly repeated?
-    potential_file_path = corrective_join(base_dir, module_path)+'.py'
-    logging.debug(f"Constructed potential file path: {potential_file_path}")
-    if os.path.isfile(potential_file_path):
-        resolved_path = os.path.abspath(potential_file_path)
-        logging.debug(f"Resolved local import to: {resolved_path}")
-        options.custom_modules[module_name.split('.')[0]] = resolved_path
-        options.loaded_custom_modules.add(module_name.split('.')[0])
-        if resolved_path not in options.processed_files:
-            options.processed_files.add(resolved_path)
-            options.file_stack.append(resolved_path)
-        return True # Exit after finding the file to avoid unnecessary checks
+    potential_file_path = corrective_join(base_dir, module_path)
+    if potential_file_path:
+        potential_file_path += '.py'
+        if resolve_import(potential_file_path, module_name, options):
+            return True
 
     # Is the import a subdirectory with python files in it?
     potential_file_path = os.path.join(base_dir, module_path)
@@ -2470,7 +2473,7 @@ def process_import(options: Options, module_name: str, file_path: str) -> bool:
         py_files = [f for f in os.listdir(resolved_path) if os.path.isfile(os.path.join(resolved_path, f)) and f.endswith('.py')]
         if not py_files:
             logging.debug(f"No python files found in subfolder: {resolved_path}")
-            return
+            return False
         logging.debug(f"Found python files in {module_path}: {py_files}")
         options.subfolders.append(module_path)
         logging.debug(f"Added subfolder: {module_path}")
@@ -2496,6 +2499,7 @@ def process_import(options: Options, module_name: str, file_path: str) -> bool:
             options.processed_files.add(resolved_path)
             options.file_stack.append(resolved_path)
     else:
+        logging.debug(f"Could not resolve local import, adding to all_imports: {module_name}")
         options.all_imports.add(module_name)
 
 def find_imports_in_script(options: Options, first_path: str) -> None:
@@ -2537,7 +2541,11 @@ def find_imports_in_script(options: Options, first_path: str) -> None:
                 logging.debug(f"Processing import statement: {line}")
                 if node.level == 0 and node.module:
                     logging.debug(f"Processing alias: {node.module}")
-                    process_import(options, node.module, file_path)
+                    if not process_import(options, node.module, file_path):
+                        logging.debug(f"Processing alias: {node.module} failed")
+                        module_name = node.module.split('.')[0]
+                        logging.debug(f"Processing module name: {module_name}")
+                        process_import(options, module_name, file_path)
                 elif node.level > 0:
                     # Handle relative imports
                     base_dir = os.path.dirname(file_path)
@@ -2576,6 +2584,8 @@ def split_imports(options: Options) -> None:
     options.all_imports = options.all_imports - options.bad_imports
     options.installed_imports = set()
     options.uninstalled_imports = set()
+    if options.args.reqs:
+        options.all_imports = options.all_imports.union(options.extra_requirements.keys())
     options.total_imports = len(options.all_imports)
     if not options.total_imports:
         logging.info("No imports found.")
@@ -2597,6 +2607,8 @@ def split_imports(options: Options) -> None:
                 logging.debug(f"Import {imp} is not installed and not a custom module")  # New logging
                 options.uninstalled_imports.add(package_name)
             logging.info(f"Checking import {imp:{max_length}} : {i}/{options.total_imports}")
+    if options.args.reqs:
+        options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
     return
 
 def list_packages(options: Options) -> None:
@@ -2624,7 +2636,7 @@ def list_packages(options: Options) -> None:
             logging.error(f"Error: The file or directory {options.script_dir_or_file_or_list} does not exist.")
             sys.exit(1)
     else:
-        logging.info("Processing a list of Python scripts.")
+        logging.info(f"Processing a list of Python scripts: {options.script_dir_or_file_or_list}")
         options.all_imports = set()
         for python_file in options.script_dir_or_file_or_list:
             python_filepath = os.path.join(options.script_dir, python_file)
@@ -2813,11 +2825,7 @@ def install_package(package_name: str, options: Options) -> bool:
 
 def check_packages_in_venv(options: Options) -> bool:
     """Create and run a script to test package imports in the virtual environment. Add packages from the requirements.txt file if '-reqs' is specified as a runtime argument."""
-    if options.args.reqs:
-        options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())        
     use_pip_list(options)
-    if options.args.reqs:
-        options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
     packages_str = ", ".join(f"'{pkg}'" for pkg in options.uninstalled_imports)  # Properly format the set as strings
     test_script = f"""
 source {options.venv_dir}/bin/activate
@@ -2890,7 +2898,10 @@ def pretty_packages_list(options: Options) -> str:
     return first_five + suffix
 
 def use_pip_list(options: Options) -> None:
-    """Use the pip list command to find all installed packages and use that pip list to modify the uninstalled and installed imports."""
+    """Use the pip list command to find all installed packages and use that pip list to modify the uninstalled and installed imports. Add packages from the options.extra_requirements dictionary if '-reqs' is specified as a runtime argument."""
+    # Add packages from the options.extra_requirements dictionary if '-reqs' is specified as a runtime argument.
+    if options.args.reqs:
+        options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
     if len(options.pip_list) == 0:
         # Create virtual environment
         venv.create(options.test_dir, with_pip=True)
@@ -2942,29 +2953,31 @@ print("\\n".join(installed_packages + available_modules + list(builtin_modules))
     logging.debug(f"{new_uninstalled_imports = }")
     options.uninstalled_imports = options.uninstalled_imports.union(new_uninstalled_imports)
     options.installed_imports = options.installed_imports - new_uninstalled_imports
+    # Once again, add packages from the options.extra_requirements dictionary if '-reqs' is specified as a runtime argument. (Do this again, just in case they got removed from the uninstalled_imports set above.)
+    if options.args.reqs:
+        options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
 
-def parse_requirements(options: Options, file_path: str) -> Dict[str, Optional[str]]:
-    """Parse a requirements file and return a dictionary of package names (and versions, if present)."""
+def parse_extra_requirements(options: Options) -> Dict[str, Optional[str]]:
+    """Parse an extra requirements file and return a dictionary of package names (and versions, if present)."""
     options.extra_requirements = {}
-    file_content = my_fopen(options, file_path)
+    file_content = my_fopen(options, options.extra_requirements_file)
     if not file_content:
         return
-    for line in file_content.splitlines():
-        line = line.strip()
-        if line and not line.startswith('#'):
-            if '==' in line:
-                package, version = line.split('==')
-                options.extra_requirements[package.strip()] = version.strip()
-            else:
-                options.extra_requirements[line] = None
+    try:
+        for line in file_content.splitlines():
+            line = line.strip()
+            if line and not line.startswith('#'):
+                if '==' in line:
+                    package, version = line.split('==')
+                    options.extra_requirements[package.strip()] = version.strip()
+                else:
+                    options.extra_requirements[line] = None
+    except Exception as e:
+        logging.error(f"Error parsing extra requirements file: {e}")
 
 def setup_virtualenv(options: Options) -> bool:
     """Setup a virtual environment and install packages."""
-    if options.args.reqs:
-        options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
     use_pip_list(options)
-    if options.args.reqs:
-        options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
     options.pretty_list = pretty_packages_list(options)
     # Create a virtual environment directory that starts with 'failed' in case the process fails. Only remove the 'failed' part if this process completes successfully.
     options.set_venv_dir(os.path.join(options.mypy_dir, f"failed-{options.venv_name}-versionless-{options.timestamp}-{options.pretty_list}"))
@@ -3271,7 +3284,7 @@ def find_match_dir_in_cache(options: Options) -> str:
                 else:
                     logging.info("Trying to load the latest matching venv now.")
         except:
-            logging.error("The last used cache encountered a problem. Trying to load the latest matching venv now.")
+            logging.warning("The last used cache encountered a problem. Trying to load the latest matching venv now.")
         options.args.latest    = True #If that didn't work, try to load the latest venv in the cache
         options.args.last_used = False #And set this to False because it failed
     logging.info("Checking the cache for a virtual environment with all the required packages...")
@@ -3396,56 +3409,45 @@ def dict_of_custom_modules(options: Options) -> Dict[str, str]:
         pickle.dump(custom_modules, f)
     return custom_modules
 
-def zip_site_packages(options: Options, output_zip) -> None:
+def zip_site_packages(options: Options, output_zip) -> bool:
     """Create a zip file in AWS Lambda layer format containing the site-packages directory of the virtual environment."""
+    success = True
     # Define the source and target paths
     src_lib_path = os.path.join(options.venv_dir, "lib")
     temp_python_dir = os.path.join(options.venv_dir, "python")
+    # Create the temporary "python" directory
+    if not os.path.exists(temp_python_dir):
+        try:
+            os.makedirs(temp_python_dir)
+            logging.info(f"Created temporary directory: {temp_python_dir}")
+        except Exception as e:
+            logging.error(f"Error creating temporary 'python' directory: {e}")
+            return False
+    else:
+        logging.error(f"Temporary directory already exists: {temp_python_dir}")
+        return False
 
-    # Ensure cleanup even if an error occurs
+    # Copy the "lib" directory into the temporary "python" directory
     try:
-        # Create the temporary "python" directory
-        if not os.path.exists(temp_python_dir):
-            try:
-                os.makedirs(temp_python_dir, exist_ok=True)
-                logging.info(f"Created temporary directory: {temp_python_dir}")
-            except Exception as e:
-                logging.error(f"Error creating temporary 'python' directory: {e}")
-                return
+        shutil.copytree(src_lib_path, os.path.join(temp_python_dir, "lib"))
+        logging.info(f"Copied 'lib' directory to: {temp_python_dir}")
+    except Exception as e:
+        logging.error(f"Error copying 'lib' directory: {e}")
+        return False
 
-        # Move the "lib" directory into the temporary "python" directory
-        try:
-            shutil.move(src_lib_path, temp_python_dir)
-            logging.info(f"Moved 'lib' directory to: {temp_python_dir}")
-        except Exception as e:
-            logging.error(f"Error moving 'lib' directory: {e}")
-            return
-
-        # Create the zip file
-        try:
-            shutil.make_archive(output_zip, 'zip', options.venv_dir, 'python')
-            logging.info(f"Created zip file: {output_zip}.zip")
-        except Exception as e:
-            logging.error(f"Error creating zip file: {e}")
-            raise  # Re-raise to ensure the directory is moved back
-
+    # Create the zip file
+    try:
+        shutil.make_archive(output_zip, 'zip', options.venv_dir, 'python')
+        logging.info(f"Created zip file: {output_zip}.zip")
+    except Exception as e:
+        logging.error(f"Error creating zip file: {e}")
+        success = False
     finally:
-        # Move the "lib" directory back to its original location
-        if os.path.exists(os.path.join(temp_python_dir, "lib")):
-            try:
-                shutil.move(os.path.join(temp_python_dir, "lib"), options.venv_dir)
-                logging.info(f"Moved 'lib' directory back to: {src_lib_path}")
-            except Exception as e:
-                logging.error(f"Error moving 'lib' directory back: {e}")
-        else:
-            logging.warning(f"'lib' directory not found in {temp_python_dir}, skipping move back.")
+        # Clean up the temporary "python" directory
+        shutil.rmtree(temp_python_dir)
+        logging.info(f"Removed temporary directory: {temp_python_dir}")
 
-        # Remove the temporary "python" directory if empty
-        try:
-            os.rmdir(temp_python_dir)
-            logging.info(f"Removed temporary directory: {temp_python_dir}")
-        except Exception as e:
-            logging.error(f"Error removing temporary directory: {e}")
+    return success
 
 def main() -> None:
     start_time = datetime.now()
@@ -3460,7 +3462,9 @@ def main() -> None:
             subprocess.run([sys.executable, options.python_script] + options.script_args)
             sys.exit(1)
 
-    memory_handler = configure_logging("mypy", log_level="INFO")
+    #log_mode = "INFO"
+    log_mode = "DEBUG"
+    memory_handler = configure_logging("mypy", log_level=log_mode)
 
     try:
         import pipreqs
@@ -3510,8 +3514,8 @@ def main() -> None:
     logging.debug(f"Directory where the script to run is located: {options.script_dir}")
 
     if options.args.reqs:
-        parse_requirements(options,'requirements.txt')
-        print(f"Loaded extra requirements from ./requirements.txt: {options.extra_requirements}")
+        parse_extra_requirements(options)
+        print(f"Loaded extra requirements from ./{options.extra_requirements_file}: {options.extra_requirements}")
 
     if not os.path.isdir(options.mypy_dir):
         logging.info(f"Directory {options.mypy_dir} does not exist yet, so it is being created.")
@@ -3601,8 +3605,6 @@ def main() -> None:
 
         if match_dir:
             options.set_venv_dir(match_dir)
-            if options.args.aws:
-                zip_site_packages(options, "awsenv_versionless")
             start_venv_time = datetime.now()
             elapsed_time = start_venv_time - start_time
             logging.info(f"Elapsed time: {elapsed_time}")
