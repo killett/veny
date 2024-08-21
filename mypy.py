@@ -48,8 +48,10 @@ If you're using the bash shell, follow these steps to add the alias manually:
 4. Reload your bash configuration by running the following command:
    source ~/.bashrc
 """
+        self.python_command: str = ''
+        self.shell: str = ''
         self.mypy_path: str = os.path.abspath(__file__) # This file's full path and filename
-        self.current_dir: str = os.getcwd()
+        self.cwd: str = os.getcwd()
         self.venv_name: str = 'myenv' # Can NOT include dashes ('-')
         self.mypy_dir: str = os.path.expanduser(os.path.join('~','mypy'))
         self.packages_dir: str = os.path.join(self.mypy_dir, 'packages')
@@ -2027,7 +2029,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
             'relstorage': 'RelStorage',
             'reportapi': 'django_reportapi',
             'reprlib': 'pies2overrides',
-            'requests': 'Requests',
+            #'requests': 'Requests', # This doesn't work on my Ubuntu machine.
             'requirements': 'requirements_parser',
             'rest_framework': 'djangorestframework',
             'restclient': 'py_restclient',
@@ -2187,11 +2189,11 @@ If you're using the bash shell, follow these steps to add the alias manually:
             'zmq': 'pyzmq',
             'zopyx': 'zopyx.textindexng3'}
         # Set of known bad imports that should be ignored.
-        self.known_bad_imports: Set[str] = {'__builtin__', 'bs4', 'snakeClass', 'pathfinding_salvo_rework', 'seaborn', 'DQN', 'bayesOpt', 'tkinter', 'msvcrt', 'non_existent_module'}
+        self.known_bad_imports: Set[str] = {'__builtin__', 'snakeClass', 'pathfinding_salvo_rework', 'seaborn', 'DQN', 'bayesOpt', 'tkinter', 'msvcrt', 'non_existent_module'}
         # List of unusual imports that are not standard library modules or packages.
         self.unusual_imports: List[str] = ['a', 'an', 'dl', 'the', 'it', 'x', 'xx', 'above', 'another', '__builtin__', 'within']
         # List of directories to stay out of when searching for local custom imports because they're filled with standard library modules or other irrelevant files.
-        self.stay_out_list: List[str] = ['myenv', 'anaconda3', '.conda']
+        self.stay_out_list: List[str] = ['myenv', 'anaconda3', '.conda',os.sep+'lib'+os.sep, '.vscode']
         # List of encodings to try when reading files, with most likely encodings first.
         self.encodings: List[str] = ['utf_8', 'latin_1', 'ascii', 'iso8859_1', 'big5', 'utf_8_sig', 'utf_16', 'utf_16_be', 'utf_16_le', 'utf_32', 'utf_32_be', 'utf_32_le', 'cp1252', 'cp1251', 'cp1250', 'cp1253', 'cp1254', 'cp1255', 'cp1256', 'cp1257', 'cp1258', 'iso8859_2', 'iso8859_3', 'iso8859_4', 'iso8859_5', 'iso8859_6', 'iso8859_7', 'iso8859_8', 'iso8859_9', 'iso8859_10', 'iso8859_11', 'iso8859_13', 'iso8859_14', 'iso8859_15', 'iso8859_16', 'cp437', 'cp850', 'cp852', 'cp855', 'cp857', 'cp858', 'cp860', 'cp861', 'cp862', 'cp863', 'cp864', 'cp865', 'cp866', 'cp869','cp037', 'cp424', 'cp500', 'cp720', 'cp737', 'cp775', 'cp874', 'cp875', 'cp932', 'cp949', 'cp950', 'cp1006', 'cp1026', 'cp1125', 'cp1140','big5hkscs', 'gb2312', 'gbk', 'gb18030', 'euc_jp', 'euc_jis_2004', 'euc_jisx0213', 'euc_kr', 'iso2022_jp', 'iso2022_jp_1', 'iso2022_jp_2', 'iso2022_jp_2004', 'iso2022_jp_3', 'iso2022_jp_ext', 'iso2022_kr', 'johab', 'koi8_r', 'koi8_t', 'koi8_u', 'kz1048', 'mac_cyrillic', 'mac_greek', 'mac_iceland', 'mac_latin2', 'mac_roman', 'mac_turkish', 'ptcp154', 'shift_jis', 'shift_jis_2004', 'shift_jisx0213', 'hz', 'tis_620', 'euc_tw', 'iso2022_tw']
 
@@ -2244,29 +2246,29 @@ def detect_shell() -> str:
         return os.path.basename(shell)
     return None
 
-def get_shell_rc_file(shell: str) -> str:
+def get_shell_rc_file(options: Options) -> str:
     """Get the shell configuration file for the current user."""
     home = os.path.expanduser("~")
-    if shell == "bash":
+    if options.shell == "bash":
         return os.path.join(home, ".bashrc")
-    elif shell == "zsh":
+    elif options.shell == "zsh":
         return os.path.join(home, ".zshrc")
-    elif shell == "fish":
+    elif options.shell == "fish":
         return os.path.join(home, ".config", "fish", "config.fish")
-    elif shell == "csh":
+    elif options.shell == "csh":
         return os.path.join(home, ".cshrc")
-    elif shell == "tcsh":
+    elif options.shell == "tcsh":
         return os.path.join(home, ".tcshrc")
     return None
 
-def get_alias_command(shell: str, alias_name: str, script_path: str) -> str:
+def get_alias_command(options: Options) -> str:
     """Get the alias command for the shell."""
-    if shell in ["bash", "zsh"]:
-        return f'alias {alias_name}="python3 {script_path}"'
-    elif shell == "fish":
-        return f'alias {alias_name} "python3 {script_path}"'
-    elif shell in ["csh", "tcsh"]:
-        return f"alias {alias_name} 'python3 {script_path}'"
+    if options.shell in ["bash", "zsh"]:
+        return f'alias {options.args.alias}="{options.python_command} {options.mypy_path}"'
+    elif options.shell == "fish":
+        return f'alias {options.args.alias} "{options.python_command} {options.mypy_path}"'
+    elif options.shell in ["csh", "tcsh"]:
+        return f"alias {options.args.alias} '{options.python_command} {options.mypy_path}'"
     return None
 
 def alias_exists(rc_file: str, alias_pattern: str) -> bool:
@@ -2285,21 +2287,21 @@ def alias_exists_in_files(files: List[str], alias_pattern: str) -> bool:
             return True
     return False
 
-def get_additional_alias_files(shell: str) -> List[str]:
+def get_additional_alias_files(options: Options) -> List[str]:
     """Get additional alias files for the shell."""
     home = os.path.expanduser("~")
-    if shell == "bash":
+    if options.shell == "bash":
         return [os.path.join(home, ".bash_aliases")]
-    elif shell == "zsh":
+    elif options.shell == "zsh":
         return [os.path.join(home, ".zsh_aliases")]
     # Add other shells if they have alias files
     return []
 
-def add_alias_to_rc(options: Options, rc_file: str, alias_command: str, alias_name: str, additional_files: List[str] = []) -> None:
+def add_alias_to_rc(options: Options, rc_file: str, alias_command: str, additional_files: List[str] = []) -> None:
     """Add an alias to the shell configuration file."""
     try:
         all_files = [rc_file] + additional_files
-        alias_pattern = rf"alias\s+{alias_name}\s*=.*"
+        alias_pattern = rf"alias\s+{options.args.alias}\s*=.*"
         if alias_exists_in_files(all_files, alias_pattern):
             print(f"Alias already exists in one of the configuration files: {all_files}")
         else:
@@ -2316,18 +2318,18 @@ def add_alias_to_rc(options: Options, rc_file: str, alias_command: str, alias_na
 
 def add_alias(options: Options) -> None:
     """Add an alias to the shell configuration file."""
-    shell = detect_shell()
-    if shell:
-        rc_file = get_shell_rc_file(shell)
-        additional_files = get_additional_alias_files(shell)
+    options.shell = detect_shell()
+    if options.shell:
+        rc_file = get_shell_rc_file(options)
+        additional_files = get_additional_alias_files(options)
         if rc_file:
-            alias_command = get_alias_command(shell, options.args.alias, options.mypy_path)
+            alias_command = get_alias_command(options)
             if alias_command:
-                add_alias_to_rc(options, rc_file, alias_command, options.args.alias, additional_files)
+                add_alias_to_rc(options, rc_file, alias_command, additional_files)
             else:
-                print(f"Unsupported shell: {shell}")
+                print(f"Unsupported shell: {options.shell}")
         else:
-            print(f"Unsupported shell configuration file for shell: {shell}")
+            print(f"Unsupported shell configuration file for shell: {options.shell}")
     else:
         print("Could not detect shell")
 
@@ -2547,6 +2549,7 @@ def find_imports_in_script(options: Options, first_path: str) -> None:
                         logging.debug(f"Processing module name: {module_name}")
                         process_import(options, module_name, file_path)
                 elif node.level > 0:
+                    logging.debug(f"Processing import statement with {node.level = }: {line}")
                     # Handle relative imports
                     base_dir = os.path.dirname(file_path)
                     rel_path = os.path.join(base_dir, *(['..'] * (node.level - 1)), node.module or '')
@@ -2639,7 +2642,10 @@ def list_packages(options: Options) -> None:
         logging.info(f"Processing a list of Python scripts: {options.script_dir_or_file_or_list}")
         options.all_imports = set()
         for python_file in options.script_dir_or_file_or_list:
-            python_filepath = os.path.join(options.script_dir, python_file)
+            if os.path.isabs(python_file):
+                python_filepath = python_file
+            else:
+                python_filepath = os.path.join(options.cwd, python_file)
             find_imports_in_script(options, python_filepath)
 
     # Filter out invalid imports before splitting
@@ -2855,7 +2861,6 @@ END
         logging.info(result.stdout)
         if result.stderr:
             logging.error(result.stderr)
-        
         # This returns true if all packages imported successfully
         return "packages imported successfully" in result.stdout
     except subprocess.CalledProcessError as e:
@@ -2887,7 +2892,7 @@ def recover_pip_versions(output: str, options: Options) -> None:
 def pretty_packages_list(options: Options) -> str:
     """Create a pretty string of the first five package names and the number of remaining packages."""
     maxnum = 5
-    packages_list = list(options.uninstalled_imports)
+    packages_list = sorted(list(options.uninstalled_imports))
     if len(packages_list) > maxnum:
         first_five = '-'.join(packages_list[:maxnum])
         suffix = f'-and-{len(packages_list) - maxnum}-more'
@@ -3386,7 +3391,7 @@ def dict_of_custom_modules(options: Options) -> Dict[str, str]:
                 for file in files:
                     if file.endswith('.py') and file != '__init__.py':
                         module_name = os.path.splitext(file)[0]
-                        if module_name not in custom_modules:
+                        if module_name not in custom_modules.keys():
                             full_path = os.path.join(root, file)
                             if not is_standard_path(options, full_path):
                                 custom_modules[module_name] = full_path
@@ -3399,7 +3404,7 @@ def dict_of_custom_modules(options: Options) -> Dict[str, str]:
                             # Remove any individual module entries within the package directory
                             for file in os.listdir(package_path):
                                 module_name = os.path.splitext(file)[0]
-                                if module_name in custom_modules:
+                                if module_name in custom_modules and package_path == os.path.dirname(custom_modules[module_name]):
                                     del custom_modules[module_name]
     #Now save to a pickle file:
     current_time = datetime.now().strftime('%Y%m%d-%H%M%S')
@@ -3409,45 +3414,38 @@ def dict_of_custom_modules(options: Options) -> Dict[str, str]:
         pickle.dump(custom_modules, f)
     return custom_modules
 
-def zip_site_packages(options: Options, output_zip) -> bool:
-    """Create a zip file in AWS Lambda layer format containing the site-packages directory of the virtual environment."""
-    success = True
-    # Define the source and target paths
-    src_lib_path = os.path.join(options.venv_dir, "lib")
-    temp_python_dir = os.path.join(options.venv_dir, "python")
-    # Create the temporary "python" directory
-    if not os.path.exists(temp_python_dir):
-        try:
-            os.makedirs(temp_python_dir)
-            logging.info(f"Created temporary directory: {temp_python_dir}")
-        except Exception as e:
-            logging.error(f"Error creating temporary 'python' directory: {e}")
-            return False
-    else:
-        logging.error(f"Temporary directory already exists: {temp_python_dir}")
+def check_python_version(command: str) -> bool:
+    """Check if the given Python command is available and has a version of 3.11 or higher."""
+    try:
+        result = subprocess.run([command, '--version'], capture_output=True, text=True)
+        if result.returncode == 0:
+            version = result.stdout.strip().split()[1]
+            major, minor = map(int, version.split('.')[:2])
+            if major == 3 and minor >= 11:
+                return True
+        return False
+    except Exception as e:
+        print(f"Error checking {command}: {e}", file=sys.stderr)
         return False
 
-    # Copy the "lib" directory into the temporary "python" directory
+def find_python3_11() -> Optional[str]:
+    """Find the Python 3.11 command."""
     try:
-        shutil.copytree(src_lib_path, os.path.join(temp_python_dir, "lib"))
-        logging.info(f"Copied 'lib' directory to: {temp_python_dir}")
-    except Exception as e:
-        logging.error(f"Error copying 'lib' directory: {e}")
-        return False
+        # Check if 'python3' exists and returns a valid path
+        python3_path = subprocess.run(['which', 'python3'], capture_output=True, text=True).stdout.strip()
+        if python3_path and check_python_version('python3'):
+            return os.path.basename(python3_path)
 
-    # Create the zip file
-    try:
-        shutil.make_archive(output_zip, 'zip', options.venv_dir, 'python')
-        logging.info(f"Created zip file: {output_zip}.zip")
-    except Exception as e:
-        logging.error(f"Error creating zip file: {e}")
-        success = False
-    finally:
-        # Clean up the temporary "python" directory
-        shutil.rmtree(temp_python_dir)
-        logging.info(f"Removed temporary directory: {temp_python_dir}")
+        # Check if 'python3.11' exists and returns a valid path
+        python3_11_path = subprocess.run(['which', 'python3.11'], capture_output=True, text=True).stdout.strip()
+        if python3_11_path and check_python_version('python3.11'):
+            return os.path.basename(python3_11_path)
+        
+        return None
 
-    return success
+    except Exception as e:
+        print(f"Error finding python3.11: {e}", file=sys.stderr)
+        return None
 
 def main() -> None:
     start_time = datetime.now()
@@ -3466,12 +3464,18 @@ def main() -> None:
     log_mode = "DEBUG"
     memory_handler = configure_logging("mypy", log_level=log_mode)
 
+    options.python_command = find_python3_11()
+    if options.python_command:
+        logging.debug(f"Python 3.11 is available at: {options.python_command}")
+    else:
+        logging.debug("Python 3.11 is not available.")
+
     try:
         import pipreqs
-        logging.info("pipreqs is available, so it will be used.")
+        logging.debug("pipreqs is available, so it will be used.")
         PIPREQS_AVAILABLE = True
     except ImportError:
-        logging.info("pipreqs is not available. Try installing it with 'pip install pipreqs'.")
+        logging.debug("pipreqs is not available. Try installing it with 'pip install pipreqs'.")
         PIPREQS_AVAILABLE = False
 
     if options.args.aws: options.venv_name = 'awsenv'
@@ -3494,7 +3498,7 @@ def main() -> None:
                 sys.exit(0)
         logging.info("Deleting everything in ~/mypy/ and all mypy .out and .err and .json and .pkl files in the current directory.")
         shutil.rmtree(options.mypy_dir, ignore_errors=True)
-        for file in os.listdir(options.current_dir):
+        for file in os.listdir(options.cwd):
             logging.debug(f"Checking {file}")
             if os.path.isfile(file):
                if (file.startswith('.mypy-') and file.endswith('.out')) or \
@@ -3503,7 +3507,7 @@ def main() -> None:
                   (file.startswith('.') and '-mypy-' in file and file.endswith('.json')):
                     try:
                         logging.info(f"Deleting {file}")
-                        os.remove(os.path.join(options.script_dir, file))
+                        os.remove(os.path.join(options.cwd, file))
                     except:
                         logging.error(f"Error deleting {file}")
         sys.exit(0)
