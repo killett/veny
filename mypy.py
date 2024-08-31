@@ -2207,25 +2207,11 @@ If you're using the bash shell, follow these steps to add the alias manually:
 
 def parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(description="Run a python script with optional flags.")
-    
-    # Create a mutually exclusive group
-    group = parser.add_mutually_exclusive_group(required=True)
-    
-    # Add the script argument to the mutually exclusive group
-    group.add_argument('script', nargs='?', help="The python script to run.")
+    parser = argparse.ArgumentParser(description="Run a python script with optional flags.")    
+    parser.add_argument('script', nargs='?', help="The python script to run.")
     parser.add_argument('script_args', nargs='*', help="Optional arguments for the python script.")
-    
-    # Add the alias argument to the mutually exclusive group
-    group.add_argument('-alias', type=str, help='Add an alias to the shell configuration file so that typing ALIAS anywhere runs this program.')
-
-    # Add the manual argument to the mutually exclusive group
-    group.add_argument('-manual', action='store_true', help='Print instructions for manually adding the alias to the shell configuration file.')
-
-    # Add the blank-slate argument to the mutually exclusive group
-    group.add_argument('-blank-slate', action='store_true', help="Delete ~/mypy/ and all mypy .out and .err and .json and .pkl files in the current directory.")
-    
-    # Add additional arguments to the parser (not part of the mutually exclusive group)
+    parser.add_argument('-manual', action='store_true', help='Print instructions for manually adding the alias to the shell configuration file.')
+    parser.add_argument('-blank-slate', action='store_true', help="Delete ~/mypy/ and all mypy .out and .err and .json and .pkl files in the current directory.")
     parser.add_argument('-full', action='store_true', help="Build a virtual environment (venv) that can run every python script in this directory.")
     parser.add_argument('-y', action='store_true', help='Automatically say yes to any prompts.')
     parser.add_argument('-no-cache', action='store_true', help="Don't search the cache. Instead, create a new virtual environment. Also, refresh the custom modules cache and the pip list.")
@@ -2236,7 +2222,12 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument('-rc', action='store_true', help='Refresh the custom modules cache and the pip list.')
     parser.add_argument('-aws', action='store_true', help='Configure the venv so it can be used on AWS, for instance as a lambda function. This requires using python 3.11 and telling pip to download manylinux wheels. It also names the venv directory in mypy/ with the keyword \'awsenv\' instead of \'myenv\'.')
     parser.add_argument('-reqs', action='store_true', help='Read the extra_requirements.txt file in the current directory and install the packages listed there (with specific versions if present in the file) into the venv (along with the other packages needed to run the script as determined elsewhere in this program).')
-    
+    parser.add_argument('-alias', type=str, help='Add an alias to the shell configuration file so that typing ALIAS anywhere runs this program.')
+    parser.add_argument('-docker', action='store_true', help='UNFINISHED! Create a Dockerfile and requirements.txt file in a subdirectory named after the target script that can be used to run the script in a Docker container.')
+    # If no arguments are provided, print a short guide
+    if len(sys.argv) == 1:
+        parser.print_help()
+        sys.exit(1)
     return parser.parse_args()
 
 def detect_shell() -> str:
@@ -2280,13 +2271,6 @@ def alias_exists(rc_file: str, alias_pattern: str) -> bool:
     except FileNotFoundError:
         return False
 
-def alias_exists_in_files(files: List[str], alias_pattern: str) -> bool:
-    """Check if an alias exists in any of the files using a pattern."""
-    for file in files:
-        if alias_exists(file, alias_pattern):
-            return True
-    return False
-
 def get_additional_alias_files(options: Options) -> List[str]:
     """Get additional alias files for the shell."""
     home = os.path.expanduser("~")
@@ -2302,13 +2286,17 @@ def add_alias_to_rc(options: Options, rc_file: str, alias_command: str, addition
     try:
         all_files = [rc_file] + additional_files
         alias_pattern = rf"alias\s+{options.args.alias}\s*=.*"
-        if alias_exists_in_files(all_files, alias_pattern):
-            print(f"Alias already exists in one of the configuration files: {all_files}")
-        else:
+        found_alias = False
+        for file in all_files:
+            if alias_exists(file, alias_pattern):
+                found_alias = True
+                logging.info(f"Alias {options.args.alias} already exists in {file}")
+        if not found_alias:
             try:
-                with open(rc_file, "a") as file:
-                    file.write(f"\n{alias_command}\n")
-                print(f"Alias added to {rc_file}")
+                if get_user_input(f"Type 'yes' or 'y' to write this alias command:\n{alias_command}\nTo this file:\n{rc_file}\n... or type anything else to quit: "):
+                    with open(rc_file, "a") as file:
+                        file.write(f"\n{alias_command}\n")
+                    logging.info(f"Alias added to {rc_file}")
             except Exception as e:
                 logging.error(f"Failed to write alias to {rc_file}: {e}")
                 logging.error(options.manual_instructions)
@@ -2327,11 +2315,11 @@ def add_alias(options: Options) -> None:
             if alias_command:
                 add_alias_to_rc(options, rc_file, alias_command, additional_files)
             else:
-                print(f"Unsupported shell: {options.shell}")
+                logging.info(f"Unsupported shell: {options.shell}")
         else:
-            print(f"Unsupported shell configuration file for shell: {options.shell}")
+            logging.info(f"Unsupported shell configuration file for shell: {options.shell}")
     else:
-        print("Could not detect shell")
+        logging.info("Could not detect shell")
 
 def safe_eval(expr: str) -> Union[None, str]:
     """Safely evaluate a Python expression using ast.literal_eval or custom parsing."""
@@ -2677,42 +2665,6 @@ def generate_requirements(directory: str) -> None:
         pipreqs.generate_requirements(directory)
     except Exception as e:
         logging.error(f"Error generating requirements file: {e}")
-
-class MyPopenResult:
-    def __init__(self, stdout, stderr, returncode):
-        self.stdout = stdout
-        self.stderr = stderr
-        self.returncode = returncode
-        self.success = (returncode == 0)
-
-def my_popen(command_list: list) -> MyPopenResult:
-    """Execute a command using subprocess.Popen and capture the output line by line."""
-    # Convert any bytes elements in the command list to strings for logging
-    command_list_str = [item.decode('utf-8') if isinstance(item, bytes) else item for item in command_list]
-    logging.info("Executing command: " + ' '.join(command_list_str))
-
-    try:
-        process = subprocess.Popen(command_list,
-                                   stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE,
-                                   text=True)
-        stdout = ""
-        stderr = ""
-        # Capture stdout line by line
-        for line in iter(process.stdout.readline, ''):
-            logging.info(line.strip())
-            stdout += line
-        # Capture stderr line by line
-        for line in iter(process.stderr.readline, ''):
-            logging.error(line.strip())
-            stderr += line
-        process.stdout.close()
-        process.stderr.close()
-        process.wait()
-        return MyPopenResult(stdout=stdout, stderr=stderr, returncode=process.returncode)
-    except Exception as e:
-        logging.error(f"An error occurred: {e}")
-        return MyPopenResult(stdout="", stderr=str(e), returncode=-1)
 
 def download_packages(options: Options) -> bool:
     if options.args.aws:
@@ -3425,7 +3377,7 @@ def check_python_version(command: str) -> bool:
                 return True
         return False
     except Exception as e:
-        print(f"Error checking {command}: {e}", file=sys.stderr)
+        logging.info(f"Error checking {command}: {e}", file=sys.stderr)
         return False
 
 def find_python3_11() -> Optional[str]:
@@ -3444,7 +3396,7 @@ def find_python3_11() -> Optional[str]:
         return None
 
     except Exception as e:
-        print(f"Error finding python3.11: {e}", file=sys.stderr)
+        logging.info(f"Error finding python3.11: {e}", file=sys.stderr)
         return None
 
 def main() -> None:
@@ -3454,11 +3406,21 @@ def main() -> None:
     options.python_script = options.args.script
     options.script_args = options.args.script_args
 
-    # Autolambda requires script_args to be set, otherwise run to show info.
+    # Autolambda requires script_args to be set, otherwise run it to show info.
     if options.python_script and 'autolambda' in options.python_script:
+        if options.args.alias:
+            if not options.args.script_args:
+                options.args.script_args = ' -alias ' + options.args.alias
+            else:
+                options.args.script_args += ' -alias ' + options.args.alias
         if not options.args.script_args:
-            subprocess.run([sys.executable, options.python_script] + options.script_args)
+            subprocess.run([sys.executable, options.python_script])
             sys.exit(1)
+
+    if options.args.script:
+        print(f"Running script: {options.args.script} with arguments: {options.args.script_args}")
+        if options.args.alias:
+            print(f"Adding alias: {options.args.alias}")
 
     #log_mode = "INFO"
     log_mode = "DEBUG"
@@ -3488,7 +3450,7 @@ def main() -> None:
         pass
     elif options.args.manual:
         # Print instructions for manually adding the alias to the shell configuration file
-        print(options.manual_instructions)
+        logging.info(options.manual_instructions)
         sys.exit(0)
     elif options.args.blank_slate:
         if not options.args.y:
@@ -3512,14 +3474,14 @@ def main() -> None:
                         logging.error(f"Error deleting {file}")
         sys.exit(0)
     else:
-        print("You must specify either a script to run or these options: alias, manual, blank-slate (be careful using blank-slate because it deletes all the virtual environments you've made, among other things!) .")
+        logging.info("You must specify either a script to run or one of these arguments: alias, manual, blank-slate (be careful using blank-slate because it deletes all cached virtual environments, among other things!).")
 
     options.script_dir = os.path.abspath(os.path.dirname(options.python_script))
     logging.debug(f"Directory where the script to run is located: {options.script_dir}")
 
     if options.args.reqs:
         parse_extra_requirements(options)
-        print(f"Loaded extra requirements from ./{options.extra_requirements_file}: {options.extra_requirements}")
+        logging.info(f"Loaded extra requirements from ./{options.extra_requirements_file}: {options.extra_requirements}")
 
     if not os.path.isdir(options.mypy_dir):
         logging.info(f"Directory {options.mypy_dir} does not exist yet, so it is being created.")
@@ -3656,7 +3618,7 @@ def main() -> None:
             save_options_to_json(options)
 
     # Print all captured error messages at the end
-    if memory_handler.logs: print("\n****************************\nCaptured error messages:")
+    if memory_handler.logs: logging.info("\n****************************\nCaptured error messages:")
     for log in memory_handler.logs:
         logging.info(log)
 
