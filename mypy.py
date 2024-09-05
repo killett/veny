@@ -22,6 +22,8 @@ import ast
 
 from univ_defs import *
 
+__version__ = '0.1.0'
+
 class Options():
     """Class that has all global options in one place."""
     def __init__(self) -> None:
@@ -1028,13 +1030,14 @@ If you're using the bash shell, follow these steps to add the alias manually:
             'xxsubtype', '_xxtestfuzz', 'zipapp', 'zipfile', 
             'zipimport', 'zlib', 'zoneinfo', 'zoneinfo._common', 
             'zoneinfo._tzpath', 'zoneinfo._zoneinfo']
-        # Sometimes, a module is imported in python using a different name than is required in the "pip install" command. Keep track of these exceptions here.
+        # Sometimes, a module is imported in python using a different name than is required in the "pip install" command. Keep track of these exceptions here. Key = import name, value = pip install name.
         self.module_aliases: Dict[str, str] = {
             #I added these manually by asking ChatGPT what pip aliases are different than their import commands:
             'ffmpeg': 'ffmpeg-python',
             'cv2': 'opencv-python',
             'jnp': 'jax.numpy',
-            'sm': 'statsmodels',
+#            'sm': 'statsmodels',
+            'netCDF4': 'netcdf4',
             #This list is from the pipreqs repo in file "mapping", retrieved on 2024-08-15 from here: https://github.com/bndr/pipreqs
             'AFQ': 'pyAFQ',
             'AG_fft_tools': 'agpy',
@@ -2188,6 +2191,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
             'z3c': 'z3c.zcmlhook',
             'zmq': 'pyzmq',
             'zopyx': 'zopyx.textindexng3'}
+        self.reversed_module_aliases = {v: k for k, v in self.module_aliases.items()}
         # Set of known bad imports that should be ignored.
         self.known_bad_imports: Set[str] = {'__builtin__', 'snakeClass', 'pathfinding_salvo_rework', 'seaborn', 'DQN', 'bayesOpt', 'tkinter', 'msvcrt', 'non_existent_module'}
         # List of unusual imports that are not standard library modules or packages.
@@ -2210,6 +2214,7 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a python script with optional flags.")    
     parser.add_argument('script', nargs='?', help="The python script to run.")
     parser.add_argument('script_args', nargs='*', help="Optional arguments for the python script.")
+    parser.add_argument('-version', action='store_true', help='Print the version of this program.')
     parser.add_argument('-manual', action='store_true', help='Print instructions for manually adding the alias to the shell configuration file.')
     parser.add_argument('-blank-slate', action='store_true', help="Delete ~/mypy/ and all mypy .out and .err and .json and .pkl files in the current directory.")
     parser.add_argument('-full', action='store_true', help="Build a virtual environment (venv) that can run every python script in this directory.")
@@ -2224,6 +2229,11 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument('-reqs', action='store_true', help='Read the extra_requirements.txt file in the current directory and install the packages listed there (with specific versions if present in the file) into the venv (along with the other packages needed to run the script as determined elsewhere in this program).')
     parser.add_argument('-alias', type=str, help='Add an alias to the shell configuration file so that typing ALIAS anywhere runs this program.')
     parser.add_argument('-docker', action='store_true', help='UNFINISHED! Create a Dockerfile and requirements.txt file in a subdirectory named after the target script that can be used to run the script in a Docker container.')
+    #Define these arguments from autolambda so they can be recognized and passed as script_args
+    parser.add_argument('-delete-function', type=str, help='Delete the specified Lambda function.')
+    parser.add_argument('-delete-layer', type=str, help='Delete the specified Lambda layer.')
+    parser.add_argument('-delete-all-functions', action='store_true', help='Delete all Lambda functions in the AWS account.')
+    parser.add_argument('-delete-all-layers', action='store_true', help='Delete all Lambda layers in the AWS account.')
     # If no arguments are provided, print a short guide
     if len(sys.argv) == 1:
         parser.print_help()
@@ -2550,23 +2560,6 @@ def find_imports_in_script(options: Options, first_path: str) -> None:
                         options.processed_files.add(resolved_path)
                         options.file_stack.append(resolved_path)
 
-def check_if_library_exists_in_venv(library_name: str, venv_dir: str) -> bool:
-    """Check if a library exists in the virtual environment."""
-    try:
-        venv_python = os.path.join(venv_dir, 'bin', 'python')
-        if sys.platform == "win32":
-            venv_python = os.path.join(venv_dir, 'Scripts', 'python.exe')
-        
-        result = subprocess.run(
-            [venv_python, '-c', f'import {library_name}'],
-            capture_output=True,
-            text=True
-        )
-        return result.returncode == 0
-    except Exception as e:
-        logging.error(f"Error checking library {library_name} in virtual environment: {e}")
-        return False
-
 def split_imports(options: Options) -> None:
     """Split imports into installed, uninstalled, and bad imports."""
     options.bad_imports = options.known_bad_imports.intersection(options.all_imports)
@@ -2591,7 +2584,7 @@ def split_imports(options: Options) -> None:
             logging.debug(f"Checking if import {imp} is installed or uninstalled")  # New logging
             if imp in options.custom_modules.keys():
                 logging.debug(f"Custom module {imp} has path {options.custom_modules[imp]}")
-            elif check_if_library_exists_in_venv(package_name, venv_dir):
+            elif check_packages_in_venv(options, package=package_name, venv_dir=venv_dir):
                 logging.debug(f"Module {imp} can be imported in venv")
                 options.installed_imports.add(imp)
             else:
@@ -2600,6 +2593,10 @@ def split_imports(options: Options) -> None:
             logging.info(f"Checking import {imp:{max_length}} : {i}/{options.total_imports}")
     if options.args.reqs:
         options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
+    if 'xarray' in options.uninstalled_imports:
+        xarray_dependencies = ['dask','netcdf4','h5netcdf']
+        logging.info(f"Adding xarray dependencies to uninstalled imports: {xarray_dependencies}")
+        options.uninstalled_imports.update(xarray_dependencies)
     return
 
 def list_packages(options: Options) -> None:
@@ -2668,7 +2665,7 @@ def generate_requirements(directory: str) -> None:
 
 def download_packages(options: Options) -> bool:
     if options.args.aws:
-        options.pip_options = "--platform manylinux1_x86_64 --python-version 3.11 --only-binary=:all:"
+        options.pip_options = ""#--platform manylinux1_x86_64 --python-version 3.11 --only-binary=:all:"
     else:
         options.pip_options = ""
     """Install packages in a virtual environment."""
@@ -2781,13 +2778,21 @@ def install_package(package_name: str, options: Options) -> bool:
         logging.error(f"Error installing package {package_name}: {e}")
         return False
 
-def check_packages_in_venv(options: Options) -> bool:
+def check_packages_in_venv(options: Options, package: Optional[str] = None, venv_dir: Optional[str] = None) -> bool:
     """Create and run a script to test package imports in the virtual environment. Add packages from the requirements.txt file if '-reqs' is specified as a runtime argument."""
-    use_pip_list(options)
-    packages_str = ", ".join(f"'{pkg}'" for pkg in options.uninstalled_imports)  # Properly format the set as strings
+    if not venv_dir:
+        venv_dir = options.venv_dir
+    venv_python = os.path.join(venv_dir, 'bin', 'python')
+    if sys.platform == "win32":
+        venv_python = os.path.join(venv_dir, 'Scripts', 'python.exe')
+    if package:
+        packages_str = f"'{options.reversed_module_aliases.get(package, package)}'"
+    else:
+        use_pip_list(options)
+        packages_str = ", ".join(f"'{options.reversed_module_aliases.get(pkg, pkg)}'" for pkg in options.uninstalled_imports)
     test_script = f"""
-source {options.venv_dir}/bin/activate
-{options.venv_python} - << END
+source {venv_dir}/bin/activate
+{venv_python} - << END
 successes = []
 failures = []
 counter = 0
@@ -2806,14 +2811,11 @@ else:
     print(f"All {{len(successes)}} (out of {{counter}}) packages imported successfully.")
 END
 """
-
-    # Run the test script
     try:
-        result = subprocess.run(test_script, shell=True, executable='/bin/bash', check=True, capture_output=True, text=True)
-        logging.info(result.stdout)
-        if result.stderr:
-            logging.error(result.stderr)
-        # This returns true if all packages imported successfully
+        # Since my_popen expects a list of commands, we'll pass the shell command directly as a single argument list
+        command_list = ['/bin/bash', '-c', test_script]
+        # Run the command using the custom my_popen function
+        result = my_popen(command_list, True) # True means to suppress output.
         return "packages imported successfully" in result.stdout
     except subprocess.CalledProcessError as e:
         logging.error(f"Error running test script: {e}")
@@ -3234,13 +3236,14 @@ def find_match_dir_in_cache(options: Options) -> str:
             json_files = [f for f in os.listdir(options.script_dir) if f.startswith("."+os.path.basename(options.python_script)) and f.endswith('.json')]
             if json_files:
                 if len(json_files) > 1:
-                    json_files.sort(key=lambda x: x.split('-')[4], reverse=True)
+                    json_files.sort(key=lambda x: datetime.strptime(x.split('-')[-2] + x.split('-')[-1].replace('.json', ''), "%Y%m%d%H%M%S"), reverse=True)
                 options_last_used = load_options_from_json(os.path.join(options.script_dir, json_files[0]))
                 if check_venv_dir(options, options_last_used):
                     return options_last_used.venv_dir
                 else:
                     logging.info("Trying to load the latest matching venv now.")
-        except:
+        except Exception as e:
+            logging.error(f"Error loading last used venv from cache: {e}")
             logging.warning("The last used cache encountered a problem. Trying to load the latest matching venv now.")
         options.args.latest    = True #If that didn't work, try to load the latest venv in the cache
         options.args.last_used = False #And set this to False because it failed
@@ -3404,26 +3407,50 @@ def main() -> None:
     options = Options()
     options.args = parse_arguments()
     options.python_script = options.args.script
-    options.script_args = options.args.script_args
+    options.script_args = options.args.script_args or []
+
+    if options.args.version:
+        print(__version__)
+        sys.exit(0)
+
+    # Handle autolambda arguments
+    if 'autolambda' in options.python_script:
+        run_now = False
+        if options.args.delete_function:
+            options.script_args.extend(['-delete-function', options.delete_function])
+            run_now = True
+        if options.args.delete_layer:
+            options.script_args.extend(['-delete-layer', options.delete_layer])
+            run_now = True
+        if options.args.delete_all_functions:
+            options.script_args.append('-delete-all-functions')
+            run_now = True
+        if options.args.delete_all_layers:
+            options.script_args.append('-delete-all-layers')
+            run_now = True
+        if options.args.alias:
+            options.script_args.extend(['-alias', options.alias])
+            run_now = True
+        if run_now:
+            #print(f"{[sys.executable, options.python_script] + options.script_args}")
+            my_popen([sys.executable, options.python_script] + options.script_args)
+            sys.exit(0)
 
     # Autolambda requires script_args to be set, otherwise run it to show info.
     if options.python_script and 'autolambda' in options.python_script:
-        if options.args.alias:
-            if not options.args.script_args:
-                options.args.script_args = ' -alias ' + options.args.alias
-            else:
-                options.args.script_args += ' -alias ' + options.args.alias
-        if not options.args.script_args:
-            subprocess.run([sys.executable, options.python_script])
-            sys.exit(1)
+        if not options.script_args:
+            my_popen([sys.executable, options.python_script])
+            sys.exit(0)
 
     if options.args.script:
-        print(f"Running script: {options.args.script} with arguments: {options.args.script_args}")
+        if options.script_args: arg_string = f" with arguments: {options.script_args}"
+        else:                        arg_string = ""
+        print(f"Running script: {options.args.script}{arg_string}")
         if options.args.alias:
             print(f"Adding alias: {options.args.alias}")
 
-    #log_mode = "INFO"
-    log_mode = "DEBUG"
+    log_mode = "INFO"
+    #log_mode = "DEBUG"
     memory_handler = configure_logging("mypy", log_level=log_mode)
 
     options.python_command = find_python3_11()
@@ -3570,14 +3597,13 @@ def main() -> None:
             logging.info(f"Using directory: {match_dir}")
 
         if match_dir:
+            guard_examines(options)
             options.set_venv_dir(match_dir)
             start_venv_time = datetime.now()
             elapsed_time = start_venv_time - start_time
             logging.info(f"Elapsed time: {elapsed_time}")
             logging.info(f"Activating virtual environment: {options.activate_script}")
-
             activate_cmd = f"bash -c '{options.activate_script} && echo \"Virtual environment activated.\" && {options.venv_python} {options.python_script} {' '.join(options.script_args)}'"
-            guard_examines(options)
             #I want to capture the output of the subprocess.run() so that I can print it at the end.
             result = subprocess.run(activate_cmd, shell=True)
             end_time = datetime.now()
