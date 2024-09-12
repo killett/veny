@@ -1030,15 +1030,17 @@ If you're using the bash shell, follow these steps to add the alias manually:
             'xxsubtype', '_xxtestfuzz', 'zipapp', 'zipfile', 
             'zipimport', 'zlib', 'zoneinfo', 'zoneinfo._common', 
             'zoneinfo._tzpath', 'zoneinfo._zoneinfo']
-        # Sometimes, a module is imported in python using a different name than is required in the "pip install" command. Keep track of these exceptions here. Key = import name, value = pip install name.
+        # Sometimes, a module is imported in python using a different name than is required in the "pip install" command. Keep track of these exceptions here.
         self.module_aliases: Dict[str, str] = {
-            #I added these manually by asking ChatGPT what pip aliases are different than their import commands:
+            # I added these manually by asking ChatGPT what pip aliases are different than their import commands:
+            # 'import name' : 'pip install name'
             'ffmpeg': 'ffmpeg-python',
             'cv2': 'opencv-python',
             'jnp': 'jax.numpy',
 #            'sm': 'statsmodels',
             'netCDF4': 'netcdf4',
-            #This list is from the pipreqs repo in file "mapping", retrieved on 2024-08-15 from here: https://github.com/bndr/pipreqs
+            'skill_metrics': 'SkillMetrics',
+            # This list is from the pipreqs repo in file "mapping", retrieved on 2024-08-15 from here: https://github.com/bndr/pipreqs
             'AFQ': 'pyAFQ',
             'AG_fft_tools': 'agpy',
             'ANSI': 'pexpect',
@@ -3643,10 +3645,10 @@ def main() -> None:
 
             save_options_to_json(options)
 
-    # Print all captured error messages at the end
-    if memory_handler.logs: logging.info("\n****************************\nCaptured error messages:")
-    for log in memory_handler.logs:
-        logging.info(log)
+    if memory_handler.logs:
+        print("\n****************************\nCaptured error messages:")
+        for log in memory_handler.logs:
+            print(log)
 
 if __name__ == "__main__":
     main()

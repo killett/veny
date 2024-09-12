@@ -6,15 +6,12 @@ class MemoryHandler(logging.Handler):
     def __init__(self):
         super().__init__()
         self.logs = []
+
     def emit(self, record):
         self.logs.append(self.format(record))
 
 def configure_logging(basename: str, log_level: str = 'INFO', testing: bool = False) -> MemoryHandler:
     """Configure logging to write to a file and the console."""
-    if logging.getLogger().hasHandlers():
-        # If logging is already configured, don't reconfigure it
-        print("Logging is already configured.", flush=True)
-        return None
     #logs_directory = '/tmp/logs'
     #os.makedirs(logs_directory, exist_ok=True)
     logs_directory = '.'
@@ -62,12 +59,12 @@ def configure_logging(basename: str, log_level: str = 'INFO', testing: bool = Fa
 
 def get_log_level(log_level: str) -> int:
     """Return the logging level based on the input string."""
-    value_map = {
-        'INFO'   : logging.INFO,
-        'DEBUG'  : logging.DEBUG,
-        'WARNING': logging.WARNING,
-        'WARN'   : logging.WARNING,
-    }
+    value_map = {'INFO'     : logging.INFO,
+                 'DEBUG'    : logging.DEBUG,
+                 'WARNING'  : logging.WARNING,
+                 'WARN'     : logging.WARNING,
+                 'ERROR'    : logging.ERROR,
+                 'CRITICAL' : logging.CRITICAL}
     return value_map.get(log_level, logging.INFO)
 
 def get_user_input(prompt: str) -> bool:
@@ -168,17 +165,31 @@ def prettyprint_timespan(timespan: float) -> None:
 
     print(f"The script took {time_str} to run.")
 
-def open_dir_in_VLC(the_dir: str, sort_choice: str) -> None:
+def open_dir_in_VLC(the_dir: str, sort_choice: str,
+                    recursive: bool = False) -> None:
     """Recursively open the files in the directory in VLC, sorted by name or modification time."""
     # List to store files with their modification times
     files_with_times = []
-    # Recursively iterate over the files in the directory
-    for root, dirs, files in os.walk(the_dir):
-        for filename in files:
-            file_path = os.path.join(root, filename)
-            if os.path.isfile(file_path):
-                mod_time = os.path.getmtime(file_path)
-                files_with_times.append((mod_time, file_path))
+    if recursive:
+        # Recursively iterate over the files in the directory
+        for root, dirs, files in os.walk(the_dir):
+            for filename in files:
+                file_path = os.path.join(root, filename)
+                if os.path.isfile(file_path):
+                    mod_time = os.path.getmtime(file_path)
+                    files_with_times.append((mod_time, file_path))
+    else:
+        for item in os.listdir(the_dir):
+            item_path = os.path.join(the_dir, item)
+            if os.path.isfile(item_path):
+                mod_time = os.path.getmtime(item_path)
+                files_with_times.append((mod_time, item_path))
+            elif os.path.isdir(item_path):
+                mod_time = os.path.getmtime(item_path)
+                files_with_times.append((mod_time, item_path))
+            else:
+                print(f"Skipping {item_path} as it is not a file or directory.")
+
     if sort_choice == "sort_by_name":
         # Sort files by name
         files_with_times.sort(key=lambda x: x[1])
