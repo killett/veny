@@ -84,6 +84,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.download_script_path: str = ''
         self.simultaneous_success: bool = False
         self.max_checks: int = 5 # Maximum number of times to check any repeated process.
+        self.check_interval: int = 5 # Number of seconds to wait between checks.
         self.script_args: List[str] = []
         self.file_stack: List[str] = [] # Use to store files that are being processed in find_imports_in_script()
         self.new_local_paths: Set[str] = set()
@@ -2213,6 +2214,19 @@ If you're using the bash shell, follow these steps to add the alias manually:
 
 def parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments."""
+
+    # Find the second argument ending with ".py"
+    py_files = [i for i, arg in enumerate(sys.argv) if arg.endswith(".py")]
+
+    if len(py_files) >= 2:
+        second_py_index = py_files[1]
+        # Store everything after the second ".py" into script_args
+        script_args = sys.argv[second_py_index + 1:]
+        # Modify sys.argv to only contain up to the second ".py"
+        sys.argv = sys.argv[:second_py_index + 1]
+    else:
+        script_args = []
+    
     parser = argparse.ArgumentParser(description="Run a python script with optional flags.")    
     parser.add_argument('script', nargs='?', help="The python script to run.")
     parser.add_argument('script_args', nargs='*', help="Optional arguments for the python script.")
@@ -2231,16 +2245,17 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument('-reqs', action='store_true', help='Read the extra_requirements.txt file in the current directory and install the packages listed there (with specific versions if present in the file) into the venv (along with the other packages needed to run the script as determined elsewhere in this program).')
     parser.add_argument('-alias', type=str, help='Add an alias to the shell configuration file so that typing ALIAS anywhere runs this program.')
     parser.add_argument('-docker', action='store_true', help='UNFINISHED! Create a Dockerfile and requirements.txt file in a subdirectory named after the target script that can be used to run the script in a Docker container.')
-    #Define these arguments from autolambda so they can be recognized and passed as script_args
-    parser.add_argument('-delete-function', type=str, help='Delete the specified Lambda function.')
-    parser.add_argument('-delete-layer', type=str, help='Delete the specified Lambda layer.')
-    parser.add_argument('-delete-all-functions', action='store_true', help='Delete all Lambda functions in the AWS account.')
-    parser.add_argument('-delete-all-layers', action='store_true', help='Delete all Lambda layers in the AWS account.')
+
     # If no arguments are provided, print a short guide
     if len(sys.argv) == 1:
         parser.print_help()
         sys.exit(1)
-    return parser.parse_args()
+    
+    # Parse known args, and then manually add the script_args
+    args = parser.parse_args()
+    args.script_args = script_args
+    
+    return args
 
 def detect_shell() -> str:
     """Detect the current shell."""
@@ -3414,35 +3429,6 @@ def main() -> None:
     if options.args.version:
         print(__version__)
         sys.exit(0)
-
-    # Handle autolambda arguments
-    if 'autolambda' in options.python_script:
-        run_now = False
-        if options.args.delete_function:
-            options.script_args.extend(['-delete-function', options.delete_function])
-            run_now = True
-        if options.args.delete_layer:
-            options.script_args.extend(['-delete-layer', options.delete_layer])
-            run_now = True
-        if options.args.delete_all_functions:
-            options.script_args.append('-delete-all-functions')
-            run_now = True
-        if options.args.delete_all_layers:
-            options.script_args.append('-delete-all-layers')
-            run_now = True
-        if options.args.alias:
-            options.script_args.extend(['-alias', options.alias])
-            run_now = True
-        if run_now:
-            #print(f"{[sys.executable, options.python_script] + options.script_args}")
-            my_popen([sys.executable, options.python_script] + options.script_args)
-            sys.exit(0)
-
-    # Autolambda requires script_args to be set, otherwise run it to show info.
-    if options.python_script and 'autolambda' in options.python_script:
-        if not options.script_args:
-            my_popen([sys.executable, options.python_script])
-            sys.exit(0)
 
     if options.args.script:
         if options.script_args: arg_string = f" with arguments: {options.script_args}"
