@@ -2241,7 +2241,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument('-last-used', action='store_true', help="Load the last used venv in the cache, but if that fails try the latest venv which has all the packages needed now.")
     parser.add_argument('-smallest', action='store_true', help="Load the smallest venv in the cache (with the fewest packages) which has all the packages needed now.")
     parser.add_argument('-rc', action='store_true', help='Refresh the custom modules cache and the pip list.')
-    parser.add_argument('-aws', action='store_true', help='Configure the venv so it can be used on AWS, for instance as a lambda function. This requires using python 3.11 and telling pip to download manylinux wheels. It also names the venv directory in mypy/ with the keyword \'awsenv\' instead of \'myenv\'.')
+    parser.add_argument('-aws', action='store_true', help=f'Configure the venv so it can be used on AWS, for instance as a lambda function. This requires using python {PY_VERSION} and telling pip to download manylinux wheels. It also names the venv directory in mypy/ with the keyword \'awsenv\' instead of \'myenv\'.')
     parser.add_argument('-reqs', action='store_true', help='Read the extra_requirements.txt file in the current directory and install the packages listed there (with specific versions if present in the file) into the venv (along with the other packages needed to run the script as determined elsewhere in this program).')
     parser.add_argument('-alias', type=str, help='Add an alias to the shell configuration file so that typing ALIAS anywhere runs this program.')
     parser.add_argument('-docker', action='store_true', help='UNFINISHED! Create a Dockerfile and requirements.txt file in a subdirectory named after the target script that can be used to run the script in a Docker container.')
@@ -2585,7 +2585,7 @@ def split_imports(options: Options) -> None:
     options.all_imports = options.all_imports - options.bad_imports
     options.installed_imports = set()
     options.uninstalled_imports = set()
-    if options.args.reqs:
+    if getattr(options.args, 'reqs', False):
         options.all_imports = options.all_imports.union(options.extra_requirements.keys())
     options.total_imports = len(options.all_imports)
     if not options.total_imports:
@@ -2608,7 +2608,7 @@ def split_imports(options: Options) -> None:
                 logging.debug(f"Import {imp} is not installed and not a custom module")  # New logging
                 options.uninstalled_imports.add(package_name)
             logging.info(f"Checking import {imp:{max_length}} : {i}/{options.total_imports}")
-    if options.args.reqs:
+    if getattr(options.args, 'reqs', False):
         options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
     if 'xarray' in options.uninstalled_imports:
         xarray_dependencies = ['dask','netcdf4','h5netcdf']
@@ -2617,7 +2617,23 @@ def split_imports(options: Options) -> None:
     return
 
 def list_packages(options: Options) -> None:
-    """List all installed and uninstalled packages that are imported in a directory or file. Return these sets inside the options object."""
+    """Examine command line arguments to determine if we're looking at a directory, a single python script, or a list of python scripts. List all installed and uninstalled packages that are imported in that directory or python script(s). Return these sets inside the options object."""
+    if getattr(options.args, 'full', False):
+        logging.info("Building a virtual environment that can run every python script in this directory.")
+        options.script_dir_or_file_or_list = options.script_dir
+    else:
+        if not getattr(options.args, 'script_args', None) or getattr(options.args, 'aws', False):
+            options.script_dir_or_file_or_list = options.python_script
+        else:
+            # List all the script arguments that are local python scripts.
+            local_scripts = [arg for arg in options.script_args if arg.endswith('.py') and arg[:-3] in options.custom_modules]
+            # Local python scripts should be added to the list of scripts to examine for imports.
+            if local_scripts:
+                options.script_dir_or_file_or_list = [options.python_script] + local_scripts
+            else:
+                options.script_dir_or_file_or_list = options.python_script
+    logging.debug(f"{options.script_dir_or_file_or_list = }")
+
     if type(options.script_dir_or_file_or_list) == str:
         options.script_dir_or_file_or_list = os.path.expanduser(options.script_dir_or_file_or_list)
         options.loaded_custom_modules = set()
@@ -2681,8 +2697,8 @@ def generate_requirements(directory: str) -> None:
         logging.error(f"Error generating requirements file: {e}")
 
 def download_packages(options: Options) -> bool:
-    if options.args.aws:
-        options.pip_options = ""#--platform manylinux1_x86_64 --python-version 3.11 --only-binary=:all:"
+    if getattr(options.args, 'aws', False):
+        options.pip_options = ""#--platform manylinux1_x86_64 --python-version {PY_VERSION} --only-binary=:all:"
     else:
         options.pip_options = ""
     """Install packages in a virtual environment."""
@@ -2876,7 +2892,7 @@ def pretty_packages_list(options: Options) -> str:
 def use_pip_list(options: Options) -> None:
     """Use the pip list command to find all installed packages and use that pip list to modify the uninstalled and installed imports. Add packages from the options.extra_requirements dictionary if '-reqs' is specified as a runtime argument."""
     # Add packages from the options.extra_requirements dictionary if '-reqs' is specified as a runtime argument.
-    if options.args.reqs:
+    if getattr(options.args, 'reqs', False):
         options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
     if len(options.pip_list) == 0:
         # Create virtual environment
@@ -2930,7 +2946,7 @@ print("\\n".join(installed_packages + available_modules + list(builtin_modules))
     options.uninstalled_imports = options.uninstalled_imports.union(new_uninstalled_imports)
     options.installed_imports = options.installed_imports - new_uninstalled_imports
     # Once again, add packages from the options.extra_requirements dictionary if '-reqs' is specified as a runtime argument. (Do this again, just in case they got removed from the uninstalled_imports set above.)
-    if options.args.reqs:
+    if getattr(options.args, 'reqs', False):
         options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
 
 def parse_extra_requirements(options: Options) -> Dict[str, Optional[str]]:
@@ -2951,14 +2967,8 @@ def parse_extra_requirements(options: Options) -> Dict[str, Optional[str]]:
     except Exception as e:
         logging.error(f"Error parsing extra requirements file: {e}")
 
-def setup_virtualenv(options: Options) -> bool:
-    """Setup a virtual environment and install packages."""
-    use_pip_list(options)
-    options.pretty_list = pretty_packages_list(options)
-    # Create a virtual environment directory that starts with 'failed' in case the process fails. Only remove the 'failed' part if this process completes successfully.
-    options.set_venv_dir(os.path.join(options.mypy_dir, f"failed-{options.venv_name}-versionless-{options.timestamp}-{options.pretty_list}"))
-    os.makedirs(options.venv_dir, exist_ok=True)
-
+def write_requirements_file_with_extras(options: Options) -> bool:
+    """Write the requirements file with the extra requirements added. Note that the extra_requirements should be added to uninstalled_imports before calling this function."""
     logging.debug(f"Writing packages to {options.requirements_file}")
     try:
         with open(options.requirements_file, 'w') as f:
@@ -2973,6 +2983,18 @@ def setup_virtualenv(options: Options) -> bool:
                     f.write(f"{package}\n")
     except Exception as e:
         logging.error(f"Error writing packages to {options.requirements_file}: {e}")
+        return False
+    return True
+
+def setup_virtualenv(options: Options) -> bool:
+    """Setup a virtual environment and install packages."""
+    use_pip_list(options)
+    options.pretty_list = pretty_packages_list(options)
+    # Create a virtual environment directory that starts with 'failed' in case the process fails. Only remove the 'failed' part if this process completes successfully.
+    options.set_venv_dir(os.path.join(options.mypy_dir, f"failed-{options.venv_name}-versionless-{options.timestamp}-{options.pretty_list}"))
+    os.makedirs(options.venv_dir, exist_ok=True)
+
+    if not write_requirements_file_with_extras(options):
         return False
 
     logging.info("Creating virtual environment...")
@@ -3246,9 +3268,12 @@ def check_venv_dir(options: Options, options_from_cache: Options) -> bool:
 
 def find_match_dir_in_cache(options: Options) -> str:
     """Find a matching virtual environment directory in the cache."""
-    if not options.args.latest and not options.args.oldest and not options.args.last_used and not options.args.smallest:
+    if not getattr(options.args, 'latest', False) and \
+       not getattr(options.args, 'oldest', False) and \
+       not getattr(options.args, 'last_used', False) and \
+       not getattr(options.args, 'smallest', False):
         options.args.last_used = True #If no flags are set, then the default is to load the last used venv in the cache
-    if options.args.last_used and not options.args.latest and not options.args.smallest:
+    if getattr(options.args, 'last_used', False) and not getattr(options.args, 'latest', False) and not getattr(options.args, 'smallest', False):
         try: # Try to load the last used venv in the cache
             json_files = [f for f in os.listdir(options.script_dir) if f.startswith("."+os.path.basename(options.python_script)) and f.endswith('.json')]
             if json_files:
@@ -3297,7 +3322,10 @@ def find_match_dir_in_cache(options: Options) -> str:
         logging.info("No matching venv folders found in the cache.")
     else:
         logging.info(f"Found {len(final_venv_folders)} matching venv folders in the cache.")
-        if options.args.latest and not options.args.oldest and not options.args.last_used and not options.args.smallest:
+        if     getattr(options.args, 'latest', False) and \
+           not getattr(options.args, 'oldest', False) and \
+           not getattr(options.args, 'last_used', False) and \
+           not getattr(options.args, 'smallest', False):
             # Return the latest venv in the cache which has all the packages needed now
             options_latest = copy.deepcopy(options)
             options_latest.set_venv_dir(os.path.join(options.mypy_dir, latest_venv(final_venv_folders)))
@@ -3307,7 +3335,10 @@ def find_match_dir_in_cache(options: Options) -> str:
             else:
                 logging.error("The latest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
                 return None
-        elif options.args.oldest and not options.args.latest and not options.args.last_used and not options.args.smallest:
+        elif    getattr(options.args, 'oldest', False) and \
+            not getattr(options.args, 'latest', False) and \
+            not getattr(options.args, 'last_used', False) and \
+            not getattr(options.args, 'smallest', False):
             # Return the oldest venv in the cache which has all the packages needed now
             options_oldest = copy.deepcopy(options)
             options_oldest.set_venv_dir(os.path.join(options.mypy_dir, oldest_venv(final_venv_folders)))
@@ -3317,7 +3348,10 @@ def find_match_dir_in_cache(options: Options) -> str:
             else:
                 logging.error("The oldest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
                 return None
-        elif options.args.smallest and not options.args.latest and not options.args.oldest and not options.args.last_used:
+        elif    getattr(options.args, 'smallest', False) and \
+            not getattr(options.args, 'latest', False) and \
+            not getattr(options.args, 'oldest', False) and \
+            not getattr(options.args, 'last_used', False):
             # Return the smallest venv in the cache which has all the packages needed now
             options_smallest = copy.deepcopy(options)
             options_smallest.set_venv_dir(os.path.join(options.mypy_dir, smallest_venv(final_venv_folders)))
@@ -3328,7 +3362,7 @@ def find_match_dir_in_cache(options: Options) -> str:
                 logging.error("The smallest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
                 return None
         else: # This should never happen
-            logging.error(f"Invalid combination of flags. {options.args.latest = }, {options.args.oldest = }, {options.args.last_used = }, {options.args.smallest = }")
+            logging.error(f"Invalid combination of flags. {getattr(options.args, 'latest', False) = }, {getattr(options.args, 'oldest', False) = }, {getattr(options.args, 'last_used', False) = }, {getattr(options.args, 'smallest', False) = }")
 
 def is_standard_path(options: Options, path: str) -> bool:
     """Check if the given path is a standard system path or part of a virtual environment."""
@@ -3347,7 +3381,7 @@ def is_standard_path(options: Options, path: str) -> bool:
 def dict_of_custom_modules(options: Options) -> Dict[str, str]:
     """Create a dictionary of all local custom modules in the non-standard sys.path directories and their associated filepaths."""
     #If -rc and -no-cache were not specified, look for a pickle file with the custom modules dictionary the last time this script was run.
-    if not options.args.rc and not options.args.no_cache:
+    if not getattr(options.args, 'rc', False) and not getattr(options.args, 'no_cache', False):
         for file in os.listdir('.'):
             if file.startswith('.mypy_custom_modules_') and file.endswith('.pkl'):
                 logging.info(f"Loading custom modules from {file}")
@@ -3387,65 +3421,68 @@ def dict_of_custom_modules(options: Options) -> Dict[str, str]:
     return custom_modules
 
 def check_python_version(command: str) -> bool:
-    """Check if the given Python command is available and has a version of 3.11 or higher."""
+    """Check if the given Python command is available and has a version of PY_VERSION or higher."""
     try:
+        preferred_major = int(PY_VERSION)
+        preferred_minor = int((PY_VERSION - preferred_major) * 100)
         result = subprocess.run([command, '--version'], capture_output=True, text=True)
         if result.returncode == 0:
             version = result.stdout.strip().split()[1]
             major, minor = map(int, version.split('.')[:2])
-            if major == 3 and minor >= 11:
+            if major == preferred_major and minor >= preferred_minor:
                 return True
         return False
     except Exception as e:
         logging.info(f"Error checking {command}: {e}", file=sys.stderr)
         return False
 
-def find_python3_11() -> Optional[str]:
-    """Find the Python 3.11 command."""
+def find_preferred_python_version() -> Optional[str]:
+    """Find the command for the preferred version of python (stored in univ_defs.py as PY_VERSION)."""
     try:
-        # Check if 'python3' exists and returns a valid path
-        python3_path = subprocess.run(['which', 'python3'], capture_output=True, text=True).stdout.strip()
-        if python3_path and check_python_version('python3'):
-            return os.path.basename(python3_path)
+        # Check if the preferred python command (only specifying integer part of the preferred version) exists and returns a valid path
+        preferred_major = int(PY_VERSION)
+        preferred_python_path = subprocess.run(['which', f'python{preferred_major}'], capture_output=True, text=True).stdout.strip()
+        if preferred_python_path and check_python_version(f'python{preferred_major}'):
+            return os.path.basename(preferred_python_path)
 
-        # Check if 'python3.11' exists and returns a valid path
-        python3_11_path = subprocess.run(['which', 'python3.11'], capture_output=True, text=True).stdout.strip()
-        if python3_11_path and check_python_version('python3.11'):
-            return os.path.basename(python3_11_path)
+        # Check if the preferred python command (with complete version specified) exists and returns a valid path
+        preferred_python_path = subprocess.run(['which', f'python{PY_VERSION}'], capture_output=True, text=True).stdout.strip()
+        if preferred_python_path and check_python_version(f'python{PY_VERSION}'):
+            return os.path.basename(preferred_python_path)
         
         return None
 
     except Exception as e:
-        logging.info(f"Error finding python3.11: {e}", file=sys.stderr)
+        logging.info(f"Error finding python{PY_VERSION}: {e}", file=sys.stderr)
         return None
 
 def main() -> None:
     start_time = datetime.now()
     options = Options()
     options.args = parse_arguments()
-    options.python_script = options.args.script
-    options.script_args = options.args.script_args or []
+    options.python_script = getattr(options.args, 'script', None)
+    options.script_args = getattr(options.args, 'script_args', [])
 
-    if options.args.version:
+    if getattr(options.args, 'version', False):
         print(__version__)
         sys.exit(0)
 
-    if options.args.script:
+    if getattr(options.args, 'script', False):
         if options.script_args: arg_string = f" with arguments: {options.script_args}"
         else:                        arg_string = ""
         print(f"Running script: {options.args.script}{arg_string}")
-        if options.args.alias:
+        if getattr(options.args, 'alias', False):
             print(f"Adding alias: {options.args.alias}")
 
     log_mode = "INFO"
     #log_mode = "DEBUG"
     memory_handler = configure_logging("mypy", log_level=log_mode)
 
-    options.python_command = find_python3_11()
+    options.python_command = find_preferred_python_version()
     if options.python_command:
-        logging.debug(f"Python 3.11 is available at: {options.python_command}")
+        logging.debug(f"Python {PY_VERSION} is available at: {options.python_command}")
     else:
-        logging.debug("Python 3.11 is not available.")
+        logging.debug(f"Python {PY_VERSION} is not available.")
 
     try:
         import pipreqs
@@ -3455,20 +3492,21 @@ def main() -> None:
         logging.debug("pipreqs is not available. Try installing it with 'pip install pipreqs'.")
         PIPREQS_AVAILABLE = False
 
-    if options.args.aws: options.venv_name = 'awsenv'
+    if getattr(options.args, 'aws', False):
+        options.venv_name = 'awsenv'
 
-    if options.args.alias:
+    if getattr(options.args, 'alias', False):
         # Add the alias to the shell configuration file
         add_alias(options)
         sys.exit(0)
-    elif options.args.script:
+    elif getattr(options.args, 'script', False):
         pass
-    elif options.args.manual:
+    elif getattr(options.args, 'manual', False):
         # Print instructions for manually adding the alias to the shell configuration file
         logging.info(options.manual_instructions)
         sys.exit(0)
-    elif options.args.blank_slate:
-        if not options.args.y:
+    elif getattr(options.args, 'blank_slate', False):
+        if not getattr(options.args, 'y', False):
             response = input("Are you sure you want to delete everything in ~/mypy/ and all mypy .json files in the current directory? (y/n) ")
             if response.casefold() != 'y':
                 logging.info("Exiting without deleting anything.")
@@ -3494,7 +3532,7 @@ def main() -> None:
     options.script_dir = os.path.abspath(os.path.dirname(options.python_script))
     logging.debug(f"Directory where the script to run is located: {options.script_dir}")
 
-    if options.args.reqs:
+    if getattr(options.args, 'reqs', False):
         parse_extra_requirements(options)
         logging.info(f"Loaded extra requirements from ./{options.extra_requirements_file}: {options.extra_requirements}")
 
@@ -3516,30 +3554,13 @@ def main() -> None:
     pip_list_files = sorted([f for f in os.listdir(options.mypy_dir) if f.startswith('pip_list')],reverse=True)
     logging.debug(f"{pip_list_files = }")
     #If -rc was not specified, look for a text file with the pip list the last time this script was run.
-    if not options.args.rc and pip_list_files:
+    if not getattr(options.args, 'rc', False) and pip_list_files:
         try:
             with open(os.path.join(options.mypy_dir, pip_list_files[0]), 'r') as file:
                 for line in file:
                     options.pip_list.append(line.strip())
         except:
             logging.error(f"Error reading {pip_list_files[0]}")
-
-    if options.args.full:
-        logging.info("Building a virtual environment that can run every python script in this directory.")
-        options.script_dir_or_file_or_list = options.script_dir
-    else:
-        if not options.args.script_args:
-            options.script_dir_or_file_or_list = options.python_script
-        else:
-            #Loop through all the script arguments and see if any of them are local python scripts.
-            options.script_dir_or_file_or_list = [options.python_script]
-            for arg in options.script_args:
-                if arg.endswith('.py'):
-                   if arg.replace('.py','') in options.custom_modules:
-                       options.script_dir_or_file_or_list.append(arg)
-            if len(options.script_dir_or_file_or_list) == 1:
-                options.script_dir_or_file_or_list = options.python_script
-    logging.debug(f"{options.script_dir_or_file_or_list = }")
 
     start_list_packages_time = datetime.now()
     elapsed_time = start_list_packages_time - start_time
@@ -3570,7 +3591,7 @@ def main() -> None:
             logging.info("Please deactivate the current virtual environment and run the script again.")
     else:
         logging.info("Not in a virtual environment.")
-        if options.args.no_cache:
+        if getattr(options.args, 'no_cache', False):
             match_dir = None
         else:
             match_dir = find_match_dir_in_cache(options)
