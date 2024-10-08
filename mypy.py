@@ -15,7 +15,7 @@ import shutil
 import venv
 import pickle
 from pathlib import Path, PosixPath
-from typing import Dict, List, Set, Tuple, Union, Iterable, Optional
+from typing import Dict, List, Set, Tuple, Union, Iterable, Optional, TextIO
 import logging
 import tempfile
 import ast
@@ -63,6 +63,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.bad_imports: Set[str] = set()
         self.custom_modules: Dict[str, str] = {}
         self.subfolders: List[str] = []
+        self.samedir_files: List[str] = []
         self.pip_list: List[str] = []
         self.loaded_custom_modules: Set[str] = set()
         self.pretty_list: str = ''
@@ -2390,10 +2391,12 @@ class SysPathVisitor(ast.NodeVisitor):
                     self.paths.add(path)
         self.generic_visit(node)
 
-def my_fopen(options: Options, file_path: str):
+def my_fopen(options: Options, file_path: str, suppress_errors: bool = False) -> Optional[TextIO]:
     """Attempt to read the file with various encodings and return the file content if successful."""
     if not os.path.isfile(file_path):
-        logging.error(f"File does not exist: {file_path}")
+        this_message = f"File does not exist: {file_path}"
+        if not suppress_errors: logging.error(this_message)
+        else:                   logging.info(this_message)
         return False
     for encoding in options.encodings:
         try:
@@ -2401,10 +2404,14 @@ def my_fopen(options: Options, file_path: str):
                 file_content = file.read()
             return file_content  # Exit the function if reading is successful
         except UnicodeDecodeError:
-            logging.warning(f"Unicode decode error with encoding {encoding} reading file {file_path}")
+            this_message = f"Unicode decode error with encoding {encoding} reading file {file_path}"
+            if not suppress_errors: logging.warning(this_message)
+            else:                   logging.info(this_message)
             continue
         except Exception as e:
-            logging.error(f"Error reading file {file_path} with encoding {encoding}: {str(e)}")
+            this_message = f"Error reading file {file_path} with encoding {encoding}: {str(e)}"
+            if not suppress_errors: logging.error(this_message)
+            else:                   logging.info(this_message)
             return
     return False
 
@@ -2471,6 +2478,8 @@ def process_import(options: Options, module_name: str, file_path: str) -> bool:
     # Is the import a file in the same directory?
     potential_file_path = os.path.join(base_dir, module_path+'.py')
     if resolve_import(potential_file_path, module_name, options):
+        options.samedir_files.append(potential_file_path)
+        logging.debug(f"Added same directory file: {potential_file_path}")
         return True
 
     # Is the import a file in a subdirectory that is mistakenly repeated?
@@ -2950,37 +2959,61 @@ print("\\n".join(installed_packages + available_modules + list(builtin_modules))
         options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
 
 def parse_extra_requirements(options: Options) -> Dict[str, Optional[str]]:
-    """Parse an extra requirements file and return a dictionary of package names (and versions, if present)."""
+    """Parse an extra requirements file and return a dictionary of package names (and version specifiers, if present)."""
     options.extra_requirements = {}
-    file_content = my_fopen(options, options.extra_requirements_file)
+    file_content = my_fopen(options, options.extra_requirements_file, suppress_errors=True)
     if not file_content:
         return
+    # Regular expression to capture package name and version specifier
+    pattern = re.compile(r'^\s*([A-Za-z0-9_\-\.]+)\s*(.*)$')
     try:
         for line in file_content.splitlines():
             line = line.strip()
             if line and not line.startswith('#'):
-                if '==' in line:
-                    package, version = line.split('==')
-                    options.extra_requirements[package.strip()] = version.strip()
-                else:
-                    options.extra_requirements[line] = None
+                match = pattern.match(line)
+                if match:
+                    package = match.group(1)
+                    version_spec = match.group(2).strip() if match.group(2) else ''
+                    options.extra_requirements[package] = version_spec
     except Exception as e:
         logging.error(f"Error parsing extra requirements file: {e}")
 
 def write_requirements_file_with_extras(options: Options) -> bool:
-    """Write the requirements file with the extra requirements added. Note that the extra_requirements should be added to uninstalled_imports before calling this function."""
+    """Write the requirements file with the extra requirements added and generate a 'pretty' requirements string."""
     logging.debug(f"Writing packages to {options.requirements_file}")
+    options.pretty_requirements = ''
+    # Define the symbol replacements
+    replacements = [
+        ('>=', '_ge'),
+        ('<=', '_le'),
+        ('==', '_eq'),
+        ('~=', '_approx'),
+        ('>', '_gt'),
+        ('<', '_lt'),
+        (',', '_and'),
+    ]
     try:
         with open(options.requirements_file, 'w') as f:
-            for package in options.uninstalled_imports:
+            for idx, package in enumerate(options.uninstalled_imports):
                 if package in options.extra_requirements:
-                    version = options.extra_requirements[package]
-                    if version is not None:
-                        f.write(f"{package}=={version}\n")
+                    version_spec = options.extra_requirements[package]
+                    if version_spec:
+                        f.write(f"{package}{version_spec}\n")
+                        # Replace symbols in version_spec for the pretty_requirements string
+                        pretty_version_spec = version_spec
+                        for old, new in replacements:
+                            pretty_version_spec = pretty_version_spec.replace(old, new)
+                        pretty_package = f"{package}{pretty_version_spec}"
                     else:
                         f.write(f"{package}\n")
+                        pretty_package = package
                 else:
                     f.write(f"{package}\n")
+                    pretty_package = package
+                # Append to the pretty_requirements string with underscores
+                if idx > 0:
+                    options.pretty_requirements += '_'
+                options.pretty_requirements += pretty_package
     except Exception as e:
         logging.error(f"Error writing packages to {options.requirements_file}: {e}")
         return False

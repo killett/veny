@@ -1,60 +1,93 @@
-import os, subprocess
+#NEW aws help docstring:
+# disables searching through script args for python scripts and then scanning them for imports. 
+import os, sys, subprocess
 from datetime import datetime
 import logging
+import threading
+
+PY_VERSION = 3.11
 
 class MemoryHandler(logging.Handler):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, level=logging.ERROR):
+        super().__init__(level)
         self.logs = []
-
     def emit(self, record):
-        self.logs.append(self.format(record))
+        if record.levelno >= self.level:  # Only capture logs with the appropriate level
+            self.logs.append(self.format(record))
 
-def configure_logging(basename: str, log_level: str = 'INFO', testing: bool = False) -> MemoryHandler:
-    """Configure logging to write to a file and the console."""
-    #logs_directory = '/tmp/logs'
-    #os.makedirs(logs_directory, exist_ok=True)
-    logs_directory = '.'
+class FlushingStreamHandler(logging.StreamHandler):
+    def emit(self, record):
+        # Call the original emit method to handle the logging
+        super().emit(record)
+        # Immediately flush the stream after emitting the log
+        self.flush()
+
+def configure_logging(basename: str, log_level: str = 'INFO',
+                      testing: bool = False,
+                      flush: bool = True) -> MemoryHandler:
+    """Configure logging to write INFO logs to stdout and ERROR logs to stderr."""
     
+    root_logger = logging.getLogger()
+
+    # Check if logging is already configured by checking for any handlers
+    if root_logger.hasHandlers():
+        print("Logging is already configured.", flush=True)
+        for handler in root_logger.handlers:
+            if isinstance(handler, MemoryHandler):
+                return handler
+
+    # Proceed with configuring logging if no MemoryHandler was found
+    #logs_directory = '/tmp/logs'
+    logs_directory = '.'
+    os.makedirs(logs_directory, exist_ok=True)
+
     now = datetime.now()
     log_base = f".{basename}-log-{now.strftime('%Y%m%d-%H%M%S')}"
-    log_info = log_base + ".out"
-    log_errors = log_base + ".err"
-    
-    logging.root.handlers = []  # Clear any existing handlers
-    
-    # Create handlers
-    debug_info_handler = logging.FileHandler(log_info)
-    debug_info_handler.setLevel(logging.DEBUG)
-    
-    warning_error_handler = logging.FileHandler(log_errors)
-    warning_error_handler.setLevel(logging.WARNING)
-    
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(get_log_level(log_level))
-    
-    memory_handler = MemoryHandler()
-    memory_handler.setLevel(logging.WARNING)
-    
-    # Formatter
+    log_info = os.path.join(logs_directory, log_base + ".out")
+    log_errors = os.path.join(logs_directory, log_base + ".err")
+
+    root_logger.handlers = []  # Reset any existing handlers
+
+    # File handlers for logging to files
+    try:
+        debug_info_handler = logging.FileHandler(log_info)
+        debug_info_handler.setLevel(logging.DEBUG)
+        warning_error_handler = logging.FileHandler(log_errors)
+        warning_error_handler.setLevel(logging.WARNING)
+    except (IOError, OSError) as e:
+        print(f"Failed to create log files: {e}", flush=True)
+        return None
+
+    # Stream handler for stdout (INFO and lower)
+    console_handler_stdout = FlushingStreamHandler(stream=sys.stdout)
+    console_handler_stdout.setLevel(logging.INFO)  # Only logs INFO and lower to stdout
+
+    # Stream handler for stderr (ERROR and above)
+    console_handler_stderr = FlushingStreamHandler(stream=sys.stderr)
+    console_handler_stderr.setLevel(logging.ERROR)  # Only logs ERROR and higher to stderr
+
+    memory_handler = MemoryHandler(level=logging.ERROR)  # Only capture ERROR level logs
+
     log_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     debug_info_handler.setFormatter(log_format)
     warning_error_handler.setFormatter(log_format)
-    console_handler.setFormatter(log_format)
+    console_handler_stdout.setFormatter(log_format)
+    console_handler_stderr.setFormatter(log_format)
     memory_handler.setFormatter(log_format)
-    
-    # Add handlers to the root logger
-    logging.basicConfig(
-        level=get_log_level(log_level),
-        handlers=[debug_info_handler, warning_error_handler, console_handler, memory_handler]
-    )
-    
+
+    root_logger.setLevel(get_log_level(log_level))
+    root_logger.addHandler(debug_info_handler)
+    root_logger.addHandler(warning_error_handler)
+    root_logger.addHandler(console_handler_stdout)
+    root_logger.addHandler(console_handler_stderr)
+    root_logger.addHandler(memory_handler)
+
     if testing:
-        logging.getLogger().setLevel(logging.DEBUG)
-        logging.info(f'Logging to console with level {logging.getLevelName(get_log_level(log_level))}')
+        root_logger.setLevel(logging.DEBUG)
+        root_logger.info(f'Logging to console with level {logging.getLevelName(get_log_level(log_level))}')
     else:
-        logging.info(f'Logging to {log_info} and {log_errors} with level {logging.getLevelName(get_log_level(log_level))}')
-    
+        root_logger.info(f'Logging to {log_info} and {log_errors} with level {logging.getLevelName(get_log_level(log_level))}')
+
     return memory_handler
 
 def get_log_level(log_level: str) -> int:
@@ -83,38 +116,67 @@ class MyPopenResult:
         self.returncode = returncode
         self.success = (returncode == 0)
 
-def my_popen(command_list: list, suppress_info: bool = False) -> MyPopenResult:
-    """Execute a command using subprocess.Popen and capture the output line by line."""
-    print(f"{suppress_info = }")
+def my_popen(command_list: list, suppress_info: bool = False, suppress_error: bool = False) -> MyPopenResult:
+    """Execute a command using subprocess.Popen and capture the output line by line using threads."""
     command_list_str = [str(item) for item in command_list]
     the_statement = "Executing command: " + ' '.join(command_list_str)
     
-    if not suppress_info: logging.info( the_statement)
-    else:                 logging.debug(the_statement)
+    if not suppress_info:
+        logging.info(the_statement)
+    else:
+        logging.debug(the_statement)
 
     try:
-        process = subprocess.Popen(command_list_str,
-                                   stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE,
-                                   text=True)
-        stdout = ""
-        stderr = ""
-        # Capture stdout and stderr line by line
-        while True:
-            line_out = process.stdout.readline()
-            line_err = process.stderr.readline()
-            if line_out:
-                log_line = line_out.strip()
-                if not suppress_info: logging.info( log_line)
-                else:                 logging.debug(log_line)
-                stdout += line_out
-            if line_err:
-                log_line = line_err.strip()
-                logging.error(log_line)
-                stderr += line_err
-            if not line_out and not line_err and process.poll() is not None:
-                break
-        return MyPopenResult(stdout=stdout, stderr=stderr, returncode=process.returncode)    
+        process = subprocess.Popen(
+            command_list_str,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1  # Line-buffered
+        )
+
+        stdout_lines = []
+        stderr_lines = []
+
+        def read_stdout():
+            for line in process.stdout:
+                stdout_lines.append(line)
+                log_line = line.strip()
+                if not suppress_info:
+                    logging.info(log_line)
+                else:
+                    logging.debug(log_line)
+
+        def read_stderr():
+            for line in process.stderr:
+                stderr_lines.append(line)
+                log_line = line.strip()
+                if not suppress_error:
+                    logging.error(log_line)
+                elif not suppress_info:
+                    logging.info(log_line)
+                else:
+                    logging.debug(log_line)
+
+        # Start threads
+        stdout_thread = threading.Thread(target=read_stdout)
+        stderr_thread = threading.Thread(target=read_stderr)
+
+        stdout_thread.start()
+        stderr_thread.start()
+
+        # Wait for the process to finish
+        process.wait()
+
+        # Wait for threads to finish
+        stdout_thread.join()
+        stderr_thread.join()
+
+        stdout = ''.join(stdout_lines)
+        stderr = ''.join(stderr_lines)
+
+        return MyPopenResult(stdout=stdout, stderr=stderr, returncode=process.returncode)
+
     except Exception as e:
         logging.error(f"An error occurred: {e}")
         return MyPopenResult(stdout="", stderr=str(e), returncode=-1)
