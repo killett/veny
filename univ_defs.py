@@ -5,7 +5,42 @@ from datetime import datetime
 import logging
 import threading
 
+# This is the version of univ_defs.py
+__version__ = '0.1.0'
+
+# This is the version of python which should be used in scripts that import this module.
 PY_VERSION = 3.11
+
+# sigfigs    =  1 #significant figures to keep during rounding.
+# max_digits = 15 #If the number is less than 10^(-max_digits), just say it has max_digits.
+
+# #Given 'float_input', what is its exponent in scientific notation?
+# def sci_exp(float_input):
+#   if np.abs(float_input) < 10**(-max_digits): return -max_digits
+#   return int(np.floor(np.log10(np.abs(float_input))))
+
+# #"round out" away from zero while keeping round_digits significant figures.
+# #Rounds up for x>0, down for x<0.
+# def round_out(x, round_digits):
+#   if np.abs(x) < 10**(-max_digits): return x
+#   these_digits = sci_exp(x) - round_digits + 1
+#   thisfactor = 10**these_digits
+#   x = x/thisfactor
+#   if x > 0: x = np.ceil(x) 
+#   else:     x = np.floor(x)
+#   return x*(thisfactor*1.0)
+
+# #Convert decimal years to datetimes.
+# #From here: https://archive.vn/KyBU7  https://stackoverflow.com/questions/20911015/decimal-years-to-datetime-in-python 
+# #and here: https://archive.vn/dCEqU  https://numpy.org/doc/stable/reference/arrays.datetime.html
+# #Usage: dec2date(2002.29178082191777)
+# def dec2date(dec):
+#   year = int(dec)
+#   rem = dec - year
+#   base = datetime.datetime(year, 1, 1)
+#   result = base + datetime.timedelta(seconds=(base.replace(year=base.year + 1) - base).total_seconds() * rem)
+#   #result = np.datetime64(result)
+#   return result
 
 class MemoryHandler(logging.Handler):
     def __init__(self, level=logging.ERROR):
@@ -228,8 +263,10 @@ def prettyprint_timespan(timespan: float) -> None:
     print(f"The script took {time_str} to run.")
 
 def open_dir_in_VLC(the_dir: str, sort_choice: str,
-                    recursive: bool = False) -> None:
-    """Recursively open the files in the directory in VLC, sorted by name or modification time."""
+                    recursive: bool = False,
+                    no_start: bool = False) -> None:
+    """Recursively open the files in the directory in VLC, sorted by name or modification time. If no_start is True, don't start playback in VLC."""
+    start_flag = "--no-playlist-autostart" if no_start else ""
     # List to store files with their modification times
     files_with_times = []
     if recursive:
@@ -268,4 +305,4 @@ def open_dir_in_VLC(the_dir: str, sort_choice: str,
     with open(playlist_path, "w") as playlist_file:
         playlist_file.write(playlist_content)
     # Open the playlist in VLC
-    subprocess.Popen(["vlc", playlist_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.Popen(["vlc", start_flag, playlist_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

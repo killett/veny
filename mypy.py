@@ -2242,7 +2242,6 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument('-last-used', action='store_true', help="Load the last used venv in the cache, but if that fails try the latest venv which has all the packages needed now.")
     parser.add_argument('-smallest', action='store_true', help="Load the smallest venv in the cache (with the fewest packages) which has all the packages needed now.")
     parser.add_argument('-rc', action='store_true', help='Refresh the custom modules cache and the pip list.')
-    parser.add_argument('-aws', action='store_true', help=f'Configure the venv so it can be used on AWS, for instance as a lambda function. This requires using python {PY_VERSION} and telling pip to download manylinux wheels. It also names the venv directory in mypy/ with the keyword \'awsenv\' instead of \'myenv\'.')
     parser.add_argument('-reqs', action='store_true', help='Read the extra_requirements.txt file in the current directory and install the packages listed there (with specific versions if present in the file) into the venv (along with the other packages needed to run the script as determined elsewhere in this program).')
     parser.add_argument('-alias', type=str, help='Add an alias to the shell configuration file so that typing ALIAS anywhere runs this program.')
     parser.add_argument('-docker', action='store_true', help='UNFINISHED! Create a Dockerfile and requirements.txt file in a subdirectory named after the target script that can be used to run the script in a Docker container.')
@@ -2631,7 +2630,7 @@ def list_packages(options: Options) -> None:
         logging.info("Building a virtual environment that can run every python script in this directory.")
         options.script_dir_or_file_or_list = options.script_dir
     else:
-        if not getattr(options.args, 'script_args', None) or getattr(options.args, 'aws', False):
+        if not getattr(options.args, 'script_args', None):
             options.script_dir_or_file_or_list = options.python_script
         else:
             # List all the script arguments that are local python scripts.
@@ -2706,10 +2705,6 @@ def generate_requirements(directory: str) -> None:
         logging.error(f"Error generating requirements file: {e}")
 
 def download_packages(options: Options) -> bool:
-    if getattr(options.args, 'aws', False):
-        options.pip_options = ""#--platform manylinux1_x86_64 --python-version {PY_VERSION} --only-binary=:all:"
-    else:
-        options.pip_options = ""
     """Install packages in a virtual environment."""
     download_script = f"""#!/bin/bash
     source {options.venv_dir}/bin/activate
@@ -2735,7 +2730,7 @@ def download_packages(options: Options) -> bool:
 
     # Download required packages
     echo "Downloading packages..."
-    {options.venv_pip} download {options.pip_options} -r {options.requirements_file} -d {options.packages_dir}"""
+    {options.venv_pip} download -r {options.requirements_file} -d {options.packages_dir}"""
 
     try:
         logging.info(f"Writing download script to {options.download_script_path}")
@@ -3524,9 +3519,6 @@ def main() -> None:
     except ImportError:
         logging.debug("pipreqs is not available. Try installing it with 'pip install pipreqs'.")
         PIPREQS_AVAILABLE = False
-
-    if getattr(options.args, 'aws', False):
-        options.venv_name = 'awsenv'
 
     if getattr(options.args, 'alias', False):
         # Add the alias to the shell configuration file
