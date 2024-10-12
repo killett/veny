@@ -22,7 +22,7 @@ import ast
 
 from univ_defs import *
 
-__version__ = '0.1.0'
+__version__ = '0.1.1'
 
 class Options():
     """Class that has all global options in one place."""
@@ -52,7 +52,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
 """
         self.python_command: str = ''
         self.shell: str = ''
-        self.mypy_path: str = os.path.abspath(__file__) # This file's full path and filename
+        self.mypy_filepath: str = os.path.abspath(__file__) # This file's full path and filename
         self.cwd: str = os.getcwd()
         self.venv_name: str = 'myenv' # Can NOT include dashes ('-')
         self.mypy_dir: str = os.path.expanduser(os.path.join('~','mypy'))
@@ -2282,11 +2282,11 @@ def get_shell_rc_file(options: Options) -> str:
 def get_alias_command(options: Options) -> str:
     """Get the alias command for the shell."""
     if options.shell in ["bash", "zsh"]:
-        return f'alias {options.args.alias}="{options.python_command} {options.mypy_path}"'
+        return f'alias {options.args.alias}="{options.python_command} {options.mypy_filepath}"'
     elif options.shell == "fish":
-        return f'alias {options.args.alias} "{options.python_command} {options.mypy_path}"'
+        return f'alias {options.args.alias} "{options.python_command} {options.mypy_filepath}"'
     elif options.shell in ["csh", "tcsh"]:
-        return f"alias {options.args.alias} '{options.python_command} {options.mypy_path}'"
+        return f"alias {options.args.alias} '{options.python_command} {options.mypy_filepath}'"
     return None
 
 def alias_exists(rc_file: str, alias_pattern: str) -> bool:
@@ -2584,6 +2584,20 @@ def find_imports_in_script(options: Options, first_path: str) -> None:
                     if os.path.isfile(resolved_path):
                         options.processed_files.add(resolved_path)
                         options.file_stack.append(resolved_path)
+            elif isinstance(node, ast.Call):
+                # Check if it's a call to __import__()
+                if isinstance(node.func, ast.Name) and node.func.id == '__import__':
+                    logging.warning(f"Found dynamic import: {ast.unparse(node)}")
+                    if node.args:
+                        module_arg = node.args[0]
+                        if isinstance(module_arg, ast.Constant) and isinstance(module_arg.value, str):
+                            module_name = module_arg.value
+                            logging.debug(f"Processing dynamic import of module: {module_name}")
+                            process_import(options, module_name, file_path)
+                        else:
+                            logging.error(f"Cannot resolve dynamic import with non-constant module name: {ast.unparse(node)}")
+                    else:
+                        logging.error(f"No arguments provided to __import__(): {ast.unparse(node)}")
 
 def split_imports(options: Options) -> None:
     """Split imports into installed, uninstalled, and bad imports."""

@@ -6,7 +6,7 @@ import logging
 import threading
 
 # This is the version of univ_defs.py
-__version__ = '0.1.0'
+__version__ = '0.1.1'
 
 # This is the version of python which should be used in scripts that import this module.
 PY_VERSION = 3.11
@@ -43,6 +43,7 @@ PY_VERSION = 3.11
 #   return result
 
 class MemoryHandler(logging.Handler):
+    """A logging handler that stores logs in memory so the errors can be printed at the end."""
     def __init__(self, level=logging.ERROR):
         super().__init__(level)
         self.logs = []
@@ -51,12 +52,20 @@ class MemoryHandler(logging.Handler):
             self.logs.append(self.format(record))
 
 class FlushingStreamHandler(logging.StreamHandler):
+    """A logging handler that flushes the stream after emitting each log so the logs are immediately visible."""
     def emit(self, record):
         # Call the original emit method to handle the logging
         super().emit(record)
         # Immediately flush the stream after emitting the log
         self.flush()
 
+class MaxLevelFilter(logging.Filter):
+    """A logging filter that only allows logs up to a certain level to pass through, so that error messages aren't printed multiple times."""
+    def __init__(self, max_level):
+        self.max_level = max_level
+    def filter(self, record):
+        return record.levelno <= self.max_level
+    
 def configure_logging(basename: str, log_level: str = 'INFO',
                       testing: bool = False,
                       flush: bool = True) -> MemoryHandler:
@@ -95,7 +104,8 @@ def configure_logging(basename: str, log_level: str = 'INFO',
 
     # Stream handler for stdout (INFO and lower)
     console_handler_stdout = FlushingStreamHandler(stream=sys.stdout)
-    console_handler_stdout.setLevel(logging.INFO)  # Only logs INFO and lower to stdout
+    console_handler_stdout.setLevel(logging.DEBUG)  # Set to lowest level
+    console_handler_stdout.addFilter(MaxLevelFilter(logging.INFO))  # Add filter for INFO and lower
 
     # Stream handler for stderr (ERROR and above)
     console_handler_stderr = FlushingStreamHandler(stream=sys.stderr)
