@@ -4,6 +4,10 @@ import os, sys, subprocess
 from datetime import datetime
 import logging
 import threading
+import socket
+import platform
+from collections import Counter
+from typing import Dict
 
 # This is the version of univ_defs.py
 __version__ = '0.1.1'
@@ -67,9 +71,8 @@ class MaxLevelFilter(logging.Filter):
         return record.levelno <= self.max_level
     
 def configure_logging(basename: str, log_level: str = 'INFO',
-                      testing: bool = False,
-                      flush: bool = True) -> MemoryHandler:
-    """Configure logging to write INFO logs to stdout and ERROR logs to stderr."""
+                      rawlog: bool = False) -> MemoryHandler:
+    """Configure logging to write to files and stdout/stderr, and return a MemoryHandler to capture ERROR logs for later (duplicate) printing."""
     
     root_logger = logging.getLogger()
 
@@ -82,7 +85,7 @@ def configure_logging(basename: str, log_level: str = 'INFO',
 
     # Proceed with configuring logging if no MemoryHandler was found
     #logs_directory = '/tmp/logs'
-    logs_directory = '.'
+    logs_directory = os.getcwd()
     os.makedirs(logs_directory, exist_ok=True)
 
     now = datetime.now()
@@ -113,7 +116,12 @@ def configure_logging(basename: str, log_level: str = 'INFO',
 
     memory_handler = MemoryHandler(level=logging.ERROR)  # Only capture ERROR level logs
 
-    log_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    # Define the formatter based on the no_prefix parameter
+    if rawlog:
+        log_format = logging.Formatter('%(message)s')
+    else:
+        log_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
     debug_info_handler.setFormatter(log_format)
     warning_error_handler.setFormatter(log_format)
     console_handler_stdout.setFormatter(log_format)
@@ -126,12 +134,7 @@ def configure_logging(basename: str, log_level: str = 'INFO',
     root_logger.addHandler(console_handler_stdout)
     root_logger.addHandler(console_handler_stderr)
     root_logger.addHandler(memory_handler)
-
-    if testing:
-        root_logger.setLevel(logging.DEBUG)
-        root_logger.info(f'Logging to console with level {logging.getLevelName(get_log_level(log_level))}')
-    else:
-        root_logger.info(f'Logging to {log_info} and {log_errors} with level {logging.getLevelName(get_log_level(log_level))}')
+    if not rawlog: root_logger.info(f'Logging to {log_info} and {log_errors} with level {logging.getLevelName(get_log_level(log_level))}')
 
     return memory_handler
 
@@ -145,6 +148,18 @@ def get_log_level(log_level: str) -> int:
                  'CRITICAL' : logging.CRITICAL}
     return value_map.get(log_level, logging.INFO)
 
+def my_critical_error(message: str, choose_breakpoint: bool = False, exit_code: int = 1) -> None:
+    """Log a critical error message and either exit the program or enter a breakpoint."""
+    #Check to see if logger is set up. If not, just print the critical error message.
+    if logging.getLogger().hasHandlers():
+        logging.critical(message)
+    else:
+        print(message)
+    if choose_breakpoint:
+        breakpoint()
+    else:
+        sys.exit(exit_code)
+
 def get_user_input(prompt: str) -> bool:
     """Prompt the user with the given message and return True if the user enters 'yes', False otherwise."""
     user_input = input(prompt)
@@ -155,7 +170,8 @@ def my_capitalize(string_to_capitalize: str) -> str:
     return string_to_capitalize[0].upper() + string_to_capitalize[1:]
 
 class MyPopenResult:
-    def __init__(self, stdout, stderr, returncode):
+    """A class to store the results of a customized subprocess.Popen call."""
+    def __init__(self, stdout: str, stderr: str, returncode: int):
         self.stdout = stdout
         self.stderr = stderr
         self.returncode = returncode
@@ -206,14 +222,11 @@ def my_popen(command_list: list, suppress_info: bool = False, suppress_error: bo
         # Start threads
         stdout_thread = threading.Thread(target=read_stdout)
         stderr_thread = threading.Thread(target=read_stderr)
-
         stdout_thread.start()
         stderr_thread.start()
 
-        # Wait for the process to finish
+        # Wait for the process and threads to finish
         process.wait()
-
-        # Wait for threads to finish
         stdout_thread.join()
         stderr_thread.join()
 
@@ -225,6 +238,97 @@ def my_popen(command_list: list, suppress_info: bool = False, suppress_error: bo
     except Exception as e:
         logging.error(f"An error occurred: {e}")
         return MyPopenResult(stdout="", stderr=str(e), returncode=-1)
+
+def get_hostname_socket():
+    """Retrieves the hostname using socket.gethostname()."""
+    return socket.gethostname()
+
+def get_hostname_platform():
+    """Retrieves the hostname using platform.node()."""
+    return platform.node()
+
+def get_hostname_os_uname():
+    """Retrieves the hostname using os.uname().nodename."""
+    return os.uname().nodename
+
+def get_hostname_subprocess_hostname():
+    """Retrieves the hostname using the 'hostname' system command via subprocess."""
+    result = subprocess.run(['hostname'], capture_output=True, text=True, check=True)
+    return result.stdout.strip()
+
+def get_hostname_subprocess_scutil():
+    """Retrieves the hostname using the 'scutil --get ComputerName' command on macOS via subprocess."""
+    result = subprocess.run(['scutil', '--get', 'ComputerName'], capture_output=True, text=True, check=True)
+    return result.stdout.strip()
+
+def get_computer_name():
+    """
+    Attempts multiple methods to retrieve the computer's name.
+    
+    Returns:
+        computer_name (str): The most common computer name.
+    """
+    methods = {
+        'socket_gethostname': get_hostname_socket,
+        'platform_node': get_hostname_platform,
+        'os_uname_nodename': get_hostname_os_uname,
+        'subprocess_hostname': get_hostname_subprocess_hostname,
+        'subprocess_scutil_computername': get_hostname_subprocess_scutil  # macOS specific
+    }
+
+    results = {}
+
+    for method_name, method_func in methods.items():
+        try:
+            name = method_func()
+            results[method_name] = name
+        except Exception as e:
+            # Optionally, you can log the exception or print it for debugging
+            # print(f"Method {method_name} failed with error: {e}")
+            pass  # Skip methods that fail
+
+    computer_name = analyze_results(results)
+
+    return computer_name
+
+def analyze_results(results: Dict[str, str]) -> str:
+    """
+    Analyzes the retrieved computer names.
+    
+    Args:
+        results (dict): Dictionary with method names as keys and computer names as values.
+    Returns:
+        computer_name (str): The most common computer name.
+    """
+    if not results:
+        print("No methods succeeded in retrieving the computer name.")
+        return "ERROR-NO-NAME"
+
+    name_values = list(results.values())
+    name_counts = Counter(name_values)
+    most_common = name_counts.most_common()
+
+    if len(name_counts) == 1:
+        # All names are identical
+        #print(f"Computer Name: {most_common[0][0]}")
+        return most_common[0][0]
+    else:
+        # Names are not identical
+        primary_name, primary_count = most_common[0]
+        differing = {name: count for name, count in most_common if name != primary_name}
+        
+        print(f"Most Common Computer Name: {primary_name} (appeared {primary_count} times)")
+        
+        print("Other Names:")
+        for name, count in differing.items():
+            print(f" - {name} (appeared {count} times)")
+
+        # Optionally, list which methods returned which names
+        print("\nDetailed Method Outputs:")
+        for method, name in results.items():
+            print(f" - {method}: {name}")
+        
+        return primary_name
 
 def prettyprint_timespan(timespan: float) -> None:
     """Pretty-prints a timespan in years, weeks, days, hours, and seconds."""
@@ -272,10 +376,11 @@ def prettyprint_timespan(timespan: float) -> None:
 
     print(f"The script took {time_str} to run.")
 
-def open_dir_in_VLC(the_dir: str, sort_choice: str,
+def open_dir_in_VLC(the_dir: str, sort_choice: str = "sort_by_name",
                     recursive: bool = False,
                     no_start: bool = False) -> None:
-    """Recursively open the files in the directory in VLC, sorted by name or modification time. If no_start is True, don't start playback in VLC."""
+    """Create a playlist of the files in the specified directory, then play that playlist in VLC. By default, don't search the directory recursively and sort the files by name. Optional arguments allow recursive loading or sorting by modification time. If no_start is True, don't start playback in VLC."""
+    #start_flag = "--start-paused" if no_start else ""
     start_flag = "--no-playlist-autostart" if no_start else ""
     # List to store files with their modification times
     files_with_times = []
@@ -310,9 +415,11 @@ def open_dir_in_VLC(the_dir: str, sort_choice: str,
     for _, file_path in files_with_times:
         base_name = os.path.basename(file_path)
         playlist_content += f"#EXTINF:-1,{base_name.replace(',', '').replace('-', '')}\n{file_path}\n"
-    # Write the playlist to ./playlist.m3u
-    playlist_path = "./playlist.m3u"
+    # Write the playlist to disk
+    playlist_path = os.path.join(os.getcwd(), "playlist.m3u")
     with open(playlist_path, "w") as playlist_file:
         playlist_file.write(playlist_content)
     # Open the playlist in VLC
-    subprocess.Popen(["vlc", start_flag, playlist_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if start_flag: command_list = ["vlc", start_flag, playlist_path]
+    else:          command_list = ["vlc",             playlist_path]
+    subprocess.Popen(command_list, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

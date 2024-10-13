@@ -22,7 +22,7 @@ import ast
 
 from univ_defs import *
 
-__version__ = '0.1.1'
+__version__ = '0.1.0'
 
 class Options():
     """Class that has all global options in one place."""
@@ -53,6 +53,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.python_command: str = ''
         self.shell: str = ''
         self.mypy_filepath: str = os.path.abspath(__file__) # This file's full path and filename
+        self.computer_name: str = get_computer_name()
         self.cwd: str = os.getcwd()
         self.venv_name: str = 'myenv' # Can NOT include dashes ('-')
         self.mypy_dir: str = os.path.expanduser(os.path.join('~','mypy'))
@@ -2244,6 +2245,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument('-rc', action='store_true', help='Refresh the custom modules cache and the pip list.')
     parser.add_argument('-reqs', action='store_true', help='Read the extra_requirements.txt file in the current directory and install the packages listed there (with specific versions if present in the file) into the venv (along with the other packages needed to run the script as determined elsewhere in this program).')
     parser.add_argument('-alias', type=str, help='Add an alias to the shell configuration file so that typing ALIAS anywhere runs this program.')
+    parser.add_argument('-rawlog', action='store_true', help='Do not add timestamps or INFO level to log messages, and do not add extra INFO level log statements. Just produce the same output that would be seen when running the program without mypy.')
     parser.add_argument('-docker', action='store_true', help='UNFINISHED! Create a Dockerfile and requirements.txt file in a subdirectory named after the target script that can be used to run the script in a Docker container.')
 
     # If no arguments are provided, print a short guide
@@ -2411,7 +2413,7 @@ def my_fopen(options: Options, file_path: str, suppress_errors: bool = False) ->
             this_message = f"Error reading file {file_path} with encoding {encoding}: {str(e)}"
             if not suppress_errors: logging.error(this_message)
             else:                   logging.info(this_message)
-            return
+            return False
     return False
 
 def my_ast_parse(file_content: str, file_path: str) -> Optional[ast.AST]:
@@ -2611,7 +2613,7 @@ def split_imports(options: Options) -> None:
         options.all_imports = options.all_imports.union(options.extra_requirements.keys())
     options.total_imports = len(options.all_imports)
     if not options.total_imports:
-        logging.info("No imports found.")
+        if not options.rawlog: logging.info("No imports found.")
         return
 
     max_length = max(len(imp) for imp in options.all_imports)
@@ -2629,22 +2631,24 @@ def split_imports(options: Options) -> None:
             else:
                 logging.debug(f"Import {imp} is not installed and not a custom module")  # New logging
                 options.uninstalled_imports.add(package_name)
-            logging.info(f"Checking import {imp:{max_length}} : {i}/{options.total_imports}")
+            if not options.rawlog: logging.info(f"Checking import {imp:{max_length}} : {i}/{options.total_imports}")
     if getattr(options.args, 'reqs', False):
         options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
     if 'xarray' in options.uninstalled_imports:
         xarray_dependencies = ['dask','netcdf4','h5netcdf']
-        logging.info(f"Adding xarray dependencies to uninstalled imports: {xarray_dependencies}")
+        if not options.rawlog: logging.info(f"Adding xarray dependencies to uninstalled imports: {xarray_dependencies}")
         options.uninstalled_imports.update(xarray_dependencies)
     return
 
 def list_packages(options: Options) -> None:
     """Examine command line arguments to determine if we're looking at a directory, a single python script, or a list of python scripts. List all installed and uninstalled packages that are imported in that directory or python script(s). Return these sets inside the options object."""
     if getattr(options.args, 'full', False):
-        logging.info("Building a virtual environment that can run every python script in this directory.")
+        if not options.rawlog: logging.info("Building a virtual environment that can run every python script in this directory.")
         options.script_dir_or_file_or_list = options.script_dir
     else:
-        if not getattr(options.args, 'script_args', None):
+        # If there aren't any script arguments then we're looking at a single python script.
+        # If the python script is autolambda.py then ignore any script arguments. Autolambda will take care of them separately so there's no need to install them in the venv.
+        if not getattr(options.args, 'script_args', None) or "autolambda.py" in options.python_script:
             options.script_dir_or_file_or_list = options.python_script
         else:
             # List all the script arguments that are local python scripts.
@@ -2660,26 +2664,26 @@ def list_packages(options: Options) -> None:
         options.script_dir_or_file_or_list = os.path.expanduser(options.script_dir_or_file_or_list)
         options.loaded_custom_modules = set()
         if os.path.isfile(options.script_dir_or_file_or_list):
-            logging.info("Processing a single Python script.")
+            if not options.rawlog: logging.info(f"Processing a single Python script: {options.script_dir_or_file_or_list}.")
             python_file = options.script_dir_or_file_or_list
             options.all_imports = set()
             find_imports_in_script(options, python_file)
         elif os.path.isdir(options.script_dir_or_file_or_list):
-            logging.info("Processing an entire folder of Python scripts.")
+            if not options.rawlog: logging.info(f"Processing an entire folder of Python scripts: {options.script_dir_or_file_or_list}.")
             python_dir = options.script_dir_or_file_or_list
             if PIPREQS_AVAILABLE:
-                logging.info("Using pipreqs to generate requirements.")
+                if not options.rawlog: logging.info("Using pipreqs to generate requirements.")
                 generate_requirements(options.script_dir_or_file_or_list)
                 with open(os.path.join(python_dir, 'requirements.txt'), 'r') as f:
                     options.all_imports = set(line.strip() for line in f)
             else:
-                logging.info("Using custom script to find imports.")
+                if not options.rawlog: logging.info("Using custom script to find imports.")
                 options.all_imports = get_all_imports(options, options.script_dir_or_file_or_list)
         else:
             logging.error(f"Error: The file or directory {options.script_dir_or_file_or_list} does not exist.")
             sys.exit(1)
     else:
-        logging.info(f"Processing a list of Python scripts: {options.script_dir_or_file_or_list}")
+        if not options.rawlog: logging.info(f"Processing a list of Python scripts: {options.script_dir_or_file_or_list}")
         options.all_imports = set()
         for python_file in options.script_dir_or_file_or_list:
             if os.path.isabs(python_file):
@@ -2707,9 +2711,9 @@ def get_all_imports(options: Options, directory: str) -> None:
                 file_path = os.path.join(root, file)
                 find_imports_in_script(options, file_path)
                 processed_files += 1
-                logging.info(f"Processing files in {directory}: {processed_files}/{total_files}")
+                if not options.rawlog: logging.info(f"Processing files in {directory}: {processed_files}/{total_files}")
 
-    logging.info(f"\nFinished processing files in {directory}.")
+    if not options.rawlog: logging.info(f"\nFinished processing files in {directory}.")
 
 def generate_requirements(directory: str) -> None:
     """Generate a requirements file using pipreqs."""
@@ -2747,7 +2751,7 @@ def download_packages(options: Options) -> bool:
     {options.venv_pip} download -r {options.requirements_file} -d {options.packages_dir}"""
 
     try:
-        logging.info(f"Writing download script to {options.download_script_path}")
+        if not options.rawlog: logging.info(f"Writing download script to {options.download_script_path}")
         with open(options.download_script_path, 'w') as f:
             f.write(download_script)
         os.chmod(options.download_script_path, 0o755)
@@ -2767,11 +2771,11 @@ def install_packages_simultaneously(options: Options) -> bool:
             "--no-index", "--find-links", options.packages_dir,
             "-r", options.requirements_file
         ]
-        logging.info("Installing all packages simultaneously...")
+        if not options.rawlog: logging.info("Installing all packages simultaneously...")
         # Run the command and capture the output line by line using my_popen
         result = my_popen(install_command)
         if result.returncode == 0:
-            logging.info("All packages installed successfully.")
+            if not options.rawlog: logging.info("All packages installed successfully.")
             return True
         else:
             logging.error("Failed to install some packages.")
@@ -2790,7 +2794,7 @@ def install_packages_individually(options: Options) -> bool:
     if failed_packages:
         logging.error(f"Failed to install the following packages: {', '.join(failed_packages)}")
     else:
-        logging.info("All packages installed successfully.")
+        if not options.rawlog: logging.info("All packages installed successfully.")
 
 def install_package(package_name: str, options: Options) -> bool:
     """Install a single package and return the success status."""
@@ -2800,7 +2804,7 @@ def install_package(package_name: str, options: Options) -> bool:
             capture_output=True,
             text=True
         )
-        logging.info(result.stdout)
+        if not options.rawlog: logging.info(result.stdout)
         if result.stderr:
             logging.error(result.stderr)
         if result.returncode != 0:
@@ -2822,7 +2826,7 @@ def install_package(package_name: str, options: Options) -> bool:
             if install_result.returncode != 0:
                 logging.error(f"Failed to install {package_name}. Error: {install_result.stderr}")
             else:
-                logging.info(f"Successfully installed {package_name}")
+                if not options.rawlog: logging.info(f"Successfully installed {package_name}")
             return result.returncode == 0
         return result.returncode == 0
     except Exception as e:
@@ -2884,13 +2888,13 @@ def recover_pip_versions(output: str, options: Options) -> None:
 
     if current_version_match:
         options.current_pip_version = current_version_match.group(1)
-        logging.info(f"Recovered current pip version: {options.current_pip_version}")
+        if not options.rawlog: logging.info(f"Recovered current pip version: {options.current_pip_version}")
     else:
         logging.warning("Failed to recover current pip version from output.")
     
     if new_version_match:
         options.new_pip_version = new_version_match.group(1)
-        logging.info(f"Recovered new pip version: {options.new_pip_version}")
+        if not options.rawlog: logging.info(f"Recovered new pip version: {options.new_pip_version}")
     else:
         logging.warning("Failed to recover new pip version from output.")
 
@@ -3039,14 +3043,14 @@ def setup_virtualenv(options: Options) -> bool:
     if not write_requirements_file_with_extras(options):
         return False
 
-    logging.info("Creating virtual environment...")
+    if not options.rawlog: logging.info("Creating virtual environment...")
     subprocess.check_call([sys.executable, '-m', 'venv', options.venv_dir])
-    logging.info("Virtual environment created.")
+    if not options.rawlog: logging.info("Virtual environment created.")
 
     # Activate virtual environment and install wheel
     install_command = f"bash -c '{options.activate_script} && {options.venv_pip} install wheel'"
     subprocess.run(install_command, shell=True, check=True)
-    logging.info("Wheel installed in the virtual environment.")
+    if not options.rawlog: logging.info("Wheel installed in the virtual environment.")
 
     download_packages(options)
     if install_packages_simultaneously(options):
@@ -3067,6 +3071,8 @@ def is_virtualenv() -> bool:
 def get_file_operations(options: Options, script_path: str) -> Tuple[List[str], List[str]]:
     """Find files that are read or written."""
     file_content = my_fopen(options, script_path)
+    if not file_content:
+        my_critical_error(f"Failed to open {script_path}")
     tree = my_ast_parse(file_content, script_path)
     if not tree:
         return [], []
@@ -3182,13 +3188,13 @@ def guard_examines(options: Options) -> None:
         aggregate_operations(module_path)
 
     if read_files:
-        logging.info("Files read: " + ", ".join(read_files))
+        if not options.rawlog: logging.info("Files read: " + ", ".join(read_files))
     if write_files:
-        logging.info("Files written: " + ", ".join(write_files))
+        if not options.rawlog: logging.info("Files written: " + ", ".join(write_files))
     if download_urls:
-        logging.info("Download URLs: " + ", ".join(download_urls))
+        if not options.rawlog: logging.info("Download URLs: " + ", ".join(download_urls))
     if upload_urls:
-        logging.info("Upload URLs: " + ", ".join(upload_urls))
+        if not options.rawlog: logging.info("Upload URLs: " + ", ".join(upload_urls))
     
 def save_options_to_json(options: Options) -> None:
     """Save the options object to a JSON file."""
@@ -3252,7 +3258,7 @@ def load_options_from_json(json_file: str) -> Options:
     else:
         logging.warning(f"No 'sets' key found in {json_file}.")
     
-    logging.info(f"options loaded from {json_file}")
+    if not options.rawlog: logging.info(f"options loaded from {json_file}")
     return options_FROM_JSON
 
 def latest_venv(final_venv_folders: Dict[str, Dict[str, int]]) -> str:
@@ -3303,9 +3309,9 @@ def check_venv_dir(options: Options, options_from_cache: Options) -> bool:
                 else:
                     logging.error(f"The cached venv directory {options_from_cache.venv_dir} failed check_packages_in_venv.")
             else:
-                logging.info(f"The cached venv directory {options_from_cache.venv_dir} does not have all the currently required packages.")
+                if not options.rawlog: logging.info(f"The cached venv directory {options_from_cache.venv_dir} does not have all the currently required packages.")
         else:
-            logging.info(f"The cached venv directory {options_from_cache.venv_dir} is no longer valid.")
+            if not options.rawlog: logging.info(f"The cached venv directory {options_from_cache.venv_dir} is no longer valid.")
     return 0
 
 def find_match_dir_in_cache(options: Options) -> str:
@@ -3325,13 +3331,13 @@ def find_match_dir_in_cache(options: Options) -> str:
                 if check_venv_dir(options, options_last_used):
                     return options_last_used.venv_dir
                 else:
-                    logging.info("Trying to load the latest matching venv now.")
+                    if not options.rawlog: logging.info("Trying to load the latest matching venv now.")
         except Exception as e:
             logging.error(f"Error loading last used venv from cache: {e}")
             logging.warning("The last used cache encountered a problem. Trying to load the latest matching venv now.")
         options.args.latest    = True #If that didn't work, try to load the latest venv in the cache
         options.args.last_used = False #And set this to False because it failed
-    logging.info("Checking the cache for a virtual environment with all the required packages...")
+    if not options.rawlog: logging.info("Checking the cache for a virtual environment with all the required packages...")
     #Search for all venv_name folders in mypy:
     all_venv_folders = [f for f in os.listdir(options.mypy_dir) if os.path.isdir(os.path.join(options.mypy_dir, f)) and f.startswith(options.venv_name)]
     #Loop through the folders and eliminate folders that clearly don't have the right packages just based on their names:
@@ -3361,9 +3367,9 @@ def find_match_dir_in_cache(options: Options) -> str:
             this_timestamp = folder.split('-')[2]+'-'+folder.split('-')[3]
             final_venv_folders[folder] = {'timestamp': this_timestamp, 'num_packages': len(requirements)}
     if not final_venv_folders:
-        logging.info("No matching venv folders found in the cache.")
+        if not options.rawlog: logging.info("No matching venv folders found in the cache.")
     else:
-        logging.info(f"Found {len(final_venv_folders)} matching venv folders in the cache.")
+        if not options.rawlog: logging.info(f"Found {len(final_venv_folders)} matching venv folders in the cache.")
         if     getattr(options.args, 'latest', False) and \
            not getattr(options.args, 'oldest', False) and \
            not getattr(options.args, 'last_used', False) and \
@@ -3425,8 +3431,8 @@ def dict_of_custom_modules(options: Options) -> Dict[str, str]:
     #If -rc and -no-cache were not specified, look for a pickle file with the custom modules dictionary the last time this script was run.
     if not getattr(options.args, 'rc', False) and not getattr(options.args, 'no_cache', False):
         for file in os.listdir('.'):
-            if file.startswith('.mypy_custom_modules_') and file.endswith('.pkl'):
-                logging.info(f"Loading custom modules from {file}")
+            if file.startswith('.mypy_custom_modules_') and file.endswith('.pkl') and options.computer_name in file:
+                if not options.rawlog: logging.info(f"Loading custom modules from {file}")
                 with open(file, 'rb') as f:
                     custom_modules = pickle.load(f)
                 return custom_modules
@@ -3456,9 +3462,9 @@ def dict_of_custom_modules(options: Options) -> Dict[str, str]:
                                     del custom_modules[module_name]
     #Now save to a pickle file:
     current_time = datetime.now().strftime('%Y%m%d-%H%M%S')
-    custom_filename = f'.mypy_custom_modules_{current_time}.pkl'
+    custom_filename = f'.mypy_custom_modules_{options.computer_name}_{current_time}.pkl'
     with open(custom_filename, 'wb') as f:
-        logging.info(f"Saving custom modules to {custom_filename}")
+        if not options.rawlog: logging.info(f"Saving custom modules to {custom_filename}")
         pickle.dump(custom_modules, f)
     return custom_modules
 
@@ -3475,7 +3481,7 @@ def check_python_version(command: str) -> bool:
                 return True
         return False
     except Exception as e:
-        logging.info(f"Error checking {command}: {e}", file=sys.stderr)
+        if not options.rawlog: logging.info(f"Error checking {command}: {e}", file=sys.stderr)
         return False
 
 def find_preferred_python_version() -> Optional[str]:
@@ -3495,7 +3501,7 @@ def find_preferred_python_version() -> Optional[str]:
         return None
 
     except Exception as e:
-        logging.info(f"Error finding python{PY_VERSION}: {e}", file=sys.stderr)
+        if not options.rawlog: logging.info(f"Error finding python{PY_VERSION}: {e}", file=sys.stderr)
         return None
 
 def main() -> None:
@@ -3504,21 +3510,16 @@ def main() -> None:
     options.args = parse_arguments()
     options.python_script = getattr(options.args, 'script', None)
     options.script_args = getattr(options.args, 'script_args', [])
+    options.rawlog = getattr(options.args, 'rawlog', False)
 
     if getattr(options.args, 'version', False):
         print(__version__)
         sys.exit(0)
 
-    if getattr(options.args, 'script', False):
-        if options.script_args: arg_string = f" with arguments: {options.script_args}"
-        else:                        arg_string = ""
-        print(f"Running script: {options.args.script}{arg_string}")
-        if getattr(options.args, 'alias', False):
-            print(f"Adding alias: {options.args.alias}")
-
     log_mode = "INFO"
     #log_mode = "DEBUG"
-    memory_handler = configure_logging("mypy", log_level=log_mode)
+    memory_handler = configure_logging("mypy", log_level=log_mode,
+                                       rawlog=options.rawlog)
 
     options.python_command = find_preferred_python_version()
     if options.python_command:
@@ -3573,20 +3574,20 @@ def main() -> None:
 
     if getattr(options.args, 'reqs', False):
         parse_extra_requirements(options)
-        logging.info(f"Loaded extra requirements from ./{options.extra_requirements_file}: {options.extra_requirements}")
+        if not options.rawlog: logging.info(f"Loaded extra requirements from ./{options.extra_requirements_file}: {options.extra_requirements}")
 
     if not os.path.isdir(options.mypy_dir):
-        logging.info(f"Directory {options.mypy_dir} does not exist yet, so it is being created.")
+        if not options.rawlog: logging.info(f"Directory {options.mypy_dir} does not exist yet, so it is being created.")
         os.makedirs(options.mypy_dir, exist_ok=True)
     if not os.path.isdir(options.packages_dir):
-        logging.info(f"Directory {options.packages_dir} does not exist yet, so it is being created.")
+        if not options.rawlog: logging.info(f"Directory {options.packages_dir} does not exist yet, so it is being created.")
         os.makedirs(options.packages_dir, exist_ok=True)
 
     time1 = datetime.now()
     options.custom_modules = dict_of_custom_modules(options)
     time2 = datetime.now()
     elapsed_time = time2 - time1
-    logging.info(f"dict_of_custom_modules() took {elapsed_time}")
+    if not options.rawlog: logging.info(f"dict_of_custom_modules() took {elapsed_time}")
     
     #Look for files in options.mypy_dir that start with pip_list and load the most recent one.
     options.pip_list = []
@@ -3603,60 +3604,60 @@ def main() -> None:
 
     start_list_packages_time = datetime.now()
     elapsed_time = start_list_packages_time - start_time
-    logging.info(f"Elapsed time: {elapsed_time}")
+    if not options.rawlog: logging.info(f"Elapsed time: {elapsed_time}")
 
     list_packages(options)
-    logging.info(f"Uninstalled imports: {options.uninstalled_imports}")
+    if not options.rawlog: logging.info(f"Uninstalled imports: {options.uninstalled_imports}")
     if options.bad_imports:
         logging.warning(f"Bad imports: {options.bad_imports}")
 
     if not options.uninstalled_imports:
-        logging.info("All required packages are already installed.")
+        if not options.rawlog: logging.info("All required packages are already installed.")
         guard_examines(options)
         start_raw_time = datetime.now()
         subprocess.run([sys.executable, options.python_script] + options.script_args)
         elapsed_raw_time = datetime.now() - start_raw_time
-        logging.info(f"Runtime: {elapsed_raw_time}")
+        if not options.rawlog: logging.info(f"Runtime: {elapsed_raw_time}")
     elif is_virtualenv():
-        logging.info("Already in a virtual environment.")
+        if not options.rawlog: logging.info("Already in a virtual environment.")
         if check_packages_in_venv(options):
             guard_examines(options)
             start_raw_time = datetime.now()
             subprocess.run([sys.executable, options.python_script] + options.script_args)
             elapsed_raw_time = datetime.now() - start_raw_time
-            logging.info(f"Runtime: {elapsed_raw_time}")
+            if not options.rawlog: logging.info(f"Runtime: {elapsed_raw_time}")
         else:
             logging.error("The current virtual environment does not have all the required packages.")
-            logging.info("Please deactivate the current virtual environment and run the script again.")
+            if not options.rawlog: logging.info("Please deactivate the current virtual environment and run the script again.")
     else:
-        logging.info("Not in a virtual environment.")
+        if not options.rawlog: logging.info("Not in a virtual environment.")
         if getattr(options.args, 'no_cache', False):
             match_dir = None
         else:
             match_dir = find_match_dir_in_cache(options)
         if not match_dir:
-            logging.info(f"Creating new virtual environment '{options.venv_name}'...")
+            if not options.rawlog: logging.info(f"Creating new virtual environment '{options.venv_name}'...")
             if setup_virtualenv(options):
                 match_dir = options.venv_dir
             else:
                 logging.error("Failed to create a virtual environment.")
                 match_dir = None
         else:
-            logging.info(f"Using directory: {match_dir}")
+            if not options.rawlog: logging.info(f"Using directory: {match_dir}")
 
         if match_dir:
             guard_examines(options)
             options.set_venv_dir(match_dir)
             start_venv_time = datetime.now()
             elapsed_time = start_venv_time - start_time
-            logging.info(f"Elapsed time: {elapsed_time}")
-            logging.info(f"Activating virtual environment: {options.activate_script}")
+            if not options.rawlog: logging.info(f"Elapsed time: {elapsed_time}")
+            if not options.rawlog: logging.info(f"Activating virtual environment: {options.activate_script}")
             activate_cmd = f"bash -c '{options.activate_script} && echo \"Virtual environment activated.\" && {options.venv_python} {options.python_script} {' '.join(options.script_args)}'"
             #I want to capture the output of the subprocess.run() so that I can print it at the end.
             result = subprocess.run(activate_cmd, shell=True)
             end_time = datetime.now()
             elapsed_time = end_time - start_venv_time
-            logging.info(f"Elapsed time since activating virtual environment: {elapsed_time}")
+            if not options.rawlog: logging.info(f"Elapsed time since activating virtual environment: {elapsed_time}")
             if result.returncode != 0:
                 logging.error(f"Error running script: {result.stderr}")
             elif os.path.basename(options.venv_dir).startswith('failed-') and options.simultaneous_success:
