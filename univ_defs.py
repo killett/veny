@@ -148,7 +148,8 @@ def get_log_level(log_level: str) -> int:
                  'CRITICAL' : logging.CRITICAL}
     return value_map.get(log_level, logging.INFO)
 
-def my_critical_error(message: str, choose_breakpoint: bool = False, exit_code: int = 1) -> None:
+def my_critical_error(message: str, choose_breakpoint: bool = False,
+                      exit_code: int = 1) -> None:
     """Log a critical error message and either exit the program or enter a breakpoint."""
     #Check to see if logger is set up. If not, just print the critical error message.
     if logging.getLogger().hasHandlers():
@@ -156,6 +157,7 @@ def my_critical_error(message: str, choose_breakpoint: bool = False, exit_code: 
     else:
         print(message)
     if choose_breakpoint:
+        print("Entering breakpoint while inside the my_critical_error() function. You can step outside of this function and remain paused by pressing 'n' to access variables in the calling function or press 'c' to continue running the script.")
         breakpoint()
     else:
         sys.exit(exit_code)
@@ -177,7 +179,8 @@ class MyPopenResult:
         self.returncode = returncode
         self.success = (returncode == 0)
 
-def my_popen(command_list: list, suppress_info: bool = False, suppress_error: bool = False) -> MyPopenResult:
+def my_popen(command_list: list, suppress_info: bool = False,
+             suppress_error: bool = False) -> MyPopenResult:
     """Execute a command using subprocess.Popen and capture the output line by line using threads."""
     command_list_str = [str(item) for item in command_list]
     the_statement = "Executing command: " + ' '.join(command_list_str)
@@ -261,13 +264,8 @@ def get_hostname_subprocess_scutil():
     result = subprocess.run(['scutil', '--get', 'ComputerName'], capture_output=True, text=True, check=True)
     return result.stdout.strip()
 
-def get_computer_name():
-    """
-    Attempts multiple methods to retrieve the computer's name.
-    
-    Returns:
-        computer_name (str): The most common computer name.
-    """
+def get_computer_name() -> str:
+    """Attempts multiple methods to retrieve the computer's name and returns the most common one."""
     methods = {
         'socket_gethostname': get_hostname_socket,
         'platform_node': get_hostname_platform,

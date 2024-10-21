@@ -96,6 +96,13 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.uninstalled_imports: Set[str] = set()
         self.total_imports: int = 0
         self.bad_imports: Set[str] = set()
+        self.rawlog: bool = False
+        # Some packages also need other packages to be installed.
+        self.also_needs: Dict[str, List[str]] = {
+            'xarray': ['dask', 'netcdf4', 'h5netcdf'],
+            # NOT PIP PACKAGES: 'pyautogui': ['scrot', 'python3-tk']
+            # Add more packages and their dependencies here
+        }
         # Keep a list of all python standard library modules.
         #This list is from the pipreqs repo in file "mapping", retrieved on 2024-08-15 from here: https://github.com/bndr/pipreqs
         self.standard_modules: List[str] = ['_abc', 'abc', 'aifc', 
@@ -2214,7 +2221,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.requirements_file    = os.path.join(self.venv_dir, "requirements.txt")
         self.download_script_path = os.path.join(self.venv_dir, "download_packages.sh")
 
-def parse_arguments() -> argparse.Namespace:
+def parse_arguments(options: Options) -> None:
     """Parse command-line arguments."""
 
     # Find the second argument ending with ".py"
@@ -2256,8 +2263,7 @@ def parse_arguments() -> argparse.Namespace:
     # Parse known args, and then manually add the script_args
     args = parser.parse_args()
     args.script_args = script_args
-    
-    return args
+    options.args = args
 
 def detect_shell() -> str:
     """Detect the current shell."""
@@ -2601,6 +2607,33 @@ def find_imports_in_script(options: Options, first_path: str) -> None:
                     else:
                         logging.error(f"No arguments provided to __import__(): {ast.unparse(node)}")
 
+def add_dependencies(options: Options) -> None:
+    """Add dependencies for uninstalled imports."""
+    # Create a copy to iterate over since we'll be modifying the set
+    initial_packages = options.uninstalled_imports.copy()
+    
+    for package in initial_packages:
+        if package in options.also_needs:
+            dependencies = options.also_needs[package]
+            if not options.rawlog:
+                logging.info(f"Adding dependencies for {package}: {dependencies}")
+            options.uninstalled_imports.update(dependencies)
+    
+    # Handle nested dependencies by repeating this process until no new dependencies are added.
+    added = True
+    while added:
+        added = False
+        current_packages = options.uninstalled_imports.copy()
+        for package in current_packages:
+            if package in options.also_needs:
+                dependencies = options.also_needs[package]
+                new_dependencies = set(dependencies) - options.uninstalled_imports
+                if new_dependencies:
+                    if not options.rawlog:
+                        logging.info(f"Adding nested dependencies for {package}: {new_dependencies}")
+                    options.uninstalled_imports.update(new_dependencies)
+                    added = True
+
 def split_imports(options: Options) -> None:
     """Split imports into installed, uninstalled, and bad imports."""
     options.bad_imports = options.known_bad_imports.intersection(options.all_imports)
@@ -2625,7 +2658,8 @@ def split_imports(options: Options) -> None:
             logging.debug(f"Checking if import {imp} is installed or uninstalled")  # New logging
             if imp in options.custom_modules.keys():
                 logging.debug(f"Custom module {imp} has path {options.custom_modules[imp]}")
-            elif check_packages_in_venv(options, package=package_name, venv_dir=venv_dir):
+            elif check_packages_in_venv(options, package=package_name,
+                                        venv_dir=venv_dir):
                 logging.debug(f"Module {imp} can be imported in venv")
                 options.installed_imports.add(imp)
             else:
@@ -2634,10 +2668,7 @@ def split_imports(options: Options) -> None:
             if not options.rawlog: logging.info(f"Checking import {imp:{max_length}} : {i}/{options.total_imports}")
     if getattr(options.args, 'reqs', False):
         options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
-    if 'xarray' in options.uninstalled_imports:
-        xarray_dependencies = ['dask','netcdf4','h5netcdf']
-        if not options.rawlog: logging.info(f"Adding xarray dependencies to uninstalled imports: {xarray_dependencies}")
-        options.uninstalled_imports.update(xarray_dependencies)
+    add_dependencies(options)
     return
 
 def list_packages(options: Options) -> None:
@@ -3072,7 +3103,7 @@ def get_file_operations(options: Options, script_path: str) -> Tuple[List[str], 
     """Find files that are read or written."""
     file_content = my_fopen(options, script_path)
     if not file_content:
-        my_critical_error(f"Failed to open {script_path}")
+        my_critical_error(f"Failed to open {script_path}", choose_breakpoint=True)
     tree = my_ast_parse(file_content, script_path)
     if not tree:
         return [], []
@@ -3507,7 +3538,7 @@ def find_preferred_python_version() -> Optional[str]:
 def main() -> None:
     start_time = datetime.now()
     options = Options()
-    options.args = parse_arguments()
+    parse_arguments(options)
     options.python_script = getattr(options.args, 'script', None)
     options.script_args = getattr(options.args, 'script_args', [])
     options.rawlog = getattr(options.args, 'rawlog', False)
@@ -3640,7 +3671,7 @@ def main() -> None:
             if setup_virtualenv(options):
                 match_dir = options.venv_dir
             else:
-                logging.error("Failed to create a virtual environment.")
+                my_critical_error("Failed to create a virtual environment.", choose_breakpoint=True)
                 match_dir = None
         else:
             if not options.rawlog: logging.info(f"Using directory: {match_dir}")
@@ -3652,13 +3683,17 @@ def main() -> None:
             elapsed_time = start_venv_time - start_time
             if not options.rawlog: logging.info(f"Elapsed time: {elapsed_time}")
             if not options.rawlog: logging.info(f"Activating virtual environment: {options.activate_script}")
-            activate_cmd = f"bash -c '{options.activate_script} && echo \"Virtual environment activated.\" && {options.venv_python} {options.python_script} {' '.join(options.script_args)}'"
+            if not options.rawlog:
+                echo_statement = " && echo \"Virtual environment activated.\""
+            else:
+                echo_statement = ""
+            activate_cmd = f"bash -c '{options.activate_script}{echo_statement} && {options.venv_python} {options.python_script} {' '.join(options.script_args)}'"
             #I want to capture the output of the subprocess.run() so that I can print it at the end.
             result = subprocess.run(activate_cmd, shell=True)
             end_time = datetime.now()
             elapsed_time = end_time - start_venv_time
             if not options.rawlog: logging.info(f"Elapsed time since activating virtual environment: {elapsed_time}")
-            if result.returncode != 0:
+            if result.returncode != 0 and not options.rawlog:
                 logging.error(f"Error running script: {result.stderr}")
             elif os.path.basename(options.venv_dir).startswith('failed-') and options.simultaneous_success:
                 #If the program has made it to this point, it has run successfully, so the venv directory can be renamed. It HASN'T failed. However, if it couldn't install simultaneously, then it's still a failed venv.
@@ -3692,7 +3727,7 @@ def main() -> None:
 
             save_options_to_json(options)
 
-    if memory_handler.logs:
+    if memory_handler.logs and not options.rawlog:
         print("\n****************************\nCaptured error messages:")
         for log in memory_handler.logs:
             print(log)
