@@ -20,7 +20,7 @@ import logging
 import tempfile
 import ast
 
-from univ_defs import *
+import univ_defs as ud
 
 __version__ = '0.1.0'
 
@@ -53,7 +53,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.python_command: str = ''
         self.shell: str = ''
         self.mypy_filepath: str = os.path.abspath(__file__) # This file's full path and filename
-        self.computer_name: str = get_computer_name()
+        self.computer_name: str = ud.get_computer_name()
         self.cwd: str = os.getcwd()
         self.venv_name: str = 'myenv' # Can NOT include dashes ('-')
         self.mypy_dir: str = os.path.expanduser(os.path.join('~','mypy'))
@@ -2328,15 +2328,15 @@ def add_alias_to_rc(options: Options, rc_file: str, alias_command: str, addition
                 logging.info(f"Alias {options.args.alias} already exists in {file}")
         if not found_alias:
             try:
-                if get_user_input(f"Type 'yes' or 'y' to write this alias command:\n{alias_command}\nTo this file:\n{rc_file}\n... or type anything else to quit: "):
+                if ud.get_user_input(f"Type 'yes' or 'y' to write this alias command:\n{alias_command}\nTo this file:\n{rc_file}\n... or type anything else to quit: "):
                     with open(rc_file, "a") as file:
                         file.write(f"\n{alias_command}\n")
                     logging.info(f"Alias added to {rc_file}")
             except Exception as e:
-                logging.error(f"Failed to write alias to {rc_file}: {e}")
+                logging.error(f"Failed to write alias to {rc_file}: {e}\nException type: ", exc_info=True)
                 logging.error(options.manual_instructions)
     except Exception as e:
-        logging.error(f"An error occurred while adding the alias: {e}")
+        logging.error(f"An error occurred while adding the alias: {e}\nException type: ", exc_info=True)
         logging.error(options.manual_instructions)
 
 def add_alias(options: Options) -> None:
@@ -2402,8 +2402,9 @@ def my_fopen(options: Options, file_path: str, suppress_errors: bool = False) ->
     """Attempt to read the file with various encodings and return the file content if successful."""
     if not os.path.isfile(file_path):
         this_message = f"File does not exist: {file_path}"
-        if not suppress_errors: logging.error(this_message)
-        else:                   logging.info(this_message)
+        if not options.rawlog:
+            if not suppress_errors: logging.error(this_message)
+            else:                   logging.info(this_message)
         return False
     for encoding in options.encodings:
         try:
@@ -2417,8 +2418,9 @@ def my_fopen(options: Options, file_path: str, suppress_errors: bool = False) ->
             continue
         except Exception as e:
             this_message = f"Error reading file {file_path} with encoding {encoding}: {str(e)}"
-            if not suppress_errors: logging.error(this_message)
-            else:                   logging.info(this_message)
+            if not options.rawlog:
+                if not suppress_errors: logging.error(this_message)
+                else:                   logging.info(this_message)
             return False
     return False
 
@@ -2751,7 +2753,7 @@ def generate_requirements(directory: str) -> None:
     try:
         pipreqs.generate_requirements(directory)
     except Exception as e:
-        logging.error(f"Error generating requirements file: {e}")
+        logging.error(f"Error generating requirements file: {e}\nException type: ", exc_info=True)
 
 def download_packages(options: Options) -> bool:
     """Install packages in a virtual environment."""
@@ -2787,10 +2789,10 @@ def download_packages(options: Options) -> bool:
             f.write(download_script)
         os.chmod(options.download_script_path, 0o755)
         # Run the initial download script and capture the output
-        result = my_popen([options.download_script_path])
+        result = ud.my_popen([options.download_script_path])
         return result.returncode == 0
     except Exception as e:
-        logging.error(f"Error downloading packages: {e}")
+        logging.error(f"Error downloading packages: {e}\nException type: ", exc_info=True)
         return False
 
 def install_packages_simultaneously(options: Options) -> bool:
@@ -2803,8 +2805,8 @@ def install_packages_simultaneously(options: Options) -> bool:
             "-r", options.requirements_file
         ]
         if not options.rawlog: logging.info("Installing all packages simultaneously...")
-        # Run the command and capture the output line by line using my_popen
-        result = my_popen(install_command)
+        # Run the command and capture the output line by line using ud.my_popen
+        result = ud.my_popen(install_command)
         if result.returncode == 0:
             if not options.rawlog: logging.info("All packages installed successfully.")
             return True
@@ -2812,7 +2814,7 @@ def install_packages_simultaneously(options: Options) -> bool:
             logging.error("Failed to install some packages.")
             return False
     except Exception as e:
-        logging.error(f"Error during simultaneous installation: {e}")
+        logging.error(f"Error during simultaneous installation: {e}\nException type: ", exc_info=True)
         return False
 
 def install_packages_individually(options: Options) -> bool:
@@ -2861,7 +2863,7 @@ def install_package(package_name: str, options: Options) -> bool:
             return result.returncode == 0
         return result.returncode == 0
     except Exception as e:
-        logging.error(f"Error installing package {package_name}: {e}")
+        logging.error(f"Error installing package {package_name}: {e}\nException type: ", exc_info=True)
         return False
 
 def check_packages_in_venv(options: Options, package: Optional[str] = None, venv_dir: Optional[str] = None) -> bool:
@@ -2898,13 +2900,13 @@ else:
 END
 """
     try:
-        # Since my_popen expects a list of commands, we'll pass the shell command directly as a single argument list
+        # Since ud.my_popen expects a list of commands, we'll pass the shell command directly as a single argument list
         command_list = ['/bin/bash', '-c', test_script]
-        # Run the command using the custom my_popen function
-        result = my_popen(command_list, True) # True means to suppress output.
+        # Run the command using the custom ud.my_popen function
+        result = ud.my_popen(command_list, True) # True means to suppress output.
         return "packages imported successfully" in result.stdout
     except subprocess.CalledProcessError as e:
-        logging.error(f"Error running test script: {e}")
+        logging.error(f"Error running test script: {e}\nException type: ", exc_info=True)
         return False
 
 def recover_pip_versions(output: str, options: Options) -> None:
@@ -2983,7 +2985,7 @@ print("\\n".join(installed_packages + available_modules + list(builtin_modules))
             result = subprocess.run(list_command, check=True, capture_output=True, text=True)
             logging.debug(f"Output:\n{result.stdout}")
         except subprocess.CalledProcessError as e:
-            logging.error(f"{e}")
+            logging.error(f"{e}\nException type: ", exc_info=True)
 
         # Use regular expressions to find all package names
         options.pip_list = re.findall(r'^[^\s]+', result.stdout, re.MULTILINE)
@@ -3020,7 +3022,7 @@ def parse_extra_requirements(options: Options) -> Dict[str, Optional[str]]:
                     version_spec = match.group(2).strip() if match.group(2) else ''
                     options.extra_requirements[package] = version_spec
     except Exception as e:
-        logging.error(f"Error parsing extra requirements file: {e}")
+        logging.error(f"Error parsing extra requirements file: {e}\nException type: ", exc_info=True)
 
 def write_requirements_file_with_extras(options: Options) -> bool:
     """Write the requirements file with the extra requirements added and generate a 'pretty' requirements string."""
@@ -3059,7 +3061,7 @@ def write_requirements_file_with_extras(options: Options) -> bool:
                     options.pretty_requirements += '_'
                 options.pretty_requirements += pretty_package
     except Exception as e:
-        logging.error(f"Error writing packages to {options.requirements_file}: {e}")
+        logging.error(f"Error writing packages to {options.requirements_file}: {e}\nException type: ", exc_info=True)
         return False
     return True
 
@@ -3103,7 +3105,7 @@ def get_file_operations(options: Options, script_path: str) -> Tuple[List[str], 
     """Find files that are read or written."""
     file_content = my_fopen(options, script_path)
     if not file_content:
-        my_critical_error(f"Failed to open {script_path}", choose_breakpoint=True)
+        ud.my_critical_error(f"Failed to open {script_path}", choose_breakpoint=True)
     tree = my_ast_parse(file_content, script_path)
     if not tree:
         return [], []
@@ -3272,7 +3274,7 @@ def save_options_to_json(options: Options) -> None:
     with open(options.json_filename, 'w') as json_file:
         json.dump(options_dict, json_file, indent=4)
 
-def load_options_from_json(json_file: str) -> Options:
+def load_options_from_json(options: Options, json_file: str) -> Options:
     """Load the options object from a JSON file."""
     with open(json_file, 'r') as file:
         options_dict = json.load(file)
@@ -3352,20 +3354,23 @@ def find_match_dir_in_cache(options: Options) -> str:
        not getattr(options.args, 'last_used', False) and \
        not getattr(options.args, 'smallest', False):
         options.args.last_used = True #If no flags are set, then the default is to load the last used venv in the cache
-    if getattr(options.args, 'last_used', False) and not getattr(options.args, 'latest', False) and not getattr(options.args, 'smallest', False):
+    if     getattr(options.args, 'last_used', False) and \
+       not getattr(options.args, 'latest', False) and \
+       not getattr(options.args, 'smallest', False):
         try: # Try to load the last used venv in the cache
             json_files = [f for f in os.listdir(options.script_dir) if f.startswith("."+os.path.basename(options.python_script)) and f.endswith('.json')]
             if json_files:
                 if len(json_files) > 1:
                     json_files.sort(key=lambda x: datetime.strptime(x.split('-')[-2] + x.split('-')[-1].replace('.json', ''), "%Y%m%d%H%M%S"), reverse=True)
-                options_last_used = load_options_from_json(os.path.join(options.script_dir, json_files[0]))
+                options_last_used = load_options_from_json(options, os.path.join(options.script_dir, json_files[0]))
                 if check_venv_dir(options, options_last_used):
                     return options_last_used.venv_dir
                 else:
                     if not options.rawlog: logging.info("Trying to load the latest matching venv now.")
         except Exception as e:
-            logging.error(f"Error loading last used venv from cache: {e}")
-            logging.warning("The last used cache encountered a problem. Trying to load the latest matching venv now.")
+            if not options.rawlog:
+                logging.error(f"Error loading last used venv from cache: {e}\nException type: ", exc_info=True)
+                logging.warning("The last used cache encountered a problem. Trying to load the latest matching venv now.")
         options.args.latest    = True #If that didn't work, try to load the latest venv in the cache
         options.args.last_used = False #And set this to False because it failed
     if not options.rawlog: logging.info("Checking the cache for a virtual environment with all the required packages...")
@@ -3412,7 +3417,7 @@ def find_match_dir_in_cache(options: Options) -> str:
             if check_venv_dir(options, options_latest):
                 return options_latest.venv_dir
             else:
-                logging.error("The latest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
+                if not options.rawlog: logging.error("The latest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
                 return None
         elif    getattr(options.args, 'oldest', False) and \
             not getattr(options.args, 'latest', False) and \
@@ -3425,7 +3430,7 @@ def find_match_dir_in_cache(options: Options) -> str:
             if check_venv_dir(options, options_oldest):
                 return options_oldest.venv_dir
             else:
-                logging.error("The oldest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
+                if not options.rawlog: logging.error("The oldest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
                 return None
         elif    getattr(options.args, 'smallest', False) and \
             not getattr(options.args, 'latest', False) and \
@@ -3438,7 +3443,7 @@ def find_match_dir_in_cache(options: Options) -> str:
             if check_venv_dir(options, options_smallest):
                 return options_smallest.venv_dir
             else:
-                logging.error("The smallest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
+                if not options.rawlog: logging.error("The smallest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
                 return None
         else: # This should never happen
             logging.error(f"Invalid combination of flags. {getattr(options.args, 'latest', False) = }, {getattr(options.args, 'oldest', False) = }, {getattr(options.args, 'last_used', False) = }, {getattr(options.args, 'smallest', False) = }")
@@ -3469,7 +3474,7 @@ def dict_of_custom_modules(options: Options) -> Dict[str, str]:
                 return custom_modules
 
     custom_modules = {}
-    logging.debug(f"IN dict_of_custom_modules: {options.new_local_paths = }")
+    logging.debug(f"In dict_of_custom_modules: {options.new_local_paths = }")
     for path in sys.path:
         if not is_standard_path(options, path) and os.path.isdir(path):
             for root, dirs, files in os.walk(path):
@@ -3502,8 +3507,8 @@ def dict_of_custom_modules(options: Options) -> Dict[str, str]:
 def check_python_version(command: str) -> bool:
     """Check if the given Python command is available and has a version of PY_VERSION or higher."""
     try:
-        preferred_major = int(PY_VERSION)
-        preferred_minor = int((PY_VERSION - preferred_major) * 100)
+        preferred_major = int(ud.PY_VERSION)
+        preferred_minor = int((ud.PY_VERSION - preferred_major) * 100)
         result = subprocess.run([command, '--version'], capture_output=True, text=True)
         if result.returncode == 0:
             version = result.stdout.strip().split()[1]
@@ -3512,27 +3517,26 @@ def check_python_version(command: str) -> bool:
                 return True
         return False
     except Exception as e:
-        if not options.rawlog: logging.info(f"Error checking {command}: {e}", file=sys.stderr)
+        logging.error(f"Error checking {command}: {e}\nException type: ", exc_info=True)
         return False
 
 def find_preferred_python_version() -> Optional[str]:
     """Find the command for the preferred version of python (stored in univ_defs.py as PY_VERSION)."""
     try:
         # Check if the preferred python command (only specifying integer part of the preferred version) exists and returns a valid path
-        preferred_major = int(PY_VERSION)
+        preferred_major = int(ud.PY_VERSION)
         preferred_python_path = subprocess.run(['which', f'python{preferred_major}'], capture_output=True, text=True).stdout.strip()
         if preferred_python_path and check_python_version(f'python{preferred_major}'):
             return os.path.basename(preferred_python_path)
 
         # Check if the preferred python command (with complete version specified) exists and returns a valid path
-        preferred_python_path = subprocess.run(['which', f'python{PY_VERSION}'], capture_output=True, text=True).stdout.strip()
-        if preferred_python_path and check_python_version(f'python{PY_VERSION}'):
+        preferred_python_path = subprocess.run(['which', f'python{ud.PY_VERSION}'], capture_output=True, text=True).stdout.strip()
+        if preferred_python_path and check_python_version(f'python{ud.PY_VERSION}'):
             return os.path.basename(preferred_python_path)
         
         return None
-
     except Exception as e:
-        if not options.rawlog: logging.info(f"Error finding python{PY_VERSION}: {e}", file=sys.stderr)
+        logging.error(f"Error finding python{ud.PY_VERSION}: {e}\nException type: ", exc_info=True)
         return None
 
 def main() -> None:
@@ -3549,14 +3553,14 @@ def main() -> None:
 
     log_mode = "INFO"
     #log_mode = "DEBUG"
-    memory_handler = configure_logging("mypy", log_level=log_mode,
+    memory_handler = ud.configure_logging("mypy", log_level=log_mode,
                                        rawlog=options.rawlog)
 
     options.python_command = find_preferred_python_version()
     if options.python_command:
-        logging.debug(f"Python {PY_VERSION} is available at: {options.python_command}")
+        logging.debug(f"Python {ud.PY_VERSION} is available at: {options.python_command}")
     else:
-        logging.debug(f"Python {PY_VERSION} is not available.")
+        logging.debug(f"Python {ud.PY_VERSION} is not available.")
 
     try:
         import pipreqs
@@ -3671,7 +3675,7 @@ def main() -> None:
             if setup_virtualenv(options):
                 match_dir = options.venv_dir
             else:
-                my_critical_error("Failed to create a virtual environment.", choose_breakpoint=True)
+                ud.my_critical_error("Failed to create a virtual environment.", choose_breakpoint=True)
                 match_dir = None
         else:
             if not options.rawlog: logging.info(f"Using directory: {match_dir}")
