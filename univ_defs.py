@@ -8,6 +8,7 @@ import socket
 import platform
 from collections import Counter
 from typing import Dict
+import traceback
 
 # This is the version of univ_defs.py
 __version__ = '0.1.1'
@@ -151,11 +152,24 @@ def get_log_level(log_level: str) -> int:
 def my_critical_error(message: str, choose_breakpoint: bool = False,
                       exit_code: int = 1) -> None:
     """Log a critical error message and either exit the program or enter a breakpoint."""
+    # Determine if an exception is being handled:
+    exc_type, exc_value, exc_traceback = sys.exc_info()
     #Check to see if logger is set up. If not, just print the critical error message.
     if logging.getLogger().hasHandlers():
-        logging.critical(message)
+        if exc_type:
+            # An exception is being handled; include exception info
+            logging.critical(message, exc_info=True)
+        else:
+            # No exception is being handled; log only the message
+            logging.critical(message)
     else:
-        print(message)
+        if exc_type:
+            # An exception is being handled; include exception info
+            print(f"{message}\n", file=sys.stderr)
+            traceback.print_exception(exc_type, exc_value, exc_traceback, file=sys.stderr)
+        else:
+            # No exception is being handled; log only the message
+            print(message)
     if choose_breakpoint:
         print("Entering breakpoint while inside the my_critical_error() function. You can step outside of this function and remain paused by pressing 'n' to access variables in the calling function or press 'c' to continue running the script.")
         breakpoint()
@@ -378,8 +392,8 @@ def open_dir_in_VLC(the_dir: str, sort_choice: str = "sort_by_name",
                     recursive: bool = False,
                     no_start: bool = False) -> None:
     """Create a playlist of the files in the specified directory, then play that playlist in VLC. By default, don't search the directory recursively and sort the files by name. Optional arguments allow recursive loading or sorting by modification time. If no_start is True, don't start playback in VLC."""
-    #start_flag = "--start-paused" if no_start else ""
-    start_flag = "--no-playlist-autostart" if no_start else ""
+    start_flag = "--start-paused" if no_start else ""
+    #start_flag = "--no-playlist-autostart" if no_start else ""
     # List to store files with their modification times
     files_with_times = []
     if recursive:

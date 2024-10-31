@@ -27,16 +27,18 @@ __version__ = '0.1.0'
 class Options():
     """Class that has all global options in one place."""
     def __init__(self) -> None:
-        self.manual_instructions: str = """
-This program acts as a wrapper around Python to automate the creation of virtual environments and the installation of any required packages. Instead of typing "python3 script.py", you can type "mypy script.py" to run script.py in a virtual environment which has all the required packages.
+        self.search_above_this_dir = True
+        self.myname = "mypy" # The name of this script without the .py extension
+        self.manual_instructions: str = f"""
+This program acts as a wrapper around Python to automate the creation of virtual environments and the installation of any required packages. Instead of typing "python3 script.py", you can type "{self.myname} script.py" to run script.py in a virtual environment which has all the required packages.
 
-It's convenient to add an alias to the shell configuration file so that typing ALIAS anywhere runs this program. This can either be done by running this program with the "-alias ALIAS" command line argument (for example: "python3 mypy.py -alias mypy") or by following the manual instructions below. The following steps assume this program is saved as mypy.py in your home directory (~), but you can adjust the path and filename to match your setup.
+It's convenient to add an alias to the shell configuration file so that typing ALIAS anywhere runs this program. This can either be done by running this program with the "-alias ALIAS" command line argument (for example: "python3 {self.myname}.py -alias {self.myname}") or by following the manual instructions below. The following steps assume this program is saved as {self.myname}.py in your home directory (~), but you can adjust the path and filename to match your setup.
 
 If you're on a Mac you're probably using the zsh shell, so follow these steps to add the alias manually:
 1. Open your zsh configuration file (~/.zshrc) in a text editor. For example:
    nano ~/.zshrc
 2. Add the following line to the end of the file:
-   alias mypy="python3 ~/mypy.py"
+   alias {self.myname}="python3 ~/{self.myname}.py"
 3. Save the file and exit the text editor.
 4. Reload your zsh configuration by running the following command:
    source ~/.zshrc
@@ -45,7 +47,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
 1. Open your bash configuration file (~/.bashrc) in a text editor. For example:
    nano ~/.bashrc
 2. Add the following line to the end of the file:
-   alias mypy="python3 ~/mypy.py"
+   alias {self.myname}="python3 ~/{self.myname}.py"
 3. Save the file and exit the text editor.
 4. Reload your bash configuration by running the following command:
    source ~/.bashrc
@@ -56,7 +58,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.computer_name: str = ud.get_computer_name()
         self.cwd: str = os.getcwd()
         self.venv_name: str = 'myenv' # Can NOT include dashes ('-')
-        self.mypy_dir: str = os.path.expanduser(os.path.join('~','mypy'))
+        self.mypy_dir: str = os.path.expanduser(os.path.join('~',self.myname))
         self.packages_dir: str = os.path.join(self.mypy_dir, 'packages')
         self.test_dir: str = os.path.join(self.mypy_dir, 'test')
         self.uninstalled_imports: Set[str] = set()
@@ -2224,24 +2226,10 @@ If you're using the bash shell, follow these steps to add the alias manually:
 def parse_arguments(options: Options) -> None:
     """Parse command-line arguments."""
 
-    # Find the second argument ending with ".py"
-    py_files = [i for i, arg in enumerate(sys.argv) if arg.endswith(".py")]
-
-    if len(py_files) >= 2:
-        second_py_index = py_files[1]
-        # Store everything after the second ".py" into script_args
-        script_args = sys.argv[second_py_index + 1:]
-        # Modify sys.argv to only contain up to the second ".py"
-        sys.argv = sys.argv[:second_py_index + 1]
-    else:
-        script_args = []
-    
     parser = argparse.ArgumentParser(description="Run a python script with optional flags.")    
-    parser.add_argument('script', nargs='?', help="The python script to run.")
-    parser.add_argument('script_args', nargs='*', help="Optional arguments for the python script.")
     parser.add_argument('-version', action='store_true', help='Print the version of this program.')
     parser.add_argument('-manual', action='store_true', help='Print instructions for manually adding the alias to the shell configuration file.')
-    parser.add_argument('-blank-slate', action='store_true', help="Delete ~/mypy/ and all mypy .out and .err and .json and .pkl files in the current directory.")
+    parser.add_argument('-blank-slate', action='store_true', help=f"Delete ~/{options.myname}/ and all {options.myname} .out and .err and .json and .pkl files in the current directory.")
     parser.add_argument('-full', action='store_true', help="Build a virtual environment (venv) that can run every python script in this directory.")
     parser.add_argument('-y', action='store_true', help='Automatically say yes to any prompts.')
     parser.add_argument('-no-cache', action='store_true', help="Don't search the cache. Instead, create a new virtual environment. Also, refresh the custom modules cache and the pip list.")
@@ -2252,8 +2240,10 @@ def parse_arguments(options: Options) -> None:
     parser.add_argument('-rc', action='store_true', help='Refresh the custom modules cache and the pip list.')
     parser.add_argument('-reqs', action='store_true', help='Read the extra_requirements.txt file in the current directory and install the packages listed there (with specific versions if present in the file) into the venv (along with the other packages needed to run the script as determined elsewhere in this program).')
     parser.add_argument('-alias', type=str, help='Add an alias to the shell configuration file so that typing ALIAS anywhere runs this program.')
-    parser.add_argument('-rawlog', action='store_true', help='Do not add timestamps or INFO level to log messages, and do not add extra INFO level log statements. Just produce the same output that would be seen when running the program without mypy.')
+    parser.add_argument('-rawlog', action='store_true', help=f'Do not add timestamps or INFO level to log messages, and do not add extra INFO level log statements. Just produce the same output that would be seen when running the program without {options.myname}.')
     parser.add_argument('-docker', action='store_true', help='UNFINISHED! Create a Dockerfile and requirements.txt file in a subdirectory named after the target script that can be used to run the script in a Docker container.')
+    parser.add_argument('script', nargs='?', help="The script to run.")
+    parser.add_argument('script_args', nargs=argparse.REMAINDER, help="Optional arguments for the python script.")
 
     # If no arguments are provided, print a short guide
     if len(sys.argv) == 1:
@@ -2262,7 +2252,6 @@ def parse_arguments(options: Options) -> None:
     
     # Parse known args, and then manually add the script_args
     args = parser.parse_args()
-    args.script_args = script_args
     options.args = args
 
 def detect_shell() -> str:
@@ -2479,8 +2468,8 @@ def process_import(options: Options, module_name: str, file_path: str) -> bool:
     if module_path == options.script_name:
         logging.debug(f"Avoiding loopback to the same file: {module_path}")
         return False
-    if module_path == 'pipreqs' and 'mypy.py' in file_path:
-        logging.debug(f"Avoiding loopback to pipreqs in mypy.py")
+    if module_path == 'pipreqs' and f'{options.myname}.py' in file_path:
+        logging.debug(f"Avoiding loopback to pipreqs in {options.myname}.py")
         return False
     logging.debug(f"Constructed module path: {module_path}")
 
@@ -3231,7 +3220,7 @@ def guard_examines(options: Options) -> None:
     
 def save_options_to_json(options: Options) -> None:
     """Save the options object to a JSON file."""
-    options.json_filename = os.path.join(options.script_dir, f".{os.path.basename(options.python_script)}-mypy-last-used-on-{options.timestamp}.json")
+    options.json_filename = os.path.join(options.script_dir, f".{os.path.basename(options.python_script)}-{options.myname}-last-used-on-{options.timestamp}.json")
     
     # Convert options to a dictionary and handle sets
     options_dict = options.__dict__
@@ -3462,12 +3451,41 @@ def is_standard_path(options: Options, path: str) -> bool:
         return True
     return False
 
+def only_search_here_filename_boolean(filename: str, thestring: str) -> bool:
+    """Check if the given filename contains thestring, which is used to determine if the search is limited to the current directory."""
+    return thestring in filename
+
+def search_anywhere_filename_boolean(filename: str, thestring: str) -> bool:
+    """Check if the given filename does NOT contain thestring. By default, those files are assumed to have been created by searching above the current directory."""
+    return thestring not in filename
+
+def only_search_here_path_boolean(options: Options, path: str) -> bool:
+    """Check if the given path is in the current directory."""
+    return os.path.abspath(path).startswith(os.path.abspath('.'))
+
+def search_anywhere_path_boolean(options: Options, path: str) -> bool:
+    """Return True regardless."""
+    return True
+
 def dict_of_custom_modules(options: Options) -> Dict[str, str]:
     """Create a dictionary of all local custom modules in the non-standard sys.path directories and their associated filepaths."""
     #If -rc and -no-cache were not specified, look for a pickle file with the custom modules dictionary the last time this script was run.
+
+    # I.f.f. options.search_above_this_dir is True, then search above the current directory for custom modules.
+    # Either way, only load custom module pickle files that searched in the same places as requested.
+    search_above_text_to_match = 'only_search_here_' # For legacy reasons, custom module pickle files are assumed to have searched above the current directory unless this text is present in the filename.
+    if options.search_above_this_dir:
+        search_above_text_to_write = '_' # This will be added to the filename of the custom modules pickle file.
+        search_constraint_filename_boolean = search_anywhere_filename_boolean
+        search_constraint_path_boolean     = search_anywhere_path_boolean
+    else:
+        search_above_text_to_write = search_above_text_to_match # This will be added to the filename of the custom modules pickle file.
+        search_constraint_filename_boolean = only_search_here_filename_boolean
+        search_constraint_path_boolean     = only_search_here_path_boolean
+
     if not getattr(options.args, 'rc', False) and not getattr(options.args, 'no_cache', False):
         for file in os.listdir('.'):
-            if file.startswith('.mypy_custom_modules_') and file.endswith('.pkl') and options.computer_name in file:
+            if file.startswith(f'.{options.myname}_custom_modules_') and file.endswith('.pkl') and options.computer_name in file and search_constraint_filename_boolean(file, search_above_text_to_match):
                 if not options.rawlog: logging.info(f"Loading custom modules from {file}")
                 with open(file, 'rb') as f:
                     custom_modules = pickle.load(f)
@@ -3476,7 +3494,7 @@ def dict_of_custom_modules(options: Options) -> Dict[str, str]:
     custom_modules = {}
     logging.debug(f"In dict_of_custom_modules: {options.new_local_paths = }")
     for path in sys.path:
-        if not is_standard_path(options, path) and os.path.isdir(path):
+        if not is_standard_path(options, path) and os.path.isdir(path) and search_constraint_path_boolean(options, path):
             for root, dirs, files in os.walk(path):
                 for file in files:
                     if file.endswith('.py') and file != '__init__.py':
@@ -3498,7 +3516,7 @@ def dict_of_custom_modules(options: Options) -> Dict[str, str]:
                                     del custom_modules[module_name]
     #Now save to a pickle file:
     current_time = datetime.now().strftime('%Y%m%d-%H%M%S')
-    custom_filename = f'.mypy_custom_modules_{options.computer_name}_{current_time}.pkl'
+    custom_filename = f'.{options.myname}_custom_modules_{options.computer_name}{search_above_text_to_write}{current_time}.pkl'
     with open(custom_filename, 'wb') as f:
         if not options.rawlog: logging.info(f"Saving custom modules to {custom_filename}")
         pickle.dump(custom_modules, f)
@@ -3553,8 +3571,8 @@ def main() -> None:
 
     log_mode = "INFO"
     #log_mode = "DEBUG"
-    memory_handler = ud.configure_logging("mypy", log_level=log_mode,
-                                       rawlog=options.rawlog)
+    memory_handler = ud.configure_logging(options.myname, log_level=log_mode,
+                                          rawlog=options.rawlog)
 
     options.python_command = find_preferred_python_version()
     if options.python_command:
@@ -3582,19 +3600,19 @@ def main() -> None:
         sys.exit(0)
     elif getattr(options.args, 'blank_slate', False):
         if not getattr(options.args, 'y', False):
-            response = input("Are you sure you want to delete everything in ~/mypy/ and all mypy .json files in the current directory? (y/n) ")
+            response = input(f"Are you sure you want to delete everything in ~/{options.myname}/ and all {options.myname} .json files in the current directory? (y/n) ")
             if response.casefold() != 'y':
                 logging.info("Exiting without deleting anything.")
                 sys.exit(0)
-        logging.info("Deleting everything in ~/mypy/ and all mypy .out and .err and .json and .pkl files in the current directory.")
+        logging.info(f"Deleting everything in ~/{options.myname}/ and all {options.myname} .out and .err and .json and .pkl files in the current directory.")
         shutil.rmtree(options.mypy_dir, ignore_errors=True)
         for file in os.listdir(options.cwd):
             logging.debug(f"Checking {file}")
             if os.path.isfile(file):
-               if (file.startswith('.mypy-') and file.endswith('.out')) or \
-                  (file.startswith('.mypy-') and file.endswith('.err')) or \
-                  (file.startswith('.mypy_custom_modules_') and file.endswith('.pkl')) or \
-                  (file.startswith('.') and '-mypy-' in file and file.endswith('.json')):
+               if (file.startswith(f'.{options.myname}-') and file.endswith('.out')) or \
+                  (file.startswith(f'.{options.myname}-') and file.endswith('.err')) or \
+                  (file.startswith(f'.{options.myname}_custom_modules_') and file.endswith('.pkl')) or \
+                  (file.startswith('.') and f'-{options.myname}-' in file and file.endswith('.json')):
                     try:
                         logging.info(f"Deleting {file}")
                         os.remove(os.path.join(options.cwd, file))
