@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 
-# Written by Emmy Killett, ChatGPT 4o, and GitHub Copilot.
-
+# Written by Emmy Killett, ChatGPT 4o, ChatGPT o1-preview, and GitHub Copilot.
 import os
 import sys
 import subprocess
-from datetime import datetime
+import datetime as dt
 import argparse
 import ast
 import re
@@ -70,7 +69,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.pip_list: List[str] = []
         self.loaded_custom_modules: Set[str] = set()
         self.pretty_list: str = ''
-        self.timestamp: str = datetime.now().strftime('%Y%m%d-%H%M%S')
+        self.timestamp: str = dt.datetime.now().strftime('%Y%m%d-%H%M%S')
         self.python_script: str = ''
         self.script_name: str = '' # python_script without the .py extension
         self.script_dir: str = ''
@@ -2242,6 +2241,7 @@ def parse_arguments(options: Options) -> None:
     parser.add_argument('-alias', type=str, help='Add an alias to the shell configuration file so that typing ALIAS anywhere runs this program.')
     parser.add_argument('-rawlog', action='store_true', help=f'Do not add timestamps or INFO level to log messages, and do not add extra INFO level log statements. Just produce the same output that would be seen when running the program without {options.myname}.')
     parser.add_argument('-docker', action='store_true', help='UNFINISHED! Create a Dockerfile and requirements.txt file in a subdirectory named after the target script that can be used to run the script in a Docker container.')
+    parser.add_argument('-justprint', action='store_true', help="UNFINISHED! Don't run the script, just print its package requirements.")
     parser.add_argument('script', nargs='?', help="The script to run.")
     parser.add_argument('script_args', nargs=argparse.REMAINDER, help="Optional arguments for the python script.")
 
@@ -3350,7 +3350,7 @@ def find_match_dir_in_cache(options: Options) -> str:
             json_files = [f for f in os.listdir(options.script_dir) if f.startswith("."+os.path.basename(options.python_script)) and f.endswith('.json')]
             if json_files:
                 if len(json_files) > 1:
-                    json_files.sort(key=lambda x: datetime.strptime(x.split('-')[-2] + x.split('-')[-1].replace('.json', ''), "%Y%m%d%H%M%S"), reverse=True)
+                    json_files.sort(key=lambda x: dt.datetime.strptime(x.split('-')[-2] + x.split('-')[-1].replace('.json', ''), "%Y%m%d%H%M%S"), reverse=True)
                 options_last_used = load_options_from_json(options, os.path.join(options.script_dir, json_files[0]))
                 if check_venv_dir(options, options_last_used):
                     return options_last_used.venv_dir
@@ -3515,7 +3515,7 @@ def dict_of_custom_modules(options: Options) -> Dict[str, str]:
                                 if module_name in custom_modules and package_path == os.path.dirname(custom_modules[module_name]):
                                     del custom_modules[module_name]
     #Now save to a pickle file:
-    current_time = datetime.now().strftime('%Y%m%d-%H%M%S')
+    current_time = dt.datetime.now().strftime('%Y%m%d-%H%M%S')
     custom_filename = f'.{options.myname}_custom_modules_{options.computer_name}{search_above_text_to_write}{current_time}.pkl'
     with open(custom_filename, 'wb') as f:
         if not options.rawlog: logging.info(f"Saving custom modules to {custom_filename}")
@@ -3558,7 +3558,7 @@ def find_preferred_python_version() -> Optional[str]:
         return None
 
 def main() -> None:
-    start_time = datetime.now()
+    start_time = dt.datetime.now()
     options = Options()
     parse_arguments(options)
     options.python_script = getattr(options.args, 'script', None)
@@ -3636,9 +3636,9 @@ def main() -> None:
         if not options.rawlog: logging.info(f"Directory {options.packages_dir} does not exist yet, so it is being created.")
         os.makedirs(options.packages_dir, exist_ok=True)
 
-    time1 = datetime.now()
+    time1 = dt.datetime.now()
     options.custom_modules = dict_of_custom_modules(options)
-    time2 = datetime.now()
+    time2 = dt.datetime.now()
     elapsed_time = time2 - time1
     if not options.rawlog: logging.info(f"dict_of_custom_modules() took {elapsed_time}")
     
@@ -3655,7 +3655,7 @@ def main() -> None:
         except:
             logging.error(f"Error reading {pip_list_files[0]}")
 
-    start_list_packages_time = datetime.now()
+    start_list_packages_time = dt.datetime.now()
     elapsed_time = start_list_packages_time - start_time
     if not options.rawlog: logging.info(f"Elapsed time: {elapsed_time}")
 
@@ -3663,21 +3663,22 @@ def main() -> None:
     if not options.rawlog: logging.info(f"Uninstalled imports: {options.uninstalled_imports}")
     if options.bad_imports:
         logging.warning(f"Bad imports: {options.bad_imports}")
+    if getattr(options.args, 'justprint', False): sys.exit(0)
 
     if not options.uninstalled_imports:
         if not options.rawlog: logging.info("All required packages are already installed.")
         guard_examines(options)
-        start_raw_time = datetime.now()
+        start_raw_time = dt.datetime.now()
         subprocess.run([sys.executable, options.python_script] + options.script_args)
-        elapsed_raw_time = datetime.now() - start_raw_time
+        elapsed_raw_time = dt.datetime.now() - start_raw_time
         if not options.rawlog: logging.info(f"Runtime: {elapsed_raw_time}")
     elif is_virtualenv():
         if not options.rawlog: logging.info("Already in a virtual environment.")
         if check_packages_in_venv(options):
             guard_examines(options)
-            start_raw_time = datetime.now()
+            start_raw_time = dt.datetime.now()
             subprocess.run([sys.executable, options.python_script] + options.script_args)
-            elapsed_raw_time = datetime.now() - start_raw_time
+            elapsed_raw_time = dt.datetime.now() - start_raw_time
             if not options.rawlog: logging.info(f"Runtime: {elapsed_raw_time}")
         else:
             logging.error("The current virtual environment does not have all the required packages.")
@@ -3701,7 +3702,7 @@ def main() -> None:
         if match_dir:
             guard_examines(options)
             options.set_venv_dir(match_dir)
-            start_venv_time = datetime.now()
+            start_venv_time = dt.datetime.now()
             elapsed_time = start_venv_time - start_time
             if not options.rawlog: logging.info(f"Elapsed time: {elapsed_time}")
             if not options.rawlog: logging.info(f"Activating virtual environment: {options.activate_script}")
@@ -3712,7 +3713,7 @@ def main() -> None:
             activate_cmd = f"bash -c '{options.activate_script}{echo_statement} && {options.venv_python} {options.python_script} {' '.join(options.script_args)}'"
             #I want to capture the output of the subprocess.run() so that I can print it at the end.
             result = subprocess.run(activate_cmd, shell=True)
-            end_time = datetime.now()
+            end_time = dt.datetime.now()
             elapsed_time = end_time - start_venv_time
             if not options.rawlog: logging.info(f"Elapsed time since activating virtual environment: {elapsed_time}")
             if result.returncode != 0 and not options.rawlog:
