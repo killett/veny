@@ -21,11 +21,13 @@ import ast
 
 import univ_defs as ud
 
-__version__ = '0.1.0'
+__version__ = '0.1.1'
 
 class Options():
     """Class that has all global options in one place."""
     def __init__(self) -> None:
+        self.log_mode = "INFO"
+        #self.log_mode = "DEBUG"
         self.search_above_this_dir = True
         self.myname = "mypy" # The name of this script without the .py extension
         self.manual_instructions: str = f"""
@@ -2526,77 +2528,158 @@ def process_import(options: Options, module_name: str, file_path: str) -> bool:
         logging.debug(f"Could not resolve local import, adding to all_imports: {module_name}")
         options.all_imports.add(module_name)
 
+class FunctionInfo:
+    def __init__(self, function_name: str) -> None:
+        self.function_name                 = function_name
+        self.imports_in_function: Set[str] = set()
+        self.function_calls:      Set[str] = set()
+
+class ModuleInfo:
+    def __init__(self, module_name: str) -> None:
+        self.module_name                                = module_name
+        self.top_level_imports: Set[str]                = set()
+        self.functions:         Dict[str, FunctionInfo] = {}
+        self.top_level_calls:   Set[str]                = set()
+        self.aliases:           Dict[str, str]          = {}
+
+class ImportFunctionCollector(ast.NodeVisitor):
+    def __init__(self, module_name: str) -> None:
+        self.module_info = ModuleInfo(module_name)
+        self.current_function = None
+        self.current_class = None
+        self.aliases = {}
+
+    def visit_Import(self, node: ast.Import) -> None:
+        """Visit an import statement and add the imported module to the module's list of imports."""
+        for alias in node.names:
+            name = alias.asname or alias.name
+            self.aliases[name] = alias.name
+            if self.current_function:
+                self.module_info.functions[self.current_function].imports_in_function.add(alias.name)
+            else:
+                self.module_info.top_level_imports.add(alias.name)
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        """Visit an import from statement and add the imported module to the module's list of imports."""
+        module = node.module or ''
+        for alias in node.names:
+            full_name = f"{module}.{alias.name}" if module else alias.name
+            name = alias.asname or alias.name
+            self.aliases[name] = full_name
+            if self.current_function:
+                self.module_info.functions[self.current_function].imports_in_function.add(full_name)
+            else:
+                self.module_info.top_level_imports.add(full_name)
+        self.generic_visit(node)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        """Visit a function definition and add it to the module's list of functions."""
+        func_name = node.name
+        if self.current_class:
+            func_name = f"{self.current_class}.{func_name}"
+        self.module_info.functions[func_name] = FunctionInfo(func_name)
+        prev_function = self.current_function
+        self.current_function = func_name
+        self.generic_visit(node)
+        self.current_function = prev_function
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        """Visit a class definition and set the current class."""
+        prev_class = self.current_class
+        self.current_class = node.name
+        self.generic_visit(node)
+        self.current_class = prev_class
+
+    def visit_Call(self, node: ast.Call) -> None:
+        """Visit a function call and add it to the function's list of calls."""
+        func_name = self.get_full_name(node.func)
+        if func_name:
+            if self.current_function:
+                self.module_info.functions[self.current_function].function_calls.add(func_name)
+            else:
+                self.module_info.top_level_calls.add(func_name)
+        self.generic_visit(node)
+
+    def get_full_name(self, node: ast.AST) -> Optional[str]:
+        """Get the full name of a node, including any aliases."""
+        if isinstance(node, ast.Name):
+            return self.aliases.get(node.id, node.id)
+        elif isinstance(node, ast.Attribute):
+            value = self.get_full_name(node.value)
+            return f"{value}.{node.attr}" if value else node.attr
+        return None
+
+def build_call_graph(modules_info: Dict[str, ModuleInfo]) -> Dict[str, Set[str]]:
+    """Build a call graph from the function calls in the modules."""
+    call_graph = {}
+    for module_name, module_info in modules_info.items():
+        for func_name, func_info in module_info.functions.items():
+            full_func_name = f"{module_name}.{func_name}"
+            call_graph[full_func_name] = set()
+            for called_func in func_info.function_calls:
+                if '.' in called_func:
+                    called_module, called_name = called_func.rsplit('.', 1)
+                    called_full_name = f"{called_module}.{called_name}"
+                else:
+                    called_full_name = f"{module_name}.{called_func}"
+                call_graph[full_func_name].add(called_full_name)
+    return call_graph
+
+def collect_used_imports(start_module: str, start_func: str,
+                         call_graph: Dict[str, Set[str]],
+                         modules_info: Dict[str, ModuleInfo],
+                         visited=None) -> Set[str]:
+    """Collect all imports used in a function and its callees."""
+    if visited is None:
+        visited = set()
+    full_func_name = f"{start_module}.{start_func}"
+    if full_func_name in visited:
+        return set()
+    visited.add(full_func_name)
+    imports = set()
+    module_info = modules_info.get(start_module)
+    if module_info:
+        func_info = module_info.functions.get(start_func)
+        if func_info:
+            imports.update(func_info.imports_in_function)
+            for called_func in func_info.function_calls:
+                if '.' in called_func:
+                    called_module, called_name = called_func.rsplit('.', 1)
+                else:
+                    called_module = start_module
+                    called_name = called_func
+                imports.update(collect_used_imports(called_module, called_name, call_graph, modules_info, visited))
+    return imports
+
 def find_imports_in_script(options: Options, first_path: str) -> None:
-    """Find all imports in a Python script and add them to a set. 'Recursively' check local imports (without actually using recursive functions) in any local custom modules that are imported."""
-    if first_path in options.processed_files:
-        return
-    options.processed_files.add(first_path)
-
-    if os.path.islink(first_path):
-        logging.debug(f"Skipping symbolic link {first_path}")
-        return
-
-    options.file_stack = [first_path]
-    
-    while options.file_stack:
-        file_path = options.file_stack.pop()
+    """Find all imports in the script and in any local custom modules it uses. However, if a local custom module imports a package in a function which is not used in the main script at "first_path", that package will not be included in the list of imports."""
+    modules_info = {}
+    files_to_process = [first_path]
+    while files_to_process:
+        file_path = files_to_process.pop()
+        module_name = os.path.splitext(os.path.basename(file_path))[0]
+        if module_name in modules_info:
+            continue
         file_content = my_fopen(options, file_path)
         tree = my_ast_parse(file_content, file_path)
-        if not tree:
-            return
-
-        # Track sys.path modifications
-        sys_path_visitor = SysPathVisitor()
-        sys_path_visitor.visit(tree)
-        options.new_local_paths.update(sys_path_visitor.paths)
-        for path in sys_path_visitor.paths:
-            logging.debug(f"Adding new local path: {path}")
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                line = ast.unparse(node)
-                logging.debug(f"Processing import statement: {line}")
-                for alias in node.names:
-                    module_name = alias.name.split('.')[0]
-                    logging.debug(f"Processing module name: {module_name}")
-                    process_import(options, module_name, file_path)
-            elif isinstance(node, ast.ImportFrom):
-                line = ast.unparse(node)
-                logging.debug(f"Processing import statement: {line}")
-                if node.level == 0 and node.module:
-                    logging.debug(f"Processing alias: {node.module}")
-                    if not process_import(options, node.module, file_path):
-                        logging.debug(f"Processing alias: {node.module} failed")
-                        module_name = node.module.split('.')[0]
-                        logging.debug(f"Processing module name: {module_name}")
-                        process_import(options, module_name, file_path)
-                elif node.level > 0:
-                    logging.debug(f"Processing import statement with {node.level = }: {line}")
-                    # Handle relative imports
-                    base_dir = os.path.dirname(file_path)
-                    rel_path = os.path.join(base_dir, *(['..'] * (node.level - 1)), node.module or '')
-                    resolved_path = os.path.abspath(rel_path)
-                    if os.path.isdir(resolved_path):
-                        resolved_path = os.path.join(resolved_path, '__init__.py')
-                    else:
-                        resolved_path += '.py'
-                    if os.path.isfile(resolved_path):
-                        options.processed_files.add(resolved_path)
-                        options.file_stack.append(resolved_path)
-            elif isinstance(node, ast.Call):
-                # Check if it's a call to __import__()
-                if isinstance(node.func, ast.Name) and node.func.id == '__import__':
-                    logging.warning(f"Found dynamic import: {ast.unparse(node)}")
-                    if node.args:
-                        module_arg = node.args[0]
-                        if isinstance(module_arg, ast.Constant) and isinstance(module_arg.value, str):
-                            module_name = module_arg.value
-                            logging.debug(f"Processing dynamic import of module: {module_name}")
-                            process_import(options, module_name, file_path)
-                        else:
-                            logging.error(f"Cannot resolve dynamic import with non-constant module name: {ast.unparse(node)}")
-                    else:
-                        logging.error(f"No arguments provided to __import__(): {ast.unparse(node)}")
+        collector = ImportFunctionCollector(module_name)
+        collector.visit(tree)
+        modules_info[module_name] = collector.module_info
+        # Add imported modules to files_to_process if they are local
+        for import_name in collector.module_info.top_level_imports:
+            if import_name in options.custom_modules:
+                files_to_process.append(options.custom_modules[import_name])
+    call_graph = build_call_graph(modules_info)
+    # Collect used imports starting from the main script at first_path
+    start_module = os.path.splitext(os.path.basename(first_path))[0]
+    used_imports = set()
+    # Process top-level imports
+    used_imports.update(modules_info[start_module].top_level_imports)
+    # Process functions called at top level
+    for func_name in modules_info[start_module].top_level_calls:
+        used_imports.update(collect_used_imports(start_module, func_name, call_graph, modules_info))
+    options.all_imports = used_imports
 
 def add_dependencies(options: Options) -> None:
     """Add dependencies for uninstalled imports."""
@@ -3568,10 +3651,13 @@ def main() -> None:
     if getattr(options.args, 'version', False):
         print(__version__)
         sys.exit(0)
+    if getattr(options.args, 'manual', False):
+        # Print instructions for manually adding the alias to the shell configuration file
+        print(options.manual_instructions)
+        sys.exit(0)
 
-    log_mode = "INFO"
-    #log_mode = "DEBUG"
-    memory_handler = ud.configure_logging(options.myname, log_level=log_mode,
+    memory_handler = ud.configure_logging(options.myname,
+                                          log_level=options.log_mode,
                                           rawlog=options.rawlog)
 
     options.python_command = find_preferred_python_version()
@@ -3594,10 +3680,6 @@ def main() -> None:
         sys.exit(0)
     elif getattr(options.args, 'script', False):
         pass
-    elif getattr(options.args, 'manual', False):
-        # Print instructions for manually adding the alias to the shell configuration file
-        logging.info(options.manual_instructions)
-        sys.exit(0)
     elif getattr(options.args, 'blank_slate', False):
         if not getattr(options.args, 'y', False):
             response = input(f"Are you sure you want to delete everything in ~/{options.myname}/ and all {options.myname} .json files in the current directory? (y/n) ")
