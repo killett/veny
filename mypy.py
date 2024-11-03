@@ -2553,24 +2553,28 @@ class ImportFunctionCollector(ast.NodeVisitor):
         """Visit an import statement and add the imported module to the module's list of imports."""
         for alias in node.names:
             name = alias.asname or alias.name
-            self.aliases[name] = alias.name
+            full_name = alias.name
+            top_level_package = full_name.split('.')[0]
+            self.aliases[name] = full_name
             if self.current_function:
-                self.module_info.functions[self.current_function].imports_in_function.add(alias.name)
+                self.module_info.functions[self.current_function].imports_in_function.add(top_level_package)
             else:
-                self.module_info.top_level_imports.add(alias.name)
+                self.module_info.top_level_imports.add(top_level_package)
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         """Visit an import from statement and add the imported module to the module's list of imports."""
         module = node.module or ''
+        # Extract the top-level package
+        top_level_package = module.split('.')[0] if module else ''
         for alias in node.names:
             full_name = f"{module}.{alias.name}" if module else alias.name
             name = alias.asname or alias.name
             self.aliases[name] = full_name
             if self.current_function:
-                self.module_info.functions[self.current_function].imports_in_function.add(full_name)
+                self.module_info.functions[self.current_function].imports_in_function.add(top_level_package)
             else:
-                self.module_info.top_level_imports.add(full_name)
+                self.module_info.top_level_imports.add(top_level_package)
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
