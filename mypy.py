@@ -26,8 +26,8 @@ __version__ = '0.1.1'
 class Options():
     """Class that has all global options in one place."""
     def __init__(self) -> None:
-        self.log_mode = "INFO"
-        #self.log_mode = "DEBUG"
+        #self.log_mode = "INFO"
+        self.log_mode = "DEBUG"
         self.search_above_this_dir = True
         self.myname = "mypy" # The name of this script without the .py extension
         self.manual_instructions: str = f"""
@@ -2631,7 +2631,7 @@ def build_call_graph(modules_info: Dict[str, ModuleInfo]) -> Dict[str, Set[str]]
     return call_graph
 
 def collect_used_imports(start_module: str, start_func: str,
-                         call_graph: Dict[str, Set[str]],
+                         call_graph:   Dict[str, Set[str]],
                          modules_info: Dict[str, ModuleInfo],
                          visited=None) -> Set[str]:
     """Collect all imports used in a function and its callees."""
@@ -3749,6 +3749,8 @@ def main() -> None:
     if not options.rawlog: logging.info(f"Uninstalled imports: {options.uninstalled_imports}")
     if options.bad_imports:
         logging.warning(f"Bad imports: {options.bad_imports}")
+    if not options.rawlog and options.samedir_files: logging.info(f"Imported files in the same directory as the script: {options.samedir_files}")
+    if not options.rawlog and options.subfolders: logging.info(f"Imported subfolders: {options.subfolders}")
     if getattr(options.args, 'justprint', False): sys.exit(0)
 
     if not options.uninstalled_imports:
