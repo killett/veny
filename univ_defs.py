@@ -1,14 +1,15 @@
 #NEW aws help docstring:
 # disables searching through script args for python scripts and then scanning them for imports. 
 import os, sys, subprocess
-from datetime import datetime
+import datetime as dt
 import logging
 import threading
 import socket
 import platform
 from collections import Counter
-from typing import Dict
+from typing import Dict, Optional, TextIO
 import traceback
+import ast
 
 # This is the version of univ_defs.py
 __version__ = '0.1.1'
@@ -16,17 +17,76 @@ __version__ = '0.1.1'
 # This is the version of python which should be used in scripts that import this module.
 PY_VERSION = 3.11
 
-# sigfigs    =  1 #significant figures to keep during rounding.
-# max_digits = 15 #If the number is less than 10^(-max_digits), just say it has max_digits.
+def unused_function():
+    """This function is not used in the test.py script."""
+    print("This function is not used in the test.py script.")
+    import numpy as np
 
-# #Given 'float_input', what is its exponent in scientific notation?
-# def sci_exp(float_input):
-#   if np.abs(float_input) < 10**(-max_digits): return -max_digits
-#   return int(np.floor(np.log10(np.abs(float_input))))
+def remove_prefix_from_filename(filepath: str, prefix: str) -> bool:
+    """If the given filepath's base filename starts with the given prefix, remove the prefix, move the file (but only if that doesn't cause errors) and return True. Otherwise, return False."""
+    file = os.path.basename(filepath)
+    if file.startswith(prefix):
+        new_file = file.replace(prefix, "", 1)  # Replace only the first occurrence
+        # If the first character is now in " _-", remove it:
+        while new_file[0] in " _-":
+            new_file = new_file[1:]
+        new_filepath = os.path.join(os.path.dirname(filepath), new_file) 
+        if not os.path.exists(new_filepath):
+            try:
+                os.rename(filepath, new_filepath)
+                print(f"Renamed '{filepath}' to '{new_filepath}'.")
+                return True
+            except OSError as e:
+                print(f"Error renaming '{filepath}' to '{new_filepath}': {e}")
+                sys.exit(1)
+        else:
+            print(f"Cannot rename '{filepath}' to '{new_filepath}': New path already exists.")
+            return False
+    else:
+        return False
+
+def remove_prefix_from_html_title(filepath: str, prefix: str) -> bool:
+    """If the given filepath is an HTML file and its title starts with the given prefix, remove the prefix from the title and save the file, then return True. Otherwise, return False."""
+    if not filepath.endswith('.html') and not filepath.endswith('.htm'):
+        print(f"File '{filepath}' is not an HTML or HTM file.")
+        breakpoint()
+        return False
+    html = my_fopen(filepath)
+    title_start = html.find('<title>') + len('<title>')
+    title_end = html.find('</title>', title_start)
+    if title_start == -1 or title_end == -1:
+        print(f"Could not find the title in the HTML file '{filepath}'.")
+        return False
+    title = html[title_start:title_end]
+    if title.startswith(prefix):
+        new_title = title.replace(prefix, "", 1)  # Replace only the first occurrence
+        new_html = html[:title_start] + new_title + html[title_end:]
+        with open(filepath, 'w', encoding='utf-8') as file:
+            file.write(new_html)
+        print(f"Removed prefix '{prefix}' from the title in '{filepath}'.")
+        return True
+    else:
+        return False
+
+def sci_exp(float_input: float) -> int:
+    """Return the scientific exponent of a float."""
+    import math
+    max_digits = 15 #If the number is smaller than 10^(-max_digits), just say it has max_digits.
+    if abs(float_input) < 10**(-max_digits): return -max_digits
+    return int(math.floor(math.log10(abs(float_input))))
+
+def human_bytesize(num: int, suffix: str='B') -> str:
+    """Convert a file size in bytes to a human-readable string with units like KB, MB, GB, etc."""
+    for unit in ['','K','M','G','T','P','E','Z']:
+        if abs(num) < 1024.0:
+            return "%3.1f%s%s" % (num, unit, suffix)
+        num /= 1024.0
+    return "%.1f%s%s" % (num, 'Y', suffix)
 
 # #"round out" away from zero while keeping round_digits significant figures.
 # #Rounds up for x>0, down for x<0.
 # def round_out(x, round_digits):
+#   import numpy as np
 #   if np.abs(x) < 10**(-max_digits): return x
 #   these_digits = sci_exp(x) - round_digits + 1
 #   thisfactor = 10**these_digits
@@ -42,8 +102,8 @@ PY_VERSION = 3.11
 # def dec2date(dec):
 #   year = int(dec)
 #   rem = dec - year
-#   base = datetime.datetime(year, 1, 1)
-#   result = base + datetime.timedelta(seconds=(base.replace(year=base.year + 1) - base).total_seconds() * rem)
+#   base = dt.datetime(year, 1, 1)
+#   result = base + dt.timedelta(seconds=(base.replace(year=base.year + 1) - base).total_seconds() * rem)
 #   #result = np.datetime64(result)
 #   return result
 
@@ -89,7 +149,7 @@ def configure_logging(basename: str, log_level: str = 'INFO',
     logs_directory = os.getcwd()
     os.makedirs(logs_directory, exist_ok=True)
 
-    now = datetime.now()
+    now = dt.datetime.now()
     log_base = f".{basename}-log-{now.strftime('%Y%m%d-%H%M%S')}"
     log_info = os.path.join(logs_directory, log_base + ".out")
     log_errors = os.path.join(logs_directory, log_base + ".err")
@@ -149,7 +209,16 @@ def get_log_level(log_level: str) -> int:
                  'CRITICAL' : logging.CRITICAL}
     return value_map.get(log_level, logging.INFO)
 
-def my_critical_error(message: str, choose_breakpoint: bool = False,
+def print_errors_at_end(memory_handler: MemoryHandler,
+                        rawlog: bool) -> None:
+    """Print any captured error messages at the end of the script."""
+    if memory_handler.logs and not rawlog:
+        print("\n****************************\nCaptured error messages:")
+        for log in memory_handler.logs:
+            print(log)
+
+def my_critical_error(message: str = "A critical error occurred.",
+                      choose_breakpoint: bool = False,
                       exit_code: int = 1) -> None:
     """Log a critical error message and either exit the program or enter a breakpoint."""
     # Determine if an exception is being handled:
@@ -255,6 +324,63 @@ def my_popen(command_list: list, suppress_info: bool = False,
     except Exception as e:
         logging.error(f"An error occurred: {e}")
         return MyPopenResult(stdout="", stderr=str(e), returncode=-1)
+
+def my_fopen(file_path: str, suppress_errors: bool = False,
+             rawlog: bool = False) -> Optional[TextIO]:
+    """Attempt to read the file with various encodings and return the file content if successful."""
+    # List of encodings to try when reading files, with most likely encodings first.
+    encodings = [
+        'utf-8', 'latin-1', 'ascii', 'iso-8859-1', 'big5', 'utf-8-sig', 'utf-16', 
+        'utf-16-be', 'utf-16-le', 'utf-32', 'utf-32-be', 'utf-32-le', 'cp1252', 'cp1251', 
+        'cp1250', 'cp1253', 'cp1254', 'cp1255', 'cp1256', 'cp1257', 'cp1258', 'iso-8859-2', 
+        'iso-8859-3', 'iso-8859-4', 'iso-8859-5', 'iso-8859-6', 'iso-8859-7', 'iso-8859-8', 
+        'iso-8859-9', 'iso-8859-10', 'iso-8859-11', 'iso-8859-13', 'iso-8859-14', 'iso-8859-15', 
+        'iso-8859-16', 'cp437', 'cp850', 'cp852', 'cp855', 'cp857', 'cp858', 'cp860', 'cp861', 
+        'cp862', 'cp863', 'cp864', 'cp865', 'cp866', 'cp869', 'cp037', 'cp424', 'cp500', 
+        'cp720', 'cp737', 'cp775', 'cp874', 'cp875', 'cp932', 'cp949', 'cp950', 'cp1006', 
+        'cp1026', 'cp1125', 'cp1140', 'big5hkscs', 'gb2312', 'gbk', 'gb18030', 'euc-jp', 
+        'euc-jis-2004', 'euc-jisx0213', 'euc-kr', 'iso2022-jp', 'iso2022-jp-1', 'iso2022-jp-2', 
+        'iso2022-jp-2004', 'iso2022-jp-3', 'iso2022-jp-ext', 'iso2022-kr', 'johab', 'koi8-r', 
+        'koi8-t', 'koi8-u', 'kz1048', 'mac-cyrillic', 'mac-greek', 'mac-iceland', 'mac-latin2', 
+        'mac-roman', 'mac-turkish', 'ptcp154', 'shift-jis', 'shift-jis-2004', 'shift-jisx0213', 
+        'hz', 'tis-620', 'euc-tw', 'iso2022-tw'
+    ]
+    #encodings = ['utf_8', 'latin_1', 'ascii', 'iso8859_1', 'big5', 'utf_8_sig', 'utf_16', 'utf_16_be', 'utf_16_le', 'utf_32', 'utf_32_be', 'utf_32_le', 'cp1252', 'cp1251', 'cp1250', 'cp1253', 'cp1254', 'cp1255', 'cp1256', 'cp1257', 'cp1258', 'iso8859_2', 'iso8859_3', 'iso8859_4', 'iso8859_5', 'iso8859_6', 'iso8859_7', 'iso8859_8', 'iso8859_9', 'iso8859_10', 'iso8859_11', 'iso8859_13', 'iso8859_14', 'iso8859_15', 'iso8859_16', 'cp437', 'cp850', 'cp852', 'cp855', 'cp857', 'cp858', 'cp860', 'cp861', 'cp862', 'cp863', 'cp864', 'cp865', 'cp866', 'cp869','cp037', 'cp424', 'cp500', 'cp720', 'cp737', 'cp775', 'cp874', 'cp875', 'cp932', 'cp949', 'cp950', 'cp1006', 'cp1026', 'cp1125', 'cp1140','big5hkscs', 'gb2312', 'gbk', 'gb18030', 'euc_jp', 'euc_jis_2004', 'euc_jisx0213', 'euc_kr', 'iso2022_jp', 'iso2022_jp_1', 'iso2022_jp_2', 'iso2022_jp_2004', 'iso2022_jp_3', 'iso2022_jp_ext', 'iso2022_kr', 'johab', 'koi8_r', 'koi8_t', 'koi8_u', 'kz1048', 'mac_cyrillic', 'mac_greek', 'mac_iceland', 'mac_latin2', 'mac_roman', 'mac_turkish', 'ptcp154', 'shift_jis', 'shift_jis_2004', 'shift_jisx0213', 'hz', 'tis_620', 'euc_tw', 'iso2022_tw']
+    if not os.path.isfile(file_path):
+        this_message = f"File does not exist: {file_path}"
+        if not rawlog:
+            if not suppress_errors: logging.error(this_message)
+            else:                   logging.info(this_message)
+        return False
+    for encoding in encodings:
+        try:
+            with open(file_path, 'r', encoding=encoding) as file:
+                file_content = file.read()
+            return file_content  # Exit the function if reading is successful
+        except UnicodeDecodeError:
+            this_message = f"Unicode decode error with encoding {encoding} reading file {file_path}"
+            if not suppress_errors: logging.warning(this_message)
+            else:                   logging.info(this_message)
+            continue
+        except Exception as e:
+            this_message = f"Error reading file {file_path} with encoding {encoding}: {str(e)}"
+            if not rawlog:
+                if not suppress_errors: logging.error(this_message)
+                else:                   logging.info(this_message)
+            return False
+    return False
+
+def my_ast_parse(file_content: str, file_path: str) -> Optional[ast.AST]:
+    """Attempt to parse the file with ast.parse and return the tree if successful."""
+    try:
+        tree = ast.parse(file_content, filename=file_path)
+    except SyntaxError as e:
+        logging.error(f"Syntax error parsing file {file_path}: {str(e)}")
+        return
+    except Exception as e:
+        logging.error(f"Error parsing file {file_path}: {str(e)}")
+        return
+    return tree
 
 def get_hostname_socket():
     """Retrieves the hostname using socket.gethostname()."""

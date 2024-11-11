@@ -14,7 +14,7 @@ import shutil
 import venv
 import pickle
 from pathlib import Path, PosixPath
-from typing import Dict, List, Set, Tuple, Union, Iterable, Optional, TextIO
+from typing import Dict, List, Set, Tuple, Union, Iterable, Optional
 import logging
 import tempfile
 import ast
@@ -2213,8 +2213,6 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.unusual_imports: List[str] = ['a', 'an', 'dl', 'the', 'it', 'x', 'xx', 'above', 'another', '__builtin__', 'within']
         # List of directories to stay out of when searching for local custom imports because they're filled with standard library modules or other irrelevant files.
         self.stay_out_list: List[str] = ['myenv', 'anaconda3', '.conda',os.sep+'lib'+os.sep, '.vscode']
-        # List of encodings to try when reading files, with most likely encodings first.
-        self.encodings: List[str] = ['utf_8', 'latin_1', 'ascii', 'iso8859_1', 'big5', 'utf_8_sig', 'utf_16', 'utf_16_be', 'utf_16_le', 'utf_32', 'utf_32_be', 'utf_32_le', 'cp1252', 'cp1251', 'cp1250', 'cp1253', 'cp1254', 'cp1255', 'cp1256', 'cp1257', 'cp1258', 'iso8859_2', 'iso8859_3', 'iso8859_4', 'iso8859_5', 'iso8859_6', 'iso8859_7', 'iso8859_8', 'iso8859_9', 'iso8859_10', 'iso8859_11', 'iso8859_13', 'iso8859_14', 'iso8859_15', 'iso8859_16', 'cp437', 'cp850', 'cp852', 'cp855', 'cp857', 'cp858', 'cp860', 'cp861', 'cp862', 'cp863', 'cp864', 'cp865', 'cp866', 'cp869','cp037', 'cp424', 'cp500', 'cp720', 'cp737', 'cp775', 'cp874', 'cp875', 'cp932', 'cp949', 'cp950', 'cp1006', 'cp1026', 'cp1125', 'cp1140','big5hkscs', 'gb2312', 'gbk', 'gb18030', 'euc_jp', 'euc_jis_2004', 'euc_jisx0213', 'euc_kr', 'iso2022_jp', 'iso2022_jp_1', 'iso2022_jp_2', 'iso2022_jp_2004', 'iso2022_jp_3', 'iso2022_jp_ext', 'iso2022_kr', 'johab', 'koi8_r', 'koi8_t', 'koi8_u', 'kz1048', 'mac_cyrillic', 'mac_greek', 'mac_iceland', 'mac_latin2', 'mac_roman', 'mac_turkish', 'ptcp154', 'shift_jis', 'shift_jis_2004', 'shift_jisx0213', 'hz', 'tis_620', 'euc_tw', 'iso2022_tw']
 
     def set_venv_dir(self, venv_dir: str) -> None:
         self.venv_dir = os.path.expanduser(venv_dir)
@@ -2250,7 +2248,7 @@ def parse_arguments(options: Options) -> None:
     # If no arguments are provided, print a short guide
     if len(sys.argv) == 1:
         parser.print_help()
-        sys.exit(1)
+        sys.exit(0)
     
     # Parse known args, and then manually add the script_args
     args = parser.parse_args()
@@ -2388,44 +2386,6 @@ class SysPathVisitor(ast.NodeVisitor):
                 if path:
                     self.paths.add(path)
         self.generic_visit(node)
-
-def my_fopen(options: Options, file_path: str, suppress_errors: bool = False) -> Optional[TextIO]:
-    """Attempt to read the file with various encodings and return the file content if successful."""
-    if not os.path.isfile(file_path):
-        this_message = f"File does not exist: {file_path}"
-        if not options.rawlog:
-            if not suppress_errors: logging.error(this_message)
-            else:                   logging.info(this_message)
-        return False
-    for encoding in options.encodings:
-        try:
-            with open(file_path, 'r', encoding=encoding) as file:
-                file_content = file.read()
-            return file_content  # Exit the function if reading is successful
-        except UnicodeDecodeError:
-            this_message = f"Unicode decode error with encoding {encoding} reading file {file_path}"
-            if not suppress_errors: logging.warning(this_message)
-            else:                   logging.info(this_message)
-            continue
-        except Exception as e:
-            this_message = f"Error reading file {file_path} with encoding {encoding}: {str(e)}"
-            if not options.rawlog:
-                if not suppress_errors: logging.error(this_message)
-                else:                   logging.info(this_message)
-            return False
-    return False
-
-def my_ast_parse(file_content: str, file_path: str) -> Optional[ast.AST]:
-    """Attempt to parse the file with ast.parse and return the tree if successful."""
-    try:
-        tree = ast.parse(file_content, filename=file_path)
-    except SyntaxError as e:
-        logging.error(f"Syntax error parsing file {file_path}: {str(e)}")
-        return
-    except Exception as e:
-        logging.error(f"Error parsing file {file_path}: {str(e)}")
-        return
-    return tree
 
 def corrective_join(base_dir: str, module_path: str) -> Optional[str]:
     """Join two paths, correcting for the case where the module_path starts with the last component of the base_dir. If that isn't the case, return None"""
@@ -2595,14 +2555,41 @@ class ImportFunctionCollector(ast.NodeVisitor):
         self.generic_visit(node)
         self.current_class = prev_class
 
+    def extract_module_name_from_import(self, node: ast.Call) -> Optional[str]:
+        """Extract the module name from a dynamic import using __import__."""
+        if node.args:
+            module_arg = node.args[0]
+            if isinstance(module_arg, ast.Constant) and isinstance(module_arg.value, str):
+                module_name = module_arg.value.split('.')[0]  # Get top-level package
+                return module_name
+            else:
+                # Handle cases where module name cannot be resolved
+                logging.error(f"Cannot resolve dynamic import with non-constant module name: {ast.unparse(node)}")
+                return None
+        else:
+            logging.error(f"No arguments provided to __import__(): {ast.unparse(node)}")
+            return None
+
     def visit_Call(self, node: ast.Call) -> None:
-        """Visit a function call and add it to the function's list of calls."""
+        """Visit a function call and add it to the function's list of calls unless the function name is __import__ which indicates that it's a dynamic import."""
         func_name = self.get_full_name(node.func)
         if func_name:
-            if self.current_function:
-                self.module_info.functions[self.current_function].function_calls.add(func_name)
+            if func_name == '__import__':
+                # Handle dynamic imports
+                module_name = self.extract_module_name_from_import(node)
+                if module_name:
+                    if self.current_function:
+                        self.module_info.functions[self.current_function].imports_in_function.add(module_name)
+                    else:
+                        self.module_info.top_level_imports.add(module_name)
+                else:
+                    # Cannot resolve module name statically
+                    logging.warning(f"Cannot resolve dynamic import: {ast.unparse(node)}")
             else:
-                self.module_info.top_level_calls.add(func_name)
+                if self.current_function:
+                    self.module_info.functions[self.current_function].function_calls.add(func_name)
+                else:
+                    self.module_info.top_level_calls.add(func_name)
         self.generic_visit(node)
 
     def get_full_name(self, node: ast.AST) -> Optional[str]:
@@ -2665,8 +2652,8 @@ def find_imports_in_script(options: Options, first_path: str) -> None:
         module_name = os.path.splitext(os.path.basename(file_path))[0]
         if module_name in modules_info:
             continue
-        file_content = my_fopen(options, file_path)
-        tree = my_ast_parse(file_content, file_path)
+        file_content = ud.my_fopen(file_path, rawlog=options.rawlog)
+        tree = ud.my_ast_parse(file_content, file_path)
         collector = ImportFunctionCollector(module_name)
         collector.visit(tree)
         modules_info[module_name] = collector.module_info
@@ -2789,8 +2776,7 @@ def list_packages(options: Options) -> None:
                 if not options.rawlog: logging.info("Using custom script to find imports.")
                 options.all_imports = get_all_imports(options, options.script_dir_or_file_or_list)
         else:
-            logging.error(f"Error: The file or directory {options.script_dir_or_file_or_list} does not exist.")
-            sys.exit(1)
+            ud.my_critical_error(f"Error: The file or directory {options.script_dir_or_file_or_list} does not exist.")
     else:
         if not options.rawlog: logging.info(f"Processing a list of Python scripts: {options.script_dir_or_file_or_list}")
         options.all_imports = set()
@@ -2924,8 +2910,7 @@ def install_package(package_name: str, options: Options) -> bool:
             ]
             download_result = subprocess.run(download_command, capture_output=True, text=True)
             if download_result.returncode != 0:
-                logging.error(f"Failed to download {package_name}. Error: {download_result.stderr}")
-                exit(1)
+                ud.my_critical_error(f"Failed to download {package_name}. Error: {download_result.stderr}")
             # Step 2: Use pip to install package_name from the file that was just downloaded to options.packages_dir
             install_command = [
                 options.venv_python, "-m", "pip", "install", 
@@ -3083,7 +3068,7 @@ print("\\n".join(installed_packages + available_modules + list(builtin_modules))
 def parse_extra_requirements(options: Options) -> Dict[str, Optional[str]]:
     """Parse an extra requirements file and return a dictionary of package names (and version specifiers, if present)."""
     options.extra_requirements = {}
-    file_content = my_fopen(options, options.extra_requirements_file, suppress_errors=True)
+    file_content = ud.my_fopen(options.extra_requirements_file, suppress_errors=True, rawlog=options.rawlog)
     if not file_content:
         return
     # Regular expression to capture package name and version specifier
@@ -3179,10 +3164,10 @@ def is_virtualenv() -> bool:
 
 def get_file_operations(options: Options, script_path: str) -> Tuple[List[str], List[str]]:
     """Find files that are read or written."""
-    file_content = my_fopen(options, script_path)
+    file_content = ud.my_fopen(script_path, rawlog=options.rawlog)
     if not file_content:
         ud.my_critical_error(f"Failed to open {script_path}", choose_breakpoint=True)
-    tree = my_ast_parse(file_content, script_path)
+    tree = ud.my_ast_parse(file_content, script_path)
     if not tree:
         return [], []
 
@@ -3194,9 +3179,9 @@ def get_file_operations(options: Options, script_path: str) -> Tuple[List[str], 
             # Check if the function called is 'open'
             if isinstance(node.func, ast.Name) and node.func.id == 'open':
                 # Get the filename
-                if isinstance(node.args[0], ast.Str):
-                    filename = node.args[0].s
-                elif isinstance(node.args[0], ast.Constant):  # For Python 3.8+
+                # if isinstance(node.args[0], ast.Str): # Deprecated!
+                #     filename = node.args[0].s
+                if isinstance(node.args[0], ast.Constant):  # For Python 3.8+
                     filename = node.args[0].value
                 else:
                     return [], []
@@ -3224,8 +3209,8 @@ def get_file_operations(options: Options, script_path: str) -> Tuple[List[str], 
 
 def get_network_operations(options: Options, script_path: str) -> Tuple[List[str], List[str]]:
     """Find URLs that are downloaded and uploaded"""
-    file_content = my_fopen(options, script_path)
-    tree = my_ast_parse(file_content, script_path)
+    file_content = ud.my_fopen(script_path, rawlog=options.rawlog)
+    tree = ud.my_ast_parse(file_content, script_path)
     if not tree:
         return [], []
 
@@ -3746,12 +3731,19 @@ def main() -> None:
     if not options.rawlog: logging.info(f"Elapsed time: {elapsed_time}")
 
     list_packages(options)
-    if not options.rawlog: logging.info(f"Uninstalled imports: {options.uninstalled_imports}")
-    if options.bad_imports:
-        logging.warning(f"Bad imports: {options.bad_imports}")
-    if not options.rawlog and options.samedir_files: logging.info(f"Imported files in the same directory as the script: {options.samedir_files}")
-    if not options.rawlog and options.subfolders: logging.info(f"Imported subfolders: {options.subfolders}")
-    if getattr(options.args, 'justprint', False): sys.exit(0)
+
+    if not options.rawlog:
+        logging.info(f"Uninstalled imports: {options.uninstalled_imports}")
+        if options.bad_imports:
+            logging.warning(f"Bad imports: {options.bad_imports}")
+        if options.samedir_files:
+            logging.info(f"Imported files in the same directory as the script: {options.samedir_files}")
+        if options.subfolders:
+            logging.info(f"Imported subfolders: {options.subfolders}")
+
+    if getattr(options.args, 'justprint', False):
+        ud.print_errors_at_end(memory_handler, options.rawlog)
+        sys.exit(0)
 
     if not options.uninstalled_imports:
         if not options.rawlog: logging.info("All required packages are already installed.")
@@ -3838,10 +3830,7 @@ def main() -> None:
 
             save_options_to_json(options)
 
-    if memory_handler.logs and not options.rawlog:
-        print("\n****************************\nCaptured error messages:")
-        for log in memory_handler.logs:
-            print(log)
+    ud.print_errors_at_end(memory_handler, options.rawlog)
 
 if __name__ == "__main__":
     main()
