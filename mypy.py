@@ -2503,11 +2503,14 @@ class ModuleInfo:
         self.aliases:           Dict[str, str]          = {}
 
 class ImportFunctionCollector(ast.NodeVisitor):
-    def __init__(self, module_name: str) -> None:
+    def __init__(self, module_name: str, options: Options,
+                 file_path: str) -> None:
         self.module_info = ModuleInfo(module_name)
         self.current_function = None
         self.current_class = None
         self.aliases = {}
+        self.options = options
+        self.file_path = file_path
 
     def visit_Import(self, node: ast.Import) -> None:
         """Visit an import statement and add the imported module to the module's list of imports."""
@@ -2520,6 +2523,7 @@ class ImportFunctionCollector(ast.NodeVisitor):
                 self.module_info.functions[self.current_function].imports_in_function.add(top_level_package)
             else:
                 self.module_info.top_level_imports.add(top_level_package)
+            process_import(self.options, top_level_package, self.file_path)
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
@@ -2535,6 +2539,7 @@ class ImportFunctionCollector(ast.NodeVisitor):
                 self.module_info.functions[self.current_function].imports_in_function.add(top_level_package)
             else:
                 self.module_info.top_level_imports.add(top_level_package)
+            process_import(self.options, top_level_package, self.file_path)
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
@@ -2582,6 +2587,7 @@ class ImportFunctionCollector(ast.NodeVisitor):
                         self.module_info.functions[self.current_function].imports_in_function.add(module_name)
                     else:
                         self.module_info.top_level_imports.add(module_name)
+                    process_import(self.options, module_name, self.file_path)
                 else:
                     # Cannot resolve module name statically
                     logging.warning(f"Cannot resolve dynamic import: {ast.unparse(node)}")
@@ -2654,12 +2660,12 @@ def find_imports_in_script(options: Options, first_path: str) -> None:
             continue
         file_content = ud.my_fopen(file_path, rawlog=options.rawlog)
         tree = ud.my_ast_parse(file_content, file_path)
-        collector = ImportFunctionCollector(module_name)
+        collector = ImportFunctionCollector(module_name, options, file_path)
         collector.visit(tree)
         modules_info[module_name] = collector.module_info
         # Add imported modules to files_to_process if they are local
         for import_name in collector.module_info.top_level_imports:
-            if import_name in options.custom_modules:
+            if import_name in options.custom_modules and import_name not in modules_info:
                 files_to_process.append(options.custom_modules[import_name])
     call_graph = build_call_graph(modules_info)
     # Collect used imports starting from the main script at first_path
