@@ -26,8 +26,8 @@ __version__ = '0.1.1'
 class Options():
     """Class that has all global options in one place."""
     def __init__(self) -> None:
-        #self.log_mode = "INFO"
-        self.log_mode = "DEBUG"
+        self.log_mode = "INFO"
+        #self.log_mode = "DEBUG"
         self.search_above_this_dir = True
         self.myname = "mypy" # The name of this script without the .py extension
         self.manual_instructions: str = f"""
@@ -2228,6 +2228,7 @@ def parse_arguments(options: Options) -> None:
     parser = argparse.ArgumentParser(description="Run a python script with optional flags.")    
     parser.add_argument('-version', action='store_true', help='Print the version of this program.')
     parser.add_argument('-manual', action='store_true', help='Print instructions for manually adding the alias to the shell configuration file.')
+    parser.add_argument('-debug', action='store_true', help='Print debug messages.')
     parser.add_argument('-blank-slate', action='store_true', help=f"Delete ~/{options.myname}/ and all {options.myname} .out and .err and .json and .pkl files in the current directory.")
     parser.add_argument('-full', action='store_true', help="Build a virtual environment (venv) that can run every python script in this directory.")
     parser.add_argument('-y', action='store_true', help='Automatically say yes to any prompts.')
@@ -2240,8 +2241,7 @@ def parse_arguments(options: Options) -> None:
     parser.add_argument('-reqs', action='store_true', help='Read the extra_requirements.txt file in the current directory and install the packages listed there (with specific versions if present in the file) into the venv (along with the other packages needed to run the script as determined elsewhere in this program).')
     parser.add_argument('-alias', type=str, help='Add an alias to the shell configuration file so that typing ALIAS anywhere runs this program.')
     parser.add_argument('-rawlog', action='store_true', help=f'Do not add timestamps or INFO level to log messages, and do not add extra INFO level log statements. Just produce the same output that would be seen when running the program without {options.myname}.')
-    parser.add_argument('-docker', action='store_true', help='UNFINISHED! Create a Dockerfile and requirements.txt file in a subdirectory named after the target script that can be used to run the script in a Docker container.')
-    parser.add_argument('-justprint', action='store_true', help="UNFINISHED! Don't run the script, just print its package requirements.")
+    parser.add_argument('-justprint', action='store_true', help="Don't run the script, just print its package requirements.")
     parser.add_argument('script', nargs='?', help="The script to run.")
     parser.add_argument('script_args', nargs=argparse.REMAINDER, help="Optional arguments for the python script.")
 
@@ -2437,7 +2437,7 @@ def process_import(options: Options, module_name: str, file_path: str) -> bool:
 
     # Is the import a file in the same directory?
     potential_file_path = os.path.join(base_dir, module_path+'.py')
-    if resolve_import(potential_file_path, module_name, options):
+    if resolve_import(potential_file_path, module_name, options) and potential_file_path not in options.samedir_files:
         options.samedir_files.append(potential_file_path)
         logging.debug(f"Added same directory file: {potential_file_path}")
         return True
@@ -2667,6 +2667,7 @@ def find_imports_in_script(options: Options, first_path: str) -> None:
         for import_name in collector.module_info.top_level_imports:
             if import_name in options.custom_modules and import_name not in modules_info:
                 files_to_process.append(options.custom_modules[import_name])
+                logging.debug(f"Adding custom module {import_name} to files_to_process as {options.custom_modules[import_name]}")
     call_graph = build_call_graph(modules_info)
     # Collect used imports starting from the main script at first_path
     start_module = os.path.splitext(os.path.basename(first_path))[0]
@@ -2676,7 +2677,7 @@ def find_imports_in_script(options: Options, first_path: str) -> None:
     # Process functions called at top level
     for func_name in modules_info[start_module].top_level_calls:
         used_imports.update(collect_used_imports(start_module, func_name, call_graph, modules_info))
-    options.all_imports = used_imports
+    options.all_imports.update(used_imports)
 
 def add_dependencies(options: Options) -> None:
     """Add dependencies for uninstalled imports."""
@@ -3650,6 +3651,9 @@ def main() -> None:
         # Print instructions for manually adding the alias to the shell configuration file
         print(options.manual_instructions)
         sys.exit(0)
+
+    if getattr(options.args, 'debug', False):
+        options.log_mode = 'DEBUG'
 
     memory_handler = ud.configure_logging(options.myname,
                                           log_level=options.log_mode,
