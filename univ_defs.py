@@ -1,5 +1,6 @@
-#NEW aws help docstring:
-# disables searching through script args for python scripts and then scanning them for imports. 
+#!/usr/bin/env python3
+
+# Written by Emmy Killett, ChatGPT 4o, ChatGPT o1-preview, and GitHub Copilot.
 import os, sys, subprocess
 import datetime as dt
 import logging
@@ -16,6 +17,9 @@ __version__ = '0.1.1'
 
 # This is the version of python which should be used in scripts that import this module.
 PY_VERSION = 3.11
+
+def parent_unused_function():
+    unused_function()
 
 def unused_function():
     """This function is not used in the test.py script."""

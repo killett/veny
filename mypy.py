@@ -21,7 +21,7 @@ import ast
 
 import univ_defs as ud
 
-__version__ = '0.1.1'
+__version__ = '0.1.2'
 
 class Options():
     """Class that has all global options in one place."""
@@ -88,7 +88,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.extra_requirements_file: str = 'extra_requirements.txt'
         self.download_script_path: str = ''
         self.simultaneous_success: bool = False
-        self.max_checks: int = 5 # Maximum number of times to check any repeated process.
+        self.max_checks: int = 10 # Maximum number of times to check any repeated process.
         self.check_interval: int = 5 # Number of seconds to wait between checks.
         self.script_args: List[str] = []
         self.file_stack: List[str] = [] # Use to store files that are being processed in find_imports_in_script()
@@ -2709,8 +2709,9 @@ def add_dependencies(options: Options) -> None:
 def split_imports(options: Options) -> None:
     """Split imports into installed, uninstalled, and bad imports."""
     options.bad_imports = options.known_bad_imports.intersection(options.all_imports)
-    logging.debug(f"Identified bad imports: {options.bad_imports}")  # New logging
     options.bad_imports.update({imp for imp in options.all_imports if imp.startswith('_')})
+    if options.bad_imports:
+        logging.debug(f"Identified bad imports: {options.bad_imports}")  # New logging
     options.all_imports = options.all_imports - options.bad_imports
     options.installed_imports = set()
     options.uninstalled_imports = set()
@@ -3065,8 +3066,9 @@ print("\\n".join(installed_packages + available_modules + list(builtin_modules))
             f.write('\n'.join(options.pip_list))
     
     new_uninstalled_imports = options.installed_imports - set(options.pip_list)
-    logging.debug(f"{new_uninstalled_imports = }")
     options.uninstalled_imports = options.uninstalled_imports.union(new_uninstalled_imports)
+    if options.uninstalled_imports:
+        logging.debug(f"{new_uninstalled_imports = }")
     options.installed_imports = options.installed_imports - new_uninstalled_imports
     # Once again, add packages from the options.extra_requirements dictionary if '-reqs' is specified as a runtime argument. (Do this again, just in case they got removed from the uninstalled_imports set above.)
     if getattr(options.args, 'reqs', False):
@@ -3637,6 +3639,7 @@ def find_preferred_python_version() -> Optional[str]:
         return None
 
 def main() -> None:
+    """Main function."""
     start_time = dt.datetime.now()
     options = Options()
     parse_arguments(options)
@@ -3811,7 +3814,7 @@ def main() -> None:
             elif os.path.basename(options.venv_dir).startswith('failed-') and options.simultaneous_success:
                 #If the program has made it to this point, it has run successfully, so the venv directory can be renamed. It HASN'T failed. However, if it couldn't install simultaneously, then it's still a failed venv.
                 os.rename(options.venv_dir, options.venv_dir.replace('failed-', ''))
-                options.set_venv_dir(       options.venv_dir.replace('failed-', ''))
+                options.set_venv_dir(options.venv_dir.replace('failed-', ''))
                 #Now edit the pyvenv.cfg file inside it:
                 cfg_file_path = os.path.join(options.venv_dir, 'pyvenv.cfg')
                 # Read the content of the file
