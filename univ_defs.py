@@ -2,18 +2,11 @@
 
 # Written by Emmy Killett, ChatGPT 4o, ChatGPT o1-preview, and GitHub Copilot.
 import os, sys, subprocess
-import datetime as dt
 import logging
-import threading
-import socket
-import platform
-from collections import Counter
 from typing import Dict, Optional, TextIO
-import traceback
-import ast
 
 # This is the version of univ_defs.py
-__version__ = '0.1.1'
+__version__ = '0.1.3'
 
 # This is the version of python which should be used in scripts that import this module.
 PY_VERSION = 3.11
@@ -26,52 +19,6 @@ def unused_function():
     print("This function is not used in the test.py script.")
     import numpy as np
 
-def remove_prefix_from_filename(filepath: str, prefix: str) -> bool:
-    """If the given filepath's base filename starts with the given prefix, remove the prefix, move the file (but only if that doesn't cause errors) and return True. Otherwise, return False."""
-    file = os.path.basename(filepath)
-    if file.startswith(prefix):
-        new_file = file.replace(prefix, "", 1)  # Replace only the first occurrence
-        # If the first character is now in " _-", remove it:
-        while new_file[0] in " _-":
-            new_file = new_file[1:]
-        new_filepath = os.path.join(os.path.dirname(filepath), new_file) 
-        if not os.path.exists(new_filepath):
-            try:
-                os.rename(filepath, new_filepath)
-                print(f"Renamed '{filepath}' to '{new_filepath}'.")
-                return True
-            except OSError as e:
-                print(f"Error renaming '{filepath}' to '{new_filepath}': {e}")
-                sys.exit(1)
-        else:
-            print(f"Cannot rename '{filepath}' to '{new_filepath}': New path already exists.")
-            return False
-    else:
-        return False
-
-def remove_prefix_from_html_title(filepath: str, prefix: str) -> bool:
-    """If the given filepath is an HTML file and its title starts with the given prefix, remove the prefix from the title and save the file, then return True. Otherwise, return False."""
-    if not filepath.endswith('.html') and not filepath.endswith('.htm'):
-        print(f"File '{filepath}' is not an HTML or HTM file.")
-        breakpoint()
-        return False
-    html = my_fopen(filepath)
-    title_start = html.find('<title>') + len('<title>')
-    title_end = html.find('</title>', title_start)
-    if title_start == -1 or title_end == -1:
-        print(f"Could not find the title in the HTML file '{filepath}'.")
-        return False
-    title = html[title_start:title_end]
-    if title.startswith(prefix):
-        new_title = title.replace(prefix, "", 1)  # Replace only the first occurrence
-        new_html = html[:title_start] + new_title + html[title_end:]
-        with open(filepath, 'w', encoding='utf-8') as file:
-            file.write(new_html)
-        print(f"Removed prefix '{prefix}' from the title in '{filepath}'.")
-        return True
-    else:
-        return False
-
 def sci_exp(float_input: float) -> int:
     """Return the scientific exponent of a float."""
     import math
@@ -79,13 +26,49 @@ def sci_exp(float_input: float) -> int:
     if abs(float_input) < 10**(-max_digits): return -max_digits
     return int(math.floor(math.log10(abs(float_input))))
 
-def human_bytesize(num: int, suffix: str='B') -> str:
-    """Convert a file size in bytes to a human-readable string with units like KB, MB, GB, etc."""
-    for unit in ['','K','M','G','T','P','E','Z']:
-        if abs(num) < 1024.0:
-            return "%3.1f%s%s" % (num, unit, suffix)
-        num /= 1024.0
-    return "%.1f%s%s" % (num, 'Y', suffix)
+class LLMs:
+    """Class that handles the import and operation of large language model APIs."""
+    def __init__(self):
+        self.import_llms()
+
+    def import_llms(self) -> None:
+        """Import the large language model APIs into the self.llm_modules dictionary and check if the necessary environment variables are set."""
+        # ADD NEW COMPANY LLMs HERE.
+        self.llms = [
+            {"name": "OpenAI", "module": "openai", "env_var": "OPENAI_API_KEY"},
+            {"name": "Anthropic", "module": "anthropic", "env_var": "ANTHROPIC_API_KEY"},
+        ]
+        self.found_llms = {}
+        self.llm_modules = {}
+        for llm in self.llms:
+            this_llm = llm["name"]
+            this_key = llm["env_var"]
+            try:
+                # THIS DOESN'T WORK YET BECAUSE DYNAMIC IMPORTS BREAK mypy.py!
+                # self.llm_modules[this_llm] = __import__(llm["module"])
+                # ADD NEW COMPANY LLMs HERE.
+                if  this_llm == "OpenAI":
+                    import openai
+                    self.llm_modules[this_llm] = openai
+                elif this_llm == "Anthropic":
+                    import anthropic
+                    self.llm_modules[this_llm] = anthropic
+                else:
+                    my_critical_error(f"Unknown LLM: {this_llm}")
+                print(f"{this_llm} package found", end="")
+                # Make sure this_key is set as an environment variable:
+                if this_key in os.environ:
+                    self.found_llms[this_llm] = True
+                    print(f", and the {this_key} environment variable is set.")
+                else:
+                    self.found_llms[this_llm] = False
+                    print(f", but the {this_key} environment variable is not set, so the {this_llm} package cannot be used.")
+            except ImportError:
+                self.found_llms[this_llm] = False
+                print(f"{this_llm} package not found.")
+
+        if not any(self.found_llms.values()):
+            my_critical_error(f"Could not find any large language model APIs. Choices are: {', '.join(self.found_llms.keys())}\nExiting.")
 
 # #"round out" away from zero while keeping round_digits significant figures.
 # #Rounds up for x>0, down for x<0.
@@ -104,6 +87,7 @@ def human_bytesize(num: int, suffix: str='B') -> str:
 # #and here: https://archive.vn/dCEqU  https://numpy.org/doc/stable/reference/arrays.datetime.html
 # #Usage: dec2date(2002.29178082191777)
 # def dec2date(dec):
+#   import datetime as dt
 #   year = int(dec)
 #   rem = dec - year
 #   base = dt.datetime(year, 1, 1)
@@ -136,8 +120,9 @@ class MaxLevelFilter(logging.Filter):
         return record.levelno <= self.max_level
     
 def configure_logging(basename: str, log_level: str = 'INFO',
-                      rawlog: bool = False) -> MemoryHandler:
+                      rawlog: bool = False, logdir: str = '') -> MemoryHandler:
     """Configure logging to write to files and stdout/stderr, and return a MemoryHandler to capture ERROR logs for later (duplicate) printing."""
+    import datetime as dt
     
     root_logger = logging.getLogger()
 
@@ -149,14 +134,14 @@ def configure_logging(basename: str, log_level: str = 'INFO',
                 return handler
 
     # Proceed with configuring logging if no MemoryHandler was found
-    #logs_directory = '/tmp/logs'
-    logs_directory = os.getcwd()
-    os.makedirs(logs_directory, exist_ok=True)
+    if not logdir: # Default to the current working directory if no logdir is provided.
+        logdir = os.getcwd()
+    os.makedirs(logdir, exist_ok=True)
 
     now = dt.datetime.now()
     log_base = f".{basename}-log-{now.strftime('%Y%m%d-%H%M%S')}"
-    log_info = os.path.join(logs_directory, log_base + ".out")
-    log_errors = os.path.join(logs_directory, log_base + ".err")
+    log_info = os.path.join(logdir, log_base + ".out")
+    log_errors = os.path.join(logdir, log_base + ".err")
 
     root_logger.handlers = []  # Reset any existing handlers
 
@@ -225,6 +210,7 @@ def my_critical_error(message: str = "A critical error occurred.",
                       choose_breakpoint: bool = False,
                       exit_code: int = 1) -> None:
     """Log a critical error message and either exit the program or enter a breakpoint."""
+    import traceback
     # Determine if an exception is being handled:
     exc_type, exc_value, exc_traceback = sys.exc_info()
     #Check to see if logger is set up. If not, just print the critical error message.
@@ -269,6 +255,8 @@ class MyPopenResult:
 def my_popen(command_list: list, suppress_info: bool = False,
              suppress_error: bool = False) -> MyPopenResult:
     """Execute a command using subprocess.Popen and capture the output line by line using threads."""
+    import threading
+
     command_list_str = [str(item) for item in command_list]
     the_statement = "Executing command: " + ' '.join(command_list_str)
     
@@ -374,8 +362,9 @@ def my_fopen(file_path: str, suppress_errors: bool = False,
             return False
     return False
 
-def my_ast_parse(file_content: str, file_path: str) -> Optional[ast.AST]:
+def my_ast_parse(file_content: str, file_path: str) -> 'Optional[ast.AST]':
     """Attempt to parse the file with ast.parse and return the tree if successful."""
+    import ast
     try:
         tree = ast.parse(file_content, filename=file_path)
     except SyntaxError as e:
@@ -386,24 +375,26 @@ def my_ast_parse(file_content: str, file_path: str) -> Optional[ast.AST]:
         return
     return tree
 
-def get_hostname_socket():
+def get_hostname_socket() -> str:
     """Retrieves the hostname using socket.gethostname()."""
+    import socket
     return socket.gethostname()
 
-def get_hostname_platform():
+def get_hostname_platform() -> str:
     """Retrieves the hostname using platform.node()."""
+    import platform
     return platform.node()
 
-def get_hostname_os_uname():
+def get_hostname_os_uname() -> str:
     """Retrieves the hostname using os.uname().nodename."""
     return os.uname().nodename
 
-def get_hostname_subprocess_hostname():
+def get_hostname_subprocess_hostname() -> str:
     """Retrieves the hostname using the 'hostname' system command via subprocess."""
     result = subprocess.run(['hostname'], capture_output=True, text=True, check=True)
     return result.stdout.strip()
 
-def get_hostname_subprocess_scutil():
+def get_hostname_subprocess_scutil() -> str:
     """Retrieves the hostname using the 'scutil --get ComputerName' command on macOS via subprocess."""
     result = subprocess.run(['scutil', '--get', 'ComputerName'], capture_output=True, text=True, check=True)
     return result.stdout.strip()
@@ -442,6 +433,8 @@ def analyze_results(results: Dict[str, str]) -> str:
     Returns:
         computer_name (str): The most common computer name.
     """
+    from collections import Counter
+
     if not results:
         print("No methods succeeded in retrieving the computer name.")
         return "ERROR-NO-NAME"
@@ -472,15 +465,23 @@ def analyze_results(results: Dict[str, str]) -> str:
         
         return primary_name
 
+def human_bytesize(num: int, suffix: str='B') -> str:
+    """Convert a file size in bytes to a human-readable string with units like KB, MB, GB, etc."""
+    for unit in ['','K','M','G','T','P','E','Z']:
+        if abs(num) < 1024.0:
+            return "%3.1f%s%s" % (num, unit, suffix)
+        num /= 1024.0
+    return "%.1f%s%s" % (num, 'Y', suffix)
+
 def prettyprint_timespan(timespan: float) -> None:
     """Pretty-prints a timespan in years, weeks, days, hours, and seconds."""
 
     # Constants for time conversions
-    SECONDS_PER_MINUTE = 60
-    SECONDS_PER_HOUR = 3600
-    SECONDS_PER_DAY = 86400
-    SECONDS_PER_WEEK = 604800
-    SECONDS_PER_YEAR = 31556952
+    SECONDS_PER_MINUTE =       60
+    SECONDS_PER_HOUR   =     3600
+    SECONDS_PER_DAY    =    86400
+    SECONDS_PER_WEEK   =   604800
+    SECONDS_PER_YEAR   = 31556952
 
     # Calculating years, weeks, days, hours
     years = int(timespan // SECONDS_PER_YEAR)
@@ -517,6 +518,42 @@ def prettyprint_timespan(timespan: float) -> None:
         time_str = "0 seconds"
 
     print(f"The script took {time_str} to run.")
+
+def kill_process(pname: str) -> None:
+    """Kill a process by its name, then check if it is still running and retry if needed. Make sure the process name is unique to avoid killing unintended processes."""
+    import time
+    import signal
+
+    while True:
+        # Find the process IDs of the given process name
+        process_ids = []
+        try:
+            process_list = subprocess.check_output(["pgrep", "-f", pname]).decode("utf-8")
+            process_ids = process_list.splitlines()
+        except subprocess.CalledProcessError:
+            print(f"No {pname} process found.")
+        
+        if process_ids:
+            for pid in process_ids:
+                print(f"Killing {pname} process with PID: {pid}")
+                try:
+                    os.kill(int(pid), signal.SIGTERM)  # Send SIGTERM to terminate the process
+                    print(f"Sent SIGTERM to PID {pid}")
+                except ProcessLookupError:
+                    print(f"Process {pid} already terminated.")
+        else:
+            print(f"No {pname} process found.")
+            break
+        
+        # Check if the process is still running
+        time.sleep(2)  # Wait for 2 seconds before checking again
+        process_ids = subprocess.check_output(["pgrep", "-f", pname]).decode("utf-8").splitlines()
+        
+        if not process_ids:
+            print(f"{pname} process successfully killed.")
+            break  # Exit the loop when the process is no longer running
+        else:
+            print(f"{pname} is still running. Retrying...")
 
 def open_dir_in_VLC(the_dir: str, sort_choice: str = "sort_by_name",
                     recursive: bool = False,
@@ -565,3 +602,49 @@ def open_dir_in_VLC(the_dir: str, sort_choice: str = "sort_by_name",
     if start_flag: command_list = ["vlc", start_flag, playlist_path]
     else:          command_list = ["vlc",             playlist_path]
     subprocess.Popen(command_list, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def remove_prefix_from_filename(filepath: str, prefix: str) -> bool:
+    """If the given filepath's base filename starts with the given prefix, remove the prefix, move the file (but only if that doesn't cause errors) and return True. Otherwise, return False."""
+    file = os.path.basename(filepath)
+    if file.startswith(prefix):
+        new_file = file.replace(prefix, "", 1)  # Replace only the first occurrence
+        # If the first character is now in " _-", remove it:
+        while new_file[0] in " _-":
+            new_file = new_file[1:]
+        new_filepath = os.path.join(os.path.dirname(filepath), new_file) 
+        if not os.path.exists(new_filepath):
+            try:
+                os.rename(filepath, new_filepath)
+                print(f"Renamed '{filepath}' to '{new_filepath}'.")
+                return True
+            except OSError as e:
+                print(f"Error renaming '{filepath}' to '{new_filepath}': {e}")
+                sys.exit(1)
+        else:
+            print(f"Cannot rename '{filepath}' to '{new_filepath}': New path already exists.")
+            return False
+    else:
+        return False
+
+def remove_prefix_from_html_title(filepath: str, prefix: str) -> bool:
+    """If the given filepath is an HTML file and its title starts with the given prefix, remove the prefix from the title and save the file, then return True. Otherwise, return False."""
+    if not filepath.endswith('.html') and not filepath.endswith('.htm'):
+        print(f"File '{filepath}' is not an HTML or HTM file.")
+        breakpoint()
+        return False
+    html = my_fopen(filepath)
+    title_start = html.find('<title>') + len('<title>')
+    title_end = html.find('</title>', title_start)
+    if title_start == -1 or title_end == -1:
+        print(f"Could not find the title in the HTML file '{filepath}'.")
+        return False
+    title = html[title_start:title_end]
+    if title.startswith(prefix):
+        new_title = title.replace(prefix, "", 1)  # Replace only the first occurrence
+        new_html = html[:title_start] + new_title + html[title_end:]
+        with open(filepath, 'w', encoding='utf-8') as file:
+            file.write(new_html)
+        print(f"Removed prefix '{prefix}' from the title in '{filepath}'.")
+        return True
+    else:
+        return False

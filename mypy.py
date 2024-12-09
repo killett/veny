@@ -91,9 +91,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.max_checks: int = 10 # Maximum number of times to check any repeated process.
         self.check_interval: int = 5 # Number of seconds to wait between checks.
         self.script_args: List[str] = []
-        self.file_stack: List[str] = [] # Use to store files that are being processed in find_imports_in_script()
         self.new_local_paths: Set[str] = set()
-        self.processed_files: Set[str] = set()
         self.all_imports: Set[str] = set()
         self.installed_imports: Set[str] = set()
         self.uninstalled_imports: Set[str] = set()
@@ -2387,32 +2385,6 @@ class SysPathVisitor(ast.NodeVisitor):
                     self.paths.add(path)
         self.generic_visit(node)
 
-def corrective_join(base_dir: str, module_path: str) -> Optional[str]:
-    """Join two paths, correcting for the case where the module_path starts with the last component of the base_dir. If that isn't the case, return None"""
-    # Split both paths into their components
-    base_components   =    base_dir.rstrip(os.path.sep).split(os.path.sep)
-    module_components = module_path.lstrip(os.path.sep).split(os.path.sep)    
-    # Handle the overlap case
-    if base_components[-1] == module_components[0]:
-        module_components = module_components[1:]
-        return os.path.join(base_dir, *module_components)
-    else:
-        return None
-
-def resolve_import(potential_file_path: str, module_name: str, options: Options) -> bool:
-    """Resolve an import by checking if it's a local custom module and handle it accordingly."""
-    logging.debug(f"Constructed potential file path: {potential_file_path}")
-    if os.path.isfile(potential_file_path):
-        resolved_path = os.path.abspath(potential_file_path)
-        logging.debug(f"Resolved local import to: {resolved_path}")
-        options.custom_modules[module_name.split('.')[0]] = resolved_path
-        options.loaded_custom_modules.add(module_name.split('.')[0])
-        if resolved_path not in options.processed_files:
-            options.processed_files.add(resolved_path)
-            options.file_stack.append(resolved_path)
-        return True
-    return False
-
 def process_import(options: Options, module_name: str, file_path: str) -> bool:
     """Process an import by checking if it's a local custom module or a standard import, and handle it accordingly."""
     if module_name in options.standard_modules:
@@ -2420,73 +2392,42 @@ def process_import(options: Options, module_name: str, file_path: str) -> bool:
         return False
 
     logging.debug(f"Processing import: {module_name} from file {file_path}")
-    
-    if module_name in options.all_imports:
-        logging.debug(f"Skipping already processed import: {module_name}")
-        return False
 
     base_dir = os.path.dirname(os.path.abspath(file_path))
     module_path = module_name.replace('.', os.sep)
-    if module_path == options.script_name:
-        logging.debug(f"Avoiding loopback to the same file: {module_path}")
+
+    # Avoid loopback to the same file
+    script_name = os.path.splitext(os.path.basename(file_path))[0]
+    if module_name == script_name:
+        logging.debug(f"Avoiding loopback to the same file: {module_name}")
         return False
-    if module_path == 'pipreqs' and f'{options.myname}.py' in file_path:
+    if module_name == 'pipreqs' and f'{options.myname}.py' in file_path:
         logging.debug(f"Avoiding loopback to pipreqs in {options.myname}.py")
         return False
     logging.debug(f"Constructed module path: {module_path}")
 
-    # Is the import a file in the same directory?
-    potential_file_path = os.path.join(base_dir, module_path+'.py')
-    if resolve_import(potential_file_path, module_name, options) and potential_file_path not in options.samedir_files:
+    # Check if the import is a .py file in the same directory
+    potential_file_path = os.path.abspath(os.path.join(base_dir, module_path + '.py'))
+    if os.path.isfile(potential_file_path) and potential_file_path not in options.samedir_files:
+        options.custom_modules[module_name] = potential_file_path
+        options.loaded_custom_modules.add(module_name)
         options.samedir_files.append(potential_file_path)
         logging.debug(f"Added same directory file: {potential_file_path}")
         return True
-
-    # Is the import a file in a subdirectory that is mistakenly repeated?
-    potential_file_path = corrective_join(base_dir, module_path)
-    if potential_file_path:
-        potential_file_path += '.py'
-        if resolve_import(potential_file_path, module_name, options):
-            return True
-
-    # Is the import a subdirectory with python files in it?
-    potential_file_path = os.path.join(base_dir, module_path)
-    logging.debug(f"Constructed potential file path: {potential_file_path}")
-    if os.path.isdir(potential_file_path):
-        resolved_path = os.path.abspath(potential_file_path)+os.sep
-        logging.debug(f"Resolved local import to: {resolved_path}")
-        # List all files in resolved_path that have extensions of '.py':
-        py_files = [f for f in os.listdir(resolved_path) if os.path.isfile(os.path.join(resolved_path, f)) and f.endswith('.py')]
-        if not py_files:
-            logging.debug(f"No python files found in subfolder: {resolved_path}")
-            return False
-        logging.debug(f"Found python files in {module_path}: {py_files}")
+    
+    # Check if the import is a package (directory with __init__.py)
+    potential_dir_path = os.path.abspath(os.path.join(base_dir, module_path))
+    logging.debug(f"Constructed potential directory path: {potential_dir_path}")
+    if os.path.isdir(potential_dir_path) and os.path.isfile(os.path.join(potential_dir_path, '__init__.py')) and module_path not in options.subfolders:
+        options.custom_modules[module_name] = potential_dir_path
+        options.loaded_custom_modules.add(module_name)
+        logging.debug(f"Resolved local package to: {potential_dir_path}")
         options.subfolders.append(module_path)
         logging.debug(f"Added subfolder: {module_path}")
-        for py_file in py_files:
-            this_resolved_path = os.path.join(resolved_path, py_file)
-            logging.debug(f"Adding custom module with name {module_name.split('.')[0]} and path: {this_resolved_path}")
-            options.custom_modules[module_name.split('.')[0]] = this_resolved_path
-            options.loaded_custom_modules.add(module_name.split('.')[0])
-            if this_resolved_path not in options.processed_files:
-                options.processed_files.add(this_resolved_path)
-                options.file_stack.append(this_resolved_path)
-        return True # Exit after finding the subdirectory to avoid unnecessary checks
-
-    # If not found in this directory, check options.custom_modules
-    if module_name in options.custom_modules:
-        resolved_path = options.custom_modules[module_name]
-        if resolved_path == file_path:
-            logging.debug(f"Avoiding loopback to the same file: {resolved_path}")
-            return False
-        logging.debug(f"Using existing resolved path from custom_modules: {resolved_path}")
-        options.loaded_custom_modules.add(module_name.split('.')[0])
-        if not any(substring in resolved_path for substring in options.stay_out_list):
-            options.processed_files.add(resolved_path)
-            options.file_stack.append(resolved_path)
-    else:
-        logging.debug(f"Could not resolve local import, adding to all_imports: {module_name}")
-        options.all_imports.add(module_name)
+        return True
+    
+    logging.debug(f"Could not resolve local import, treating as external: {module_name}")
+    return False
 
 class FunctionInfo:
     def __init__(self, function_name: str) -> None:
@@ -2501,16 +2442,18 @@ class ModuleInfo:
         self.functions:         Dict[str, FunctionInfo] = {}
         self.top_level_calls:   Set[str]                = set()
         self.aliases:           Dict[str, str]          = {}
+        self.classes:           Set[str]                = set()
 
 class ImportFunctionCollector(ast.NodeVisitor):
     def __init__(self, module_name: str, options: Options,
                  file_path: str) -> None:
         self.module_info = ModuleInfo(module_name)
         self.current_function = None
-        self.current_class = None
-        self.aliases = {}
-        self.options = options
-        self.file_path = file_path
+        self.current_class    = None
+        self.aliases          = {}
+        self.options          = options
+        self.file_path        = file_path
+        self.base_classes     = {}
 
     def visit_Import(self, node: ast.Import) -> None:
         """Visit an import statement and add the imported module to the module's list of imports."""
@@ -2523,7 +2466,6 @@ class ImportFunctionCollector(ast.NodeVisitor):
                 self.module_info.functions[self.current_function].imports_in_function.add(top_level_package)
             else:
                 self.module_info.top_level_imports.add(top_level_package)
-            process_import(self.options, top_level_package, self.file_path)
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
@@ -2539,7 +2481,6 @@ class ImportFunctionCollector(ast.NodeVisitor):
                 self.module_info.functions[self.current_function].imports_in_function.add(top_level_package)
             else:
                 self.module_info.top_level_imports.add(top_level_package)
-            process_import(self.options, top_level_package, self.file_path)
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
@@ -2548,6 +2489,7 @@ class ImportFunctionCollector(ast.NodeVisitor):
         if self.current_class:
             func_name = f"{self.current_class}.{func_name}"
         self.module_info.functions[func_name] = FunctionInfo(func_name)
+        logging.debug(f"Added function: {func_name} to module {self.module_info.module_name}")
         prev_function = self.current_function
         self.current_function = func_name
         self.generic_visit(node)
@@ -2555,8 +2497,27 @@ class ImportFunctionCollector(ast.NodeVisitor):
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         """Visit a class definition and set the current class."""
+        # Create a fully qualified class name
+        full_class_name = f"{self.module_info.module_name}.{node.name}"
+
+        self.module_info.classes.add(full_class_name)
         prev_class = self.current_class
-        self.current_class = node.name
+        self.current_class = full_class_name  # Store the fully qualified class name
+
+        # Record base classes before visiting the body
+        base_class_names = []
+        for base in node.bases:
+            base_name = self.get_full_name(base)
+            if base_name:
+                parts = base_name.split('.')
+                if parts and parts[0] in self.aliases:
+                    alias_target = self.aliases[parts[0]]
+                    base_name = alias_target + '.' + '.'.join(parts[1:])
+                base_class_names.append(base_name)
+        self.base_classes[full_class_name] = base_class_names
+        logging.debug(f"Recorded base classes for {full_class_name}: {self.base_classes[full_class_name]}")
+
+        # Now that base_classes is set, visit the class body
         self.generic_visit(node)
         self.current_class = prev_class
 
@@ -2576,51 +2537,127 @@ class ImportFunctionCollector(ast.NodeVisitor):
             return None
 
     def visit_Call(self, node: ast.Call) -> None:
-        """Visit a function call and add it to the function's list of calls unless the function name is __import__ which indicates that it's a dynamic import."""
+        """Visit a function call and add it to the function's list of calls."""
         func_name = self.get_full_name(node.func)
+        original_func_name = func_name
+
         if func_name:
+            parts = func_name.split('.')
+
+            # If func_name is a bare name and not found as is, try qualifying it
+            # For example, if we have test_classes.test_class in self.module_info.classes
+            # but just got 'test_class', let's prepend the module name.
+            if '.' not in func_name:
+                potential_full_name = f"{self.module_info.module_name}.{func_name}"
+                if potential_full_name in self.module_info.classes:
+                    func_name = potential_full_name
+            
+            # Now check if the fully resolved func_name is a class
+            if func_name in self.module_info.classes:
+                # It's a class, so calling it means calling its __init__
+                func_name = f"{func_name}.__init__"
+
+            # Handle dynamic imports
             if func_name == '__import__':
-                # Handle dynamic imports
                 module_name = self.extract_module_name_from_import(node)
                 if module_name:
                     if self.current_function:
                         self.module_info.functions[self.current_function].imports_in_function.add(module_name)
                     else:
                         self.module_info.top_level_imports.add(module_name)
-                    process_import(self.options, module_name, self.file_path)
                 else:
-                    # Cannot resolve module name statically
                     logging.warning(f"Cannot resolve dynamic import: {ast.unparse(node)}")
+            elif func_name.startswith('super.'):
+                # Handle super calls
+                _, method_name = func_name.split('.', 1)
+                if self.current_class and self.current_class in self.base_classes:
+                    base_classes = self.base_classes[self.current_class]
+                    if base_classes:
+                        base_class = base_classes[0]  # Assuming single inheritance
+                        func_name = f"{base_class}.{method_name}"
+                # Record super calls
+                if self.current_function:
+                    self.module_info.functions[self.current_function].function_calls.add(func_name)
+                    logging.debug(f"Adding to {self.current_function}.function_calls: {func_name}")
+                else:
+                    self.module_info.top_level_calls.add(func_name)
+                    logging.debug(f"Adding to top_level_calls: {func_name}")
             else:
+                # Normal calls
                 if self.current_function:
                     self.module_info.functions[self.current_function].function_calls.add(func_name)
                 else:
                     self.module_info.top_level_calls.add(func_name)
+
         self.generic_visit(node)
+        logging.debug(f"Call found: original func_name={original_func_name}, resolved func_name={func_name}")
+        if self.current_function:
+            logging.debug(f"Adding function call {func_name} to {self.current_function}")
+        else:
+            logging.debug(f"Adding top-level call: {func_name}")
 
     def get_full_name(self, node: ast.AST) -> Optional[str]:
         """Get the full name of a node, including any aliases."""
-        if isinstance(node, ast.Name):
-            return self.aliases.get(node.id, node.id)
-        elif isinstance(node, ast.Attribute):
+        if isinstance(node, ast.Name): # Handle variable names
+            if node.id in ('self', 'cls'): # Handle class methods
+                if self.current_class:
+                    return self.current_class
+                else:
+                    return node.id
+            elif node.id == 'super': # Handle super() calls
+                return 'super'
+            else:
+                return self.aliases.get(node.id, node.id)
+        elif isinstance(node, ast.Attribute): # Handle attribute access
             value = self.get_full_name(node.value)
             return f"{value}.{node.attr}" if value else node.attr
+        elif isinstance(node, ast.Call): # Handle super() calls
+            func_name = self.get_full_name(node.func)
+            if func_name == 'super':
+                return 'super'
+            return func_name
         return None
+
+def split_function_name(called_func: str, default_module: str) -> Tuple[str, str]:
+    """
+    Split a fully qualified function name into module and function parts.
+    If there's no dot, the default_module is used as the module.
+    """
+    parts = called_func.split('.')
+    if len(parts) > 1:
+        called_module = parts[0]
+        called_name = '.'.join(parts[1:])
+    else:
+        called_module = default_module
+        called_name = called_func
+    return called_module, called_name
 
 def build_call_graph(modules_info: Dict[str, ModuleInfo]) -> Dict[str, Set[str]]:
     """Build a call graph from the function calls in the modules."""
     call_graph = {}
     for module_name, module_info in modules_info.items():
         for func_name, func_info in module_info.functions.items():
-            full_func_name = f"{module_name}.{func_name}"
+            # func_name is already fully qualified like "test_classes.test_class.__init__"
+            full_func_name = func_name  # No need to prepend the module_name again
+
             call_graph[full_func_name] = set()
             for called_func in func_info.function_calls:
-                if '.' in called_func:
-                    called_module, called_name = called_func.rsplit('.', 1)
-                    called_full_name = f"{called_module}.{called_name}"
+                # called_func is also fully qualified, like "test_defs.univ_class.__init__"
+                # We'll just split it to identify the called module and function name.
+                called_module, called_name = split_function_name(called_func, module_name)
+
+                # Check if called_name is a class in the module (fully qualified)
+                if called_module in modules_info and called_name in modules_info[called_module].classes:
+                    # Class instantiation, call __init__
+                    called_full_name = f"{called_module}.{called_name}.__init__"
                 else:
-                    called_full_name = f"{module_name}.{called_func}"
+                    called_full_name = f"{called_module}.{called_name}"
+
                 call_graph[full_func_name].add(called_full_name)
+
+    logging.debug("Call graph constructed:")
+    for func, calls in call_graph.items():
+        logging.debug(f"{func} calls: {calls}")
     return call_graph
 
 def collect_used_imports(start_module: str, start_func: str,
@@ -2632,52 +2669,123 @@ def collect_used_imports(start_module: str, start_func: str,
         visited = set()
     full_func_name = f"{start_module}.{start_func}"
     if full_func_name in visited:
+        logging.debug(f"Already visited {full_func_name}, skipping.")
         return set()
+    logging.debug(f"Visiting function: {full_func_name}")
     visited.add(full_func_name)
     imports = set()
     module_info = modules_info.get(start_module)
     if module_info:
         func_info = module_info.functions.get(start_func)
         if func_info:
+            if func_info.imports_in_function:
+                logging.debug(f"Function {full_func_name} imports: {func_info.imports_in_function}")
+            else:
+                logging.debug(f"No direct imports found in {full_func_name}")
             imports.update(func_info.imports_in_function)
             for called_func in func_info.function_calls:
-                if '.' in called_func:
-                    called_module, called_name = called_func.rsplit('.', 1)
-                else:
-                    called_module = start_module
-                    called_name = called_func
+                called_module, called_name = split_function_name(called_func, start_module)
+                logging.debug(f"From {full_func_name}, visiting called function {called_module}.{called_name}")
                 imports.update(collect_used_imports(called_module, called_name, call_graph, modules_info, visited))
+        else:
+            logging.debug(f"No function info found for {full_func_name}")
+    else:
+        logging.debug(f"No module info found for {start_module}")
     return imports
 
 def find_imports_in_script(options: Options, first_path: str) -> None:
-    """Find all imports in the script and in any local custom modules it uses. However, if a local custom module imports a package in a function which is not used in the main script at "first_path", that package will not be included in the list of imports."""
+    processed_modules = set()
     modules_info = {}
-    files_to_process = [first_path]
-    while files_to_process:
-        file_path = files_to_process.pop()
-        module_name = os.path.splitext(os.path.basename(file_path))[0]
-        if module_name in modules_info:
+    modules_to_process = [first_path]
+    while modules_to_process:
+        module_path = modules_to_process.pop()
+        module_name = os.path.splitext(os.path.basename(module_path))[0]
+        if module_name in processed_modules:
             continue
-        file_content = ud.my_fopen(file_path, rawlog=options.rawlog)
-        tree = ud.my_ast_parse(file_content, file_path)
-        collector = ImportFunctionCollector(module_name, options, file_path)
+        processed_modules.add(module_name)
+        file_content = ud.my_fopen(module_path, rawlog=options.rawlog)
+        tree = ud.my_ast_parse(file_content, module_path)
+        collector = ImportFunctionCollector(module_name, options, module_path)
         collector.visit(tree)
-        modules_info[module_name] = collector.module_info
-        # Add imported modules to files_to_process if they are local
-        for import_name in collector.module_info.top_level_imports:
-            if import_name in options.custom_modules and import_name not in modules_info:
-                files_to_process.append(options.custom_modules[import_name])
-                logging.debug(f"Adding custom module {import_name} to files_to_process as {options.custom_modules[import_name]}")
+        module_info = collector.module_info
+        modules_info[module_name] = module_info
+        # Process only top-level imports to find local modules
+        for import_name in module_info.top_level_imports:
+            if import_name in options.standard_modules:
+                continue  # Skip standard modules
+            resolved = process_import(options, import_name, module_path)
+            if resolved:
+                module_file_path = options.custom_modules.get(import_name)
+                if module_file_path and module_file_path not in processed_modules:
+                    modules_to_process.append(module_file_path)
+            else:
+                options.all_imports.add(import_name)
+    logging.debug("Modules processed so far:")
+    for m_name, m_info in modules_info.items():
+        logging.debug(f"Module: {m_name}, Classes: {m_info.classes}, Functions: {list(m_info.functions.keys())}")
+    # Now build the call graph
     call_graph = build_call_graph(modules_info)
-    # Collect used imports starting from the main script at first_path
-    start_module = os.path.splitext(os.path.basename(first_path))[0]
+    # Collect used imports starting from the first module
     used_imports = set()
-    # Process top-level imports
-    used_imports.update(modules_info[start_module].top_level_imports)
-    # Process functions called at top level
-    for func_name in modules_info[start_module].top_level_calls:
-        used_imports.update(collect_used_imports(start_module, func_name, call_graph, modules_info))
+    visited_funcs = set()
+    def collect_imports_from_module(module_name):
+        module_info = modules_info[module_name]
+        used_imports.update(module_info.top_level_imports)
+        for func_name in module_info.top_level_calls:
+            called_module, called_name = split_function_name(func_name, module_name)
+            logging.debug(f"Collecting used imports for module '{called_module}' and func_name '{called_name}'")
+            used_imports.update(
+                collect_used_imports(
+                    called_module,  # Use the extracted module name
+                    called_name,     # Use the extracted function name
+                    call_graph,
+                    modules_info,
+                    visited_funcs
+                )
+            )
+            logging.debug(f"Used imports collected from '{called_name}' in '{called_module}': {used_imports}")
+        logging.debug(f"Used imports after collecting from module {module_name}: {used_imports}")
+    collect_imports_from_module(os.path.splitext(os.path.basename(first_path))[0])
     options.all_imports.update(used_imports)
+    # Now process used imports and recursively process new local modules
+    new_modules_found = True
+    while new_modules_found:
+        new_modules_found = False
+        for import_name in used_imports.copy():
+            if import_name in options.standard_modules or import_name in options.all_imports:
+                continue  # Skip standard modules and already processed imports
+            if import_name in options.custom_modules:
+                module_file_path = options.custom_modules[import_name]
+                module_name = import_name
+                if module_name not in processed_modules:
+                    modules_to_process.append(module_file_path)
+                    new_modules_found = True
+                    processed_modules.add(module_name)
+                    # Process the new module
+                    file_content = ud.my_fopen(module_file_path, rawlog=options.rawlog)
+                    tree = ud.my_ast_parse(file_content, module_file_path)
+                    collector = ImportFunctionCollector(module_name, options, module_file_path)
+                    collector.visit(tree)
+                    module_info = collector.module_info
+                    modules_info[module_name] = module_info
+                    # Process top-level imports to find more local modules
+                    for new_import in module_info.top_level_imports:
+                        if new_import in options.standard_modules:
+                            continue
+                        resolved = process_import(options, new_import, module_file_path)
+                        if resolved:
+                            module_file_path = options.custom_modules.get(new_import)
+                            if module_file_path and new_import not in processed_modules:
+                                modules_to_process.append(module_file_path)
+                    # Rebuild call graph and collect used imports again
+                    call_graph = build_call_graph(modules_info)
+                    used_imports.clear()
+                    visited_funcs.clear()
+                    collect_imports_from_module(os.path.splitext(os.path.basename(first_path))[0])
+                    options.all_imports.update(used_imports)
+            else:
+                # If not a local module, add to options.all_imports
+                options.all_imports.add(import_name)
 
 def add_dependencies(options: Options) -> None:
     """Add dependencies for uninstalled imports."""
