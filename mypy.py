@@ -2497,12 +2497,9 @@ class ImportFunctionCollector(ast.NodeVisitor):
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         """Visit a class definition and set the current class."""
-        # Create a fully qualified class name
-        full_class_name = f"{self.module_info.module_name}.{node.name}"
-
-        self.module_info.classes.add(full_class_name)
+        self.module_info.classes.add(node.name)
         prev_class = self.current_class
-        self.current_class = full_class_name  # Store the fully qualified class name
+        self.current_class = node.name
 
         # Record base classes before visiting the body
         base_class_names = []
@@ -2514,9 +2511,8 @@ class ImportFunctionCollector(ast.NodeVisitor):
                     alias_target = self.aliases[parts[0]]
                     base_name = alias_target + '.' + '.'.join(parts[1:])
                 base_class_names.append(base_name)
-        self.base_classes[full_class_name] = base_class_names
-        logging.debug(f"Recorded base classes for {full_class_name}: {self.base_classes[full_class_name]}")
-
+        self.base_classes[node.name] = base_class_names
+        logging.debug(f"Recorded base classes for {node.name}: {self.base_classes[node.name]}")
         # Now that base_classes is set, visit the class body
         self.generic_visit(node)
         self.current_class = prev_class
@@ -2543,18 +2539,21 @@ class ImportFunctionCollector(ast.NodeVisitor):
 
         if func_name:
             parts = func_name.split('.')
+            if parts[0] in self.module_info.classes:
+                # It's a class from this module
+                if func_name in self.module_info.classes:
+                    # func_name is exactly the class name, treat as constructor
+                    logging.debug(f"{func_name} is identified as a class. Converting to __init__ call.")
+                    func_name = f"{self.module_info.module_name}.{func_name}.__init__"
+                else:
+                    # It's a method/attribute call on a class from this module
+                    logging.debug(f"{func_name} is a method/attribute on a class from the same module. Qualifying with module name.")
+                    func_name = f"{self.module_info.module_name}.{func_name}"
+            else:
+                logging.debug(f"{func_name} is not a class, leaving as-is.")
 
-            # If func_name is a bare name and not found as is, try qualifying it
-            # For example, if we have test_classes.test_class in self.module_info.classes
-            # but just got 'test_class', let's prepend the module name.
-            if '.' not in func_name:
-                potential_full_name = f"{self.module_info.module_name}.{func_name}"
-                if potential_full_name in self.module_info.classes:
-                    func_name = potential_full_name
-            
-            # Now check if the fully resolved func_name is a class
+            # If func_name corresponds to a class in this module, treat it as calling __init__
             if func_name in self.module_info.classes:
-                # It's a class, so calling it means calling its __init__
                 func_name = f"{func_name}.__init__"
 
             # Handle dynamic imports
@@ -2588,7 +2587,6 @@ class ImportFunctionCollector(ast.NodeVisitor):
                     self.module_info.functions[self.current_function].function_calls.add(func_name)
                 else:
                     self.module_info.top_level_calls.add(func_name)
-
         self.generic_visit(node)
         logging.debug(f"Call found: original func_name={original_func_name}, resolved func_name={func_name}")
         if self.current_function:
@@ -2637,24 +2635,17 @@ def build_call_graph(modules_info: Dict[str, ModuleInfo]) -> Dict[str, Set[str]]
     call_graph = {}
     for module_name, module_info in modules_info.items():
         for func_name, func_info in module_info.functions.items():
-            # func_name is already fully qualified like "test_classes.test_class.__init__"
-            full_func_name = func_name  # No need to prepend the module_name again
-
+            full_func_name = f"{module_name}.{func_name}"
             call_graph[full_func_name] = set()
             for called_func in func_info.function_calls:
-                # called_func is also fully qualified, like "test_defs.univ_class.__init__"
-                # We'll just split it to identify the called module and function name.
                 called_module, called_name = split_function_name(called_func, module_name)
-
-                # Check if called_name is a class in the module (fully qualified)
+                # Check if called_name is a class in the module
                 if called_module in modules_info and called_name in modules_info[called_module].classes:
                     # Class instantiation, call __init__
                     called_full_name = f"{called_module}.{called_name}.__init__"
                 else:
                     called_full_name = f"{called_module}.{called_name}"
-
                 call_graph[full_func_name].add(called_full_name)
-
     logging.debug("Call graph constructed:")
     for func, calls in call_graph.items():
         logging.debug(f"{func} calls: {calls}")
