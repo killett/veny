@@ -21,25 +21,27 @@ import ast
 
 import univ_defs as ud
 
-__version__ = '0.1.2'
+__version__ = '0.1.3'
 
 class Options():
     """Class that has all global options in one place."""
     def __init__(self) -> None:
         self.log_mode = "INFO"
-        #self.log_mode = "DEBUG"
+        #self.log_mode = "DEBUG" # Instead of uncommenting this line, just use the -debug command line argument.
         self.search_above_this_dir = True
-        self.myname = "mypy" # The name of this script without the .py extension
+        self.my_filepath: str = os.path.abspath(__file__) # This file's full path and filename
+        self.my_name = os.path.splitext(os.path.basename(self.my_filepath))[0] # The base name of this script without the .py extension
+        self.my_dir: str = os.path.expanduser(os.path.join('~',self.my_name))
         self.manual_instructions: str = f"""
-This program acts as a wrapper around Python to automate the creation of virtual environments and the installation of any required packages. Instead of typing "python3 script.py", you can type "{self.myname} script.py" to run script.py in a virtual environment which has all the required packages.
+This program acts as a wrapper around Python to automate the creation of virtual environments and the installation of any required packages. Instead of typing "python3 script.py", you can type "{self.my_name} script.py" to run script.py in a virtual environment which has all the required packages.
 
-It's convenient to add an alias to the shell configuration file so that typing ALIAS anywhere runs this program. This can either be done by running this program with the "-alias ALIAS" command line argument (for example: "python3 {self.myname}.py -alias {self.myname}") or by following the manual instructions below. The following steps assume this program is saved as {self.myname}.py in your home directory (~), but you can adjust the path and filename to match your setup.
+It's convenient to add an alias to the shell configuration file so that typing ALIAS anywhere runs this program. This can either be done by running this program with the "-alias ALIAS" command line argument (for example: "python3 {self.my_name}.py -alias {self.my_name}") or by following the manual instructions below. The following steps assume this program is saved as {self.my_name}.py in your home directory (~), but you can adjust the path and filename to match your setup.
 
 If you're on a Mac you're probably using the zsh shell, so follow these steps to add the alias manually:
 1. Open your zsh configuration file (~/.zshrc) in a text editor. For example:
    nano ~/.zshrc
 2. Add the following line to the end of the file:
-   alias {self.myname}="python3 ~/{self.myname}.py"
+   alias {self.my_name}="python3 ~/{self.my_name}.py"
 3. Save the file and exit the text editor.
 4. Reload your zsh configuration by running the following command:
    source ~/.zshrc
@@ -48,20 +50,18 @@ If you're using the bash shell, follow these steps to add the alias manually:
 1. Open your bash configuration file (~/.bashrc) in a text editor. For example:
    nano ~/.bashrc
 2. Add the following line to the end of the file:
-   alias {self.myname}="python3 ~/{self.myname}.py"
+   alias {self.my_name}="python3 ~/{self.my_name}.py"
 3. Save the file and exit the text editor.
 4. Reload your bash configuration by running the following command:
    source ~/.bashrc
 """
         self.python_command: str = ''
         self.shell: str = ''
-        self.mypy_filepath: str = os.path.abspath(__file__) # This file's full path and filename
         self.computer_name: str = ud.get_computer_name()
         self.cwd: str = os.getcwd()
         self.venv_name: str = 'myenv' # Can NOT include dashes ('-')
-        self.mypy_dir: str = os.path.expanduser(os.path.join('~',self.myname))
-        self.packages_dir: str = os.path.join(self.mypy_dir, 'packages')
-        self.test_dir: str = os.path.join(self.mypy_dir, 'test')
+        self.packages_dir: str = os.path.join(self.my_dir, 'packages')
+        self.test_dir: str = os.path.join(self.my_dir, 'test')
         self.uninstalled_imports: Set[str] = set()
         self.installed_imports: Set[str] = set()
         self.bad_imports: Set[str] = set()
@@ -2226,8 +2226,8 @@ def parse_arguments(options: Options) -> None:
     parser = argparse.ArgumentParser(description="Run a python script with optional flags.")    
     parser.add_argument('-version', action='store_true', help='Print the version of this program.')
     parser.add_argument('-manual', action='store_true', help='Print instructions for manually adding the alias to the shell configuration file.')
-    parser.add_argument('-debug', action='store_true', help='Print debug messages.')
-    parser.add_argument('-blank-slate', action='store_true', help=f"Delete ~/{options.myname}/ and all {options.myname} .out and .err and .json and .pkl files in the current directory.")
+    parser.add_argument('-debug', action='store_true', help='Run this program in debug mode, which prints additional debug messages.')
+    parser.add_argument('-blank-slate', action='store_true', help=f"Delete ~/{options.my_name}/ and all {options.my_name} .out and .err and .json and .pkl files in the current directory.")
     parser.add_argument('-full', action='store_true', help="Build a virtual environment (venv) that can run every python script in this directory.")
     parser.add_argument('-y', action='store_true', help='Automatically say yes to any prompts.')
     parser.add_argument('-no-cache', action='store_true', help="Don't search the cache. Instead, create a new virtual environment. Also, refresh the custom modules cache and the pip list.")
@@ -2238,7 +2238,7 @@ def parse_arguments(options: Options) -> None:
     parser.add_argument('-rc', action='store_true', help='Refresh the custom modules cache and the pip list.')
     parser.add_argument('-reqs', action='store_true', help='Read the extra_requirements.txt file in the current directory and install the packages listed there (with specific versions if present in the file) into the venv (along with the other packages needed to run the script as determined elsewhere in this program).')
     parser.add_argument('-alias', type=str, help='Add an alias to the shell configuration file so that typing ALIAS anywhere runs this program.')
-    parser.add_argument('-rawlog', action='store_true', help=f'Do not add timestamps or INFO level to log messages, and do not add extra INFO level log statements. Just produce the same output that would be seen when running the program without {options.myname}.')
+    parser.add_argument('-rawlog', action='store_true', help=f'Do not add timestamps or INFO level to log messages, and do not add extra INFO level log statements. Just produce the same output that would be seen when running the program without {options.my_name}.')
     parser.add_argument('-justprint', action='store_true', help="Don't run the script, just print its package requirements.")
     parser.add_argument('script', nargs='?', help="The script to run.")
     parser.add_argument('script_args', nargs=argparse.REMAINDER, help="Optional arguments for the python script.")
@@ -2277,11 +2277,11 @@ def get_shell_rc_file(options: Options) -> str:
 def get_alias_command(options: Options) -> str:
     """Get the alias command for the shell."""
     if options.shell in ["bash", "zsh"]:
-        return f'alias {options.args.alias}="{options.python_command} {options.mypy_filepath}"'
+        return f'alias {options.args.alias}="{options.python_command} {options.my_filepath}"'
     elif options.shell == "fish":
-        return f'alias {options.args.alias} "{options.python_command} {options.mypy_filepath}"'
+        return f'alias {options.args.alias} "{options.python_command} {options.my_filepath}"'
     elif options.shell in ["csh", "tcsh"]:
-        return f"alias {options.args.alias} '{options.python_command} {options.mypy_filepath}'"
+        return f"alias {options.args.alias} '{options.python_command} {options.my_filepath}'"
     return None
 
 def alias_exists(rc_file: str, alias_pattern: str) -> bool:
@@ -2401,8 +2401,8 @@ def process_import(options: Options, module_name: str, file_path: str) -> bool:
     if module_name == script_name:
         logging.debug(f"Avoiding loopback to the same file: {module_name}")
         return False
-    if module_name == 'pipreqs' and f'{options.myname}.py' in file_path:
-        logging.debug(f"Avoiding loopback to pipreqs in {options.myname}.py")
+    if module_name == 'pipreqs' and f'{options.my_name}.py' in file_path:
+        logging.debug(f"Avoiding loopback to pipreqs in {options.my_name}.py")
         return False
     logging.debug(f"Constructed module path: {module_path}")
 
@@ -3160,7 +3160,7 @@ print("\\n".join(installed_packages + available_modules + list(builtin_modules))
         options.pip_list = [pkg for pkg in options.pip_list if pkg != 'Package' and not all(c == '-' for c in pkg)]
         logging.debug(f"\n{options.pip_list = }")
 
-        pip_list_filename = os.path.join(options.mypy_dir, f"pip_list_{options.timestamp}.txt")
+        pip_list_filename = os.path.join(options.my_dir, f"pip_list_{options.timestamp}.txt")
         with open(pip_list_filename, 'w') as f:
             f.write('\n'.join(options.pip_list))
     
@@ -3239,7 +3239,7 @@ def setup_virtualenv(options: Options) -> bool:
     use_pip_list(options)
     options.pretty_list = pretty_packages_list(options)
     # Create a virtual environment directory that starts with 'failed' in case the process fails. Only remove the 'failed' part if this process completes successfully.
-    options.set_venv_dir(os.path.join(options.mypy_dir, f"failed-{options.venv_name}-versionless-{options.timestamp}-{options.pretty_list}"))
+    options.set_venv_dir(os.path.join(options.my_dir, f"failed-{options.venv_name}-versionless-{options.timestamp}-{options.pretty_list}"))
     os.makedirs(options.venv_dir, exist_ok=True)
 
     if not write_requirements_file_with_extras(options):
@@ -3400,7 +3400,7 @@ def guard_examines(options: Options) -> None:
     
 def save_options_to_json(options: Options) -> None:
     """Save the options object to a JSON file."""
-    options.json_filename = os.path.join(options.script_dir, f".{os.path.basename(options.python_script)}-{options.myname}-last-used-on-{options.timestamp}.json")
+    options.json_filename = os.path.join(options.script_dir, f".{os.path.basename(options.python_script)}-{options.my_name}-last-used-on-{options.timestamp}.json")
     
     # Convert options to a dictionary and handle sets
     options_dict = options.__dict__
@@ -3543,8 +3543,8 @@ def find_match_dir_in_cache(options: Options) -> str:
         options.args.latest    = True #If that didn't work, try to load the latest venv in the cache
         options.args.last_used = False #And set this to False because it failed
     if not options.rawlog: logging.info("Checking the cache for a virtual environment with all the required packages...")
-    #Search for all venv_name folders in mypy:
-    all_venv_folders = [f for f in os.listdir(options.mypy_dir) if os.path.isdir(os.path.join(options.mypy_dir, f)) and f.startswith(options.venv_name)]
+    #Search for all venv_name folders in my_dir:
+    all_venv_folders = [f for f in os.listdir(options.my_dir) if os.path.isdir(os.path.join(options.my_dir, f)) and f.startswith(options.venv_name)]
     #Loop through the folders and eliminate folders that clearly don't have the right packages just based on their names:
     venv_folders = []
     for folder in all_venv_folders:
@@ -3565,7 +3565,7 @@ def find_match_dir_in_cache(options: Options) -> str:
     #Loop through possibly valid venv folders and compare requirements in detail.
     final_venv_folders = {}
     for folder in venv_folders:
-        this_requirements_file = os.path.join(options.mypy_dir, folder, 'requirements.txt')
+        this_requirements_file = os.path.join(options.my_dir, folder, 'requirements.txt')
         with open(this_requirements_file, 'r') as file:
             requirements = set(file.read().splitlines())
         if options.uninstalled_imports.issubset(requirements):
@@ -3581,7 +3581,7 @@ def find_match_dir_in_cache(options: Options) -> str:
            not getattr(options.args, 'smallest', False):
             # Return the latest venv in the cache which has all the packages needed now
             options_latest = copy.deepcopy(options)
-            options_latest.set_venv_dir(os.path.join(options.mypy_dir, latest_venv(final_venv_folders)))
+            options_latest.set_venv_dir(os.path.join(options.my_dir, latest_venv(final_venv_folders)))
             options_latest.uninstalled_imports = options.uninstalled_imports
             if check_venv_dir(options, options_latest):
                 return options_latest.venv_dir
@@ -3594,7 +3594,7 @@ def find_match_dir_in_cache(options: Options) -> str:
             not getattr(options.args, 'smallest', False):
             # Return the oldest venv in the cache which has all the packages needed now
             options_oldest = copy.deepcopy(options)
-            options_oldest.set_venv_dir(os.path.join(options.mypy_dir, oldest_venv(final_venv_folders)))
+            options_oldest.set_venv_dir(os.path.join(options.my_dir, oldest_venv(final_venv_folders)))
             options_oldest.uninstalled_imports = options.uninstalled_imports
             if check_venv_dir(options, options_oldest):
                 return options_oldest.venv_dir
@@ -3607,7 +3607,7 @@ def find_match_dir_in_cache(options: Options) -> str:
             not getattr(options.args, 'last_used', False):
             # Return the smallest venv in the cache which has all the packages needed now
             options_smallest = copy.deepcopy(options)
-            options_smallest.set_venv_dir(os.path.join(options.mypy_dir, smallest_venv(final_venv_folders)))
+            options_smallest.set_venv_dir(os.path.join(options.my_dir, smallest_venv(final_venv_folders)))
             options_smallest.uninstalled_imports = options.uninstalled_imports
             if check_venv_dir(options, options_smallest):
                 return options_smallest.venv_dir
@@ -3665,7 +3665,7 @@ def dict_of_custom_modules(options: Options) -> Dict[str, str]:
 
     if not getattr(options.args, 'rc', False) and not getattr(options.args, 'no_cache', False):
         for file in os.listdir('.'):
-            if file.startswith(f'.{options.myname}_custom_modules_') and file.endswith('.pkl') and options.computer_name in file and search_constraint_filename_boolean(file, search_above_text_to_match):
+            if file.startswith(f'.{options.my_name}_custom_modules_') and file.endswith('.pkl') and options.computer_name in file and search_constraint_filename_boolean(file, search_above_text_to_match):
                 if not options.rawlog: logging.info(f"Loading custom modules from {file}")
                 with open(file, 'rb') as f:
                     custom_modules = pickle.load(f)
@@ -3696,7 +3696,7 @@ def dict_of_custom_modules(options: Options) -> Dict[str, str]:
                                     del custom_modules[module_name]
     #Now save to a pickle file:
     current_time = dt.datetime.now().strftime('%Y%m%d-%H%M%S')
-    custom_filename = f'.{options.myname}_custom_modules_{options.computer_name}{search_above_text_to_write}{current_time}.pkl'
+    custom_filename = f'.{options.my_name}_custom_modules_{options.computer_name}{search_above_text_to_write}{current_time}.pkl'
     with open(custom_filename, 'wb') as f:
         if not options.rawlog: logging.info(f"Saving custom modules to {custom_filename}")
         pickle.dump(custom_modules, f)
@@ -3757,7 +3757,7 @@ def main() -> None:
     if getattr(options.args, 'debug', False):
         options.log_mode = 'DEBUG'
 
-    memory_handler = ud.configure_logging(options.myname,
+    memory_handler = ud.configure_logging(options.my_name,
                                           log_level=options.log_mode,
                                           rawlog=options.rawlog)
 
@@ -3783,19 +3783,19 @@ def main() -> None:
         pass
     elif getattr(options.args, 'blank_slate', False):
         if not getattr(options.args, 'y', False):
-            response = input(f"Are you sure you want to delete everything in ~/{options.myname}/ and all {options.myname} .json files in the current directory? (y/n) ")
+            response = input(f"Are you sure you want to delete everything in ~/{options.my_name}/ and all {options.my_name} .json files in the current directory? (y/n) ")
             if response.casefold() != 'y':
                 logging.info("Exiting without deleting anything.")
                 sys.exit(0)
-        logging.info(f"Deleting everything in ~/{options.myname}/ and all {options.myname} .out and .err and .json and .pkl files in the current directory.")
-        shutil.rmtree(options.mypy_dir, ignore_errors=True)
+        logging.info(f"Deleting everything in ~/{options.my_name}/ and all {options.my_name} .out and .err and .json and .pkl files in the current directory.")
+        shutil.rmtree(options.my_dir, ignore_errors=True)
         for file in os.listdir(options.cwd):
             logging.debug(f"Checking {file}")
             if os.path.isfile(file):
-               if (file.startswith(f'.{options.myname}-') and file.endswith('.out')) or \
-                  (file.startswith(f'.{options.myname}-') and file.endswith('.err')) or \
-                  (file.startswith(f'.{options.myname}_custom_modules_') and file.endswith('.pkl')) or \
-                  (file.startswith('.') and f'-{options.myname}-' in file and file.endswith('.json')):
+               if (file.startswith(f'.{options.my_name}-') and file.endswith('.out')) or \
+                  (file.startswith(f'.{options.my_name}-') and file.endswith('.err')) or \
+                  (file.startswith(f'.{options.my_name}_custom_modules_') and file.endswith('.pkl')) or \
+                  (file.startswith('.') and f'-{options.my_name}-' in file and file.endswith('.json')):
                     try:
                         logging.info(f"Deleting {file}")
                         os.remove(os.path.join(options.cwd, file))
@@ -3812,9 +3812,9 @@ def main() -> None:
         parse_extra_requirements(options)
         if not options.rawlog: logging.info(f"Loaded extra requirements from ./{options.extra_requirements_file}: {options.extra_requirements}")
 
-    if not os.path.isdir(options.mypy_dir):
-        if not options.rawlog: logging.info(f"Directory {options.mypy_dir} does not exist yet, so it is being created.")
-        os.makedirs(options.mypy_dir, exist_ok=True)
+    if not os.path.isdir(options.my_dir):
+        if not options.rawlog: logging.info(f"Directory {options.my_dir} does not exist yet, so it is being created.")
+        os.makedirs(options.my_dir, exist_ok=True)
     if not os.path.isdir(options.packages_dir):
         if not options.rawlog: logging.info(f"Directory {options.packages_dir} does not exist yet, so it is being created.")
         os.makedirs(options.packages_dir, exist_ok=True)
@@ -3825,14 +3825,14 @@ def main() -> None:
     elapsed_time = time2 - time1
     if not options.rawlog: logging.info(f"dict_of_custom_modules() took {elapsed_time}")
     
-    #Look for files in options.mypy_dir that start with pip_list and load the most recent one.
+    #Look for files in options.my_dir that start with pip_list and load the most recent one.
     options.pip_list = []
-    pip_list_files = sorted([f for f in os.listdir(options.mypy_dir) if f.startswith('pip_list')],reverse=True)
+    pip_list_files = sorted([f for f in os.listdir(options.my_dir) if f.startswith('pip_list')],reverse=True)
     logging.debug(f"{pip_list_files = }")
     #If -rc was not specified, look for a text file with the pip list the last time this script was run.
     if not getattr(options.args, 'rc', False) and pip_list_files:
         try:
-            with open(os.path.join(options.mypy_dir, pip_list_files[0]), 'r') as file:
+            with open(os.path.join(options.my_dir, pip_list_files[0]), 'r') as file:
                 for line in file:
                     options.pip_list.append(line.strip())
         except:
@@ -3876,7 +3876,6 @@ def main() -> None:
             logging.error("The current virtual environment does not have all the required packages.")
             if not options.rawlog: logging.info("Please deactivate the current virtual environment and run the script again.")
     else:
-        if not options.rawlog: logging.info("Not in a virtual environment.")
         if getattr(options.args, 'no_cache', False):
             match_dir = None
         else:

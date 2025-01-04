@@ -19,6 +19,14 @@ def unused_function():
     print("This function is not used in the test.py script.")
     import numpy as np
 
+class univ_class:
+    """Class that handles the import and operation of large language model APIs."""
+    def __init__(self):
+        self.import_test()
+
+    def import_test(self) -> None:
+        import openai
+
 def sci_exp(float_input: float) -> int:
     """Return the scientific exponent of a float."""
     import math
@@ -155,10 +163,10 @@ def configure_logging(basename: str, log_level: str = 'INFO',
         print(f"Failed to create log files: {e}", flush=True)
         return None
 
-    # Stream handler for stdout (INFO and lower)
+    # Stream handler for stdout (WARNING and lower)
     console_handler_stdout = FlushingStreamHandler(stream=sys.stdout)
-    console_handler_stdout.setLevel(logging.DEBUG)  # Set to lowest level
-    console_handler_stdout.addFilter(MaxLevelFilter(logging.INFO))  # Add filter for INFO and lower
+    console_handler_stdout.setLevel(logging.DEBUG) # Set to lowest level
+    console_handler_stdout.addFilter(MaxLevelFilter(logging.WARNING)) # Highest
 
     # Stream handler for stderr (ERROR and above)
     console_handler_stderr = FlushingStreamHandler(stream=sys.stderr)
@@ -242,7 +250,16 @@ def get_user_input(prompt: str) -> bool:
 
 def my_capitalize(string_to_capitalize: str) -> str:
     """Capitalize ONLY the first letter of a string and DON'T modify the rest of it."""
+    if not string_to_capitalize:
+        return ""
     return string_to_capitalize[0].upper() + string_to_capitalize[1:]
+
+def my_title_case(the_title: str) -> str:
+    """Capitalize the first letter of each word, but if a word already has ANY uppercase letters, leave it as is. This way, words like "WW2" or "iZombie" won't be modified."""
+    words = the_title.split()
+    capitalized_words = [word if any(letter.isupper() for letter in word)
+                         else word.title() for word in words]
+    return ' '.join(capitalized_words)
 
 class MyPopenResult:
     """A class to store the results of a customized subprocess.Popen call."""
@@ -467,7 +484,7 @@ def analyze_results(results: Dict[str, str]) -> str:
 
 def human_bytesize(num: int, suffix: str='B') -> str:
     """Convert a file size in bytes to a human-readable string with units like KB, MB, GB, etc."""
-    for unit in ['','K','M','G','T','P','E','Z']:
+    for unit in ['','K','M','G','T','P','E','Z','Y']:
         if abs(num) < 1024.0:
             return "%3.1f%s%s" % (num, unit, suffix)
         num /= 1024.0
@@ -648,3 +665,60 @@ def remove_prefix_from_html_title(filepath: str, prefix: str) -> bool:
         return True
     else:
         return False
+
+def check_list_for_duplicates(the_list: list) -> bool:
+    """Check a list for duplicate elements and return True if duplicates are found."""
+    duplicates = [ext for ext in set(the_list) if the_list.count(ext) > 1]
+    print("Duplicates:", duplicates)
+
+# A comprehensive list of video file extensions.
+video_extensions = [
+    '.mp4',   '.mkv',   '.mov',   '.avi',  '.mpg',  '.mpeg',
+    '.wmv',   '.m4v',   '.flv',   '.divx', '.vob',  '.iso',
+    '.3gp',   '.webm',  '.mts',   '.m2ts', '.ts',   '.ogv', 
+    '.rm',    '.rmvb',  '.asf',   '.f4v',  '.mxf',  '.dv',
+    '.swf',   '.m2v',   '.svi',   '.mpe',  '.ogm',  '.bik',
+    '.xvid',  '.yuv',   '.qt',    '.gvi',  '.viv',  '.fli',
+    '.mjpg',  '.mjpeg', '.amv',   '.drc',  '.flc',  '.wve',
+    '.avchd', '.vp6',   '.ivf',   '.mps',  '.vro',  '.ssf', 
+    '.hevc',  '.h265',  '.264',   '.str',  '.evo',  '.3g2',
+    '.h264',  '.av1',   '.ogx',   '.mlv',  '.ps',   '.tsx',
+    '.mp2v',  '.dvs',   '.gxf',   '.m4p',  '.webp', '.vp8',
+    '.trp',   '.f4p',   '.f4b',   '.f4m',  '.mk3d', '.3mm',
+    '.3gpp',  '.mod',   '.tod',   '.cine', '.arf',  '.wrf',
+    '.braw',  '.jmf',   '.r3d',   '.dpx',  '.mpv',  '.tsv',
+    '.rmx',   '.smk',   '.mkd',   '.mj2',  '.scm',  '.ivr',
+    '.xesc',  '.wtv',   '.dcr',   '.mpl',  '.pds',  '.ismv',
+    '.vc1',   '.vcd',   '.mpcpl', '.bin',  '.sfd',  '.qtz',
+    '.vdat',  '.vft',
+]
+# check_list_for_duplicates(video_extensions)
+
+# A comprehensive list of audio file extensions.
+audio_extensions = [
+    '.mp3',   '.wav',   '.flac',  '.aac',   '.ogg',   '.wma',
+    '.m4a',   '.alac',  '.aiff',  '.opus',  '.amr',   '.pcm',
+    '.au',    '.raw',   '.dts',   '.ac3',   '.mka',   '.mpc',
+    '.vqf',   '.ape',   '.shn',   '.ra',    '.rm',    '.oga',
+    '.spx',   '.caf',   '.snd',   '.mid',   '.midi',  '.kar',
+    '.rmi',   '.m3u',   '.pls',   '.xspf',  '.asf',   '.wv',
+    '.aa',    '.aax',   '.dsf',   '.dff',   '.sf2',   '.g721',
+    '.voc',   '.swa',   '.bwf',   '.ivs',   '.smp',   '.htk',
+    '.sds',   '.brstm', '.adx',   '.hca',   '.ast',   '.psf',
+    '.psf2',  '.qsf',   '.ssf',   '.usf',   '.gsf',   '.flp',
+    '.dsm',   '.dmf',   '.mod',   '.s3m',   '.it',    '.xm',
+    '.mt2',   '.mo3',   '.umx',   '.tt',    '.tak',   '.trk',
+    '.669',   '.abc',   '.ts',    '.ym',    '.hsq',   '.mpa',
+]
+# check_list_for_duplicates(audio_extensions)
+
+# A comprehensive list of subtitle file extensions.
+subtitle_extensions = [
+    '.srt',   '.sub',    '.idx',   '.ass',   '.ssa',   '.vtt',
+    '.ttml',  '.dfxp',   '.smi',   '.smil',  '.usf',   '.psb',
+    '.mks',   '.lrc',    '.stl',   '.pjs',   '.rt',    '.aqt',
+    '.gsub',  '.jss',    '.dks',   '.mpl2',  '.tmp',   '.vsf',
+    '.zeg',   '.webvtt', '.scc',   '.cap',   '.asc',   '.txt',
+    '.sbv',   '.ebu',    '.sami',  '.xml',   '.itt',   '.qt.txt',
+]
+# check_list_for_duplicates(subtitle_extensions)
