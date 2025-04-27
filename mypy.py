@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# Written by Emmy Killett, ChatGPT 4o, ChatGPT o1-preview, and GitHub Copilot.
+# Written by Emmy Killett (she/her), ChatGPT 4o (it/its), ChatGPT o1-preview (it/its), ChatGPT o3-mini-high (it/its), and GitHub Copilot (it/its).
 import os
 import sys
 import subprocess
@@ -3942,6 +3942,7 @@ def main() -> None:
             save_options_to_json(options)
 
     ud.print_errors_at_end(memory_handler, options.rawlog)
+    logging.shutdown()
 
 if __name__ == "__main__":
     main()

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# Written by Emmy Killett, ChatGPT 4o, ChatGPT o1-preview, and GitHub Copilot.
+# Written by Emmy Killett (she/her), ChatGPT 4o (it/its), ChatGPT o1-preview (it/its), ChatGPT o3-mini-high (it/its), and GitHub Copilot (it/its).
 import os, sys, subprocess
 import logging
 from typing import Dict, Optional, TextIO
@@ -27,6 +27,18 @@ class univ_class:
     def import_test(self) -> None:
         import openai
 
+def parse_date(date_str: str) -> 'dt.datetime':
+    """Try parsing the given date string in multiple formats. Once a format works, return the datetime object. If none of the formats work, raise a ValueError. If the date string is 'NOW', return the current datetime."""
+    import datetime as dt
+    if date_str.upper() == "NOW":
+        return dt.datetime.now()
+    for fmt in ("%Y", "%Y-%m", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return dt.datetime.strptime(date_str, fmt)
+        except ValueError:
+            pass
+    raise ValueError(f"The date '{date_str}' is in an unknown format. Please use NOW, YYYY, YYYY-MM, YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS.")
+
 def sci_exp(float_input: float) -> int:
     """Return the scientific exponent of a float."""
     import math
@@ -37,10 +49,15 @@ def sci_exp(float_input: float) -> int:
 class LLMs:
     """Class that handles the import and operation of large language model APIs."""
     def __init__(self):
-        self.import_llms()
+        self.init_llms()
 
-    def import_llms(self) -> None:
-        """Import the large language model APIs into the self.llm_modules dictionary and check if the necessary environment variables are set."""
+    def init_llms(self) -> None:
+        """
+        1. Import the LLM APIs into the self.llm_modules dictionary.
+        2. Check if the necessary environment variables are set.
+        3. Create clients for all successfully imported LLMs.
+        """
+        # 1. Import the LLM APIs into the self.llm_modules dictionary.
         # ADD NEW COMPANY LLMs HERE.
         self.llms = [
             {"name": "OpenAI", "module": "openai", "env_var": "OPENAI_API_KEY"},
@@ -64,7 +81,7 @@ class LLMs:
                 else:
                     my_critical_error(f"Unknown LLM: {this_llm}")
                 print(f"{this_llm} package found", end="")
-                # Make sure this_key is set as an environment variable:
+                # 2. Check if the necessary environment variables are set.
                 if this_key in os.environ:
                     self.found_llms[this_llm] = True
                     print(f", and the {this_key} environment variable is set.")
@@ -77,6 +94,50 @@ class LLMs:
 
         if not any(self.found_llms.values()):
             my_critical_error(f"Could not find any large language model APIs. Choices are: {', '.join(self.found_llms.keys())}\nExiting.")
+
+        # 3. Create clients for all successfully imported LLMs.
+        self.clients = {}
+        for llm in self.found_llms:
+            if self.found_llms[llm]:
+                # ADD NEW COMPANY LLMs HERE.
+                if   llm == "OpenAI":
+                    self.clients[llm] = self.llm_modules[llm].OpenAI()
+                elif llm == "Anthropic":
+                    self.clients[llm] = self.llm_modules[llm].Anthropic()
+                else:
+                    print(f"Can't create client for unknown LLM: {llm}")
+                    sys.exit()
+
+    def send_prompt(self, prompt: str,
+                    system_message: str, model: str,
+                    company: str, temperature: float,
+                    max_tokens: int = 1000) -> str:
+        """Call the chosen LLM's API and return the text response."""
+        try:
+            # ADD NEW COMPANY LLMs HERE.
+            if company == "OpenAI":
+                response_obj = self.clients[company].chat.completions.create(
+                    model=model,
+                    temperature=temperature,
+                    messages=[
+                        {"role": "system", "content": system_message},
+                        {"role": "user",   "content": prompt},
+                    ]
+                )
+                return response_obj.choices[0].message.content
+            elif company == "Anthropic":
+                response_obj = self.clients[company].messages.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    system=system_message,
+                    messages=[{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+                )
+                return response_obj.content[0].text
+            else:
+                my_critical_error(f"Unknown company: {company}")
+        except Exception as e:
+            my_critical_error(f"An error occurred: {e}", choose_breakpoint=True)
 
 # #"round out" away from zero while keeping round_digits significant figures.
 # #Rounds up for x>0, down for x<0.
@@ -490,8 +551,9 @@ def human_bytesize(num: int, suffix: str='B') -> str:
         num /= 1024.0
     return "%.1f%s%s" % (num, 'Y', suffix)
 
-def prettyprint_timespan(timespan: float) -> None:
-    """Pretty-prints a timespan in years, weeks, days, hours, and seconds."""
+def human_timespan(timespan: float) -> str:
+    """Input: A timespan specified by a floating point number of seconds.
+    Returns: a string describing that timespan in years, weeks, days, hours, and seconds."""
 
     # Constants for time conversions
     SECONDS_PER_MINUTE =       60
@@ -510,21 +572,26 @@ def prettyprint_timespan(timespan: float) -> None:
     days = int(remaining // SECONDS_PER_DAY)
     remaining = remaining % SECONDS_PER_DAY
 
-    hours = remaining / SECONDS_PER_HOUR
+    hours = int(remaining // SECONDS_PER_HOUR)
     remaining = remaining % SECONDS_PER_HOUR
+
+    minutes = int(remaining // SECONDS_PER_MINUTE)
+    remaining = remaining % SECONDS_PER_MINUTE
 
     # Creating a list of time components
     components = []
     if years > 0:
-        components.append(f"{years} years")
+        components.append(f"{years} year" if years == 1 else f"{years} years")
     if weeks > 0:
-        components.append(f"{weeks} weeks")
+        components.append(f"{weeks} week" if weeks == 1 else f"{weeks} weeks")
     if days > 0:
-        components.append(f"{days} days")
+        components.append(f"{days} day" if days == 1 else f"{days} days")
     if hours > 0:
-        components.append(f"{hours:.1f} hours")
+        components.append(f"{hours} hour" if hours == 1 else f"{hours} hours")
+    if minutes > 0:
+        components.append(f"{minutes} minute" if minutes == 1 else f"{minutes} minutes")
     else:
-        components.append(f"{remaining:.3f} seconds")
+        components.append(f"{remaining:.3f} second" if round(remaining, 3) == 1.0 else f"{remaining:.3f} seconds")
     
     # Joining the components with commas, and "and" for the last component
     if len(components) > 1:
@@ -534,7 +601,7 @@ def prettyprint_timespan(timespan: float) -> None:
     else:
         time_str = "0 seconds"
 
-    print(f"The script took {time_str} to run.")
+    return time_str
 
 def kill_process(pname: str) -> None:
     """Kill a process by its name, then check if it is still running and retry if needed. Make sure the process name is unique to avoid killing unintended processes."""
@@ -690,7 +757,7 @@ video_extensions = [
     '.rmx',   '.smk',   '.mkd',   '.mj2',  '.scm',  '.ivr',
     '.xesc',  '.wtv',   '.dcr',   '.mpl',  '.pds',  '.ismv',
     '.vc1',   '.vcd',   '.mpcpl', '.bin',  '.sfd',  '.qtz',
-    '.vdat',  '.vft',
+    '.vdat',  '.vft',   '.md5',   '.par2', # The extensions.md5 and .par2 are included because hash/parity files are useful here.
 ]
 # check_list_for_duplicates(video_extensions)
 
