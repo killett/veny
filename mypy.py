@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# Written by Emmy Killett (she/her), ChatGPT 4o (it/its), ChatGPT o1-preview (it/its), ChatGPT o3-mini-high (it/its), and GitHub Copilot (it/its).
+# Written by Emmy Killett (she/her), ChatGPT 4o (it/its), ChatGPT o1-preview (it/its), ChatGPT o3-mini-high (it/its), ChatGPT o4-mini-high (it/its), and GitHub Copilot (it/its).
 import os
 import sys
 import subprocess
@@ -17,15 +17,15 @@ from pathlib import Path, PosixPath
 from typing import Dict, List, Set, Tuple, Union, Iterable, Optional
 import logging
 import tempfile
-import ast
 
 import univ_defs as ud
 
-__version__ = '0.1.3'
+__version__ = '0.1.4'
 
 class Options():
     """Class that has all global options in one place."""
     def __init__(self) -> None:
+        """Initialize the Options class with default values."""
         self.log_mode = "INFO"
         #self.log_mode = "DEBUG" # Instead of uncommenting this line, just use the -debug command line argument.
         self.search_above_this_dir = True
@@ -1045,6 +1045,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.module_aliases: Dict[str, str] = {
             # I added these manually by asking ChatGPT what pip aliases are different than their import commands:
             # 'import name' : 'pip install name'
+            'osgeo': 'gdal', #osgeo is the import name for gdal
             'ffmpeg': 'ffmpeg-python',
             'cv2': 'opencv-python',
             'jnp': 'jax.numpy',
@@ -2213,6 +2214,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.stay_out_list: List[str] = ['myenv', 'anaconda3', '.conda',os.sep+'lib'+os.sep, '.vscode']
 
     def set_venv_dir(self, venv_dir: str) -> None:
+        """Set the directory for the virtual environment."""
         self.venv_dir = os.path.expanduser(venv_dir)
         self.activate_script   = 'source ' + os.path.join(self.venv_dir, 'bin', 'activate')
         self.venv_python          = os.path.join(self.venv_dir, 'bin', 'python')
@@ -2224,23 +2226,23 @@ def parse_arguments(options: Options) -> None:
     """Parse command-line arguments."""
 
     parser = argparse.ArgumentParser(description="Run a python script with optional flags.")    
-    parser.add_argument('-version', action='store_true', help='Print the version of this program.')
-    parser.add_argument('-manual', action='store_true', help='Print instructions for manually adding the alias to the shell configuration file.')
-    parser.add_argument('-debug', action='store_true', help='Run this program in debug mode, which prints additional debug messages.')
+    parser.add_argument('-version',     action='store_true', help='Print the version of this program.')
+    parser.add_argument('-manual',      action='store_true', help='Print instructions for manually adding the alias to the shell configuration file.')
+    parser.add_argument('-debug',       action='store_true', help='Run this program in debug mode, which prints additional debug messages.')
     parser.add_argument('-blank-slate', action='store_true', help=f"Delete ~/{options.my_name}/ and all {options.my_name} .out and .err and .json and .pkl files in the current directory.")
-    parser.add_argument('-full', action='store_true', help="Build a virtual environment (venv) that can run every python script in this directory.")
-    parser.add_argument('-y', action='store_true', help='Automatically say yes to any prompts.')
-    parser.add_argument('-no-cache', action='store_true', help="Don't search the cache. Instead, create a new virtual environment. Also, refresh the custom modules cache and the pip list.")
-    parser.add_argument('-latest', action='store_true', help="Load the latest venv in the cache which has all the packages needed now.")
-    parser.add_argument('-oldest', action='store_true', help="Load the oldest venv in the cache which has all the packages needed now.")
-    parser.add_argument('-last-used', action='store_true', help="Load the last used venv in the cache, but if that fails try the latest venv which has all the packages needed now.")
-    parser.add_argument('-smallest', action='store_true', help="Load the smallest venv in the cache (with the fewest packages) which has all the packages needed now.")
-    parser.add_argument('-rc', action='store_true', help='Refresh the custom modules cache and the pip list.')
-    parser.add_argument('-reqs', action='store_true', help='Read the extra_requirements.txt file in the current directory and install the packages listed there (with specific versions if present in the file) into the venv (along with the other packages needed to run the script as determined elsewhere in this program).')
-    parser.add_argument('-alias', type=str, help='Add an alias to the shell configuration file so that typing ALIAS anywhere runs this program.')
-    parser.add_argument('-rawlog', action='store_true', help=f'Do not add timestamps or INFO level to log messages, and do not add extra INFO level log statements. Just produce the same output that would be seen when running the program without {options.my_name}.')
-    parser.add_argument('-justprint', action='store_true', help="Don't run the script, just print its package requirements.")
-    parser.add_argument('script', nargs='?', help="The script to run.")
+    parser.add_argument('-full',        action='store_true', help="Build a virtual environment (venv) that can run every python script in this directory.")
+    parser.add_argument('-y',           action='store_true', help='Automatically say yes to any prompts.')
+    parser.add_argument('-no-cache',    action='store_true', help="Don't search the cache. Instead, create a new virtual environment. Also, refresh the custom modules cache and the pip list.")
+    parser.add_argument('-latest',      action='store_true', help="Load the latest venv in the cache which has all the packages needed now.")
+    parser.add_argument('-oldest',      action='store_true', help="Load the oldest venv in the cache which has all the packages needed now.")
+    parser.add_argument('-last-used',   action='store_true', help="Load the last used venv in the cache, but if that fails try the latest venv which has all the packages needed now.")
+    parser.add_argument('-smallest',    action='store_true', help="Load the smallest venv in the cache (with the fewest packages) which has all the packages needed now.")
+    parser.add_argument('-rc',          action='store_true', help='Refresh the custom modules cache and the pip list.')
+    parser.add_argument('-reqs',        action='store_true', help='Read the extra_requirements.txt file in the current directory and install the packages listed there (with specific versions if present in the file) into the venv (along with the other packages needed to run the script as determined elsewhere in this program).')
+    parser.add_argument('-alias',       type=str,            help='Add an alias to the shell configuration file so that typing ALIAS anywhere runs this program.')
+    parser.add_argument('-rawlog',      action='store_true', help=f'Do not add timestamps or INFO level to log messages, and do not add extra INFO level log statements. Just produce the same output that would be seen when running the program without {options.my_name}.')
+    parser.add_argument('-justprint',   action='store_true', help="Don't run the script, just print its package requirements.")
+    parser.add_argument('script',      nargs='?',                help="The script to run.")
     parser.add_argument('script_args', nargs=argparse.REMAINDER, help="Optional arguments for the python script.")
 
     # If no arguments are provided, print a short guide
@@ -2359,9 +2361,11 @@ def safe_eval(expr: str) -> Union[None, str]:
 class SysPathVisitor(ast.NodeVisitor):
     """Visitor class to extract sys.path modifications."""
     def __init__(self):
+        """Initialize the sys.path visitor."""
         self.paths = set()
 
-    def visit_Assign(self, node):
+    def visit_Assign(self, node: ast.Assign) -> None:
+        """Visit an assignment statement and check if it's modifying sys.path."""
         if isinstance(node.targets[0], ast.Attribute) and \
            isinstance(node.targets[0].value, ast.Name) and \
            node.targets[0].value.id == 'sys' and \
@@ -2372,7 +2376,8 @@ class SysPathVisitor(ast.NodeVisitor):
                     self.paths.add(path)
         self.generic_visit(node)
 
-    def visit_Call(self, node):
+    def visit_Call(self, node: ast.Call) -> None:
+        """Visit a function call and check if it's modifying sys.path."""
         if isinstance(node.func, ast.Attribute) and \
            isinstance(node.func.value, ast.Attribute) and \
            isinstance(node.func.value.value, ast.Name) and \
@@ -2430,13 +2435,17 @@ def process_import(options: Options, module_name: str, file_path: str) -> bool:
     return False
 
 class FunctionInfo:
+    """Class to hold information about a function."""
     def __init__(self, function_name: str) -> None:
+        """Initialize the function information."""
         self.function_name                 = function_name
         self.imports_in_function: Set[str] = set()
         self.function_calls:      Set[str] = set()
 
 class ModuleInfo:
+    """Class to hold information about a module."""
     def __init__(self, module_name: str) -> None:
+        """Initialize the module information."""
         self.module_name                                = module_name
         self.top_level_imports: Set[str]                = set()
         self.functions:         Dict[str, FunctionInfo] = {}
@@ -2445,8 +2454,10 @@ class ModuleInfo:
         self.classes:           Set[str]                = set()
 
 class ImportFunctionCollector(ast.NodeVisitor):
+    """Visitor class to collect function and import information from a module."""
     def __init__(self, module_name: str, options: Options,
                  file_path: str) -> None:
+        """Initialize the import function collector."""
         self.module_info = ModuleInfo(module_name)
         self.current_function = None
         self.current_class    = None
@@ -2611,16 +2622,11 @@ class ImportFunctionCollector(ast.NodeVisitor):
             return f"{value}.{node.attr}" if value else node.attr
         elif isinstance(node, ast.Call): # Handle super() calls
             func_name = self.get_full_name(node.func)
-            if func_name == 'super':
-                return 'super'
             return func_name
         return None
 
 def split_function_name(called_func: str, default_module: str) -> Tuple[str, str]:
-    """
-    Split a fully qualified function name into module and function parts.
-    If there's no dot, the default_module is used as the module.
-    """
+    """Split a fully qualified function name into module and function parts. If there's no dot, the default_module is used as the module."""
     parts = called_func.split('.')
     if len(parts) > 1:
         called_module = parts[0]
@@ -2684,7 +2690,37 @@ def collect_used_imports(start_module: str, start_func: str,
         logging.debug(f"No module info found for {start_module}")
     return imports
 
+def check_syntax(file_path: str) -> None:
+    """Attempt to compile the given file in 'exec' mode. On syntax or I/O problems, abort via ud.my_critical_error()."""
+    try:
+        source = ud.my_fopen(file_path, suppress_errors=True)
+        if not source:
+            ud.my_critical_error(f"Could not read file: {file_path}")
+        compile(source, file_path, 'exec')
+        return
+    except FileNotFoundError:
+        ud.my_critical_error(f"File not found: {file_path}")
+    except PermissionError:
+        ud.my_critical_error(f"Permission denied: {file_path}")
+    except UnicodeDecodeError as e:
+        ud.my_critical_error(f"Could not decode {file_path!r} as UTF-8: {e}")
+    except SyntaxError as e:
+        # protect against None offsets
+        lineno = e.lineno or '?'
+        offset = e.offset or 0
+        line = (e.text or '').rstrip('\n')
+        pointer = ' ' * (offset - 1) + '^' if offset else ''
+        ud.my_critical_error(f"Syntax error in {e.filename!r}, line {lineno}, column {offset}:\n"
+                             f"    {line}\n"
+                             f"    {pointer}\n"
+                             f"    {e.msg!r}")
+    except Exception as e:
+        ud.my_critical_error(f"Unexpected error checking syntax of {file_path!r}: {e}")
+
 def find_imports_in_script(options: Options, first_path: str) -> None:
+    """Find all imports in the script and its dependencies."""
+    # Check if the file is a valid Python script. If not, raise a critical error.
+    check_syntax(first_path)
     processed_modules = set()
     modules_info = {}
     modules_to_process = [first_path]
@@ -2719,7 +2755,8 @@ def find_imports_in_script(options: Options, first_path: str) -> None:
     # Collect used imports starting from the first module
     used_imports = set()
     visited_funcs = set()
-    def collect_imports_from_module(module_name):
+    def collect_imports_from_module(module_name: str) -> None:
+        """Recursively collect used imports from a module."""
         module_info = modules_info[module_name]
         used_imports.update(module_info.top_level_imports)
         for func_name in module_info.top_level_calls:
@@ -3209,7 +3246,8 @@ def write_requirements_file_with_extras(options: Options) -> bool:
     ]
     try:
         with open(options.requirements_file, 'w') as f:
-            for idx, package in enumerate(options.uninstalled_imports):
+            # Write the packages in alphabetical order so the requirements file is deterministic.
+            for idx, package in enumerate(sorted(options.uninstalled_imports)):
                 if package in options.extra_requirements:
                     version_spec = options.extra_requirements[package]
                     if version_spec:
@@ -3283,7 +3321,9 @@ def get_file_operations(options: Options, script_path: str) -> Tuple[List[str], 
     write_files = []
 
     class FileOperationsVisitor(ast.NodeVisitor):
-        def visit_Call(self, node):
+        """Visitor class to find file operations in the AST (Abstract Syntax Tree)."""
+        def visit_Call(self, node: ast.Call) -> None:
+            """Visit function calls to find file operations."""
             # Check if the function called is 'open'
             if isinstance(node.func, ast.Name) and node.func.id == 'open':
                 # Get the filename
@@ -3329,7 +3369,9 @@ def get_network_operations(options: Options, script_path: str) -> Tuple[List[str
     url_pattern = re.compile(r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+')
 
     class NetworkOperationsVisitor(ast.NodeVisitor):
-        def visit_Call(self, node):
+        """Visitor class to find network operations in the AST (Abstract Syntax Tree)."""
+        def visit_Call(self, node: ast.Call) -> None:
+            """Visit function calls to find network operations."""
             # Check if the function is a requests function
             if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
                 if node.func.value.id == 'requests':
@@ -3941,7 +3983,7 @@ def main() -> None:
 
             save_options_to_json(options)
 
-    ud.print_errors_at_end(memory_handler, options.rawlog)
+    ud.print_all_errors(memory_handler, options.rawlog)
     logging.shutdown()
 
 if __name__ == "__main__":
