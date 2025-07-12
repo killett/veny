@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 # Written by Emmy Killett (she/her), ChatGPT 4o (it/its), ChatGPT o1-preview (it/its), ChatGPT o3-mini-high (it/its), ChatGPT o4-mini-high (it/its), and GitHub Copilot (it/its).
+from __future__ import annotations # For Python 3.7+ compatibility with type annotations
 import os
 import sys
 import subprocess
@@ -14,13 +15,14 @@ import shutil
 import venv
 import pickle
 from pathlib import Path, PosixPath
-from typing import Dict, List, Set, Tuple, Union, Iterable, Optional
+from typing import Dict, List, Set, Tuple, Iterable, Any
 import logging
 import tempfile
+import stat
 
 import univ_defs as ud
 
-__version__ = '0.1.4'
+__version__ = '0.1.5'
 
 class Options():
     """Class that has all global options in one place."""
@@ -76,7 +78,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.script_name: str = '' # python_script without the .py extension
         self.script_dir: str = ''
         self.json_filename: str = ''
-        self.script_dir_or_file_or_list: Union[str, Iterable[str]] = ''
+        self.script_dir_or_file_or_list: str | Iterable[str] = ''
         self.current_pip_version: str = ''
         self.new_pip_version: str = ''
         self.activate_script: str = ''
@@ -98,6 +100,11 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.total_imports: int = 0
         self.bad_imports: Set[str] = set()
         self.rawlog: bool = False
+        self.pipreqs_available: bool = False
+        self.read_files:    List[str] = [] # List of files read       by the Python script.
+        self.write_files:   List[str] = [] # List of files written    by the Python script.
+        self.download_urls: List[str] = [] # List of  URLs downloaded by the Python script.
+        self.upload_urls:   List[str] = [] # List of  URLs uploaded   by the Python script.
         # Some packages also need other packages to be installed.
         self.also_needs: Dict[str, List[str]] = {
             'xarray': ['dask', 'netcdf4', 'h5netcdf'],
@@ -105,6 +112,8 @@ If you're using the bash shell, follow these steps to add the alias manually:
             # Add more packages and their dependencies here
         }
         # Keep a list of all python standard library modules.
+        # Consider switching to stdlib_list package: https://pypi.org/project/stdlib-list/
+        # https://chatgpt.com/share/687000fd-be84-8006-a7f4-06af4b1e0eda
         #This list is from the pipreqs repo in file "mapping", retrieved on 2024-08-15 from here: https://github.com/bndr/pipreqs
         self.standard_modules: List[str] = ['_abc', 'abc', 'aifc', 
             '_aix_support', 'antigravity', 'argparse', 'array', 
@@ -2207,7 +2216,8 @@ If you're using the bash shell, follow these steps to add the alias manually:
             'zopyx': 'zopyx.textindexng3'}
         self.reversed_module_aliases = {v: k for k, v in self.module_aliases.items()}
         # Set of known bad imports that should be ignored.
-        self.known_bad_imports: Set[str] = {'__builtin__', 'snakeClass', 'pathfinding_salvo_rework', 'seaborn', 'DQN', 'bayesOpt', 'tkinter', 'msvcrt', 'non_existent_module'}
+        self.known_bad_imports: Set[str] = {'__builtin__', 'snakeClass', 'GPUampcor', 'pathfinding_salvo_rework', 'seaborn', 'DQN', 'bayesOpt', 'tkinter', 'msvcrt', 'BaseHTTPServer', 'urlparse', 'tkFileDialog', 'tkMessageBox', 'ConfigParser', 'Cookie', 'HTMLParser', 'Queue', 'SocketServer', 'StringIO', 'Tkinter', 'UserDict', 'cPickle', 'cStringIO', 'cookielib', 'htmlentitydefs', 'httplib', 'tkFont', 'tkMessageBox', 'urllib2', 'non_existent_module'} # 'BaseHTTPServer', 'urlparse', 'tkFileDialog', 'tkMessageBox', 'ConfigParser', 'Cookie', 'HTMLParser', 'Queue', 'SocketServer', 'StringIO', 'Tkinter', 'UserDict', 'cPickle', 'cStringIO', 'cookielib', 'htmlentitydefs', 'httplib', 'tkFont', 'tkMessageBox', 'urllib2' are Python 2 modules - we don't want to try to install them. A more general approach would involve importing stdlib_list and using that to filter out stdlib modules from Python 2 and Python 3: https://pypi.org/project/stdlib-list/
+        # https://chatgpt.com/share/687000fd-be84-8006-a7f4-06af4b1e0eda
         # List of unusual imports that are not standard library modules or packages.
         self.unusual_imports: List[str] = ['a', 'an', 'dl', 'the', 'it', 'x', 'xx', 'above', 'another', '__builtin__', 'within']
         # List of directories to stay out of when searching for local custom imports because they're filled with standard library modules or other irrelevant files.
@@ -2230,7 +2240,7 @@ def parse_arguments(options: Options) -> None:
     parser.add_argument('-manual',      action='store_true', help='Print instructions for manually adding the alias to the shell configuration file.')
     parser.add_argument('-debug',       action='store_true', help='Run this program in debug mode, which prints additional debug messages.')
     parser.add_argument('-blank-slate', action='store_true', help=f"Delete ~/{options.my_name}/ and all {options.my_name} .out and .err and .json and .pkl files in the current directory.")
-    parser.add_argument('-full',        action='store_true', help="Build a virtual environment (venv) that can run every python script in this directory.")
+    parser.add_argument('-full',        action='store_true', help="Build a virtual environment (venv) that can run every python script in the specified directory (defaults to the current working directory).")
     parser.add_argument('-y',           action='store_true', help='Automatically say yes to any prompts.')
     parser.add_argument('-no-cache',    action='store_true', help="Don't search the cache. Instead, create a new virtual environment. Also, refresh the custom modules cache and the pip list.")
     parser.add_argument('-latest',      action='store_true', help="Load the latest venv in the cache which has all the packages needed now.")
@@ -2321,7 +2331,7 @@ def add_alias_to_rc(options: Options, rc_file: str, alias_command: str, addition
                     with open(rc_file, "a") as file:
                         file.write(f"\n{alias_command}\n")
                     logging.info(f"Alias added to {rc_file}")
-            except Exception as e:
+            except (IOError, OSError) as e:
                 logging.error(f"Failed to write alias to {rc_file}: {e}\nException type: ", exc_info=True)
                 logging.error(options.manual_instructions)
     except Exception as e:
@@ -2345,18 +2355,67 @@ def add_alias(options: Options) -> None:
     else:
         logging.info("Could not detect shell")
 
-def safe_eval(expr: str) -> Union[None, str]:
-    """Safely evaluate a Python expression using ast.literal_eval or custom parsing."""
+def _safe_eval_node(node: ast.AST) -> Any:
+    """
+    Recursively evaluate a restricted subset of AST nodes:
+    - Constants (strings, numbers, booleans, None)
+    - Lists, tuples, dicts
+    - os.path.abspath(<string>)
+    """
+    if isinstance(node, ast.Constant):
+        # Python 3.8+: Constant covers str, int, float, bool, None
+        return node.value
+
+    if isinstance(node, ast.List):
+        return [_safe_eval_node(elt) for elt in node.elts]
+
+    if isinstance(node, ast.Tuple):
+        return tuple(_safe_eval_node(elt) for elt in node.elts)
+
+    if isinstance(node, ast.Dict):
+        return {
+            _safe_eval_node(k): _safe_eval_node(v)
+            for k, v in zip(node.keys, node.values)
+        }
+
+    if isinstance(node, ast.Call):
+        # Check for os.path.abspath
+        func = node.func
+        # attr.value.value.id == 'os' && attr.value.attr == 'path' && attr.attr == 'abspath'
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == "abspath"
+            and isinstance(func.value, ast.Attribute)
+            and func.value.attr == "path"
+            and isinstance(func.value.value, ast.Name)
+            and func.value.value.id == "os"
+        ):
+            # exactly one argument?
+            if len(node.args) == 1:
+                arg_val = _safe_eval_node(node.args[0])
+                if isinstance(arg_val, str):
+                    return os.path.abspath(arg_val)
+        # If it's not exactly os.path.abspath(str), fall through:
+        raise ValueError(f"Unsupported call: {ast.unparse(node)}")
+
+    # anything else is disallowed
+    raise ValueError(f"Unsupported expression: {ast.dump(node)}")
+
+def safe_eval(expr: str) -> Any | None:
+    """
+    Safely evaluate a Python expression string containing only:
+      - literals (str, int, float, bool, None)
+      - lists, tuples, dicts of the above
+      - os.path.abspath(<literal string>)
+    Returns the evaluated Python object, or None on unsupported syntax.
+    """
     try:
-        return ast.literal_eval(expr)
-    except Exception:
-        if expr.startswith('os.path.abspath'):
-            inner_expr = expr[len('os.path.abspath('):-1]
-            path = safe_eval(inner_expr)
-            if path:
-                return os.path.abspath(path)
-        # Add more handling as needed
-    return None
+        # Parse in 'eval' mode so we get an Expression node
+        tree = ast.parse(expr, mode="eval")
+        return _safe_eval_node(tree.body)  # tree.body is the root expr
+    except (SyntaxError, ValueError) as e:
+        logging.debug(f"safe_eval: Unsupported expression: {expr!r}: {e}")
+        return None
 
 class SysPathVisitor(ast.NodeVisitor):
     """Visitor class to extract sys.path modifications."""
@@ -2528,7 +2587,7 @@ class ImportFunctionCollector(ast.NodeVisitor):
         self.generic_visit(node)
         self.current_class = prev_class
 
-    def extract_module_name_from_import(self, node: ast.Call) -> Optional[str]:
+    def extract_module_name_from_import(self, node: ast.Call) -> str | None:
         """Extract the module name from a dynamic import using __import__."""
         if node.args:
             module_arg = node.args[0]
@@ -2605,7 +2664,7 @@ class ImportFunctionCollector(ast.NodeVisitor):
         else:
             logging.debug(f"Adding top-level call: {func_name}")
 
-    def get_full_name(self, node: ast.AST) -> Optional[str]:
+    def get_full_name(self, node: ast.AST) -> str | None:
         """Get the full name of a node, including any aliases."""
         if isinstance(node, ast.Name): # Handle variable names
             if node.id in ('self', 'cls'): # Handle class methods
@@ -2690,48 +2749,73 @@ def collect_used_imports(start_module: str, start_func: str,
         logging.debug(f"No module info found for {start_module}")
     return imports
 
-def check_syntax(file_path: str) -> None:
-    """Attempt to compile the given file in 'exec' mode. On syntax or I/O problems, abort via ud.my_critical_error()."""
+def check_syntax(file_path: str) -> bool:
+    """Attempt to compile the given file in 'exec' mode. If it compiles, return True. On syntax or I/O problems, log an error and return False."""
     try:
         source = ud.my_fopen(file_path, suppress_errors=True)
         if not source:
-            ud.my_critical_error(f"Could not read file: {file_path}")
+            logging.error(f"Could not read file: {file_path}")
         compile(source, file_path, 'exec')
-        return
+        return True
     except FileNotFoundError:
-        ud.my_critical_error(f"File not found: {file_path}")
+        logging.error(f"File not found: {file_path}")
     except PermissionError:
-        ud.my_critical_error(f"Permission denied: {file_path}")
+        logging.error(f"Permission denied: {file_path}")
     except UnicodeDecodeError as e:
-        ud.my_critical_error(f"Could not decode {file_path!r} as UTF-8: {e}")
+        logging.error(f"Could not decode {file_path!r} as UTF-8: {e}")
     except SyntaxError as e:
         # protect against None offsets
         lineno = e.lineno or '?'
         offset = e.offset or 0
         line = (e.text or '').rstrip('\n')
         pointer = ' ' * (offset - 1) + '^' if offset else ''
-        ud.my_critical_error(f"Syntax error in {e.filename!r}, line {lineno}, column {offset}:\n"
-                             f"    {line}\n"
-                             f"    {pointer}\n"
-                             f"    {e.msg!r}")
+        logging.error(f"Syntax error in {e.filename!r}, line {lineno}, column {offset}:\n"
+                      f"    {line}\n"
+                      f"    {pointer}\n"
+                      f"    {e.msg!r}")
     except Exception as e:
-        ud.my_critical_error(f"Unexpected error checking syntax of {file_path!r}: {e}")
+        logging.error(f"Unexpected error checking syntax of {file_path!r}: {e}")
+    return False
 
 def find_imports_in_script(options: Options, first_path: str) -> None:
     """Find all imports in the script and its dependencies."""
-    # Check if the file is a valid Python script. If not, raise a critical error.
-    check_syntax(first_path)
+    # is_python_script() has already been called to verify that the first_path file LOOKS like a Python script.
+    # However, it's still necessary to check if the file is a VALID Python script. If not, skip it.
+    if not check_syntax(first_path):
+        logging.error(f"Skipping invalid Python script: {first_path}")
+        return
     processed_modules = set()
     modules_info = {}
     modules_to_process = [first_path]
     while modules_to_process:
         module_path = modules_to_process.pop()
+        if os.path.isdir(module_path):
+            pkg_dir = module_path
+            init_py = os.path.join(pkg_dir, "__init__.py")
+            if os.path.isfile(init_py):
+                # 1) Parse the package __init__.py
+                module_path = init_py
+                # 2) Also enqueue all other .py modules in that same folder
+                for fname in os.listdir(pkg_dir):
+                    if is_python_script(fname) and fname != "__init__.py":
+                        path = os.path.join(pkg_dir, fname)
+                        if path not in modules_to_process and path not in processed_modules:
+                            modules_to_process.append(path)
+            else:
+                logging.error(f"No __init__.py in package directory {pkg_dir}, skipping.")
+                continue
         module_name = os.path.splitext(os.path.basename(module_path))[0]
         if module_name in processed_modules:
             continue
         processed_modules.add(module_name)
         file_content = ud.my_fopen(module_path, rawlog=options.rawlog)
-        tree = ud.my_ast_parse(file_content, module_path)
+        if not file_content:
+            logging.error(f"Could not read file: {module_path}")
+            continue
+        try:
+            tree = ud.my_ast_parse(file_content, module_path)
+        except:
+            breakpoint()
         collector = ImportFunctionCollector(module_name, options, module_path)
         collector.visit(tree)
         module_info = collector.module_info
@@ -2764,8 +2848,8 @@ def find_imports_in_script(options: Options, first_path: str) -> None:
             logging.debug(f"Collecting used imports for module '{called_module}' and func_name '{called_name}'")
             used_imports.update(
                 collect_used_imports(
-                    called_module,  # Use the extracted module name
-                    called_name,     # Use the extracted function name
+                    called_module, # Use the extracted module name
+                    called_name,   # Use the extracted function name
                     call_graph,
                     modules_info,
                     visited_funcs
@@ -2791,6 +2875,9 @@ def find_imports_in_script(options: Options, first_path: str) -> None:
                     processed_modules.add(module_name)
                     # Process the new module
                     file_content = ud.my_fopen(module_file_path, rawlog=options.rawlog)
+                    if not file_content:
+                        logging.error(f"Could not read file: {module_file_path}")
+                        continue
                     tree = ud.my_ast_parse(file_content, module_file_path)
                     collector = ImportFunctionCollector(module_name, options, module_file_path)
                     collector.visit(tree)
@@ -2858,7 +2945,8 @@ def split_imports(options: Options) -> None:
         if not options.rawlog: logging.info("No imports found.")
         return
 
-    max_length = max(len(imp) for imp in options.all_imports)
+    max_length = max(len(imp) for imp in options.all_imports) # Longest import name length, used for formatting
+    max_digits = len(str(len(options.all_imports))) # Maximum number of digits in import count, also used for formatting
 
     with tempfile.TemporaryDirectory() as venv_dir:
         venv.create(venv_dir, with_pip=True)
@@ -2867,18 +2955,47 @@ def split_imports(options: Options) -> None:
             logging.debug(f"Checking if import {imp} is installed or uninstalled")  # New logging
             if imp in options.custom_modules.keys():
                 logging.debug(f"Custom module {imp} has path {options.custom_modules[imp]}")
+                status_str = "YES - custom module"
             elif check_packages_in_venv(options, package=package_name,
                                         venv_dir=venv_dir):
                 logging.debug(f"Module {imp} can be imported in venv")
+                status_str = "YES -     installed"
                 options.installed_imports.add(imp)
             else:
                 logging.debug(f"Import {imp} is not installed and not a custom module")  # New logging
+                status_str = "NO  - NOT installed"
                 options.uninstalled_imports.add(package_name)
-            if not options.rawlog: logging.info(f"Checking import {imp:{max_length}} : {i}/{options.total_imports}")
+            if not options.rawlog: logging.info(f"Checking import {imp:{max_length}} : {i:>{max_digits}}/{options.total_imports} - {status_str}")
     if getattr(options.args, 'reqs', False):
         options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
     add_dependencies(options)
     return
+
+def is_python_script(path: str) -> bool:
+    """
+    Return True if 'path' looks like a Python script:
+      1. It ends in .py or .pyw
+      2. Or it is executable AND its first line is a python shebang
+    """
+    # Common extensions
+    if any(path.endswith(ext) for ext in ud.python_extensions):
+        return True
+
+    # No-extension scripts: check for executable bit + python shebang
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False
+
+    # Must be a regular file and executable by owner/group/other
+    if not stat.S_ISREG(st.st_mode) or not (st.st_mode & (stat.S_IXUSR|stat.S_IXGRP|stat.S_IXOTH)):
+        return False
+
+    # Try to read the first line and look for a python shebang
+    first_line = ud.my_fopen(path, suppress_errors=True, rawlog=False, numlines=1)
+    if not first_line:
+        return False
+    return bool(re.match(r'#!.*\bpython[0-9.]*\b', first_line))
 
 def list_packages(options: Options) -> None:
     """Examine command line arguments to determine if we're looking at a directory, a single python script, or a list of python scripts. List all installed and uninstalled packages that are imported in that directory or python script(s). Return these sets inside the options object."""
@@ -2892,7 +3009,12 @@ def list_packages(options: Options) -> None:
             options.script_dir_or_file_or_list = options.python_script
         else:
             # List all the script arguments that are local python scripts.
-            local_scripts = [arg for arg in options.script_args if arg.endswith('.py') and arg[:-3] in options.custom_modules]
+            local_scripts = []
+            for arg in options.script_args:
+                full = arg if os.path.isabs(arg) else os.path.join(options.cwd, arg)
+                # only include if it really looks like a Python script
+                if is_python_script(full) and os.path.splitext(arg)[0] in options.custom_modules:
+                    local_scripts.append(arg)
             # Local python scripts should be added to the list of scripts to examine for imports.
             if local_scripts:
                 options.script_dir_or_file_or_list = [options.python_script] + local_scripts
@@ -2904,32 +3026,44 @@ def list_packages(options: Options) -> None:
         options.script_dir_or_file_or_list = os.path.expanduser(options.script_dir_or_file_or_list)
         options.loaded_custom_modules = set()
         if os.path.isfile(options.script_dir_or_file_or_list):
-            if not options.rawlog: logging.info(f"Processing a single Python script: {options.script_dir_or_file_or_list}.")
-            python_file = options.script_dir_or_file_or_list
-            options.all_imports = set()
-            find_imports_in_script(options, python_file)
+            if is_python_script(options.script_dir_or_file_or_list):
+                if not options.rawlog: logging.info(f"Processing a single Python script: {options.script_dir_or_file_or_list}.")
+                python_file = options.script_dir_or_file_or_list
+                options.all_imports = set()
+                find_imports_in_script(options, python_file)
+            else:
+                ud.my_critical_error(f"'{options.script_dir_or_file_or_list}' is not a valid Python script.")
         elif os.path.isdir(options.script_dir_or_file_or_list):
             if not options.rawlog: logging.info(f"Processing an entire folder of Python scripts: {options.script_dir_or_file_or_list}.")
             python_dir = options.script_dir_or_file_or_list
-            if PIPREQS_AVAILABLE:
+            if options.pipreqs_available:
                 if not options.rawlog: logging.info("Using pipreqs to generate requirements.")
                 generate_requirements(options.script_dir_or_file_or_list)
                 with open(os.path.join(python_dir, 'requirements.txt'), 'r') as f:
                     options.all_imports = set(line.strip() for line in f)
             else:
                 if not options.rawlog: logging.info("Using custom script to find imports.")
-                options.all_imports = get_all_imports(options, options.script_dir_or_file_or_list)
+                get_all_imports(options, options.script_dir_or_file_or_list)
         else:
-            ud.my_critical_error(f"Error: The file or directory {options.script_dir_or_file_or_list} does not exist.")
+            ud.my_critical_error(f"The file or directory {options.script_dir_or_file_or_list} does not exist.")
     else:
         if not options.rawlog: logging.info(f"Processing a list of Python scripts: {options.script_dir_or_file_or_list}")
         options.all_imports = set()
-        for python_file in options.script_dir_or_file_or_list:
-            if os.path.isabs(python_file):
-                python_filepath = python_file
+        # Filter out non‐Python files
+        valid = []
+        for sf in options.script_dir_or_file_or_list:
+            full = sf if os.path.isabs(sf) else os.path.join(options.cwd, sf)
+            if is_python_script(full):
+                valid.append(sf)
             else:
-                python_filepath = os.path.join(options.cwd, python_file)
-            find_imports_in_script(options, python_filepath)
+                logging.info(f"Skipping non‐Python file in list: {full}")
+        if not valid:
+            ud.my_critical_error("No valid Python scripts found in the list of files.")
+        options.script_dir_or_file_or_list = valid
+        # Process only the ones left
+        for python_file in options.script_dir_or_file_or_list:
+            full = python_file if os.path.isabs(python_file) else os.path.join(options.cwd, python_file)
+            find_imports_in_script(options, full)
 
     # Filter out invalid imports before splitting
     options.all_imports = {imp for imp in options.all_imports if re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', imp)}
@@ -2946,11 +3080,11 @@ def get_all_imports(options: Options, directory: str) -> None:
         if any(substring in root for substring in options.stay_out_list):
             continue
         for file in files:
-            if file.endswith('.py'):
-                file_path = os.path.join(root, file)
+            file_path = os.path.join(root, file)
+            if is_python_script(file_path):
                 find_imports_in_script(options, file_path)
                 processed_files += 1
-                if not options.rawlog: logging.info(f"Processing files in {directory}: {processed_files}/{total_files}")
+                if not options.rawlog: logging.info(f"Processing {file_path} ({processed_files}/{total_files})")
 
     if not options.rawlog: logging.info(f"\nFinished processing files in {directory}.")
 
@@ -2958,8 +3092,8 @@ def generate_requirements(directory: str) -> None:
     """Generate a requirements file using pipreqs."""
     try:
         pipreqs.generate_requirements(directory)
-    except Exception as e:
-        logging.error(f"Error generating requirements file: {e}\nException type: ", exc_info=True)
+    except (pipreqs.PipreqsError, pipreqs.PipreqsWarning) as e:
+        raise ValueError(f"Error generating requirements file in {directory}") from e
 
 def download_packages(options: Options) -> bool:
     """Install packages in a virtual environment."""
@@ -2997,8 +3131,8 @@ def download_packages(options: Options) -> bool:
         # Run the initial download script and capture the output
         result = ud.my_popen([options.download_script_path])
         return result.returncode == 0
-    except Exception as e:
-        logging.error(f"Error downloading packages: {e}\nException type: ", exc_info=True)
+    except (IOError, OSError) as e:
+        logging.error(f"Error writing or executing download script: {e}\nException type: ", exc_info=True)
         return False
 
 def install_packages_simultaneously(options: Options) -> bool:
@@ -3036,7 +3170,7 @@ def install_packages_individually(options: Options) -> bool:
         if not options.rawlog: logging.info("All packages installed successfully.")
 
 def install_package(package_name: str, options: Options) -> bool:
-    """Install a single package and return the success status."""
+    """Install a single package and return the success status (True if successful, False otherwise)."""
     try:
         result = subprocess.run(
             [options.venv_python, "-m", "pip", "install", package_name, "--no-index", "--find-links", options.packages_dir],
@@ -3047,19 +3181,14 @@ def install_package(package_name: str, options: Options) -> bool:
         if result.stderr:
             logging.error(result.stderr)
         if result.returncode != 0:
-            # Step 1: Use pip to download files for package_name to options.packages_dir
-            download_command = [
-                options.venv_python, "-m", "pip", "download", 
-                "--dest", options.packages_dir, package_name
-            ]
+            # Use pip to download files for package_name to options.packages_dir
+            download_command = [options.venv_python, "-m", "pip", "download", "--dest", options.packages_dir, package_name]
             download_result = subprocess.run(download_command, capture_output=True, text=True)
             if download_result.returncode != 0:
                 ud.my_critical_error(f"Failed to download {package_name}. Error: {download_result.stderr}")
-            # Step 2: Use pip to install package_name from the file that was just downloaded to options.packages_dir
-            install_command = [
-                options.venv_python, "-m", "pip", "install", 
-                "--no-index", "--find-links", options.packages_dir, package_name
-            ]
+            # Use pip to install package_name from the file that was just downloaded to options.packages_dir
+            install_command = [options.venv_python, "-m", "pip", "install", "--no-index",
+                               "--find-links", options.packages_dir, package_name]
             install_result = subprocess.run(install_command, capture_output=True, text=True)
             if install_result.returncode != 0:
                 logging.error(f"Failed to install {package_name}. Error: {install_result.stderr}")
@@ -3071,7 +3200,7 @@ def install_package(package_name: str, options: Options) -> bool:
         logging.error(f"Error installing package {package_name}: {e}\nException type: ", exc_info=True)
         return False
 
-def check_packages_in_venv(options: Options, package: Optional[str] = None, venv_dir: Optional[str] = None) -> bool:
+def check_packages_in_venv(options: Options, package: str | None = None, venv_dir: str | None = None) -> bool:
     """Create and run a script to test package imports in the virtual environment. Add packages from the requirements.txt file if '-reqs' is specified as a runtime argument."""
     if not venv_dir:
         venv_dir = options.venv_dir
@@ -3210,7 +3339,7 @@ print("\\n".join(installed_packages + available_modules + list(builtin_modules))
     if getattr(options.args, 'reqs', False):
         options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
 
-def parse_extra_requirements(options: Options) -> Dict[str, Optional[str]]:
+def parse_extra_requirements(options: Options) -> Dict[str, str | None]:
     """Parse an extra requirements file and return a dictionary of package names (and version specifiers, if present)."""
     options.extra_requirements = {}
     file_content = ud.my_fopen(options.extra_requirements_file, suppress_errors=True, rawlog=options.rawlog)
@@ -3308,17 +3437,14 @@ def is_virtualenv() -> bool:
     """Check if currently running in a virtual environment."""
     return sys.prefix != sys.base_prefix
 
-def get_file_operations(options: Options, script_path: str) -> Tuple[List[str], List[str]]:
-    """Find files that are read or written."""
+def get_file_operations(options: Options, script_path: str) -> None:
+    """Find files that are read or written, store in options."""
     file_content = ud.my_fopen(script_path, rawlog=options.rawlog)
-    if not file_content:
+    if not file_content: # Do NOT run a file if we can't read it!
         ud.my_critical_error(f"Failed to open {script_path}", choose_breakpoint=True)
     tree = ud.my_ast_parse(file_content, script_path)
     if not tree:
-        return [], []
-
-    read_files = []
-    write_files = []
+        return
 
     class FileOperationsVisitor(ast.NodeVisitor):
         """Visitor class to find file operations in the AST (Abstract Syntax Tree)."""
@@ -3327,46 +3453,44 @@ def get_file_operations(options: Options, script_path: str) -> Tuple[List[str], 
             # Check if the function called is 'open'
             if isinstance(node.func, ast.Name) and node.func.id == 'open':
                 # Get the filename
-                # if isinstance(node.args[0], ast.Str): # Deprecated!
-                #     filename = node.args[0].s
                 if isinstance(node.args[0], ast.Constant):  # For Python 3.8+
                     filename = node.args[0].value
                 else:
-                    return [], []
+                    return
 
                 # Determine if the file is being read or written
                 if len(node.args) > 1:
-                    if isinstance(node.args[1], ast.Str) or isinstance(node.args[1], ast.Constant):
-                        mode = node.args[1].s if isinstance(node.args[1], ast.Str) else node.args[1].value
+                    if isinstance(node.args[1], ast.Constant):
+                        mode = node.args[1].s if isinstance(node.args[1], ast.Constant) else node.args[1].value
                     else:
-                        return [], []
+                        return
                 else:
                     mode = 'r'  # Default mode
 
                 if 'r' in mode:
-                    read_files.append(filename)
+                    options.read_files.append(filename)
                 elif 'w' in mode or 'a' in mode or 'x' in mode:
-                    write_files.append(filename)
+                    options.write_files.append(filename)
 
             self.generic_visit(node)
 
     visitor = FileOperationsVisitor()
     visitor.visit(tree)
+    return
 
-    return read_files, write_files
-
-def get_network_operations(options: Options, script_path: str) -> Tuple[List[str], List[str]]:
-    """Find URLs that are downloaded and uploaded"""
+def get_network_operations(options: Options, script_path: str) -> None:
+    """Find URLs that are downloaded and uploaded, store in options."""
     file_content = ud.my_fopen(script_path, rawlog=options.rawlog)
+    if not file_content: # Do NOT run a file if we can't read it!
+        ud.my_critical_error(f"Failed to open {script_path}", choose_breakpoint=True)
     tree = ud.my_ast_parse(file_content, script_path)
     if not tree:
-        return [], []
+        return
 
-    download_urls = []
-    upload_urls   = []
-
-    # Regular expression to match URLs
-    url_pattern = re.compile(r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+')
+    class NetworkOperationsVisitor(ast.NodeVisitor):
+        """Visitor class to find network operations in the AST (Abstract Syntax Tree)."""
+        def visit_Call(self, node: ast.Call) -> None:
+            """Visit function calls to find network operations."""
 
     class NetworkOperationsVisitor(ast.NodeVisitor):
         """Visitor class to find network operations in the AST (Abstract Syntax Tree)."""
@@ -3379,67 +3503,76 @@ def get_network_operations(options: Options, script_path: str) -> Tuple[List[str
                         if len(node.args) > 0 and isinstance(node.args[0], ast.Str):
                             url = node.args[0].s
                             if node.func.attr == 'get':
-                                download_urls.append(url)
+                                options.download_urls.append(url)
                             else:
-                                upload_urls.append(url)
+                                options.upload_urls.append(url)
                         elif len(node.args) > 0 and isinstance(node.args[0], ast.Constant):  # For Python 3.8+
                             url = node.args[0].value
                             if node.func.attr == 'get':
-                                download_urls.append(url)
+                                options.download_urls.append(url)
                             else:
-                                upload_urls.append(url)
+                                options.upload_urls.append(url)
 
             # Check if the function is a urllib request function
             elif isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Attribute):
                 if node.func.value.attr in ['urlopen', 'Request']:
                     if len(node.args) > 0 and isinstance(node.args[0], ast.Str):
                         url = node.args[0].s
-                        download_urls.append(url)
+                        options.download_urls.append(url)
                     elif len(node.args) > 0 and isinstance(node.args[0], ast.Constant):  # For Python 3.8+
                         url = node.args[0].value
-                        download_urls.append(url)
+                        options.download_urls.append(url)
 
             self.generic_visit(node)
 
     visitor = NetworkOperationsVisitor()
     visitor.visit(tree)
 
-    return download_urls, upload_urls
+    return
 
-def guard_examines(options: Options) -> None:
-    """Examine the script to determine what files are read and written, and what URLs are downloaded and uploaded."""
-    read_files = []
-    write_files = []
-    download_urls = []
-    upload_urls = []
+def guard_examines(options: Options) -> bool:
+    """
+    Examine options.python_script:
+      1. Is it a valid python script? If not, return False and skip the rest of this function.
+      2. If so, return True and list the files that it reads and writes, as well as the URLs it downloads and uploads.
+    """
+    options.read_files    = []
+    options.write_files   = []
+    options.download_urls = []
+    options.upload_urls   = []
 
-    def aggregate_operations(script_path: str):
+    def aggregate_operations(script_path: str) -> None:
         """Aggregate file and network operations from script_path."""
-        nonlocal read_files, write_files, download_urls, upload_urls
-        r_files, w_files = get_file_operations(options, script_path)
-        d_urls, u_urls = get_network_operations(options, script_path)
-        read_files.extend(r_files)
-        write_files.extend(w_files)
-        download_urls.extend(d_urls)
-        upload_urls.extend(u_urls)
+        get_file_operations(options, script_path)
+        get_network_operations(options, script_path)
 
-    # Examine the main script
-    aggregate_operations(options.python_script)
+    # Examine the main script to make sure it's a valid Python script.
+    if is_python_script(options.python_script) and check_syntax(options.python_script):
+        try:
+            aggregate_operations(options.python_script)
+        except Exception as e:
+            raise RuntimeError(f"Error examining {options.python_script} for file operations: {e}") from e
+    else:
+        logging.warning(f"Skipping file operations analysis for {options.python_script} because it doesn't look like a valid Python script.")
+        return False
 
     # Examine each custom module
     for custom_load in options.loaded_custom_modules:
         module_path = options.custom_modules[custom_load]
         aggregate_operations(module_path)
 
-    if read_files:
-        if not options.rawlog: logging.info("Files read: " + ", ".join(read_files))
-    if write_files:
-        if not options.rawlog: logging.info("Files written: " + ", ".join(write_files))
-    if download_urls:
-        if not options.rawlog: logging.info("Download URLs: " + ", ".join(download_urls))
-    if upload_urls:
-        if not options.rawlog: logging.info("Upload URLs: " + ", ".join(upload_urls))
+    if not options.rawlog:
+        if options.read_files:
+            logging.info("Files read: " + ", ".join(options.read_files))
+        if options.write_files:
+            logging.info("Files written: " + ", ".join(options.write_files))
+        if options.download_urls:
+            logging.info("Download URLs: " + ", ".join(options.download_urls))
+        if options.upload_urls:
+            logging.info("Upload URLs: " + ", ".join(options.upload_urls))
     
+    return True
+
 def save_options_to_json(options: Options) -> None:
     """Save the options object to a JSON file."""
     options.json_filename = os.path.join(options.script_dir, f".{os.path.basename(options.python_script)}-{options.my_name}-last-used-on-{options.timestamp}.json")
@@ -3464,9 +3597,9 @@ def save_options_to_json(options: Options) -> None:
     for key, value in options_dict.items():
         try:
             json.dumps(value)
-        except TypeError:
+        except TypeError as e:
             non_serializable[key] = type(value).__name__
-            logging.debug(f"Key '{key}' is of type {type(value).__name__}, so it needs to be modified for JSON serialization.")
+            logging.debug(f"Key '{key}' is of type {type(value).__name__}, so it needs to be modified for JSON serialization: {e}")
 
     if non_serializable:
         logging.debug("Non-serializable keys being modified for JSON serialization...", non_serializable)
@@ -3760,7 +3893,7 @@ def check_python_version(command: str) -> bool:
         logging.error(f"Error checking {command}: {e}\nException type: ", exc_info=True)
         return False
 
-def find_preferred_python_version() -> Optional[str]:
+def find_preferred_python_version() -> str | None:
     """Find the command for the preferred version of python (stored in univ_defs.py as PY_VERSION)."""
     try:
         # Check if the preferred python command (only specifying integer part of the preferred version) exists and returns a valid path
@@ -3812,10 +3945,10 @@ def main() -> None:
     try:
         import pipreqs
         logging.debug("pipreqs is available, so it will be used.")
-        PIPREQS_AVAILABLE = True
+        options.pipreqs_available = True
     except ImportError:
         logging.debug("pipreqs is not available. Try installing it with 'pip install pipreqs'.")
-        PIPREQS_AVAILABLE = False
+        options.pipreqs_available = False
 
     if getattr(options.args, 'alias', False):
         # Add the alias to the shell configuration file
@@ -3844,6 +3977,9 @@ def main() -> None:
                     except:
                         logging.error(f"Error deleting {file}")
         sys.exit(0)
+    elif getattr(options.args, 'full', False) and not getattr(options.args, 'script', False):
+        options.args.script   = options.cwd
+        options.python_script = options.cwd
     else:
         logging.info("You must specify either a script to run or one of these arguments: alias, manual, blank-slate (be careful using blank-slate because it deletes all cached virtual environments, among other things!).")
 
@@ -3896,24 +4032,24 @@ def main() -> None:
             logging.info(f"Imported subfolders: {options.subfolders}")
 
     if getattr(options.args, 'justprint', False):
-        ud.print_errors_at_end(memory_handler, options.rawlog)
+        ud.print_all_errors(memory_handler, options.rawlog)
         sys.exit(0)
 
     if not options.uninstalled_imports:
         if not options.rawlog: logging.info("All required packages are already installed.")
-        guard_examines(options)
-        start_raw_time = dt.datetime.now()
-        subprocess.run([sys.executable, options.python_script] + options.script_args)
-        elapsed_raw_time = dt.datetime.now() - start_raw_time
-        if not options.rawlog: logging.info(f"Runtime: {elapsed_raw_time}")
-    elif is_virtualenv():
-        if not options.rawlog: logging.info("Already in a virtual environment.")
-        if check_packages_in_venv(options):
-            guard_examines(options)
+        if guard_examines(options):
             start_raw_time = dt.datetime.now()
             subprocess.run([sys.executable, options.python_script] + options.script_args)
             elapsed_raw_time = dt.datetime.now() - start_raw_time
             if not options.rawlog: logging.info(f"Runtime: {elapsed_raw_time}")
+    elif is_virtualenv():
+        if not options.rawlog: logging.info("Already in a virtual environment.")
+        if check_packages_in_venv(options):
+            if guard_examines(options):
+                start_raw_time = dt.datetime.now()
+                subprocess.run([sys.executable, options.python_script] + options.script_args)
+                elapsed_raw_time = dt.datetime.now() - start_raw_time
+                if not options.rawlog: logging.info(f"Runtime: {elapsed_raw_time}")
         else:
             logging.error("The current virtual environment does not have all the required packages.")
             if not options.rawlog: logging.info("Please deactivate the current virtual environment and run the script again.")
@@ -3933,25 +4069,25 @@ def main() -> None:
             if not options.rawlog: logging.info(f"Using directory: {match_dir}")
 
         if match_dir:
-            guard_examines(options)
             options.set_venv_dir(match_dir)
             start_venv_time = dt.datetime.now()
             elapsed_time = start_venv_time - start_time
             if not options.rawlog: logging.info(f"Elapsed time: {elapsed_time}")
-            if not options.rawlog: logging.info(f"Activating virtual environment: {options.activate_script}")
-            if not options.rawlog:
-                echo_statement = " && echo \"Virtual environment activated.\""
-            else:
-                echo_statement = ""
-            activate_cmd = f"bash -c '{options.activate_script}{echo_statement} && {options.venv_python} {options.python_script} {' '.join(options.script_args)}'"
-            #I want to capture the output of the subprocess.run() so that I can print it at the end.
-            result = subprocess.run(activate_cmd, shell=True)
-            end_time = dt.datetime.now()
-            elapsed_time = end_time - start_venv_time
-            if not options.rawlog: logging.info(f"Elapsed time since activating virtual environment: {elapsed_time}")
-            if result.returncode != 0 and not options.rawlog:
-                logging.error(f"Error running script: {result.stderr}")
-            elif os.path.basename(options.venv_dir).startswith('failed-') and options.simultaneous_success:
+            if guard_examines(options):
+                if not options.rawlog:
+                    logging.info(f"Activating virtual environment: {options.activate_script}")
+                    echo_statement = " && echo \"Virtual environment activated.\""
+                else:
+                    echo_statement = ""
+                activate_cmd = f"bash -c '{options.activate_script}{echo_statement} && {options.venv_python} {options.python_script} {' '.join(options.script_args)}'"
+                #I want to capture the output of the subprocess.run() so that I can print it at the end.
+                result = subprocess.run(activate_cmd, shell=True)
+                end_time = dt.datetime.now()
+                elapsed_time = end_time - start_venv_time
+                if not options.rawlog: logging.info(f"Elapsed time since activating virtual environment: {elapsed_time}")
+                if result.returncode != 0 and not options.rawlog:
+                    logging.error(f"Error running script: {result.stderr}")
+            if os.path.basename(options.venv_dir).startswith('failed-') and options.simultaneous_success:
                 #If the program has made it to this point, it has run successfully, so the venv directory can be renamed. It HASN'T failed. However, if it couldn't install simultaneously, then it's still a failed venv.
                 os.rename(options.venv_dir, options.venv_dir.replace('failed-', ''))
                 options.set_venv_dir(options.venv_dir.replace('failed-', ''))

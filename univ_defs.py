@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 
-# Written by Emmy Killett (she/her), ChatGPT 4o (it/its), ChatGPT o1-preview (it/its), ChatGPT o3-mini-high (it/its), and GitHub Copilot (it/its).
+# Written by Emmy Killett (she/her), ChatGPT 4o (it/its), ChatGPT o1-preview (it/its), ChatGPT o3-mini-high (it/its), ChatGPT o4-mini-high (it/its), and GitHub Copilot (it/its).
 import os, sys, subprocess
 import logging
-from typing import Dict, Optional, TextIO
+from typing import Dict, Optional, TextIO, Any
 
 # This is the version of univ_defs.py
-__version__ = '0.1.3'
+__version__ = '0.1.5'
 
 # This is the version of python which should be used in scripts that import this module.
 PY_VERSION = 3.11
@@ -22,6 +22,7 @@ def unused_function():
 class univ_class:
     """Class that handles the import and operation of large language model APIs."""
     def __init__(self):
+        """Initialize the class and import the necessary modules."""
         self.import_test()
 
     def import_test(self) -> None:
@@ -49,6 +50,7 @@ def sci_exp(float_input: float) -> int:
 class LLMs:
     """Class that handles the import and operation of large language model APIs."""
     def __init__(self):
+        """Initialize the LLM class and import the necessary modules."""
         self.init_llms()
 
     def init_llms(self) -> None:
@@ -70,6 +72,8 @@ class LLMs:
             this_key = llm["env_var"]
             try:
                 # THIS DOESN'T WORK YET BECAUSE DYNAMIC IMPORTS BREAK mypy.py!
+                # ALSO, THE importlib APPROACH IS MORE MODERN THAN THE __import__ APPROACH:
+                # https://chatgpt.com/share/68158ef6-b5ec-8006-ab89-15340479e6d2
                 # self.llm_modules[this_llm] = __import__(llm["module"])
                 # ADD NEW COMPANY LLMs HERE.
                 if  this_llm == "OpenAI":
@@ -141,32 +145,35 @@ class LLMs:
 
 # #"round out" away from zero while keeping round_digits significant figures.
 # #Rounds up for x>0, down for x<0.
-# def round_out(x, round_digits):
-#   import numpy as np
-#   if np.abs(x) < 10**(-max_digits): return x
-#   these_digits = sci_exp(x) - round_digits + 1
-#   thisfactor = 10**these_digits
-#   x = x/thisfactor
-#   if x > 0: x = np.ceil(x) 
-#   else:     x = np.floor(x)
-#   return x*(thisfactor*1.0)
+def round_out(x: float, round_digits: int = 3) -> float:
+    """Round a number away from zero to the specified number of significant figures (defaults to 3)."""
+    import numpy as np
+    if np.abs(x) < 10**(-max_digits): return x
+    these_digits = sci_exp(x) - round_digits + 1
+    thisfactor = 10**these_digits
+    x = x/thisfactor
+    if x > 0: x = np.ceil(x) 
+    else:     x = np.floor(x)
+    return x*(thisfactor*1.0)
 
 # #Convert decimal years to datetimes.
 # #From here: https://archive.vn/KyBU7  https://stackoverflow.com/questions/20911015/decimal-years-to-datetime-in-python 
 # #and here: https://archive.vn/dCEqU  https://numpy.org/doc/stable/reference/arrays.datetime.html
 # #Usage: dec2date(2002.29178082191777)
-# def dec2date(dec):
-#   import datetime as dt
-#   year = int(dec)
-#   rem = dec - year
-#   base = dt.datetime(year, 1, 1)
-#   result = base + dt.timedelta(seconds=(base.replace(year=base.year + 1) - base).total_seconds() * rem)
-#   #result = np.datetime64(result)
-#   return result
+def dec2date(dec: float) -> 'dt.datetime':
+    """Convert a decimal year to a datetime object."""
+    import datetime as dt
+    year = int(dec)
+    rem = dec - year
+    base = dt.datetime(year, 1, 1)
+    result = base + dt.timedelta(seconds=(base.replace(year=base.year + 1) - base).total_seconds() * rem)
+    #result = np.datetime64(result)
+    return result
 
 class MemoryHandler(logging.Handler):
     """A logging handler that stores logs in memory so the errors can be printed at the end."""
     def __init__(self, level=logging.ERROR):
+        """Initialize the MemoryHandler with the specified logging level."""
         super().__init__(level)
         self.logs = []
     def emit(self, record):
@@ -184,6 +191,7 @@ class FlushingStreamHandler(logging.StreamHandler):
 class MaxLevelFilter(logging.Filter):
     """A logging filter that only allows logs up to a certain level to pass through, so that error messages aren't printed multiple times."""
     def __init__(self, max_level):
+        """Initialize the MaxLevelFilter with the specified maximum logging level."""
         self.max_level = max_level
     def filter(self, record):
         return record.levelno <= self.max_level
@@ -197,7 +205,6 @@ def configure_logging(basename: str, log_level: str = 'INFO',
 
     # Check if logging is already configured by checking for any handlers
     if root_logger.hasHandlers():
-        print("Logging is already configured.", flush=True)
         for handler in root_logger.handlers:
             if isinstance(handler, MemoryHandler):
                 return handler
@@ -267,11 +274,11 @@ def get_log_level(log_level: str) -> int:
                  'CRITICAL' : logging.CRITICAL}
     return value_map.get(log_level, logging.INFO)
 
-def print_errors_at_end(memory_handler: MemoryHandler,
-                        rawlog: bool) -> None:
-    """Print any captured error messages at the end of the script."""
+def print_all_errors(memory_handler: MemoryHandler,
+                     rawlog: bool) -> None:
+    """Print all the captured error messages."""
     if memory_handler.logs and not rawlog:
-        print("\n****************************\nCaptured error messages:")
+        print("\n****************************\n****************************\nError messages:")
         for log in memory_handler.logs:
             print(log)
 
@@ -325,6 +332,7 @@ def my_title_case(the_title: str) -> str:
 class MyPopenResult:
     """A class to store the results of a customized subprocess.Popen call."""
     def __init__(self, stdout: str, stderr: str, returncode: int):
+        """Initialize the MyPopenResult with stdout, stderr, and returncode."""
         self.stdout = stdout
         self.stderr = stderr
         self.returncode = returncode
@@ -415,7 +423,6 @@ def my_fopen(file_path: str, suppress_errors: bool = False,
         'mac-roman', 'mac-turkish', 'ptcp154', 'shift-jis', 'shift-jis-2004', 'shift-jisx0213', 
         'hz', 'tis-620', 'euc-tw', 'iso2022-tw'
     ]
-    #encodings = ['utf_8', 'latin_1', 'ascii', 'iso8859_1', 'big5', 'utf_8_sig', 'utf_16', 'utf_16_be', 'utf_16_le', 'utf_32', 'utf_32_be', 'utf_32_le', 'cp1252', 'cp1251', 'cp1250', 'cp1253', 'cp1254', 'cp1255', 'cp1256', 'cp1257', 'cp1258', 'iso8859_2', 'iso8859_3', 'iso8859_4', 'iso8859_5', 'iso8859_6', 'iso8859_7', 'iso8859_8', 'iso8859_9', 'iso8859_10', 'iso8859_11', 'iso8859_13', 'iso8859_14', 'iso8859_15', 'iso8859_16', 'cp437', 'cp850', 'cp852', 'cp855', 'cp857', 'cp858', 'cp860', 'cp861', 'cp862', 'cp863', 'cp864', 'cp865', 'cp866', 'cp869','cp037', 'cp424', 'cp500', 'cp720', 'cp737', 'cp775', 'cp874', 'cp875', 'cp932', 'cp949', 'cp950', 'cp1006', 'cp1026', 'cp1125', 'cp1140','big5hkscs', 'gb2312', 'gbk', 'gb18030', 'euc_jp', 'euc_jis_2004', 'euc_jisx0213', 'euc_kr', 'iso2022_jp', 'iso2022_jp_1', 'iso2022_jp_2', 'iso2022_jp_2004', 'iso2022_jp_3', 'iso2022_jp_ext', 'iso2022_kr', 'johab', 'koi8_r', 'koi8_t', 'koi8_u', 'kz1048', 'mac_cyrillic', 'mac_greek', 'mac_iceland', 'mac_latin2', 'mac_roman', 'mac_turkish', 'ptcp154', 'shift_jis', 'shift_jis_2004', 'shift_jisx0213', 'hz', 'tis_620', 'euc_tw', 'iso2022_tw']
     if not os.path.isfile(file_path):
         this_message = f"File does not exist: {file_path}"
         if not rawlog:
@@ -452,6 +459,69 @@ def my_ast_parse(file_content: str, file_path: str) -> 'Optional[ast.AST]':
         logging.error(f"Error parsing file {file_path}: {str(e)}")
         return
     return tree
+
+def load_ast_var(var_name: str, script_path: str, rawlog: bool = False) -> Any:
+    """
+    Load a top-level literal Python variable from a module without executing it.
+    
+    :param options: Command line options and various sundries.
+    :param var_name: Name of the global variable to extract.
+    :param script_path: Path to the .py file.
+    :returns: The Python object assigned to var_name, if it’s a literal; else raises.
+    :raises FileNotFoundError: if script_path doesn’t exist.
+    :raises AttributeError: if var_name isn’t found at top level.
+    :raises ValueError: if the value isn’t a literal expression.
+    """
+    import ast
+    file_content = my_fopen(script_path, rawlog=rawlog)
+    if not file_content:
+        my_critical_error(f"Failed to open {script_path}", choose_breakpoint=True)
+    tree = my_ast_parse(file_content, script_path)
+    if tree is None:
+        raise SyntaxError(f"Could not parse {script_path}")
+
+    for node in tree.body:
+        # handle plain assignments: var_name = <expr>
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == var_name:
+                    try:
+                        return ast.literal_eval(node.value)
+                    except Exception as e:
+                        raise ValueError(
+                            f"Cannot literal_eval the value of {var_name}: {e}"
+                        )
+        # also handle annotated assignments: var_name: Type = <expr>
+        elif isinstance(node, ast.AnnAssign):
+            target = node.target
+            if isinstance(target, ast.Name) and target.id == var_name and node.value:
+                try:
+                    return ast.literal_eval(node.value)
+                except Exception as e:
+                    raise ValueError(
+                        f"Cannot literal_eval the value of {var_name}: {e}"
+                    )
+
+    raise AttributeError(f"Top-level variable {var_name!r} not found in {script_path}")
+
+def normalize_to_dict(value: Any, var_name: str, script_path: str) -> Dict:
+    """Ensure that 'value' is a dict. If it's a JSON-style string, try to parse it. Otherwise, log a warning and return an empty dict."""
+    import json
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed
+            logging.warning(f"Variable {var_name!r} in {script_path} JSON-decoded to {type(parsed).__name__}, expected dict.")
+        except json.JSONDecodeError as e:
+            logging.warning(f"Failed to JSON-decode variable {var_name!r} from {script_path}: {e}")
+    else:
+        logging.warning(f"Variable {var_name!r} in {script_path} is of type {type(value).__name__}, expected dict or JSON string.")
+    return {}
 
 def get_hostname_socket() -> str:
     """Retrieves the hostname using socket.gethostname()."""
@@ -603,6 +673,49 @@ def human_timespan(timespan: float) -> str:
 
     return time_str
 
+def to_datetime(thedate: "Union[np.datetime64, dt.datetime]") -> "dt.datetime":
+    """Convert numpy.datetime64 or datetime.datetime to datetime.datetime, but first convert to milliseconds if necessary to avoid errors."""
+    import numpy as np
+    import datetime as dt
+    if isinstance(thedate, dt.datetime):
+        return thedate
+    elif isinstance(thedate, np.datetime64):
+        return thedate.astype('datetime64[ms]').astype(dt.datetime)
+    else:
+        raise ValueError("Input must be a numpy.datetime64 or datetime.datetime object.")
+
+def format_date_range(date1: "dt.datetime", date2: "dt.datetime" = None) -> str:
+    """Process a pair of datetime.datetime dates and produce a formatted date range string where each date looks like 'Jan  7, 2025'. If date2 is not provided, it is set to date1."""
+    import datetime as dt
+
+    month_names = {
+        1: 'Jan', 2: 'Feb', 3: 'Mar', 4: 'Apr',
+        5: 'May', 6: 'Jun', 7: 'Jul', 8: 'Aug',
+        9: 'Sep', 10: 'Oct', 11: 'Nov', 12: 'Dec'
+    }
+
+    # If date2 is not provided, set date2 to date1
+    if date2 is None:
+        date2 = date1
+    
+    # Make sure both dates are datetime.datetime objects
+    if not isinstance(date1, dt.datetime) or not isinstance(date2, dt.datetime):
+        raise ValueError(f"Both dates must be datetime.datetime objects, but date1 is {date1} with type {type(date1)} and date2 {date2} with type {type(date2)}.")
+
+    # Ensure that the first date is earlier than the second.
+    if date1 > date2: date1, date2 = date2, date1
+
+    day1, day2     = date1.day, date2.day
+    month1, month2 = month_names[date1.month], month_names[date2.month]
+    year1, year2   = date1.year, date2.year
+
+    if year1 == year2:
+        if month1 == month2:
+            if day1 == day2: return f"{month1} {day1:2d}, {year1}"
+            else:            return f"{month1} {day1:2d} - {day2:2d}, {year1}"
+        else:                return f"{month1} {day1:2d} - {month2} {day2:2d}, {year1}"
+    else: return f"{month1} {day1:2d}, {year1} - {month2} {day2:2d}, {year2}"
+
 def kill_process(pname: str) -> None:
     """Kill a process by its name, then check if it is still running and retry if needed. Make sure the process name is unique to avoid killing unintended processes."""
     import time
@@ -638,6 +751,24 @@ def kill_process(pname: str) -> None:
             break  # Exit the loop when the process is no longer running
         else:
             print(f"{pname} is still running. Retrying...")
+
+def ensure_even_dimensions(image_path: str) -> None:
+    from PIL import Image
+    """Ensure the image has dimensions divisible by 2 by resizing if necessary."""
+    with Image.open(image_path) as img:
+        width, height = img.size
+        new_width = width if width % 2 == 0 else width - 1
+        new_height = height if height % 2 == 0 else height - 1
+        
+        if new_width != width or new_height != height:
+            try:
+                img = img.resize((new_width, new_height), Image.LANCZOS)
+                img.save(image_path)
+                logging.info(f"Resized image to even dimensions: width = {new_width}, height = {new_height}")
+            except Exception as e:
+                logging.error(f"Failed to resize image: {e}")
+        else:
+            logging.info(f"Image already has even dimensions: width = {width}, height = {height}")
 
 def open_dir_in_VLC(the_dir: str, sort_choice: str = "sort_by_name",
                     recursive: bool = False,
@@ -737,6 +868,7 @@ def check_list_for_duplicates(the_list: list) -> bool:
     """Check a list for duplicate elements and return True if duplicates are found."""
     duplicates = [ext for ext in set(the_list) if the_list.count(ext) > 1]
     print("Duplicates:", duplicates)
+    return len(duplicates) > 0
 
 # A comprehensive list of video file extensions.
 video_extensions = [
@@ -757,9 +889,9 @@ video_extensions = [
     '.rmx',   '.smk',   '.mkd',   '.mj2',  '.scm',  '.ivr',
     '.xesc',  '.wtv',   '.dcr',   '.mpl',  '.pds',  '.ismv',
     '.vc1',   '.vcd',   '.mpcpl', '.bin',  '.sfd',  '.qtz',
-    '.vdat',  '.vft',   '.md5',   '.par2', # The extensions.md5 and .par2 are included because hash/parity files are useful here.
+    '.vdat',  '.vft',
 ]
-# check_list_for_duplicates(video_extensions)
+# check_list_for_duplicates(video_extensions) # Run this after adding new extensions to ensure there are no duplicates.
 
 # A comprehensive list of audio file extensions.
 audio_extensions = [
@@ -777,7 +909,7 @@ audio_extensions = [
     '.mt2',   '.mo3',   '.umx',   '.tt',    '.tak',   '.trk',
     '.669',   '.abc',   '.ts',    '.ym',    '.hsq',   '.mpa',
 ]
-# check_list_for_duplicates(audio_extensions)
+# check_list_for_duplicates(video_extensions) # Run this after adding new extensions to ensure there are no duplicates.
 
 # A comprehensive list of subtitle file extensions.
 subtitle_extensions = [
@@ -788,4 +920,4 @@ subtitle_extensions = [
     '.zeg',   '.webvtt', '.scc',   '.cap',   '.asc',   '.txt',
     '.sbv',   '.ebu',    '.sami',  '.xml',   '.itt',   '.qt.txt',
 ]
-# check_list_for_duplicates(subtitle_extensions)
+# check_list_for_duplicates(video_extensions) # Run this after adding new extensions to ensure there are no duplicates.
