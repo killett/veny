@@ -2419,7 +2419,7 @@ def safe_eval(expr: str) -> Any | None:
 
 class SysPathVisitor(ast.NodeVisitor):
     """Visitor class to extract sys.path modifications."""
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the sys.path visitor."""
         self.paths = set()
 
@@ -2719,7 +2719,7 @@ def build_call_graph(modules_info: Dict[str, ModuleInfo]) -> Dict[str, Set[str]]
 def collect_used_imports(start_module: str, start_func: str,
                          call_graph:   Dict[str, Set[str]],
                          modules_info: Dict[str, ModuleInfo],
-                         visited=None) -> Set[str]:
+                         visited: set[str] = None) -> Set[str]:
     """Collect all imports used in a function and its callees."""
     if visited is None:
         visited = set()
@@ -2749,39 +2749,11 @@ def collect_used_imports(start_module: str, start_func: str,
         logging.debug(f"No module info found for {start_module}")
     return imports
 
-def check_syntax(file_path: str) -> bool:
-    """Attempt to compile the given file in 'exec' mode. If it compiles, return True. On syntax or I/O problems, log an error and return False."""
-    try:
-        source = ud.my_fopen(file_path, suppress_errors=True)
-        if not source:
-            logging.error(f"Could not read file: {file_path}")
-        compile(source, file_path, 'exec')
-        return True
-    except FileNotFoundError:
-        logging.error(f"File not found: {file_path}")
-    except PermissionError:
-        logging.error(f"Permission denied: {file_path}")
-    except UnicodeDecodeError as e:
-        logging.error(f"Could not decode {file_path!r} as UTF-8: {e}")
-    except SyntaxError as e:
-        # protect against None offsets
-        lineno = e.lineno or '?'
-        offset = e.offset or 0
-        line = (e.text or '').rstrip('\n')
-        pointer = ' ' * (offset - 1) + '^' if offset else ''
-        logging.error(f"Syntax error in {e.filename!r}, line {lineno}, column {offset}:\n"
-                      f"    {line}\n"
-                      f"    {pointer}\n"
-                      f"    {e.msg!r}")
-    except Exception as e:
-        logging.error(f"Unexpected error checking syntax of {file_path!r}: {e}")
-    return False
-
 def find_imports_in_script(options: Options, first_path: str) -> None:
     """Find all imports in the script and its dependencies."""
     # is_python_script() has already been called to verify that the first_path file LOOKS like a Python script.
     # However, it's still necessary to check if the file is a VALID Python script. If not, skip it.
-    if not check_syntax(first_path):
+    if not ud.compile_script(first_path):
         logging.error(f"Skipping invalid Python script: {first_path}")
         return
     processed_modules = set()
@@ -3547,7 +3519,7 @@ def guard_examines(options: Options) -> bool:
         get_network_operations(options, script_path)
 
     # Examine the main script to make sure it's a valid Python script.
-    if is_python_script(options.python_script) and check_syntax(options.python_script):
+    if is_python_script(options.python_script) and ud.compile_script(options.python_script):
         try:
             aggregate_operations(options.python_script)
         except Exception as e:
