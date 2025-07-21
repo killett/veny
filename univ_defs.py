@@ -4,7 +4,7 @@
 from __future__ import annotations # For Python 3.7+ compatibility with type annotations
 import os, sys, subprocess
 import logging
-from typing import Dict, TextIO, Any, TypeAlias
+from typing import Dict, TextIO, Any, TypeAlias, Type
 import re # Used to precompile regexes for performance
 
 # This is the version of univ_defs.py
@@ -15,21 +15,45 @@ PY_VERSION = 3.11
 
 valid_basins = ["California", "Sacramento", "San Joaquin", "Tulare-Buena Vista Lakes"]
 
-def parent_unused_function():
+def parent_unused_function() -> None:
+    """This function is not used in the test.py script."""
     unused_function()
 
-def unused_function():
+def unused_function() -> None:
     """This function is not used in the test.py script."""
     print("This function is not used in the test.py script.")
     import numpy as np
 
-class univ_class:
+class PlotOptions:
+    """Global figure options."""
+    def __init__(self) -> None:
+        """Initialize PlotOptions class with default values."""
+        # Ideas for improving this parent class: https://chatgpt.com/share/6876a7e2-da84-8006-9c8f-100d243b73e4
+        self.myfigsize   = (16, 9)
+        self.fsize       = 24
+        self.dpi_choice  = 300
+        self.markers     = ['o',     's',      '^',         'v',          '<',           '>']
+        self.colors      = ['black', 'red',    'blue',      'green',      'purple']      # Used for lines in light mode or for shaded areas in dark mode
+        self.lightcolors = ['grey',  'pink',   'lightblue', 'lightgreen', 'lightpurple'] # Used for shaded areas in light mode or for lines in dark mode
+        self.linestyles  = ['solid', 'dashed', 'dashdot',   'dotted']
+        self.dark_mode   = 0 # 1 = dark mode, 0 = light mode
+        if self.dark_mode:
+            self.background_color = '#000000'
+            self.text_color       = '#FFFFFF'
+            self.colors      = [c.replace('black', 'darkgrey') for c in self.colors]
+            self.lightcolors = [c.replace('grey', 'lightgrey') for c in self.lightcolors]
+        else:
+            self.background_color = '#FFFFFF'
+            self.text_color       = '#000000'
+
+class UnivClass:
     """Class that handles the import and operation of large language model APIs."""
     def __init__(self) -> None:
         """Initialize the class and import the necessary modules."""
         self.import_test()
 
     def import_test(self) -> None:
+        """ Test the import of this module by printing a message and the version of Python being used."""
         import openai
 
 class LLMs:
@@ -130,17 +154,19 @@ class LLMs:
 
 class MemoryHandler(logging.Handler):
     """A logging handler that stores logs in memory so the errors can be printed at the end."""
-    def __init__(self, level=logging.ERROR) -> None:
+    def __init__(self, level: int = logging.ERROR) -> None:
         """Initialize the MemoryHandler with the specified logging level."""
         super().__init__(level)
         self.logs = []
     def emit(self, record: logging.LogRecord) -> None:
+        """Capture the log record and store it in memory."""
         if record.levelno >= self.level:  # Only capture logs with the appropriate level
             self.logs.append(self.format(record))
 
 class FlushingStreamHandler(logging.StreamHandler):
     """A logging handler that flushes the stream after emitting each log so the logs are immediately visible."""
     def emit(self, record: logging.LogRecord) -> None:
+        """Emit a log record and immediately flush the stream."""
         # Call the original emit method to handle the logging
         super().emit(record)
         # Immediately flush the stream after emitting the log
@@ -152,6 +178,7 @@ class MaxLevelFilter(logging.Filter):
         """Initialize the MaxLevelFilter with the specified maximum logging level."""
         self.max_level = max_level
     def filter(self, record: logging.LogRecord) -> bool:
+        """Filter out log records above the maximum level."""
         return record.levelno <= self.max_level
 
 def fallback_logging_config(level: str = 'INFO') -> None:
@@ -251,9 +278,8 @@ def my_critical_error(message: str = "A critical error occurred.",
                       choose_breakpoint: bool = False,
                       exit_code: int = 1) -> None:
     """Log a critical error message and either exit the program or enter a breakpoint."""
-    import traceback
-    # Determine if an exception is being handled:
     fallback_logging_config()
+    # Determine if an exception is being handled:
     exc_type, exc_value, exc_traceback = sys.exc_info()
     if exc_type:
         # An exception is being handled; include exception info
@@ -416,10 +442,10 @@ def load_ast_var(var_name: str, script_path: str, rawlog: bool = False) -> Any:
     :param options: Command line options and various sundries.
     :param var_name: Name of the global variable to extract.
     :param script_path: Path to the .py file.
-    :returns: The Python object assigned to var_name, if it’s a literal; else raises.
-    :raises FileNotFoundError: if script_path doesn’t exist.
-    :raises AttributeError: if var_name isn’t found at top level.
-    :raises ValueError: if the value isn’t a literal expression.
+    :returns: The Python object assigned to var_name, if it's a literal; else raises.
+    :raises FileNotFoundError: if script_path doesn't exist.
+    :raises AttributeError: if var_name isn't found at top level.
+    :raises ValueError: if the value isn't a literal expression.
     """
     import ast
     file_content = my_fopen(script_path, rawlog=rawlog)
@@ -596,6 +622,7 @@ def kill_process(pname: str) -> None:
             print(f"{pname} is still running. Retrying...")
 
 def ensure_even_dimensions(image_path: str) -> None:
+    """Ensure the image at 'image_path' has dimensions divisible by 2 by resizing if necessary."""
     from PIL import Image
     fallback_logging_config()
     """Ensure the image has dimensions divisible by 2 by resizing if necessary."""
@@ -1019,7 +1046,7 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
 
     Otherwise, if given_date is a float or int, treat it as a decimal year by default if format_str is not provided.
 
-    Any call that doesn’t provide a timezone argument will default to UTC. 
+    Any call that doesn't provide a timezone argument will default to UTC. 
     The timezone can be a datetime.tzinfo object or a string that can be converted to a ZoneInfo object (e.g. 'America/New_York').
     If the given_date is an "aware" datetime.datetime object which already has a timezone attached, it will be converted to the specified timezone (which may involve changing its date and time if the specified timezone is different).
     The timezone can also be a fixed‐offset like "+05:30" or "-04:00", or the string "Naive" to indicate that the datetime should be treated as a naive datetime (i.e. without any timezone information).
@@ -1212,8 +1239,8 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
 
     raise ValueError(error_message + "\n".join(errors) + "\nPlease check the input format and try again.")
 
-def sci_exp(float_input: float, max_digits: int = 15) -> int:
-    """Return the scientific exponent of a floating point number. An optional max_digits parameter can be specified to determine the maximum number of digits to consider for very small numbers; if the number is smaller than 10^(-max_digits), just say it has max_digits. By default, max_digits is 15."""
+def sci_exp(float_input: float | int, max_digits: int = 15) -> int:
+    """Return the scientific exponent of an integer or floating point number. An optional max_digits parameter can be specified to determine the maximum number of digits to consider for very small numbers; if the number is smaller than 10^(-max_digits), just say it has max_digits. By default, max_digits is 15."""
     import math
     if abs(float_input) < 10**(-max_digits): return -max_digits
     return int(math.floor(math.log10(abs(float_input))))
@@ -1247,14 +1274,239 @@ def my_title_case(the_title: str) -> str:
                          else word.title() for word in words]
     return ' '.join(capitalized_words)
 
+def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
+    """
+    Turn arbitrary text into an ASCII-only, filesystem‐safe filename.
+    
+    Steps:
+      1. Unicode → ASCII
+      2. Treat dots, underscores & whitespace as word separators
+      3. Remove any character that isn't A-z, a–z, 0–9, dashes, or the separator
+      4. Collapse runs of separators into a single one
+      5. Trim separators from ends
+      6. Optionally truncate to max_length (preserving word boundaries)
+    
+    Args:
+        text:        Original filename or title
+        sep:         Single-character separator (default: "_")
+        max_length:  If set, strongest‐effort truncate to this many chars
+    
+    Returns:
+        A clean, filename-safe string.
+    """
+    import re
+    import unidecode
+
+    # 1. Normalize to ASCII
+    text = unidecode.unidecode(text)
+
+    # 2. Replace common “word boundaries” with sep
+    #    (dots, underscores, whitespace) but keep dashes
+    #    e.g. "hello.world--foo_bar" → "hello world--foo bar"
+    text = re.sub(r"[._\s]+", sep, text)
+    
+    # 3. Remove anything but a–z, 0–9, dashes, or our sep
+    allowed = f"A-Za-z0-9\-{re.escape(sep)}"
+    text = re.sub(fr"[^{allowed}]+", "", text)
+    
+    # 4. Collapse runs of sep (e.g. “__” → “_”)
+    text = re.sub(fr"{re.escape(sep)}{{2,}}", sep, text)
+    
+    # 5. Strip leading/trailing seps
+    text = text.strip(sep)
+    
+    # 6. Optionally truncate (try not to cut in middle of a word)
+    if max_length is not None and len(text) > max_length:
+        # cut at max_length, then drop a partial trailing token if any
+        truncated = text[:max_length]
+        # if the next char in original isn't sep and our chop landed mid-token, trim back to last sep
+        if (len(text) > max_length and
+            not truncated.endswith(sep) and
+            sep in truncated):
+            truncated = truncated.rsplit(sep, 1)[0]
+        text = truncated
+    
+    return text
+
+def compile_script(file_path: str) -> bool:
+    """Attempt to compile the given file in 'exec' mode. If it compiles, return True. On syntax or I/O problems, log an error and return False."""
+    import logging
+    fallback_logging_config()
+    try:
+        source = my_fopen(file_path, suppress_errors=True)
+        if not source:
+            logging.error(f"Could not read file: {file_path}")
+        compile(source, file_path, 'exec')
+        return True
+    except FileNotFoundError:
+        logging.error(f"File not found: {file_path}")
+    except PermissionError:
+        logging.error(f"Permission denied: {file_path}")
+    except UnicodeDecodeError as e:
+        logging.error(f"Could not decode {file_path!r} as UTF-8: {e}")
+    except SyntaxError as e:
+        # protect against None offsets
+        lineno = e.lineno or '?'
+        offset = e.offset or 0
+        line = (e.text or '').rstrip('\n')
+        pointer = ' ' * (offset - 1) + '^' if offset else ''
+        logging.error(f"Syntax error in {e.filename!r}, line {lineno}, column {offset}:\n"
+                      f"    {line}\n"
+                      f"    {pointer}\n"
+                      f"    {e.msg!r}")
+    except Exception as e:
+        logging.error(f"Unexpected error checking syntax of {file_path!r}: {e}")
+    return False
+
+# --------------------------------------------------------------------------------
+# Note: Python resolves base classes at the moment a class statement is executed.
+# That means any names used as base classes (e.g., ast.NodeVisitor) must already
+# be defined in the current scope when the class is created.
+#
+# If we defer importing `ast` until inside a function but still try to define
+# the class at the module level, Python will raise:
+#     NameError: name 'ast' is not defined
+#
+# Wrapping the class definition in a factory function lets us:
+#   1) Import `ast` inside the function, so it’s guaranteed to be in scope
+#      when we define the class.
+#   2) Keep module‑level imports to a minimum (only __future__ and typing).
+#   3) Return the fully‑constructed class and assign it to the module name.
+#
+# In short: by defining FormatChecker inside this helper, we avoid NameError
+# and still get a clean, well‑typed class available at the module level.
+# --------------------------------------------------------------------------------
+def _make_format_checker() -> Type[FormatChecker]:
+    """Factory function to create the FormatChecker class with the necessary imports."""
+    import ast
+    from typing import List, Tuple
+    class FormatChecker(ast.NodeVisitor):
+        """
+        Walks a module AST and collects formatting violations:
+        - missing type hints on params / return
+        - missing docstring or incorrect docstring quote style
+        """
+        def __init__(self, source: str) -> None:
+            """Initialize the FormatChecker with the source code string."""
+            self.source = source
+            self.errors: List[Tuple[str, str, str, int]] = []
+            self._seen_funcs: set[int] = set() # keep track of which FunctionDef/AsyncFunctionDef nodes we've already checked
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            """Visit a FunctionDef node and check for formatting violations."""
+            self._check_function(node)
+            self.generic_visit(node)
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            """Visit an AsyncFunctionDef node and check for formatting violations."""
+            self._check_function(node)
+            self.generic_visit(node)
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            """Visit a ClassDef node and check for formatting violations."""
+            self._check_docstring(node, f'class "{node.name}"')
+            init = self._find_init(node)
+            if init:
+                self._check_function(init, in_method=True, container=f'class "{node.name}"')
+            self.generic_visit(node)
+
+        def _find_init(self, node: ast.ClassDef) -> ast.FunctionDef | None:
+            """Find the __init__ method in a class definition."""
+            for elt in node.body:
+                if isinstance(elt, (ast.FunctionDef, ast.AsyncFunctionDef)) and elt.name == "__init__":
+                    return elt  # type: ignore
+            return None
+
+        def _check_function(self, node: ast.FunctionDef, *, in_method: bool = False, container: str | None = None) -> None:
+            """Check a function or method node for formatting violations.
+            If `in_method` is True, it indicates that this is a method (e.g. inside a class).
+            If `container` is provided, it indicates the context (e.g. class name)."""
+            if id(node) in self._seen_funcs: # ←─ skip if we’ve already run this exact node
+                return
+            self._seen_funcs.add(id(node))
+            who = (f'function "{node.name}"' if container is None else f'{container} → method "{node.name}"')
+            self._check_docstring(node, who)
+
+            missing: List[str] = []
+            args = [a for a in node.args.args if a.arg != "self"]
+            for a in args + node.args.kwonlyargs:
+                if a.annotation is None:
+                    missing.append(f'param "{a.arg}"')
+            if node.args.vararg and node.args.vararg.annotation is None:
+                missing.append(f'param "*{node.args.vararg.arg}"')
+            if node.args.kwarg and node.args.kwarg.annotation is None:
+                missing.append(f'param "**{node.args.kwarg.arg}"')
+            if node.returns is None:
+                missing.append("return")
+            if missing:
+                self.errors.append(("function", node.name, "missing type hints for " + ", ".join(missing), node.lineno))
+
+        def _check_docstring(self, node: ast.AST, who: str) -> None:
+            """Check a node for a docstring and its formatting.
+            If the node has no docstring or the docstring is not formatted correctly, an error is added to self.errors.
+            The `who` parameter is a string describing the context (e.g. function or class name)."""
+            if not node.body or not isinstance(node.body[0], ast.Expr):
+                self.errors.append((node.__class__.__name__.lower(), who, "no docstring", node.lineno))
+                return
+
+            expr = node.body[0]
+            if not (isinstance(expr.value, ast.Constant) and isinstance(expr.value.value, str)):
+                self.errors.append((node.__class__.__name__.lower(), who, "no docstring", node.lineno))
+                return
+
+            # recover the exact literal to verify triple-double-quote
+            literal = ast.get_source_segment(self.source, expr.value) or ""
+            first_line = literal.strip().splitlines()[0]
+            if first_line.startswith("'''"):
+                self.errors.append((node.__class__.__name__.lower(), who, 'docstring should use triple double quotes ("""…""")', node.lineno))
+    return FormatChecker
+FormatChecker = _make_format_checker()
+
+def check_python_formatting(path: str) -> None:
+    """Reads a .py file at `path` via ud.my_fopen, parses it with ud.my_ast_parse, and prints any formatting violations to stdout."""
+    src = my_fopen(path)
+    if src is False:
+        logging.error(f"❌ Failed to open file: {path}")
+        return
+
+    if '`' in src:
+        logging.info(f"File {path} contains the backtick character (`). This is not recommended in Python source code, as it may cause issues with syntax highlighting or string formatting. Consider replacing it with a single quote (').")
+
+    try:
+        tree = my_ast_parse(src, path)
+    except SyntaxError as e:
+        logging.error(f"❌ {e}")
+        return
+
+    checker = FormatChecker(src)
+    checker.visit(tree)
+
+    if not checker.errors:
+        logging.info("🎉 All functions and classes conform to the formatting rules.")
+    else:
+        max_lineno = max(err[3] for err in checker.errors)
+        the_digits = sci_exp(max_lineno) + 1
+        for kind, name, msg, lineno in checker.errors:
+            logging.error(f"{lineno:>{the_digits}} – {kind.capitalize()} {name}: {msg}")
+    
+    if compile_script(path):
+        logging.info(f"✅ {path} compiled successfully.")
+
 def open_dir_in_VLC(the_dir: str, sort_choice: str = "sort_by_name",
                     recursive: bool = False,
-                    no_start: bool = False) -> None:
+                    no_start:  bool = False) -> None:
     """Create a playlist of the files in the specified directory, then play that playlist in VLC. By default, don't search the directory recursively and sort the files by name. Optional arguments allow recursive loading or sorting by modification time. If no_start is True, don't start playback in VLC."""
-    start_flag = "--start-paused" if no_start else ""
-    #start_flag = "--no-playlist-autostart" if no_start else ""
+    if the_dir is None:
+        raise ValueError("The directory path cannot be None.")
+    elif not isinstance(the_dir, str):
+        raise TypeError(f"Expected 'the_dir' to be a string, got {type(the_dir).__name__!r}")
+    elif not os.path.isdir(the_dir):
+        raise ValueError(f"The specified path '{the_dir}' is not a valid directory.")
+    #start_flag = "--start-paused" if no_start else False # The "--start-paused" flag forces you to press play in VLC EACH TIME YOU GO TO A NEW PLAYLIST ENTRY!
+    start_flag = "--no-playlist-autostart" if no_start else False
     # List to store files with their modification times
     files_with_times = []
+    recursive_string = "recursive" if recursive else "NOT_recursive"
     if recursive:
         # Recursively iterate over the files in the directory
         for root, dirs, files in os.walk(the_dir):
@@ -1286,8 +1538,8 @@ def open_dir_in_VLC(the_dir: str, sort_choice: str = "sort_by_name",
     for _, file_path in files_with_times:
         base_name = os.path.basename(file_path)
         playlist_content += f"#EXTINF:-1,{base_name.replace(',', '').replace('-', '')}\n{file_path}\n"
-    # Write the playlist to disk
-    playlist_path = os.path.join(os.getcwd(), "playlist.m3u")
+    # Write the playlist to disk in the specified directory
+    playlist_path = os.path.join(the_dir, f"playlist_{sort_choice}_{recursive_string}.m3u")
     with open(playlist_path, "w") as playlist_file:
         playlist_file.write(playlist_content)
     # Open the playlist in VLC
@@ -1348,21 +1600,25 @@ def check_list_for_duplicates(the_list: list) -> bool:
 
 # A comprehensive list of encodings to try when reading files, with most likely encodings first.
 text_encodings = [
-    'utf-8', 'latin-1', 'ascii', 'iso-8859-1', 'big5', 'utf-8-sig', 'utf-16', 
-    'utf-16-be', 'utf-16-le', 'utf-32', 'utf-32-be', 'utf-32-le', 'cp1252', 'cp1251', 
-    'cp1250', 'cp1253', 'cp1254', 'cp1255', 'cp1256', 'cp1257', 'cp1258', 'iso-8859-2', 
-    'iso-8859-3', 'iso-8859-4', 'iso-8859-5', 'iso-8859-6', 'iso-8859-7', 'iso-8859-8', 
-    'iso-8859-9', 'iso-8859-10', 'iso-8859-11', 'iso-8859-13', 'iso-8859-14', 'iso-8859-15', 
-    'iso-8859-16', 'cp437', 'cp850', 'cp852', 'cp855', 'cp857', 'cp858', 'cp860', 'cp861', 
-    'cp862', 'cp863', 'cp864', 'cp865', 'cp866', 'cp869', 'cp037', 'cp424', 'cp500', 
-    'cp720', 'cp737', 'cp775', 'cp874', 'cp875', 'cp932', 'cp949', 'cp950', 'cp1006', 
-    'cp1026', 'cp1125', 'cp1140', 'big5hkscs', 'gb2312', 'gbk', 'gb18030', 'euc-jp', 
-    'euc-jis-2004', 'euc-jisx0213', 'euc-kr', 'iso2022-jp', 'iso2022-jp-1', 'iso2022-jp-2', 
-    'iso2022-jp-2004', 'iso2022-jp-3', 'iso2022-jp-ext', 'iso2022-kr', 'johab', 'koi8-r', 
-    'koi8-t', 'koi8-u', 'kz1048', 'mac-cyrillic', 'mac-greek', 'mac-iceland', 'mac-latin2', 
-    'mac-roman', 'mac-turkish', 'ptcp154', 'shift-jis', 'shift-jis-2004', 'shift-jisx0213', 
-    'hz', 'tis-620', 'euc-tw', 'iso2022-tw'
+    'utf-8',        'latin-1',      'ascii',          'iso-8859-1',      'big5',         'utf-8-sig',
+    'utf-16',       'utf-16-be',    'utf-16-le',      'utf-32',          'utf-32-be',    'utf-32-le',
+    'cp1252',       'cp1251',       'cp1250',         'cp1253',          'cp1254',       'cp1255',
+    'cp1256',       'cp1257',       'cp1258',         'iso-8859-2',      'iso-8859-3',   'iso-8859-4',
+    'iso-8859-5',   'iso-8859-6',   'iso-8859-7',     'iso-8859-8',      'iso-8859-9',   'iso-8859-10',
+    'iso-8859-11',  'iso-8859-13',  'iso-8859-14',    'iso-8859-15',     'iso-8859-16',  'cp437',        
+    'cp850',        'cp852',        'cp855',          'cp857',           'cp858',        'cp860',
+    'cp861',        'cp862',        'cp863',          'cp864',           'cp865',        'cp866',
+    'cp869',        'cp037',        'cp424',          'cp500',           'cp720',        'cp737',
+    'cp775',        'cp874',        'cp875',          'cp932',           'cp949',        'cp950',
+    'cp1006',       'cp1026',       'cp1125',         'cp1140',          'big5hkscs',    'gb2312',
+    'gbk',          'gb18030',      'euc-jp',         'euc-jis-2004',    'euc-jisx0213', 'euc-kr',
+    'iso2022-jp',   'iso2022-jp-1', 'iso2022-jp-2',   'iso2022-jp-2004', 'iso2022-jp-3', 'iso2022-jp-ext',
+    'iso2022-kr',   'johab',        'koi8-r',         'koi8-t',          'koi8-u',       'kz1048',
+    'mac-cyrillic', 'mac-greek',    'mac-iceland',    'mac-latin2',      'mac-roman',    'mac-turkish',
+    'ptcp154',      'shift-jis',    'shift-jis-2004', 'shift-jisx0213',  'hz',           'tis-620',
+    'euc-tw',       'iso2022-tw'
 ]
+# check_list_for_duplicates(text_encodings) # Run this after adding new extensions to ensure there are no duplicates.
 
 # A comprehensive list of python extensions.
 python_extensions = ['.py', '.pyw']

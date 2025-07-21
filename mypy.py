@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 # Written by Emmy Killett (she/her), ChatGPT 4o (it/its), ChatGPT o1-preview (it/its), ChatGPT o3-mini-high (it/its), ChatGPT o4-mini-high (it/its), and GitHub Copilot (it/its).
-from __future__ import annotations # For Python 3.7+ compatibility with type annotations
+from __future__ import annotations  # For Python 3.7+ compatibility with type annotations
 import os
 import sys
 import subprocess
@@ -15,25 +15,27 @@ import shutil
 import venv
 import pickle
 from pathlib import Path, PosixPath
-from typing import Dict, List, Set, Tuple, Iterable, Any
+from typing import Any
+from collections.abc import Iterable
 import logging
 import tempfile
 import stat
 
 import univ_defs as ud
 
-__version__ = '0.1.5'
+__version__ = '0.1.6'
+
 
 class Options():
     """Class that has all global options in one place."""
     def __init__(self) -> None:
         """Initialize the Options class with default values."""
         self.log_mode = "INFO"
-        #self.log_mode = "DEBUG" # Instead of uncommenting this line, just use the -debug command line argument.
+        # self.log_mode = "DEBUG" # Instead of uncommenting this line, just use the -debug command line argument.
         self.search_above_this_dir = True
-        self.my_filepath: str = os.path.abspath(__file__) # This file's full path and filename
-        self.my_name = os.path.splitext(os.path.basename(self.my_filepath))[0] # The base name of this script without the .py extension
-        self.my_dir: str = os.path.expanduser(os.path.join('~',self.my_name))
+        self.my_filepath: str = os.path.abspath(__file__)  # This file's full path and filename
+        self.my_name = os.path.splitext(os.path.basename(self.my_filepath))[0]  # The base name of this script without the .py extension
+        self.my_dir: str = os.path.expanduser(os.path.join('~', self.my_name))
         self.manual_instructions: str = f"""
 This program acts as a wrapper around Python to automate the creation of virtual environments and the installation of any required packages. Instead of typing "python3 script.py", you can type "{self.my_name} script.py" to run script.py in a virtual environment which has all the required packages.
 
@@ -61,21 +63,21 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.shell: str = ''
         self.computer_name: str = ud.get_computer_name()
         self.cwd: str = os.getcwd()
-        self.venv_name: str = 'myenv' # Can NOT include dashes ('-')
+        self.venv_name: str = 'myenv'  # Can NOT include dashes ('-')
         self.packages_dir: str = os.path.join(self.my_dir, 'packages')
         self.test_dir: str = os.path.join(self.my_dir, 'test')
-        self.uninstalled_imports: Set[str] = set()
-        self.installed_imports: Set[str] = set()
-        self.bad_imports: Set[str] = set()
-        self.custom_modules: Dict[str, str] = {}
-        self.subfolders: List[str] = []
-        self.samedir_files: List[str] = []
-        self.pip_list: List[str] = []
-        self.loaded_custom_modules: Set[str] = set()
+        self.uninstalled_imports: set[str] = set()
+        self.installed_imports: set[str] = set()
+        self.bad_imports: set[str] = set()
+        self.custom_modules: dict[str, str] = {}
+        self.subfolders: list[str] = []
+        self.samedir_files: list[str] = []
+        self.pip_list: list[str] = []
+        self.loaded_custom_modules: set[str] = set()
         self.pretty_list: str = ''
         self.timestamp: str = dt.datetime.now().strftime('%Y%m%d-%H%M%S')
         self.python_script: str = ''
-        self.script_name: str = '' # python_script without the .py extension
+        self.script_name: str = ''  # python_script without the .py extension
         self.script_dir: str = ''
         self.json_filename: str = ''
         self.script_dir_or_file_or_list: str | Iterable[str] = ''
@@ -90,23 +92,23 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.extra_requirements_file: str = 'extra_requirements.txt'
         self.download_script_path: str = ''
         self.simultaneous_success: bool = False
-        self.max_checks: int = 10 # Maximum number of times to check any repeated process.
-        self.check_interval: int = 5 # Number of seconds to wait between checks.
-        self.script_args: List[str] = []
-        self.new_local_paths: Set[str] = set()
-        self.all_imports: Set[str] = set()
-        self.installed_imports: Set[str] = set()
-        self.uninstalled_imports: Set[str] = set()
+        self.max_checks: int = 10  # Maximum number of times to check any repeated process.
+        self.check_interval: int = 5  # Number of seconds to wait between checks.
+        self.script_args: list[str] = []
+        self.new_local_paths: set[str] = set()
+        self.all_imports: set[str] = set()
+        self.installed_imports: set[str] = set()
+        self.uninstalled_imports: set[str] = set()
         self.total_imports: int = 0
-        self.bad_imports: Set[str] = set()
+        self.bad_imports: set[str] = set()
         self.rawlog: bool = False
         self.pipreqs_available: bool = False
-        self.read_files:    List[str] = [] # List of files read       by the Python script.
-        self.write_files:   List[str] = [] # List of files written    by the Python script.
-        self.download_urls: List[str] = [] # List of  URLs downloaded by the Python script.
-        self.upload_urls:   List[str] = [] # List of  URLs uploaded   by the Python script.
+        self.read_files:    list[str] = []  # List of files read       by the Python script.
+        self.write_files:   list[str] = []  # List of files written    by the Python script.
+        self.download_urls: list[str] = []  # List of  URLs downloaded by the Python script.
+        self.upload_urls:   list[str] = []  # List of  URLs uploaded   by the Python script.
         # Some packages also need other packages to be installed.
-        self.also_needs: Dict[str, List[str]] = {
+        self.also_needs: dict[str, list[str]] = {
             'xarray': ['dask', 'netcdf4', 'h5netcdf'],
             # NOT PIP PACKAGES: 'pyautogui': ['scrot', 'python3-tk']
             # Add more packages and their dependencies here
@@ -114,951 +116,951 @@ If you're using the bash shell, follow these steps to add the alias manually:
         # Keep a list of all python standard library modules.
         # Consider switching to stdlib_list package: https://pypi.org/project/stdlib-list/
         # https://chatgpt.com/share/687000fd-be84-8006-a7f4-06af4b1e0eda
-        #This list is from the pipreqs repo in file "mapping", retrieved on 2024-08-15 from here: https://github.com/bndr/pipreqs
-        self.standard_modules: List[str] = ['_abc', 'abc', 'aifc', 
-            '_aix_support', 'antigravity', 'argparse', 'array', 
-            '_ast', 'ast', 'asynchat', '_asyncio', 'asyncio', 
-            'asyncio.base_events', 'asyncio.base_futures', 
-            'asyncio.base_subprocess', 'asyncio.base_tasks', 
-            'asyncio.constants', 'asyncio.coroutines', 
-            'asyncio.events', 'asyncio.exceptions', 
-            'asyncio.format_helpers', 'asyncio.futures', 
-            'asyncio.locks', 'asyncio.log', 'asyncio.__main__', 
-            'asyncio.proactor_events', 'asyncio.protocols', 
-            'asyncio.queues', 'asyncio.runners', 
-            'asyncio.selector_events', 'asyncio.sslproto', 
-            'asyncio.staggered', 'asyncio.streams', 
-            'asyncio.subprocess', 'asyncio.tasks', 'asyncio.threads', 
-            'asyncio.transports', 'asyncio.trsock', 
-            'asyncio.unix_events', 'asyncio.windows_events', 
-            'asyncio.windows_utils', 'asyncore', 'atexit', 'audioop', 
-            'base64', 'bdb', 'binascii', 'binhex', '_bisect', 
-            'bisect', '_blake2', '_bootlocale', '_bootsubprocess', 
-            'builtins', '_bz2', 'bz2', 'calendar', 'cgi', 'cgitb', 
-            'chunk', 'cmath', 'cmd', 'code', '_codecs', 'codecs', 
-            '_codecs_cn', '_codecs_hk', '_codecs_iso2022', 
-            '_codecs_jp', '_codecs_kr', '_codecs_tw', 'codeop', 
-            '_collections', 'collections', '_collections_abc', 
-            'collections.abc', 'colorsys', '_compat_pickle', 
-            'compileall', '_compression', 'concurrent', 
-            'concurrent.futures', 'concurrent.futures._base', 
-            'concurrent.futures.process', 'concurrent.futures.thread', 
-            'configparser', 'contextlib', '_contextvars', 
-            'contextvars', 'copy', 'copyreg', 'cProfile', '_crypt', 
-            'crypt', '_csv', 'csv', '_ctypes', 'ctypes', 
-            'ctypes._aix', 'ctypes._endian', 'ctypes.macholib', 
-            'ctypes.macholib.dyld', 'ctypes.macholib.dylib', 
-            'ctypes.macholib.framework', '_ctypes_test', 
-            'ctypes.test', 'ctypes.test.__main__', 
-            'ctypes.test.test_anon', 
-            'ctypes.test.test_array_in_pointer', 
-            'ctypes.test.test_arrays', 
-            'ctypes.test.test_as_parameter', 
-            'ctypes.test.test_bitfields', 'ctypes.test.test_buffers', 
-            'ctypes.test.test_bytes', 'ctypes.test.test_byteswap', 
-            'ctypes.test.test_callbacks', 'ctypes.test.test_cast', 
-            'ctypes.test.test_cfuncs', 'ctypes.test.test_checkretval', 
-            'ctypes.test.test_delattr', 'ctypes.test.test_errno', 
-            'ctypes.test.test_find', 'ctypes.test.test_frombuffer', 
-            'ctypes.test.test_funcptr', 'ctypes.test.test_functions', 
-            'ctypes.test.test_incomplete', 'ctypes.test.test_init', 
-            'ctypes.test.test_internals', 'ctypes.test.test_keeprefs', 
-            'ctypes.test.test_libc', 'ctypes.test.test_loading', 
-            'ctypes.test.test_macholib', 
-            'ctypes.test.test_memfunctions', 
-            'ctypes.test.test_numbers', 'ctypes.test.test_objects', 
-            'ctypes.test.test_parameters', 'ctypes.test.test_pep3118', 
-            'ctypes.test.test_pickling', 'ctypes.test.test_pointers', 
-            'ctypes.test.test_prototypes', 
-            'ctypes.test.test_python_api', 
-            'ctypes.test.test_random_things', 
-            'ctypes.test.test_refcounts', 'ctypes.test.test_repr', 
-            'ctypes.test.test_returnfuncptrs', 
-            'ctypes.test.test_simplesubclasses', 
-            'ctypes.test.test_sizes', 'ctypes.test.test_slicing', 
-            'ctypes.test.test_stringptr', 'ctypes.test.test_strings', 
-            'ctypes.test.test_struct_fields', 
-            'ctypes.test.test_structures', 
-            'ctypes.test.test_unaligned_structures', 
-            'ctypes.test.test_unicode', 'ctypes.test.test_values', 
-            'ctypes.test.test_varsize_struct', 
-            'ctypes.test.test_win32', 'ctypes.test.test_wintypes', 
-            'ctypes.util', 'ctypes.wintypes', '_curses', 'curses', 
-            'curses.ascii', 'curses.has_key', '_curses_panel', 
-            'curses.panel', 'curses.textpad', 'dataclasses', 
-            '_datetime', 'datetime', '_dbm', 'dbm', 'dbm.dumb', 
-            'dbm.gnu', 'dbm.ndbm', '_decimal', 'decimal', 'difflib', 
-            'dis', 'distutils', 'distutils.archive_util', 
-            'distutils.bcppcompiler', 'distutils.ccompiler', 
-            'distutils.cmd', 'distutils.command', 
-            'distutils.command.bdist', 'distutils.command.bdist_dumb', 
-            'distutils.command.bdist_msi', 
-            'distutils.command.bdist_packager', 
-            'distutils.command.bdist_rpm', 
-            'distutils.command.bdist_wininst', 
-            'distutils.command.build', 'distutils.command.build_clib', 
-            'distutils.command.build_ext', 
-            'distutils.command.build_py', 
-            'distutils.command.build_scripts', 
-            'distutils.command.check', 'distutils.command.clean', 
-            'distutils.command.config', 'distutils.command.install', 
-            'distutils.command.install_data', 
-            'distutils.command.install_egg_info', 
-            'distutils.command.install_headers', 
-            'distutils.command.install_lib', 
-            'distutils.command.install_scripts', 
-            'distutils.command.register', 'distutils.command.sdist', 
-            'distutils.command.upload', 'distutils.config', 
-            'distutils.core', 'distutils.cygwinccompiler', 
-            'distutils.debug', 'distutils.dep_util', 
-            'distutils.dir_util', 'distutils.dist', 
-            'distutils.errors', 'distutils.extension', 
-            'distutils.fancy_getopt', 'distutils.filelist', 
-            'distutils.file_util', 'distutils.log', 
-            'distutils.msvc9compiler', 'distutils._msvccompiler', 
-            'distutils.msvccompiler', 'distutils.spawn', 
-            'distutils.sysconfig', 'distutils.tests', 
-            'distutils.tests.support', 
-            'distutils.tests.test_archive_util', 
-            'distutils.tests.test_bdist', 
-            'distutils.tests.test_bdist_dumb', 
-            'distutils.tests.test_bdist_msi', 
-            'distutils.tests.test_bdist_rpm', 
-            'distutils.tests.test_bdist_wininst', 
-            'distutils.tests.test_build', 
-            'distutils.tests.test_build_clib', 
-            'distutils.tests.test_build_ext', 
-            'distutils.tests.test_build_py', 
-            'distutils.tests.test_build_scripts', 
-            'distutils.tests.test_check', 
-            'distutils.tests.test_clean', 'distutils.tests.test_cmd', 
-            'distutils.tests.test_config', 
-            'distutils.tests.test_config_cmd', 
-            'distutils.tests.test_core', 
-            'distutils.tests.test_cygwinccompiler', 
-            'distutils.tests.test_dep_util', 
-            'distutils.tests.test_dir_util', 
-            'distutils.tests.test_dist', 
-            'distutils.tests.test_extension', 
-            'distutils.tests.test_filelist', 
-            'distutils.tests.test_file_util', 
-            'distutils.tests.test_install', 
-            'distutils.tests.test_install_data', 
-            'distutils.tests.test_install_headers', 
-            'distutils.tests.test_install_lib', 
-            'distutils.tests.test_install_scripts', 
-            'distutils.tests.test_log', 
-            'distutils.tests.test_msvc9compiler', 
-            'distutils.tests.test_msvccompiler', 
-            'distutils.tests.test_register', 
-            'distutils.tests.test_sdist', 
-            'distutils.tests.test_spawn', 
-            'distutils.tests.test_sysconfig', 
-            'distutils.tests.test_text_file', 
-            'distutils.tests.test_unixccompiler', 
-            'distutils.tests.test_upload', 
-            'distutils.tests.test_util', 
-            'distutils.tests.test_version', 
-            'distutils.tests.test_versionpredicate', 
-            'distutils.text_file', 'distutils.unixccompiler', 
-            'distutils.util', 'distutils.version', 
-            'distutils.versionpredicate', 'doctest', '_dummy_thread', 
-            'dummy_threading', '_elementtree', 'email', 
-            'email.base64mime', 'email.charset', 
-            'email.contentmanager', 'email._encoded_words', 
-            'email.encoders', 'email.errors', 'email.feedparser', 
-            'email.generator', 'email.header', 'email.headerregistry', 
-            'email._header_value_parser', 'email.iterators', 
-            'email.message', 'email.mime', 'email.mime.application', 
-            'email.mime.audio', 'email.mime.base', 'email.mime.image', 
-            'email.mime.message', 'email.mime.multipart', 
-            'email.mime.nonmultipart', 'email.mime.text', 
-            'email._parseaddr', 'email.parser', 'email.policy', 
-            'email._policybase', 'email.quoprimime', 'email.utils', 
-            'encodings', 'encodings.aliases', 'encodings.ascii', 
-            'encodings.base64_codec', 'encodings.big5', 
-            'encodings.big5hkscs', 'encodings.bz2_codec', 
-            'encodings.charmap', 'encodings.cp037', 
-            'encodings.cp1006', 'encodings.cp1026', 
-            'encodings.cp1125', 'encodings.cp1140', 
-            'encodings.cp1250', 'encodings.cp1251', 
-            'encodings.cp1252', 'encodings.cp1253', 
-            'encodings.cp1254', 'encodings.cp1255', 
-            'encodings.cp1256', 'encodings.cp1257', 
-            'encodings.cp1258', 'encodings.cp273', 'encodings.cp424', 
-            'encodings.cp437', 'encodings.cp500', 'encodings.cp720', 
-            'encodings.cp737', 'encodings.cp775', 'encodings.cp850', 
-            'encodings.cp852', 'encodings.cp855', 'encodings.cp856', 
-            'encodings.cp857', 'encodings.cp858', 'encodings.cp860', 
-            'encodings.cp861', 'encodings.cp862', 'encodings.cp863', 
-            'encodings.cp864', 'encodings.cp865', 'encodings.cp866', 
-            'encodings.cp869', 'encodings.cp874', 'encodings.cp875', 
-            'encodings.cp932', 'encodings.cp949', 'encodings.cp950', 
-            'encodings.euc_jis_2004', 'encodings.euc_jisx0213', 
-            'encodings.euc_jp', 'encodings.euc_kr', 
-            'encodings.gb18030', 'encodings.gb2312', 'encodings.gbk', 
-            'encodings.hex_codec', 'encodings.hp_roman8', 
-            'encodings.hz', 'encodings.idna', 'encodings.iso2022_jp', 
-            'encodings.iso2022_jp_1', 'encodings.iso2022_jp_2', 
-            'encodings.iso2022_jp_2004', 'encodings.iso2022_jp_3', 
-            'encodings.iso2022_jp_ext', 'encodings.iso2022_kr', 
-            'encodings.iso8859_1', 'encodings.iso8859_10', 
-            'encodings.iso8859_11', 'encodings.iso8859_13', 
-            'encodings.iso8859_14', 'encodings.iso8859_15', 
-            'encodings.iso8859_16', 'encodings.iso8859_2', 
-            'encodings.iso8859_3', 'encodings.iso8859_4', 
-            'encodings.iso8859_5', 'encodings.iso8859_6', 
-            'encodings.iso8859_7', 'encodings.iso8859_8', 
-            'encodings.iso8859_9', 'encodings.johab', 
-            'encodings.koi8_r', 'encodings.koi8_t', 
-            'encodings.koi8_u', 'encodings.kz1048', 
-            'encodings.latin_1', 'encodings.mac_arabic', 
-            'encodings.mac_centeuro', 'encodings.mac_croatian', 
-            'encodings.mac_cyrillic', 'encodings.mac_farsi', 
-            'encodings.mac_greek', 'encodings.mac_iceland', 
-            'encodings.mac_latin2', 'encodings.mac_roman', 
-            'encodings.mac_romanian', 'encodings.mac_turkish', 
-            'encodings.mbcs', 'encodings.oem', 'encodings.palmos', 
-            'encodings.ptcp154', 'encodings.punycode', 
-            'encodings.quopri_codec', 'encodings.raw_unicode_escape', 
-            'encodings.rot_13', 'encodings.shift_jis', 
-            'encodings.shift_jis_2004', 'encodings.shift_jisx0213', 
-            'encodings.tis_620', 'encodings.undefined', 
-            'encodings.unicode_escape', 'encodings.utf_16', 
-            'encodings.utf_16_be', 'encodings.utf_16_le', 
-            'encodings.utf_32', 'encodings.utf_32_be', 
-            'encodings.utf_32_le', 'encodings.utf_7', 
-            'encodings.utf_8', 'encodings.utf_8_sig', 
-            'encodings.uu_codec', 'encodings.zlib_codec', 'ensurepip', 
-            'ensurepip._bundled', 'ensurepip.__main__', 
-            'ensurepip._uninstall', 'enum', 'errno', 'faulthandler', 
-            'fcntl', 'filecmp', 'fileinput', 'fnmatch', 'formatter', 
-            'fractions', '_frozen_importlib', 
-            '_frozen_importlib_external', 'ftplib', '_functools', 
-            'functools', '__future__', 'gc', '_gdbm', 'genericpath', 
-            'getopt', 'getpass', 'gettext', 'glob', 'graphlib', 'grp', 
-            'gzip', '_hashlib', 'hashlib', '_heapq', 'heapq', 'hmac', 
-            'html', 'html.entities', 'html.parser', 'http', 
-            'http.client', 'http.cookiejar', 'http.cookies', 
-            'http.server', 'idlelib', 'idlelib.autocomplete', 
-            'idlelib.autocomplete_w', 'idlelib.autoexpand', 
-            'idlelib.browser', 'idlelib.calltip', 'idlelib.calltip_w', 
-            'idlelib.codecontext', 'idlelib.colorizer', 
-            'idlelib.config', 'idlelib.configdialog', 
-            'idlelib.config_key', 'idlelib.debugger', 
-            'idlelib.debugger_r', 'idlelib.debugobj', 
-            'idlelib.debugobj_r', 'idlelib.delegator', 
-            'idlelib.dynoption', 'idlelib.editor', 'idlelib.filelist', 
-            'idlelib.format', 'idlelib.grep', 'idlelib.help', 
-            'idlelib.help_about', 'idlelib.history', 
-            'idlelib.hyperparser', 'idlelib.idle', 
-            'idlelib.idle_test', 'idlelib.idle_test.htest', 
-            'idlelib.idle_test.mock_idle', 
-            'idlelib.idle_test.mock_tk', 'idlelib.idle_test.template', 
-            'idlelib.idle_test.test_autocomplete', 
-            'idlelib.idle_test.test_autocomplete_w', 
-            'idlelib.idle_test.test_autoexpand', 
-            'idlelib.idle_test.test_browser', 
-            'idlelib.idle_test.test_calltip', 
-            'idlelib.idle_test.test_calltip_w', 
-            'idlelib.idle_test.test_codecontext', 
-            'idlelib.idle_test.test_colorizer', 
-            'idlelib.idle_test.test_config', 
-            'idlelib.idle_test.test_configdialog', 
-            'idlelib.idle_test.test_config_key', 
-            'idlelib.idle_test.test_debugger', 
-            'idlelib.idle_test.test_debugger_r', 
-            'idlelib.idle_test.test_debugobj', 
-            'idlelib.idle_test.test_debugobj_r', 
-            'idlelib.idle_test.test_delegator', 
-            'idlelib.idle_test.test_editmenu', 
-            'idlelib.idle_test.test_editor', 
-            'idlelib.idle_test.test_filelist', 
-            'idlelib.idle_test.test_format', 
-            'idlelib.idle_test.test_grep', 
-            'idlelib.idle_test.test_help', 
-            'idlelib.idle_test.test_help_about', 
-            'idlelib.idle_test.test_history', 
-            'idlelib.idle_test.test_hyperparser', 
-            'idlelib.idle_test.test_iomenu', 
-            'idlelib.idle_test.test_macosx', 
-            'idlelib.idle_test.test_mainmenu', 
-            'idlelib.idle_test.test_multicall', 
-            'idlelib.idle_test.test_outwin', 
-            'idlelib.idle_test.test_parenmatch', 
-            'idlelib.idle_test.test_pathbrowser', 
-            'idlelib.idle_test.test_percolator', 
-            'idlelib.idle_test.test_pyparse', 
-            'idlelib.idle_test.test_pyshell', 
-            'idlelib.idle_test.test_query', 
-            'idlelib.idle_test.test_redirector', 
-            'idlelib.idle_test.test_replace', 
-            'idlelib.idle_test.test_rpc', 
-            'idlelib.idle_test.test_run', 
-            'idlelib.idle_test.test_runscript', 
-            'idlelib.idle_test.test_scrolledlist', 
-            'idlelib.idle_test.test_search', 
-            'idlelib.idle_test.test_searchbase', 
-            'idlelib.idle_test.test_searchengine', 
-            'idlelib.idle_test.test_sidebar', 
-            'idlelib.idle_test.test_squeezer', 
-            'idlelib.idle_test.test_stackviewer', 
-            'idlelib.idle_test.test_statusbar', 
-            'idlelib.idle_test.test_text', 
-            'idlelib.idle_test.test_textview', 
-            'idlelib.idle_test.test_tooltip', 
-            'idlelib.idle_test.test_tree', 
-            'idlelib.idle_test.test_undo', 
-            'idlelib.idle_test.test_warning', 
-            'idlelib.idle_test.test_window', 
-            'idlelib.idle_test.test_zoomheight', 'idlelib.iomenu', 
-            'idlelib.macosx', 'idlelib.__main__', 'idlelib.mainmenu', 
-            'idlelib.multicall', 'idlelib.outwin', 
-            'idlelib.parenmatch', 'idlelib.pathbrowser', 
-            'idlelib.percolator', 'idlelib.pyparse', 
-            'idlelib.pyshell', 'idlelib.query', 'idlelib.redirector', 
-            'idlelib.replace', 'idlelib.rpc', 'idlelib.run', 
-            'idlelib.runscript', 'idlelib.scrolledlist', 
-            'idlelib.search', 'idlelib.searchbase', 
-            'idlelib.searchengine', 'idlelib.sidebar', 
-            'idlelib.squeezer', 'idlelib.stackviewer', 
-            'idlelib.statusbar', 'idlelib.textview', 
-            'idlelib.tooltip', 'idlelib.tree', 'idlelib.undo', 
-            'idlelib.window', 'idlelib.zoomheight', 'idlelib.zzdummy', 
-            'imaplib', 'imghdr', '_imp', 'imp', 'importlib', 
-            'importlib.abc', 'importlib._bootstrap', 
-            'importlib._bootstrap_external', 'importlib._common', 
-            'importlib.machinery', 'importlib.metadata', 
-            'importlib.resources', 'importlib.util', 'inspect', '_io', 
-            'io', 'ipaddress', 'itertools', '_json', 'json', 
-            'json.decoder', 'json.encoder', 'json.scanner', 
-            'json.tool', 'keyword', 'lib2to3', 'lib2to3.btm_matcher', 
-            'lib2to3.btm_utils', 'lib2to3.fixer_base', 
-            'lib2to3.fixer_util', 'lib2to3.fixes', 
-            'lib2to3.fixes.fix_apply', 'lib2to3.fixes.fix_asserts', 
-            'lib2to3.fixes.fix_basestring', 
-            'lib2to3.fixes.fix_buffer', 'lib2to3.fixes.fix_dict', 
-            'lib2to3.fixes.fix_except', 'lib2to3.fixes.fix_exec', 
-            'lib2to3.fixes.fix_execfile', 
-            'lib2to3.fixes.fix_exitfunc', 'lib2to3.fixes.fix_filter', 
-            'lib2to3.fixes.fix_funcattrs', 'lib2to3.fixes.fix_future', 
-            'lib2to3.fixes.fix_getcwdu', 'lib2to3.fixes.fix_has_key', 
-            'lib2to3.fixes.fix_idioms', 'lib2to3.fixes.fix_import', 
-            'lib2to3.fixes.fix_imports', 'lib2to3.fixes.fix_imports2', 
-            'lib2to3.fixes.fix_input', 'lib2to3.fixes.fix_intern', 
-            'lib2to3.fixes.fix_isinstance', 
-            'lib2to3.fixes.fix_itertools', 
-            'lib2to3.fixes.fix_itertools_imports', 
-            'lib2to3.fixes.fix_long', 'lib2to3.fixes.fix_map', 
-            'lib2to3.fixes.fix_metaclass', 
-            'lib2to3.fixes.fix_methodattrs', 'lib2to3.fixes.fix_ne', 
-            'lib2to3.fixes.fix_next', 'lib2to3.fixes.fix_nonzero', 
-            'lib2to3.fixes.fix_numliterals', 
-            'lib2to3.fixes.fix_operator', 'lib2to3.fixes.fix_paren', 
-            'lib2to3.fixes.fix_print', 'lib2to3.fixes.fix_raise', 
-            'lib2to3.fixes.fix_raw_input', 'lib2to3.fixes.fix_reduce', 
-            'lib2to3.fixes.fix_reload', 'lib2to3.fixes.fix_renames', 
-            'lib2to3.fixes.fix_repr', 'lib2to3.fixes.fix_set_literal', 
-            'lib2to3.fixes.fix_standarderror', 
-            'lib2to3.fixes.fix_sys_exc', 'lib2to3.fixes.fix_throw', 
-            'lib2to3.fixes.fix_tuple_params', 
-            'lib2to3.fixes.fix_types', 'lib2to3.fixes.fix_unicode', 
-            'lib2to3.fixes.fix_urllib', 'lib2to3.fixes.fix_ws_comma', 
-            'lib2to3.fixes.fix_xrange', 
-            'lib2to3.fixes.fix_xreadlines', 'lib2to3.fixes.fix_zip', 
-            'lib2to3.main', 'lib2to3.__main__', 'lib2to3.patcomp', 
-            'lib2to3.pgen2', 'lib2to3.pgen2.conv', 
-            'lib2to3.pgen2.driver', 'lib2to3.pgen2.grammar', 
-            'lib2to3.pgen2.literals', 'lib2to3.pgen2.parse', 
-            'lib2to3.pgen2.pgen', 'lib2to3.pgen2.token', 
-            'lib2to3.pgen2.tokenize', 'lib2to3.pygram', 
-            'lib2to3.pytree', 'lib2to3.refactor', 'lib2to3.tests', 
-            'lib2to3.tests.data.bom', 'lib2to3.tests.data.crlf', 
-            'lib2to3.tests.data.different_encoding', 
-            'lib2to3.tests.data.false_encoding', 
-            'lib2to3.tests.data.fixers.bad_order', 
-            'lib2to3.tests.data.fixers.myfixes', 
-            'lib2to3.tests.data.fixers.myfixes.fix_explicit', 
-            'lib2to3.tests.data.fixers.myfixes.fix_first', 
-            'lib2to3.tests.data.fixers.myfixes.fix_last', 
-            'lib2to3.tests.data.fixers.myfixes.fix_parrot', 
-            'lib2to3.tests.data.fixers.myfixes.fix_preorder', 
-            'lib2to3.tests.data.fixers.no_fixer_cls', 
-            'lib2to3.tests.data.fixers.parrot_example', 
-            'lib2to3.tests.data.infinite_recursion', 
-            'lib2to3.tests.data.py2_test_grammar', 
-            'lib2to3.tests.data.py3_test_grammar', 
-            'lib2to3.tests.__main__', 
-            'lib2to3.tests.pytree_idempotency', 
-            'lib2to3.tests.support', 'lib2to3.tests.test_all_fixers', 
-            'lib2to3.tests.test_fixers', 'lib2to3.tests.test_main', 
-            'lib2to3.tests.test_parser', 'lib2to3.tests.test_pytree', 
-            'lib2to3.tests.test_refactor', 'lib2to3.tests.test_util', 
-            'lib.libpython3', 'linecache', '_locale', 'locale', 
-            'logging', 'logging.config', 'logging.handlers', 
-            '_lsprof', '_lzma', 'lzma', 'mailbox', 'mailcap', 
-            '__main__', '_markupbase', 'marshal', 'math', '_md5', 
-            'mimetypes', 'mmap', 'modulefinder', 'msilib', 'msvcrt', 
-            '_multibytecodec', '_multiprocessing', 'multiprocessing', 
-            'multiprocessing.connection', 'multiprocessing.context', 
-            'multiprocessing.dummy', 
-            'multiprocessing.dummy.connection', 
-            'multiprocessing.forkserver', 'multiprocessing.heap', 
-            'multiprocessing.managers', 'multiprocessing.pool', 
-            'multiprocessing.popen_fork', 
-            'multiprocessing.popen_forkserver', 
-            'multiprocessing.popen_spawn_posix', 
-            'multiprocessing.popen_spawn_win32', 
-            'multiprocessing.process', 'multiprocessing.queues', 
-            'multiprocessing.reduction', 
-            'multiprocessing.resource_sharer', 
-            'multiprocessing.resource_tracker', 
-            'multiprocessing.sharedctypes', 
-            'multiprocessing.shared_memory', 'multiprocessing.spawn', 
-            'multiprocessing.synchronize', 'multiprocessing.util', 
-            'netrc', 'nis', 'nntplib', 'ntpath', 'nturl2path', 
-            'numbers', '_opcode', 'opcode', '_operator', 'operator', 
-            'optparse', 'os', 'os.path', 'ossaudiodev', 
-            '_osx_support', 'parser', 'pathlib', 'pdb', 
-            '__phello__.foo', '_pickle', 'pickle', 'pickletools', 
-            'pipes', 'pkgutil', 'platform', 'plistlib', 'poplib', 
-            'posix', 'posixpath', '_posixshmem', '_posixsubprocess', 
-            'pprint', 'profile', 'pstats', 'pty', 'pwd', '_py_abc', 
-            'pyclbr', 'py_compile', '_pydecimal', 'pydoc', 
-            'pydoc_data', 'pydoc_data.topics', 'pyexpat', '_pyio', 
-            '_queue', 'queue', 'quopri', '_random', 'random', 're', 
-            'readline', 'reprlib', 'resource', 'rlcompleter', 'runpy', 
-            'sched', 'secrets', 'select', 'selectors', '_sha1', 
-            '_sha256', '_sha3', '_sha512', 'shelve', 'shlex', 
-            'shutil', '_signal', 'signal', 'site', '_sitebuiltins', 
-            'smtpd', 'smtplib', 'sndhdr', '_socket', 'socket', 
-            'socketserver', 'spwd', '_sqlite3', 'sqlite3', 
-            'sqlite3.dbapi2', 'sqlite3.dump', 'sqlite3.test', 
-            'sqlite3.test.backup', 'sqlite3.test.dbapi', 
-            'sqlite3.test.dump', 'sqlite3.test.factory', 
-            'sqlite3.test.hooks', 'sqlite3.test.regression', 
-            'sqlite3.test.transactions', 'sqlite3.test.types', 
-            'sqlite3.test.userfunctions', '_sre', 'sre_compile', 
-            'sre_constants', 'sre_parse', '_ssl', 'ssl', '_stat', 
-            'stat', '_statistics', 'statistics', '_string', 'string', 
-            'stringprep', '_strptime', '_struct', 'struct', 
-            'subprocess', 'sunau', 'symbol', '_symtable', 'symtable', 
-            'sys', 'sysconfig', 
-            '_sysconfigdata_x86_64_conda_cos6_linux_gnu', 
-            '_sysconfigdata_x86_64_conda_linux_gnu', 'syslog', 
-            'tabnanny', 'tarfile', 'telnetlib', 'tempfile', 'termios', 
-            'test', 'test.ann_module', 'test.ann_module2', 
-            'test.ann_module3', 'test.audiotests', 'test.autotest', 
-            'test.bad_coding', 'test.bad_coding2', 'test.bad_getattr', 
-            'test.bad_getattr2', 'test.bad_getattr3', 
-            'test.badsyntax_3131', 'test.badsyntax_future10', 
-            'test.badsyntax_future3', 'test.badsyntax_future4', 
-            'test.badsyntax_future5', 'test.badsyntax_future6', 
-            'test.badsyntax_future7', 'test.badsyntax_future8', 
-            'test.badsyntax_future9', 'test.badsyntax_pep3120', 
-            'test.bisect_cmd', '_testbuffer', 'test.bytecode_helper', 
-            '_testcapi', 'test.coding20731', 'test.curses_tests', 
-            'test.dataclass_module_1', 'test.dataclass_module_1_str', 
-            'test.dataclass_module_2', 'test.dataclass_module_2_str', 
-            'test.datetimetester', 'test.dis_module', 
-            'test.doctest_aliases', 'test.double_const', 
-            'test.dtracedata.call_stack', 'test.dtracedata.gc', 
-            'test.dtracedata.instance', 'test.dtracedata.line', 
-            'test.eintrdata.eintr_tester', 'test.encoded_modules', 
-            'test.encoded_modules.module_iso_8859_1', 
-            'test.encoded_modules.module_koi8_r', 'test.final_a', 
-            'test.final_b', 'test.fork_wait', 'test.future_test1', 
-            'test.future_test2', 'test.gdb_sample', 
-            'test.good_getattr', 'test.imp_dummy', 
-            '_testimportmultiple', 'test.inspect_fodder', 
-            'test.inspect_fodder2', '_testinternalcapi', 
-            'test.libregrtest', 'test.libregrtest.cmdline', 
-            'test.libregrtest.main', 'test.libregrtest.pgo', 
-            'test.libregrtest.refleak', 'test.libregrtest.runtest', 
-            'test.libregrtest.runtest_mp', 
-            'test.libregrtest.save_env', 'test.libregrtest.setup', 
-            'test.libregrtest.utils', 'test.libregrtest.win_utils', 
-            'test.list_tests', 'test.lock_tests', 'test.__main__', 
-            'test.make_ssl_certs', 'test.mapping_tests', 
-            'test.memory_watchdog', 'test.mock_socket', 
-            'test.mod_generics_cache', 'test.mp_fork_bomb', 
-            'test.mp_preload', 'test.multibytecodec_support', 
-            '_testmultiphase', 'test.outstanding_bugs', 
-            'test.pickletester', 'test.profilee', 'test.pyclbr_input', 
-            'test.pydocfodder', 'test.pydoc_mod', 'test.pythoninfo', 
-            'test.regrtest', 'test.relimport', 'test.reperf', 
-            'test.re_tests', 'test.sample_doctest', 
-            'test.sample_doctest_no_docstrings', 
-            'test.sample_doctest_no_doctests', 'test.seq_tests', 
-            'test.signalinterproctester', 'test.sortperf', 
-            'test.ssl_servers', 'test.ssltests', 'test.string_tests', 
-            'test.subprocessdata.fd_status', 
-            'test.subprocessdata.input_reader', 
-            'test.subprocessdata.qcat', 'test.subprocessdata.qgrep', 
-            'test.subprocessdata.sigchild_ignore', 'test.support', 
-            'test.support.bytecode_helper', 
-            'test.support.hashlib_helper', 
-            'test.support.logging_helper', 
-            'test.support.script_helper', 
-            'test.support.socket_helper', 'test.support.testresult', 
-            'test.test_abc', 'test.test_abstract_numbers', 
-            'test.test_aifc', 'test.test___all__', 
-            'test.test_argparse', 'test.test_array', 
-            'test.test_asdl_parser', 'test.test_ast', 
-            'test.test_asyncgen', 'test.test_asynchat', 
-            'test.test_asyncio', 'test.test_asyncio.echo', 
-            'test.test_asyncio.echo2', 'test.test_asyncio.echo3', 
-            'test.test_asyncio.functional', 
-            'test.test_asyncio.__main__', 
-            'test.test_asyncio.test_base_events', 
-            'test.test_asyncio.test_buffered_proto', 
-            'test.test_asyncio.test_context', 
-            'test.test_asyncio.test_events', 
-            'test.test_asyncio.test_futures', 
-            'test.test_asyncio.test_locks', 
-            'test.test_asyncio.test_pep492', 
-            'test.test_asyncio.test_proactor_events', 
-            'test.test_asyncio.test_protocols', 
-            'test.test_asyncio.test_queues', 
-            'test.test_asyncio.test_runners', 
-            'test.test_asyncio.test_selector_events', 
-            'test.test_asyncio.test_sendfile', 
-            'test.test_asyncio.test_server', 
-            'test.test_asyncio.test_sock_lowlevel', 
-            'test.test_asyncio.test_sslproto', 
-            'test.test_asyncio.test_streams', 
-            'test.test_asyncio.test_subprocess', 
-            'test.test_asyncio.test_tasks', 
-            'test.test_asyncio.test_transports', 
-            'test.test_asyncio.test_unix_events', 
-            'test.test_asyncio.test_windows_events', 
-            'test.test_asyncio.test_windows_utils', 
-            'test.test_asyncio.utils', 'test.test_asyncore', 
-            'test.test_atexit', 'test.test_audioop', 
-            'test.test_audit', 'test.test_augassign', 
-            'test.test_base64', 'test.test_baseexception', 
-            'test.test_bdb', 'test.test_bigaddrspace', 
-            'test.test_bigmem', 'test.test_binascii', 
-            'test.test_binhex', 'test.test_binop', 'test.test_bisect', 
-            'test.test_bool', 'test.test_buffer', 'test.test_bufio', 
-            'test.test_builtin', 'test.test_bytes', 'test.test_bz2', 
-            'test.test_calendar', 'test.test_call', 'test.test_capi', 
-            'test.test_cgi', 'test.test_cgitb', 
-            'test.test_charmapcodec', 'test.test_class', 
-            'test.test_clinic', 'test.test_c_locale_coercion', 
-            'test.test_cmath', 'test.test_cmd', 'test.test_cmd_line', 
-            'test.test_cmd_line_script', 'test.test_code', 
-            'test.testcodec', 'test.test_codeccallbacks', 
-            'test.test_codecencodings_cn', 
-            'test.test_codecencodings_hk', 
-            'test.test_codecencodings_iso2022', 
-            'test.test_codecencodings_jp', 
-            'test.test_codecencodings_kr', 
-            'test.test_codecencodings_tw', 'test.test_codecmaps_cn', 
-            'test.test_codecmaps_hk', 'test.test_codecmaps_jp', 
-            'test.test_codecmaps_kr', 'test.test_codecmaps_tw', 
-            'test.test_codecs', 'test.test_code_module', 
-            'test.test_codeop', 'test.test_collections', 
-            'test.test_colorsys', 'test.test_compare', 
-            'test.test_compile', 'test.test_compileall', 
-            'test.test_complex', 'test.test_concurrent_futures', 
-            'test.test_configparser', 'test.test_contains', 
-            'test.test_context', 'test.test_contextlib', 
-            'test.test_contextlib_async', 'test.test_copy', 
-            'test.test_copyreg', 'test.test_coroutines', 
-            'test.test_cprofile', 'test.test_crashers', 
-            'test.test_crypt', 'test.test_csv', 'test.test_ctypes', 
-            'test.test_curses', 'test.test_dataclasses', 
-            'test.test_datetime', 'test.test_dbm', 
-            'test.test_dbm_dumb', 'test.test_dbm_gnu', 
-            'test.test_dbm_ndbm', 'test.test_decimal', 
-            'test.test_decorators', 'test.test_defaultdict', 
-            'test.test_deque', 'test.test_descr', 
-            'test.test_descrtut', 'test.test_devpoll', 
-            'test.test_dict', 'test.test_dictcomps', 
-            'test.test_dict_version', 'test.test_dictviews', 
-            'test.test_difflib', 'test.test_dis', 
-            'test.test_distutils', 'test.test_doctest', 
-            'test.test_doctest2', 'test.test_docxmlrpc', 
-            'test.test_dtrace', 'test.test_dummy_thread', 
-            'test.test_dummy_threading', 'test.test_dynamic', 
-            'test.test_dynamicclassattribute', 'test.test_eintr', 
-            'test.test_email', 'test.test_email.__main__', 
-            'test.test_email.test_asian_codecs', 
-            'test.test_email.test_contentmanager', 
-            'test.test_email.test_defect_handling', 
-            'test.test_email.test_email', 
-            'test.test_email.test__encoded_words', 
-            'test.test_email.test_generator', 
-            'test.test_email.test_headerregistry', 
-            'test.test_email.test__header_value_parser', 
-            'test.test_email.test_inversion', 
-            'test.test_email.test_message', 
-            'test.test_email.test_parser', 
-            'test.test_email.test_pickleable', 
-            'test.test_email.test_policy', 
-            'test.test_email.test_utils', 
-            'test.test_email.torture_test', 'test.test_embed', 
-            'test.test_ensurepip', 'test.test_enum', 
-            'test.test_enumerate', 'test.test_eof', 'test.test_epoll', 
-            'test.test_errno', 'test.test_exception_hierarchy', 
-            'test.test_exceptions', 'test.test_exception_variations', 
-            'test.test_extcall', 'test.test_faulthandler', 
-            'test.test_fcntl', 'test.test_file', 'test.test_filecmp', 
-            'test.test_file_eintr', 'test.test_fileinput', 
-            'test.test_fileio', 'test.test_finalization', 
-            'test.test_float', 'test.test_flufl', 'test.test_fnmatch', 
-            'test.test_fork1', 'test.test_format', 
-            'test.test_fractions', 'test.test_frame', 
-            'test.test_frozen', 'test.test_fstring', 
-            'test.test_ftplib', 'test.test_funcattrs', 
-            'test.test_functools', 'test.test___future__', 
-            'test.test_future', 'test.test_future3', 
-            'test.test_future4', 'test.test_future5', 'test.test_gc', 
-            'test.test_gdb', 'test.test_generators', 
-            'test.test_generator_stop', 'test.test_genericclass', 
-            'test.test_genericpath', 'test.test_genexps', 
-            'test.test_getargs2', 'test.test_getopt', 
-            'test.test_getpass', 'test.test_gettext', 
-            'test.test_glob', 'test.test_global', 'test.test_grammar', 
-            'test.test_grp', 'test.test_gzip', 'test.test_hash', 
-            'test.test_hashlib', 'test.test_heapq', 'test.test_hmac', 
-            'test.test_html', 'test.test_htmlparser', 
-            'test.test_http_cookiejar', 'test.test_http_cookies', 
-            'test.test_httplib', 'test.test_httpservers', 
-            'test.test_idle', 'test.test_imaplib', 'test.test_imghdr', 
-            'test.test_imp', 'test.test_import', 
-            'test.test_import.data.circular_imports.basic', 
-            'test.test_import.data.circular_imports.basic2', 
-            'test.test_import.data.circular_imports.binding', 
-            'test.test_import.data.circular_imports.binding2', 
-            'test.test_import.data.circular_imports.from_cycle1', 
-            'test.test_import.data.circular_imports.from_cycle2', 
-            'test.test_import.data.circular_imports.indirect', 
-            'test.test_import.data.circular_imports.rebinding', 
-            'test.test_import.data.circular_imports.rebinding2', 
-            'test.test_import.data.circular_imports.source', 
-            'test.test_import.data.circular_imports.subpackage', 
-            'test.test_import.data.circular_imports.subpkg.subpackage2', 
-            'test.test_import.data.circular_imports.subpkg.util', 
-            'test.test_import.data.circular_imports.use', 
-            'test.test_import.data.circular_imports.util', 
-            'test.test_import.data.package', 
-            'test.test_import.data.package2.submodule1', 
-            'test.test_import.data.package2.submodule2', 
-            'test.test_import.data.package.submodule', 
-            'test.test_importlib', 'test.test_importlib.abc', 
-            'test.test_importlib.builtin', 
-            'test.test_importlib.builtin.__main__', 
-            'test.test_importlib.builtin.test_finder', 
-            'test.test_importlib.builtin.test_loader', 
-            'test.test_importlib.data', 'test.test_importlib.data01', 
-            'test.test_importlib.data01.subdirectory', 
-            'test.test_importlib.data02', 
-            'test.test_importlib.data02.one', 
-            'test.test_importlib.data02.two', 
-            'test.test_importlib.data03', 
-            'test.test_importlib.data03.namespace.portion1', 
-            'test.test_importlib.data03.namespace.portion2', 
-            'test.test_importlib.extension', 
-            'test.test_importlib.extension.__main__', 
-            'test.test_importlib.extension.test_case_sensitivity', 
-            'test.test_importlib.extension.test_finder', 
-            'test.test_importlib.extension.test_loader', 
-            'test.test_importlib.extension.test_path_hook', 
-            'test.test_importlib.fixtures', 
-            'test.test_importlib.frozen', 
-            'test.test_importlib.frozen.__main__', 
-            'test.test_importlib.frozen.test_finder', 
-            'test.test_importlib.frozen.test_loader', 
-            'test.test_importlib.import_', 
-            'test.test_importlib.import_.__main__', 
-            'test.test_importlib.import_.test_api', 
-            'test.test_importlib.import_.test_caching', 
-            'test.test_importlib.import_.test_fromlist', 
-            'test.test_importlib.import_.test___loader__', 
-            'test.test_importlib.import_.test_meta_path', 
-            'test.test_importlib.import_.test___package__', 
-            'test.test_importlib.import_.test_packages', 
-            'test.test_importlib.import_.test_path', 
-            'test.test_importlib.import_.test_relative_imports', 
-            'test.test_importlib.__main__', 
-            'test.test_importlib.namespace_pkgs.both_portions.foo.one', 
-            'test.test_importlib.namespace_pkgs.both_portions.foo.two', 
-            'test.test_importlib.namespace_pkgs.module_and_namespace_package.a_test', 
-            'test.test_importlib.namespace_pkgs.not_a_namespace_pkg.foo', 
-            'test.test_importlib.namespace_pkgs.not_a_namespace_pkg.foo.one', 
-            'test.test_importlib.namespace_pkgs.portion1.foo.one', 
-            'test.test_importlib.namespace_pkgs.portion2.foo.two', 
-            'test.test_importlib.namespace_pkgs.project1.parent.child.one', 
-            'test.test_importlib.namespace_pkgs.project2.parent.child.two', 
-            'test.test_importlib.namespace_pkgs.project3.parent.child.three', 
-            'test.test_importlib.source', 
-            'test.test_importlib.source.__main__', 
-            'test.test_importlib.source.test_case_sensitivity', 
-            'test.test_importlib.source.test_file_loader', 
-            'test.test_importlib.source.test_finder', 
-            'test.test_importlib.source.test_path_hook', 
-            'test.test_importlib.source.test_source_encoding', 
-            'test.test_importlib.test_abc', 
-            'test.test_importlib.test_api', 
-            'test.test_importlib.test_lazy', 
-            'test.test_importlib.test_locks', 
-            'test.test_importlib.test_main', 
-            'test.test_importlib.test_metadata_api', 
-            'test.test_importlib.test_namespace_pkgs', 
-            'test.test_importlib.test_open', 
-            'test.test_importlib.test_path', 
-            'test.test_importlib.test_read', 
-            'test.test_importlib.test_resource', 
-            'test.test_importlib.test_spec', 
-            'test.test_importlib.test_util', 
-            'test.test_importlib.test_windows', 
-            'test.test_importlib.test_zip', 
-            'test.test_importlib.util', 
-            'test.test_importlib.zipdata01', 
-            'test.test_importlib.zipdata02', 
-            'test.test_import.__main__', 'test.test_index', 
-            'test.test_inspect', 'test.test_int', 
-            'test.test_int_literal', 'test.test_io', 
-            'test.test_ioctl', 'test.test_ipaddress', 
-            'test.test_isinstance', 'test.test_iter', 
-            'test.test_iterlen', 'test.test_itertools', 
-            'test.test_json', 'test.test_json.__main__', 
-            'test.test_json.test_decode', 
-            'test.test_json.test_default', 'test.test_json.test_dump', 
-            'test.test_json.test_encode_basestring_ascii', 
-            'test.test_json.test_enum', 'test.test_json.test_fail', 
-            'test.test_json.test_float', 'test.test_json.test_indent', 
-            'test.test_json.test_pass1', 'test.test_json.test_pass2', 
-            'test.test_json.test_pass3', 
-            'test.test_json.test_recursion', 
-            'test.test_json.test_scanstring', 
-            'test.test_json.test_separators', 
-            'test.test_json.test_speedups', 
-            'test.test_json.test_tool', 'test.test_json.test_unicode', 
-            'test.test_keyword', 'test.test_keywordonlyarg', 
-            'test.test_kqueue', 'test.test_largefile', 
-            'test.test_lib2to3', 'test.test_linecache', 
-            'test.test_list', 'test.test_listcomps', 
-            'test.test_lltrace', 'test.test__locale', 
-            'test.test_locale', 'test.test_logging', 'test.test_long', 
-            'test.test_longexp', 'test.test_lzma', 
-            'test.test_mailbox', 'test.test_mailcap', 
-            'test.test_marshal', 'test.test_math', 
-            'test.test_memoryio', 'test.test_memoryview', 
-            'test.test_metaclass', 'test.test_mimetypes', 
-            'test.test_minidom', 'test.test_mmap', 'test.test_module', 
-            'test.test_modulefinder', 'test.test_msilib', 
-            'test.test_multibytecodec', 'test._test_multiprocessing', 
-            'test.test_multiprocessing_fork', 
-            'test.test_multiprocessing_forkserver', 
-            'test.test_multiprocessing_main_handling', 
-            'test.test_multiprocessing_spawn', 
-            'test.test_named_expressions', 'test.test_netrc', 
-            'test.test_nis', 'test.test_nntplib', 
-            'test.test_normalization', 'test.test_ntpath', 
-            'test.test_numeric_tower', 'test.test__opcode', 
-            'test.test_opcodes', 'test.test_openpty', 
-            'test.test_operator', 'test.test_optparse', 
-            'test.test_ordered_dict', 'test.test_os', 
-            'test.test_ossaudiodev', 'test.test_osx_env', 
-            'test.test__osx_support', 'test.test_parser', 
-            'test.test_pathlib', 'test.test_pdb', 
-            'test.test_peepholer', 'test.test_pickle', 
-            'test.test_picklebuffer', 'test.test_pickletools', 
-            'test.test_pipes', 'test.test_pkg', 'test.test_pkgimport', 
-            'test.test_pkgutil', 'test.test_platform', 
-            'test.test_plistlib', 'test.test_poll', 'test.test_popen', 
-            'test.test_poplib', 'test.test_positional_only_arg', 
-            'test.test_posix', 'test.test_posixpath', 'test.test_pow', 
-            'test.test_pprint', 'test.test_print', 
-            'test.test_profile', 'test.test_property', 
-            'test.test_pstats', 'test.test_pty', 'test.test_pulldom', 
-            'test.test_pwd', 'test.test_pyclbr', 
-            'test.test_py_compile', 'test.test_pydoc', 
-            'test.test_pyexpat', 'test.test_queue', 
-            'test.test_quopri', 'test.test_raise', 'test.test_random', 
-            'test.test_range', 'test.test_re', 'test.test_readline', 
-            'test.test_regrtest', 'test.test_repl', 
-            'test.test_reprlib', 'test.test_resource', 
-            'test.test_richcmp', 'test.test_rlcompleter', 
-            'test.test_robotparser', 'test.test_runpy', 
-            'test.test_sax', 'test.test_sched', 'test.test_scope', 
-            'test.test_script_helper', 'test.test_secrets', 
-            'test.test_select', 'test.test_selectors', 
-            'test.test_set', 'test.test_setcomps', 'test.test_shelve', 
-            'test.test_shlex', 'test.test_shutil', 'test.test_signal', 
-            'test.test_site', 'test.test_slice', 'test.test_smtpd', 
-            'test.test_smtplib', 'test.test_smtpnet', 
-            'test.test_sndhdr', 'test.test_socket', 
-            'test.test_socketserver', 'test.test_sort', 
-            'test.test_source_encoding', 'test.test_spwd', 
-            'test.test_sqlite', 'test.test_ssl', 
-            'test.test_startfile', 'test.test_stat', 
-            'test.test_statistics', 'test.test_strftime', 
-            'test.test_string', 'test.test_string_literals', 
-            'test.test_stringprep', 'test.test_strptime', 
-            'test.test_strtod', 'test.test_struct', 
-            'test.test_structmembers', 'test.test_structseq', 
-            'test.test_subclassinit', 'test.test_subprocess', 
-            'test.test_sunau', 'test.test_sundry', 'test.test_super', 
-            'test.test_support', 'test.test_symbol', 
-            'test.test_symtable', 'test.test_syntax', 'test.test_sys', 
-            'test.test_sysconfig', 'test.test_syslog', 
-            'test.test_sys_setprofile', 'test.test_sys_settrace', 
-            'test.test_tabnanny', 'test.test_tarfile', 
-            'test.test_tcl', 'test.test_telnetlib', 
-            'test.test_tempfile', 'test.test_textwrap', 
-            'test.test_thread', 'test.test_threaded_import', 
-            'test.test_threadedtempfile', 'test.test_threading', 
-            'test.test_threading_local', 'test.test_threadsignals', 
-            'test.test_time', 'test.test_timeit', 'test.test_timeout', 
-            'test.test_tix', 'test.test_tk', 'test.test_tokenize', 
-            'test.test_tools', 'test.test_tools.__main__', 
-            'test.test_tools.test_fixcid', 
-            'test.test_tools.test_gprof2html', 
-            'test.test_tools.test_i18n', 'test.test_tools.test_lll', 
-            'test.test_tools.test_md5sum', 
-            'test.test_tools.test_pathfix', 
-            'test.test_tools.test_pdeps', 
-            'test.test_tools.test_pindent', 
-            'test.test_tools.test_reindent', 
-            'test.test_tools.test_sundry', 
-            'test.test_tools.test_unparse', 'test.test_trace', 
-            'test.test_traceback', 'test.test_tracemalloc', 
-            'test.test_ttk_guionly', 'test.test_ttk_textonly', 
-            'test.test_tuple', 'test.test_turtle', 
-            'test.test_typechecks', 'test.test_type_comments', 
-            'test.test_types', 'test.test_typing', 'test.test_ucn', 
-            'test.test_unary', 'test.test_unicode', 
-            'test.test_unicodedata', 'test.test_unicode_file', 
-            'test.test_unicode_file_functions', 
-            'test.test_unicode_identifiers', 'test.test_unittest', 
-            'test.test_univnewlines', 'test.test_unpack', 
-            'test.test_unpack_ex', 'test.test_urllib', 
-            'test.test_urllib2', 'test.test_urllib2_localnet', 
-            'test.test_urllib2net', 'test.test_urllibnet', 
-            'test.test_urllib_response', 'test.test_urlparse', 
-            'test.test_userdict', 'test.test_userlist', 
-            'test.test_userstring', 'test.test_utf8_mode', 
-            'test.test_utf8source', 'test.test_uu', 'test.test_uuid', 
-            'test.test_venv', 'test.test_wait3', 'test.test_wait4', 
-            'test.test_warnings', 
-            'test.test_warnings.data.import_warning', 
-            'test.test_warnings.data.stacklevel', 
-            'test.test_warnings.__main__', 'test.test_wave', 
-            'test.test_weakref', 'test.test_weakset', 
-            'test.test_webbrowser', 'test.test_winconsoleio', 
-            'test.test_winreg', 'test.test_winsound', 
-            'test.test_with', 'test.test_wsgiref', 'test.test_xdrlib', 
-            'test.test_xml_dom_minicompat', 'test.test_xml_etree', 
-            'test.test_xml_etree_c', 'test.test_xmlrpc', 
-            'test.test_xmlrpc_net', 'test.test__xxsubinterpreters', 
-            'test.test_xxtestfuzz', 'test.test_yield_from', 
-            'test.test_zipapp', 'test.test_zipfile', 
-            'test.test_zipfile64', 'test.test_zipimport', 
-            'test.test_zipimport_support', 'test.test_zlib', 
-            'test.tf_inherit_check', 'test.threaded_import_hangers', 
-            'test.time_hashlib', 'test.tracedmodules', 
-            'test.tracedmodules.testmod', 'test.win_console_handler', 
-            'test.xmltests', 
-            'test.ziptestdata.testdata_module_inside_zip', 'textwrap', 
-            'this', '_thread', 'threading', '_threading_local', 
-            'time', 'timeit', '_tkinter', 'tkinter', 
-            'tkinter.colorchooser', 'tkinter.commondialog', 
-            'tkinter.constants', 'tkinter.dialog', 'tkinter.dnd', 
-            'tkinter.filedialog', 'tkinter.font', 'tkinter.__main__', 
-            'tkinter.messagebox', 'tkinter.scrolledtext', 
-            'tkinter.simpledialog', 'tkinter.test', 
-            'tkinter.test.runtktests', 'tkinter.test.support', 
-            'tkinter.test.test_tkinter', 
-            'tkinter.test.test_tkinter.test_font', 
-            'tkinter.test.test_tkinter.test_geometry_managers', 
-            'tkinter.test.test_tkinter.test_images', 
-            'tkinter.test.test_tkinter.test_loadtk', 
-            'tkinter.test.test_tkinter.test_misc', 
-            'tkinter.test.test_tkinter.test_text', 
-            'tkinter.test.test_tkinter.test_variables', 
-            'tkinter.test.test_tkinter.test_widgets', 
-            'tkinter.test.test_ttk', 
-            'tkinter.test.test_ttk.test_extensions', 
-            'tkinter.test.test_ttk.test_functions', 
-            'tkinter.test.test_ttk.test_style', 
-            'tkinter.test.test_ttk.test_widgets', 
-            'tkinter.test.widget_tests', 'tkinter.tix', 'tkinter.ttk', 
-            'token', 'tokenize', 'trace', 'traceback', '_tracemalloc', 
-            'tracemalloc', 'tty', 'turtle', 'turtledemo', 
-            'turtledemo.bytedesign', 'turtledemo.chaos', 
-            'turtledemo.clock', 'turtledemo.colormixer', 
-            'turtledemo.forest', 'turtledemo.fractalcurves', 
-            'turtledemo.lindenmayer', 'turtledemo.__main__', 
-            'turtledemo.minimal_hanoi', 'turtledemo.nim', 
-            'turtledemo.paint', 'turtledemo.peace', 
-            'turtledemo.penrose', 'turtledemo.planet_and_moon', 
-            'turtledemo.rosette', 'turtledemo.round_dance', 
-            'turtledemo.sorting_animate', 'turtledemo.tree', 
-            'turtledemo.two_canvases', 'turtledemo.yinyang', 'types', 
-            'typing', 'typing.io', 'typing.re', 'unicodedata', 
-            'unittest', 'unittest.async_case', 'unittest.case', 
-            'unittest.loader', 'unittest._log', 'unittest.__main__', 
-            'unittest.main', 'unittest.mock', 'unittest.result', 
-            'unittest.runner', 'unittest.signals', 'unittest.suite', 
-            'unittest.test', 'unittest.test.dummy', 
-            'unittest.test.__main__', 'unittest.test.support', 
-            'unittest.test.test_assertions', 
-            'unittest.test.test_async_case', 
-            'unittest.test.test_break', 'unittest.test.test_case', 
-            'unittest.test.test_discovery', 
-            'unittest.test.test_functiontestcase', 
-            'unittest.test.test_loader', 'unittest.test.testmock', 
-            'unittest.test.testmock.__main__', 
-            'unittest.test.testmock.support', 
-            'unittest.test.testmock.testasync', 
-            'unittest.test.testmock.testcallable', 
-            'unittest.test.testmock.testhelpers', 
-            'unittest.test.testmock.testmagicmethods', 
-            'unittest.test.testmock.testmock', 
-            'unittest.test.testmock.testpatch', 
-            'unittest.test.testmock.testsealable', 
-            'unittest.test.testmock.testsentinel', 
-            'unittest.test.testmock.testwith', 
-            'unittest.test.test_program', 'unittest.test.test_result', 
-            'unittest.test.test_runner', 'unittest.test.test_setups', 
-            'unittest.test.test_skipping', 'unittest.test.test_suite', 
-            'unittest.test._test_warnings', 'unittest.util', 'urllib', 
-            'urllib.error', 'urllib.parse', 'urllib.request', 
-            'urllib.response', 'urllib.robotparser', 'uu', '_uuid', 
-            'uuid', 'venv', 'venv.__main__', '_warnings', 'warnings', 
-            'wave', '_weakref', 'weakref', '_weakrefset', 
-            'webbrowser', 'winreg', 'winsound', 'wsgiref', 
-            'wsgiref.handlers', 'wsgiref.headers', 
-            'wsgiref.simple_server', 'wsgiref.util', 
-            'wsgiref.validate', 'xdrlib', 'xml', 'xml.dom', 
-            'xml.dom.domreg', 'xml.dom.expatbuilder', 
-            'xml.dom.minicompat', 'xml.dom.minidom', 
-            'xml.dom.NodeFilter', 'xml.dom.pulldom', 
-            'xml.dom.xmlbuilder', 'xml.etree', 
-            'xml.etree.cElementTree', 'xml.etree.ElementInclude', 
-            'xml.etree.ElementPath', 'xml.etree.ElementTree', 
-            'xml.parsers', 'xml.parsers.expat', 
-            'xml.parsers.expat.errors', 'xml.parsers.expat.model', 
-            'xmlrpc', 'xmlrpc.client', 'xmlrpc.server', 'xml.sax', 
-            'xml.sax._exceptions', 'xml.sax.expatreader', 
-            'xml.sax.handler', 'xml.sax.saxutils', 
-            'xml.sax.xmlreader', 'xxlimited', '_xxsubinterpreters', 
-            'xxsubtype', '_xxtestfuzz', 'zipapp', 'zipfile', 
-            'zipimport', 'zlib', 'zoneinfo', 'zoneinfo._common', 
+        # This list is from the pipreqs repo in file "mapping", retrieved on 2024-08-15 from here: https://github.com/bndr/pipreqs
+        self.standard_modules: list[str] = ['_abc', 'abc', 'aifc',
+            '_aix_support', 'antigravity', 'argparse', 'array',
+            '_ast', 'ast', 'asynchat', '_asyncio', 'asyncio',
+            'asyncio.base_events', 'asyncio.base_futures',
+            'asyncio.base_subprocess', 'asyncio.base_tasks',
+            'asyncio.constants', 'asyncio.coroutines',
+            'asyncio.events', 'asyncio.exceptions',
+            'asyncio.format_helpers', 'asyncio.futures',
+            'asyncio.locks', 'asyncio.log', 'asyncio.__main__',
+            'asyncio.proactor_events', 'asyncio.protocols',
+            'asyncio.queues', 'asyncio.runners',
+            'asyncio.selector_events', 'asyncio.sslproto',
+            'asyncio.staggered', 'asyncio.streams',
+            'asyncio.subprocess', 'asyncio.tasks', 'asyncio.threads',
+            'asyncio.transports', 'asyncio.trsock',
+            'asyncio.unix_events', 'asyncio.windows_events',
+            'asyncio.windows_utils', 'asyncore', 'atexit', 'audioop',
+            'base64', 'bdb', 'binascii', 'binhex', '_bisect',
+            'bisect', '_blake2', '_bootlocale', '_bootsubprocess',
+            'builtins', '_bz2', 'bz2', 'calendar', 'cgi', 'cgitb',
+            'chunk', 'cmath', 'cmd', 'code', '_codecs', 'codecs',
+            '_codecs_cn', '_codecs_hk', '_codecs_iso2022',
+            '_codecs_jp', '_codecs_kr', '_codecs_tw', 'codeop',
+            '_collections', 'collections', '_collections_abc',
+            'collections.abc', 'colorsys', '_compat_pickle',
+            'compileall', '_compression', 'concurrent',
+            'concurrent.futures', 'concurrent.futures._base',
+            'concurrent.futures.process', 'concurrent.futures.thread',
+            'configparser', 'contextlib', '_contextvars',
+            'contextvars', 'copy', 'copyreg', 'cProfile', '_crypt',
+            'crypt', '_csv', 'csv', '_ctypes', 'ctypes',
+            'ctypes._aix', 'ctypes._endian', 'ctypes.macholib',
+            'ctypes.macholib.dyld', 'ctypes.macholib.dylib',
+            'ctypes.macholib.framework', '_ctypes_test',
+            'ctypes.test', 'ctypes.test.__main__',
+            'ctypes.test.test_anon',
+            'ctypes.test.test_array_in_pointer',
+            'ctypes.test.test_arrays',
+            'ctypes.test.test_as_parameter',
+            'ctypes.test.test_bitfields', 'ctypes.test.test_buffers',
+            'ctypes.test.test_bytes', 'ctypes.test.test_byteswap',
+            'ctypes.test.test_callbacks', 'ctypes.test.test_cast',
+            'ctypes.test.test_cfuncs', 'ctypes.test.test_checkretval',
+            'ctypes.test.test_delattr', 'ctypes.test.test_errno',
+            'ctypes.test.test_find', 'ctypes.test.test_frombuffer',
+            'ctypes.test.test_funcptr', 'ctypes.test.test_functions',
+            'ctypes.test.test_incomplete', 'ctypes.test.test_init',
+            'ctypes.test.test_internals', 'ctypes.test.test_keeprefs',
+            'ctypes.test.test_libc', 'ctypes.test.test_loading',
+            'ctypes.test.test_macholib',
+            'ctypes.test.test_memfunctions',
+            'ctypes.test.test_numbers', 'ctypes.test.test_objects',
+            'ctypes.test.test_parameters', 'ctypes.test.test_pep3118',
+            'ctypes.test.test_pickling', 'ctypes.test.test_pointers',
+            'ctypes.test.test_prototypes',
+            'ctypes.test.test_python_api',
+            'ctypes.test.test_random_things',
+            'ctypes.test.test_refcounts', 'ctypes.test.test_repr',
+            'ctypes.test.test_returnfuncptrs',
+            'ctypes.test.test_simplesubclasses',
+            'ctypes.test.test_sizes', 'ctypes.test.test_slicing',
+            'ctypes.test.test_stringptr', 'ctypes.test.test_strings',
+            'ctypes.test.test_struct_fields',
+            'ctypes.test.test_structures',
+            'ctypes.test.test_unaligned_structures',
+            'ctypes.test.test_unicode', 'ctypes.test.test_values',
+            'ctypes.test.test_varsize_struct',
+            'ctypes.test.test_win32', 'ctypes.test.test_wintypes',
+            'ctypes.util', 'ctypes.wintypes', '_curses', 'curses',
+            'curses.ascii', 'curses.has_key', '_curses_panel',
+            'curses.panel', 'curses.textpad', 'dataclasses',
+            '_datetime', 'datetime', '_dbm', 'dbm', 'dbm.dumb',
+            'dbm.gnu', 'dbm.ndbm', '_decimal', 'decimal', 'difflib',
+            'dis', 'distutils', 'distutils.archive_util',
+            'distutils.bcppcompiler', 'distutils.ccompiler',
+            'distutils.cmd', 'distutils.command',
+            'distutils.command.bdist', 'distutils.command.bdist_dumb',
+            'distutils.command.bdist_msi',
+            'distutils.command.bdist_packager',
+            'distutils.command.bdist_rpm',
+            'distutils.command.bdist_wininst',
+            'distutils.command.build', 'distutils.command.build_clib',
+            'distutils.command.build_ext',
+            'distutils.command.build_py',
+            'distutils.command.build_scripts',
+            'distutils.command.check', 'distutils.command.clean',
+            'distutils.command.config', 'distutils.command.install',
+            'distutils.command.install_data',
+            'distutils.command.install_egg_info',
+            'distutils.command.install_headers',
+            'distutils.command.install_lib',
+            'distutils.command.install_scripts',
+            'distutils.command.register', 'distutils.command.sdist',
+            'distutils.command.upload', 'distutils.config',
+            'distutils.core', 'distutils.cygwinccompiler',
+            'distutils.debug', 'distutils.dep_util',
+            'distutils.dir_util', 'distutils.dist',
+            'distutils.errors', 'distutils.extension',
+            'distutils.fancy_getopt', 'distutils.filelist',
+            'distutils.file_util', 'distutils.log',
+            'distutils.msvc9compiler', 'distutils._msvccompiler',
+            'distutils.msvccompiler', 'distutils.spawn',
+            'distutils.sysconfig', 'distutils.tests',
+            'distutils.tests.support',
+            'distutils.tests.test_archive_util',
+            'distutils.tests.test_bdist',
+            'distutils.tests.test_bdist_dumb',
+            'distutils.tests.test_bdist_msi',
+            'distutils.tests.test_bdist_rpm',
+            'distutils.tests.test_bdist_wininst',
+            'distutils.tests.test_build',
+            'distutils.tests.test_build_clib',
+            'distutils.tests.test_build_ext',
+            'distutils.tests.test_build_py',
+            'distutils.tests.test_build_scripts',
+            'distutils.tests.test_check',
+            'distutils.tests.test_clean', 'distutils.tests.test_cmd',
+            'distutils.tests.test_config',
+            'distutils.tests.test_config_cmd',
+            'distutils.tests.test_core',
+            'distutils.tests.test_cygwinccompiler',
+            'distutils.tests.test_dep_util',
+            'distutils.tests.test_dir_util',
+            'distutils.tests.test_dist',
+            'distutils.tests.test_extension',
+            'distutils.tests.test_filelist',
+            'distutils.tests.test_file_util',
+            'distutils.tests.test_install',
+            'distutils.tests.test_install_data',
+            'distutils.tests.test_install_headers',
+            'distutils.tests.test_install_lib',
+            'distutils.tests.test_install_scripts',
+            'distutils.tests.test_log',
+            'distutils.tests.test_msvc9compiler',
+            'distutils.tests.test_msvccompiler',
+            'distutils.tests.test_register',
+            'distutils.tests.test_sdist',
+            'distutils.tests.test_spawn',
+            'distutils.tests.test_sysconfig',
+            'distutils.tests.test_text_file',
+            'distutils.tests.test_unixccompiler',
+            'distutils.tests.test_upload',
+            'distutils.tests.test_util',
+            'distutils.tests.test_version',
+            'distutils.tests.test_versionpredicate',
+            'distutils.text_file', 'distutils.unixccompiler',
+            'distutils.util', 'distutils.version',
+            'distutils.versionpredicate', 'doctest', '_dummy_thread',
+            'dummy_threading', '_elementtree', 'email',
+            'email.base64mime', 'email.charset',
+            'email.contentmanager', 'email._encoded_words',
+            'email.encoders', 'email.errors', 'email.feedparser',
+            'email.generator', 'email.header', 'email.headerregistry',
+            'email._header_value_parser', 'email.iterators',
+            'email.message', 'email.mime', 'email.mime.application',
+            'email.mime.audio', 'email.mime.base', 'email.mime.image',
+            'email.mime.message', 'email.mime.multipart',
+            'email.mime.nonmultipart', 'email.mime.text',
+            'email._parseaddr', 'email.parser', 'email.policy',
+            'email._policybase', 'email.quoprimime', 'email.utils',
+            'encodings', 'encodings.aliases', 'encodings.ascii',
+            'encodings.base64_codec', 'encodings.big5',
+            'encodings.big5hkscs', 'encodings.bz2_codec',
+            'encodings.charmap', 'encodings.cp037',
+            'encodings.cp1006', 'encodings.cp1026',
+            'encodings.cp1125', 'encodings.cp1140',
+            'encodings.cp1250', 'encodings.cp1251',
+            'encodings.cp1252', 'encodings.cp1253',
+            'encodings.cp1254', 'encodings.cp1255',
+            'encodings.cp1256', 'encodings.cp1257',
+            'encodings.cp1258', 'encodings.cp273', 'encodings.cp424',
+            'encodings.cp437', 'encodings.cp500', 'encodings.cp720',
+            'encodings.cp737', 'encodings.cp775', 'encodings.cp850',
+            'encodings.cp852', 'encodings.cp855', 'encodings.cp856',
+            'encodings.cp857', 'encodings.cp858', 'encodings.cp860',
+            'encodings.cp861', 'encodings.cp862', 'encodings.cp863',
+            'encodings.cp864', 'encodings.cp865', 'encodings.cp866',
+            'encodings.cp869', 'encodings.cp874', 'encodings.cp875',
+            'encodings.cp932', 'encodings.cp949', 'encodings.cp950',
+            'encodings.euc_jis_2004', 'encodings.euc_jisx0213',
+            'encodings.euc_jp', 'encodings.euc_kr',
+            'encodings.gb18030', 'encodings.gb2312', 'encodings.gbk',
+            'encodings.hex_codec', 'encodings.hp_roman8',
+            'encodings.hz', 'encodings.idna', 'encodings.iso2022_jp',
+            'encodings.iso2022_jp_1', 'encodings.iso2022_jp_2',
+            'encodings.iso2022_jp_2004', 'encodings.iso2022_jp_3',
+            'encodings.iso2022_jp_ext', 'encodings.iso2022_kr',
+            'encodings.iso8859_1', 'encodings.iso8859_10',
+            'encodings.iso8859_11', 'encodings.iso8859_13',
+            'encodings.iso8859_14', 'encodings.iso8859_15',
+            'encodings.iso8859_16', 'encodings.iso8859_2',
+            'encodings.iso8859_3', 'encodings.iso8859_4',
+            'encodings.iso8859_5', 'encodings.iso8859_6',
+            'encodings.iso8859_7', 'encodings.iso8859_8',
+            'encodings.iso8859_9', 'encodings.johab',
+            'encodings.koi8_r', 'encodings.koi8_t',
+            'encodings.koi8_u', 'encodings.kz1048',
+            'encodings.latin_1', 'encodings.mac_arabic',
+            'encodings.mac_centeuro', 'encodings.mac_croatian',
+            'encodings.mac_cyrillic', 'encodings.mac_farsi',
+            'encodings.mac_greek', 'encodings.mac_iceland',
+            'encodings.mac_latin2', 'encodings.mac_roman',
+            'encodings.mac_romanian', 'encodings.mac_turkish',
+            'encodings.mbcs', 'encodings.oem', 'encodings.palmos',
+            'encodings.ptcp154', 'encodings.punycode',
+            'encodings.quopri_codec', 'encodings.raw_unicode_escape',
+            'encodings.rot_13', 'encodings.shift_jis',
+            'encodings.shift_jis_2004', 'encodings.shift_jisx0213',
+            'encodings.tis_620', 'encodings.undefined',
+            'encodings.unicode_escape', 'encodings.utf_16',
+            'encodings.utf_16_be', 'encodings.utf_16_le',
+            'encodings.utf_32', 'encodings.utf_32_be',
+            'encodings.utf_32_le', 'encodings.utf_7',
+            'encodings.utf_8', 'encodings.utf_8_sig',
+            'encodings.uu_codec', 'encodings.zlib_codec', 'ensurepip',
+            'ensurepip._bundled', 'ensurepip.__main__',
+            'ensurepip._uninstall', 'enum', 'errno', 'faulthandler',
+            'fcntl', 'filecmp', 'fileinput', 'fnmatch', 'formatter',
+            'fractions', '_frozen_importlib',
+            '_frozen_importlib_external', 'ftplib', '_functools',
+            'functools', '__future__', 'gc', '_gdbm', 'genericpath',
+            'getopt', 'getpass', 'gettext', 'glob', 'graphlib', 'grp',
+            'gzip', '_hashlib', 'hashlib', '_heapq', 'heapq', 'hmac',
+            'html', 'html.entities', 'html.parser', 'http',
+            'http.client', 'http.cookiejar', 'http.cookies',
+            'http.server', 'idlelib', 'idlelib.autocomplete',
+            'idlelib.autocomplete_w', 'idlelib.autoexpand',
+            'idlelib.browser', 'idlelib.calltip', 'idlelib.calltip_w',
+            'idlelib.codecontext', 'idlelib.colorizer',
+            'idlelib.config', 'idlelib.configdialog',
+            'idlelib.config_key', 'idlelib.debugger',
+            'idlelib.debugger_r', 'idlelib.debugobj',
+            'idlelib.debugobj_r', 'idlelib.delegator',
+            'idlelib.dynoption', 'idlelib.editor', 'idlelib.filelist',
+            'idlelib.format', 'idlelib.grep', 'idlelib.help',
+            'idlelib.help_about', 'idlelib.history',
+            'idlelib.hyperparser', 'idlelib.idle',
+            'idlelib.idle_test', 'idlelib.idle_test.htest',
+            'idlelib.idle_test.mock_idle',
+            'idlelib.idle_test.mock_tk', 'idlelib.idle_test.template',
+            'idlelib.idle_test.test_autocomplete',
+            'idlelib.idle_test.test_autocomplete_w',
+            'idlelib.idle_test.test_autoexpand',
+            'idlelib.idle_test.test_browser',
+            'idlelib.idle_test.test_calltip',
+            'idlelib.idle_test.test_calltip_w',
+            'idlelib.idle_test.test_codecontext',
+            'idlelib.idle_test.test_colorizer',
+            'idlelib.idle_test.test_config',
+            'idlelib.idle_test.test_configdialog',
+            'idlelib.idle_test.test_config_key',
+            'idlelib.idle_test.test_debugger',
+            'idlelib.idle_test.test_debugger_r',
+            'idlelib.idle_test.test_debugobj',
+            'idlelib.idle_test.test_debugobj_r',
+            'idlelib.idle_test.test_delegator',
+            'idlelib.idle_test.test_editmenu',
+            'idlelib.idle_test.test_editor',
+            'idlelib.idle_test.test_filelist',
+            'idlelib.idle_test.test_format',
+            'idlelib.idle_test.test_grep',
+            'idlelib.idle_test.test_help',
+            'idlelib.idle_test.test_help_about',
+            'idlelib.idle_test.test_history',
+            'idlelib.idle_test.test_hyperparser',
+            'idlelib.idle_test.test_iomenu',
+            'idlelib.idle_test.test_macosx',
+            'idlelib.idle_test.test_mainmenu',
+            'idlelib.idle_test.test_multicall',
+            'idlelib.idle_test.test_outwin',
+            'idlelib.idle_test.test_parenmatch',
+            'idlelib.idle_test.test_pathbrowser',
+            'idlelib.idle_test.test_percolator',
+            'idlelib.idle_test.test_pyparse',
+            'idlelib.idle_test.test_pyshell',
+            'idlelib.idle_test.test_query',
+            'idlelib.idle_test.test_redirector',
+            'idlelib.idle_test.test_replace',
+            'idlelib.idle_test.test_rpc',
+            'idlelib.idle_test.test_run',
+            'idlelib.idle_test.test_runscript',
+            'idlelib.idle_test.test_scrolledlist',
+            'idlelib.idle_test.test_search',
+            'idlelib.idle_test.test_searchbase',
+            'idlelib.idle_test.test_searchengine',
+            'idlelib.idle_test.test_sidebar',
+            'idlelib.idle_test.test_squeezer',
+            'idlelib.idle_test.test_stackviewer',
+            'idlelib.idle_test.test_statusbar',
+            'idlelib.idle_test.test_text',
+            'idlelib.idle_test.test_textview',
+            'idlelib.idle_test.test_tooltip',
+            'idlelib.idle_test.test_tree',
+            'idlelib.idle_test.test_undo',
+            'idlelib.idle_test.test_warning',
+            'idlelib.idle_test.test_window',
+            'idlelib.idle_test.test_zoomheight', 'idlelib.iomenu',
+            'idlelib.macosx', 'idlelib.__main__', 'idlelib.mainmenu',
+            'idlelib.multicall', 'idlelib.outwin',
+            'idlelib.parenmatch', 'idlelib.pathbrowser',
+            'idlelib.percolator', 'idlelib.pyparse',
+            'idlelib.pyshell', 'idlelib.query', 'idlelib.redirector',
+            'idlelib.replace', 'idlelib.rpc', 'idlelib.run',
+            'idlelib.runscript', 'idlelib.scrolledlist',
+            'idlelib.search', 'idlelib.searchbase',
+            'idlelib.searchengine', 'idlelib.sidebar',
+            'idlelib.squeezer', 'idlelib.stackviewer',
+            'idlelib.statusbar', 'idlelib.textview',
+            'idlelib.tooltip', 'idlelib.tree', 'idlelib.undo',
+            'idlelib.window', 'idlelib.zoomheight', 'idlelib.zzdummy',
+            'imaplib', 'imghdr', '_imp', 'imp', 'importlib',
+            'importlib.abc', 'importlib._bootstrap',
+            'importlib._bootstrap_external', 'importlib._common',
+            'importlib.machinery', 'importlib.metadata',
+            'importlib.resources', 'importlib.util', 'inspect', '_io',
+            'io', 'ipaddress', 'itertools', '_json', 'json',
+            'json.decoder', 'json.encoder', 'json.scanner',
+            'json.tool', 'keyword', 'lib2to3', 'lib2to3.btm_matcher',
+            'lib2to3.btm_utils', 'lib2to3.fixer_base',
+            'lib2to3.fixer_util', 'lib2to3.fixes',
+            'lib2to3.fixes.fix_apply', 'lib2to3.fixes.fix_asserts',
+            'lib2to3.fixes.fix_basestring',
+            'lib2to3.fixes.fix_buffer', 'lib2to3.fixes.fix_dict',
+            'lib2to3.fixes.fix_except', 'lib2to3.fixes.fix_exec',
+            'lib2to3.fixes.fix_execfile',
+            'lib2to3.fixes.fix_exitfunc', 'lib2to3.fixes.fix_filter',
+            'lib2to3.fixes.fix_funcattrs', 'lib2to3.fixes.fix_future',
+            'lib2to3.fixes.fix_getcwdu', 'lib2to3.fixes.fix_has_key',
+            'lib2to3.fixes.fix_idioms', 'lib2to3.fixes.fix_import',
+            'lib2to3.fixes.fix_imports', 'lib2to3.fixes.fix_imports2',
+            'lib2to3.fixes.fix_input', 'lib2to3.fixes.fix_intern',
+            'lib2to3.fixes.fix_isinstance',
+            'lib2to3.fixes.fix_itertools',
+            'lib2to3.fixes.fix_itertools_imports',
+            'lib2to3.fixes.fix_long', 'lib2to3.fixes.fix_map',
+            'lib2to3.fixes.fix_metaclass',
+            'lib2to3.fixes.fix_methodattrs', 'lib2to3.fixes.fix_ne',
+            'lib2to3.fixes.fix_next', 'lib2to3.fixes.fix_nonzero',
+            'lib2to3.fixes.fix_numliterals',
+            'lib2to3.fixes.fix_operator', 'lib2to3.fixes.fix_paren',
+            'lib2to3.fixes.fix_print', 'lib2to3.fixes.fix_raise',
+            'lib2to3.fixes.fix_raw_input', 'lib2to3.fixes.fix_reduce',
+            'lib2to3.fixes.fix_reload', 'lib2to3.fixes.fix_renames',
+            'lib2to3.fixes.fix_repr', 'lib2to3.fixes.fix_set_literal',
+            'lib2to3.fixes.fix_standarderror',
+            'lib2to3.fixes.fix_sys_exc', 'lib2to3.fixes.fix_throw',
+            'lib2to3.fixes.fix_tuple_params',
+            'lib2to3.fixes.fix_types', 'lib2to3.fixes.fix_unicode',
+            'lib2to3.fixes.fix_urllib', 'lib2to3.fixes.fix_ws_comma',
+            'lib2to3.fixes.fix_xrange',
+            'lib2to3.fixes.fix_xreadlines', 'lib2to3.fixes.fix_zip',
+            'lib2to3.main', 'lib2to3.__main__', 'lib2to3.patcomp',
+            'lib2to3.pgen2', 'lib2to3.pgen2.conv',
+            'lib2to3.pgen2.driver', 'lib2to3.pgen2.grammar',
+            'lib2to3.pgen2.literals', 'lib2to3.pgen2.parse',
+            'lib2to3.pgen2.pgen', 'lib2to3.pgen2.token',
+            'lib2to3.pgen2.tokenize', 'lib2to3.pygram',
+            'lib2to3.pytree', 'lib2to3.refactor', 'lib2to3.tests',
+            'lib2to3.tests.data.bom', 'lib2to3.tests.data.crlf',
+            'lib2to3.tests.data.different_encoding',
+            'lib2to3.tests.data.false_encoding',
+            'lib2to3.tests.data.fixers.bad_order',
+            'lib2to3.tests.data.fixers.myfixes',
+            'lib2to3.tests.data.fixers.myfixes.fix_explicit',
+            'lib2to3.tests.data.fixers.myfixes.fix_first',
+            'lib2to3.tests.data.fixers.myfixes.fix_last',
+            'lib2to3.tests.data.fixers.myfixes.fix_parrot',
+            'lib2to3.tests.data.fixers.myfixes.fix_preorder',
+            'lib2to3.tests.data.fixers.no_fixer_cls',
+            'lib2to3.tests.data.fixers.parrot_example',
+            'lib2to3.tests.data.infinite_recursion',
+            'lib2to3.tests.data.py2_test_grammar',
+            'lib2to3.tests.data.py3_test_grammar',
+            'lib2to3.tests.__main__',
+            'lib2to3.tests.pytree_idempotency',
+            'lib2to3.tests.support', 'lib2to3.tests.test_all_fixers',
+            'lib2to3.tests.test_fixers', 'lib2to3.tests.test_main',
+            'lib2to3.tests.test_parser', 'lib2to3.tests.test_pytree',
+            'lib2to3.tests.test_refactor', 'lib2to3.tests.test_util',
+            'lib.libpython3', 'linecache', '_locale', 'locale',
+            'logging', 'logging.config', 'logging.handlers',
+            '_lsprof', '_lzma', 'lzma', 'mailbox', 'mailcap',
+            '__main__', '_markupbase', 'marshal', 'math', '_md5',
+            'mimetypes', 'mmap', 'modulefinder', 'msilib', 'msvcrt',
+            '_multibytecodec', '_multiprocessing', 'multiprocessing',
+            'multiprocessing.connection', 'multiprocessing.context',
+            'multiprocessing.dummy',
+            'multiprocessing.dummy.connection',
+            'multiprocessing.forkserver', 'multiprocessing.heap',
+            'multiprocessing.managers', 'multiprocessing.pool',
+            'multiprocessing.popen_fork',
+            'multiprocessing.popen_forkserver',
+            'multiprocessing.popen_spawn_posix',
+            'multiprocessing.popen_spawn_win32',
+            'multiprocessing.process', 'multiprocessing.queues',
+            'multiprocessing.reduction',
+            'multiprocessing.resource_sharer',
+            'multiprocessing.resource_tracker',
+            'multiprocessing.sharedctypes',
+            'multiprocessing.shared_memory', 'multiprocessing.spawn',
+            'multiprocessing.synchronize', 'multiprocessing.util',
+            'netrc', 'nis', 'nntplib', 'ntpath', 'nturl2path',
+            'numbers', '_opcode', 'opcode', '_operator', 'operator',
+            'optparse', 'os', 'os.path', 'ossaudiodev',
+            '_osx_support', 'parser', 'pathlib', 'pdb',
+            '__phello__.foo', '_pickle', 'pickle', 'pickletools',
+            'pipes', 'pkgutil', 'platform', 'plistlib', 'poplib',
+            'posix', 'posixpath', '_posixshmem', '_posixsubprocess',
+            'pprint', 'profile', 'pstats', 'pty', 'pwd', '_py_abc',
+            'pyclbr', 'py_compile', '_pydecimal', 'pydoc',
+            'pydoc_data', 'pydoc_data.topics', 'pyexpat', '_pyio',
+            '_queue', 'queue', 'quopri', '_random', 'random', 're',
+            'readline', 'reprlib', 'resource', 'rlcompleter', 'runpy',
+            'sched', 'secrets', 'select', 'selectors', '_sha1',
+            '_sha256', '_sha3', '_sha512', 'shelve', 'shlex',
+            'shutil', '_signal', 'signal', 'site', '_sitebuiltins',
+            'smtpd', 'smtplib', 'sndhdr', '_socket', 'socket',
+            'socketserver', 'spwd', '_sqlite3', 'sqlite3',
+            'sqlite3.dbapi2', 'sqlite3.dump', 'sqlite3.test',
+            'sqlite3.test.backup', 'sqlite3.test.dbapi',
+            'sqlite3.test.dump', 'sqlite3.test.factory',
+            'sqlite3.test.hooks', 'sqlite3.test.regression',
+            'sqlite3.test.transactions', 'sqlite3.test.types',
+            'sqlite3.test.userfunctions', '_sre', 'sre_compile',
+            'sre_constants', 'sre_parse', '_ssl', 'ssl', '_stat',
+            'stat', '_statistics', 'statistics', '_string', 'string',
+            'stringprep', '_strptime', '_struct', 'struct',
+            'subprocess', 'sunau', 'symbol', '_symtable', 'symtable',
+            'sys', 'sysconfig',
+            '_sysconfigdata_x86_64_conda_cos6_linux_gnu',
+            '_sysconfigdata_x86_64_conda_linux_gnu', 'syslog',
+            'tabnanny', 'tarfile', 'telnetlib', 'tempfile', 'termios',
+            'test', 'test.ann_module', 'test.ann_module2',
+            'test.ann_module3', 'test.audiotests', 'test.autotest',
+            'test.bad_coding', 'test.bad_coding2', 'test.bad_getattr',
+            'test.bad_getattr2', 'test.bad_getattr3',
+            'test.badsyntax_3131', 'test.badsyntax_future10',
+            'test.badsyntax_future3', 'test.badsyntax_future4',
+            'test.badsyntax_future5', 'test.badsyntax_future6',
+            'test.badsyntax_future7', 'test.badsyntax_future8',
+            'test.badsyntax_future9', 'test.badsyntax_pep3120',
+            'test.bisect_cmd', '_testbuffer', 'test.bytecode_helper',
+            '_testcapi', 'test.coding20731', 'test.curses_tests',
+            'test.dataclass_module_1', 'test.dataclass_module_1_str',
+            'test.dataclass_module_2', 'test.dataclass_module_2_str',
+            'test.datetimetester', 'test.dis_module',
+            'test.doctest_aliases', 'test.double_const',
+            'test.dtracedata.call_stack', 'test.dtracedata.gc',
+            'test.dtracedata.instance', 'test.dtracedata.line',
+            'test.eintrdata.eintr_tester', 'test.encoded_modules',
+            'test.encoded_modules.module_iso_8859_1',
+            'test.encoded_modules.module_koi8_r', 'test.final_a',
+            'test.final_b', 'test.fork_wait', 'test.future_test1',
+            'test.future_test2', 'test.gdb_sample',
+            'test.good_getattr', 'test.imp_dummy',
+            '_testimportmultiple', 'test.inspect_fodder',
+            'test.inspect_fodder2', '_testinternalcapi',
+            'test.libregrtest', 'test.libregrtest.cmdline',
+            'test.libregrtest.main', 'test.libregrtest.pgo',
+            'test.libregrtest.refleak', 'test.libregrtest.runtest',
+            'test.libregrtest.runtest_mp',
+            'test.libregrtest.save_env', 'test.libregrtest.setup',
+            'test.libregrtest.utils', 'test.libregrtest.win_utils',
+            'test.list_tests', 'test.lock_tests', 'test.__main__',
+            'test.make_ssl_certs', 'test.mapping_tests',
+            'test.memory_watchdog', 'test.mock_socket',
+            'test.mod_generics_cache', 'test.mp_fork_bomb',
+            'test.mp_preload', 'test.multibytecodec_support',
+            '_testmultiphase', 'test.outstanding_bugs',
+            'test.pickletester', 'test.profilee', 'test.pyclbr_input',
+            'test.pydocfodder', 'test.pydoc_mod', 'test.pythoninfo',
+            'test.regrtest', 'test.relimport', 'test.reperf',
+            'test.re_tests', 'test.sample_doctest',
+            'test.sample_doctest_no_docstrings',
+            'test.sample_doctest_no_doctests', 'test.seq_tests',
+            'test.signalinterproctester', 'test.sortperf',
+            'test.ssl_servers', 'test.ssltests', 'test.string_tests',
+            'test.subprocessdata.fd_status',
+            'test.subprocessdata.input_reader',
+            'test.subprocessdata.qcat', 'test.subprocessdata.qgrep',
+            'test.subprocessdata.sigchild_ignore', 'test.support',
+            'test.support.bytecode_helper',
+            'test.support.hashlib_helper',
+            'test.support.logging_helper',
+            'test.support.script_helper',
+            'test.support.socket_helper', 'test.support.testresult',
+            'test.test_abc', 'test.test_abstract_numbers',
+            'test.test_aifc', 'test.test___all__',
+            'test.test_argparse', 'test.test_array',
+            'test.test_asdl_parser', 'test.test_ast',
+            'test.test_asyncgen', 'test.test_asynchat',
+            'test.test_asyncio', 'test.test_asyncio.echo',
+            'test.test_asyncio.echo2', 'test.test_asyncio.echo3',
+            'test.test_asyncio.functional',
+            'test.test_asyncio.__main__',
+            'test.test_asyncio.test_base_events',
+            'test.test_asyncio.test_buffered_proto',
+            'test.test_asyncio.test_context',
+            'test.test_asyncio.test_events',
+            'test.test_asyncio.test_futures',
+            'test.test_asyncio.test_locks',
+            'test.test_asyncio.test_pep492',
+            'test.test_asyncio.test_proactor_events',
+            'test.test_asyncio.test_protocols',
+            'test.test_asyncio.test_queues',
+            'test.test_asyncio.test_runners',
+            'test.test_asyncio.test_selector_events',
+            'test.test_asyncio.test_sendfile',
+            'test.test_asyncio.test_server',
+            'test.test_asyncio.test_sock_lowlevel',
+            'test.test_asyncio.test_sslproto',
+            'test.test_asyncio.test_streams',
+            'test.test_asyncio.test_subprocess',
+            'test.test_asyncio.test_tasks',
+            'test.test_asyncio.test_transports',
+            'test.test_asyncio.test_unix_events',
+            'test.test_asyncio.test_windows_events',
+            'test.test_asyncio.test_windows_utils',
+            'test.test_asyncio.utils', 'test.test_asyncore',
+            'test.test_atexit', 'test.test_audioop',
+            'test.test_audit', 'test.test_augassign',
+            'test.test_base64', 'test.test_baseexception',
+            'test.test_bdb', 'test.test_bigaddrspace',
+            'test.test_bigmem', 'test.test_binascii',
+            'test.test_binhex', 'test.test_binop', 'test.test_bisect',
+            'test.test_bool', 'test.test_buffer', 'test.test_bufio',
+            'test.test_builtin', 'test.test_bytes', 'test.test_bz2',
+            'test.test_calendar', 'test.test_call', 'test.test_capi',
+            'test.test_cgi', 'test.test_cgitb',
+            'test.test_charmapcodec', 'test.test_class',
+            'test.test_clinic', 'test.test_c_locale_coercion',
+            'test.test_cmath', 'test.test_cmd', 'test.test_cmd_line',
+            'test.test_cmd_line_script', 'test.test_code',
+            'test.testcodec', 'test.test_codeccallbacks',
+            'test.test_codecencodings_cn',
+            'test.test_codecencodings_hk',
+            'test.test_codecencodings_iso2022',
+            'test.test_codecencodings_jp',
+            'test.test_codecencodings_kr',
+            'test.test_codecencodings_tw', 'test.test_codecmaps_cn',
+            'test.test_codecmaps_hk', 'test.test_codecmaps_jp',
+            'test.test_codecmaps_kr', 'test.test_codecmaps_tw',
+            'test.test_codecs', 'test.test_code_module',
+            'test.test_codeop', 'test.test_collections',
+            'test.test_colorsys', 'test.test_compare',
+            'test.test_compile', 'test.test_compileall',
+            'test.test_complex', 'test.test_concurrent_futures',
+            'test.test_configparser', 'test.test_contains',
+            'test.test_context', 'test.test_contextlib',
+            'test.test_contextlib_async', 'test.test_copy',
+            'test.test_copyreg', 'test.test_coroutines',
+            'test.test_cprofile', 'test.test_crashers',
+            'test.test_crypt', 'test.test_csv', 'test.test_ctypes',
+            'test.test_curses', 'test.test_dataclasses',
+            'test.test_datetime', 'test.test_dbm',
+            'test.test_dbm_dumb', 'test.test_dbm_gnu',
+            'test.test_dbm_ndbm', 'test.test_decimal',
+            'test.test_decorators', 'test.test_defaultdict',
+            'test.test_deque', 'test.test_descr',
+            'test.test_descrtut', 'test.test_devpoll',
+            'test.test_dict', 'test.test_dictcomps',
+            'test.test_dict_version', 'test.test_dictviews',
+            'test.test_difflib', 'test.test_dis',
+            'test.test_distutils', 'test.test_doctest',
+            'test.test_doctest2', 'test.test_docxmlrpc',
+            'test.test_dtrace', 'test.test_dummy_thread',
+            'test.test_dummy_threading', 'test.test_dynamic',
+            'test.test_dynamicclassattribute', 'test.test_eintr',
+            'test.test_email', 'test.test_email.__main__',
+            'test.test_email.test_asian_codecs',
+            'test.test_email.test_contentmanager',
+            'test.test_email.test_defect_handling',
+            'test.test_email.test_email',
+            'test.test_email.test__encoded_words',
+            'test.test_email.test_generator',
+            'test.test_email.test_headerregistry',
+            'test.test_email.test__header_value_parser',
+            'test.test_email.test_inversion',
+            'test.test_email.test_message',
+            'test.test_email.test_parser',
+            'test.test_email.test_pickleable',
+            'test.test_email.test_policy',
+            'test.test_email.test_utils',
+            'test.test_email.torture_test', 'test.test_embed',
+            'test.test_ensurepip', 'test.test_enum',
+            'test.test_enumerate', 'test.test_eof', 'test.test_epoll',
+            'test.test_errno', 'test.test_exception_hierarchy',
+            'test.test_exceptions', 'test.test_exception_variations',
+            'test.test_extcall', 'test.test_faulthandler',
+            'test.test_fcntl', 'test.test_file', 'test.test_filecmp',
+            'test.test_file_eintr', 'test.test_fileinput',
+            'test.test_fileio', 'test.test_finalization',
+            'test.test_float', 'test.test_flufl', 'test.test_fnmatch',
+            'test.test_fork1', 'test.test_format',
+            'test.test_fractions', 'test.test_frame',
+            'test.test_frozen', 'test.test_fstring',
+            'test.test_ftplib', 'test.test_funcattrs',
+            'test.test_functools', 'test.test___future__',
+            'test.test_future', 'test.test_future3',
+            'test.test_future4', 'test.test_future5', 'test.test_gc',
+            'test.test_gdb', 'test.test_generators',
+            'test.test_generator_stop', 'test.test_genericclass',
+            'test.test_genericpath', 'test.test_genexps',
+            'test.test_getargs2', 'test.test_getopt',
+            'test.test_getpass', 'test.test_gettext',
+            'test.test_glob', 'test.test_global', 'test.test_grammar',
+            'test.test_grp', 'test.test_gzip', 'test.test_hash',
+            'test.test_hashlib', 'test.test_heapq', 'test.test_hmac',
+            'test.test_html', 'test.test_htmlparser',
+            'test.test_http_cookiejar', 'test.test_http_cookies',
+            'test.test_httplib', 'test.test_httpservers',
+            'test.test_idle', 'test.test_imaplib', 'test.test_imghdr',
+            'test.test_imp', 'test.test_import',
+            'test.test_import.data.circular_imports.basic',
+            'test.test_import.data.circular_imports.basic2',
+            'test.test_import.data.circular_imports.binding',
+            'test.test_import.data.circular_imports.binding2',
+            'test.test_import.data.circular_imports.from_cycle1',
+            'test.test_import.data.circular_imports.from_cycle2',
+            'test.test_import.data.circular_imports.indirect',
+            'test.test_import.data.circular_imports.rebinding',
+            'test.test_import.data.circular_imports.rebinding2',
+            'test.test_import.data.circular_imports.source',
+            'test.test_import.data.circular_imports.subpackage',
+            'test.test_import.data.circular_imports.subpkg.subpackage2',
+            'test.test_import.data.circular_imports.subpkg.util',
+            'test.test_import.data.circular_imports.use',
+            'test.test_import.data.circular_imports.util',
+            'test.test_import.data.package',
+            'test.test_import.data.package2.submodule1',
+            'test.test_import.data.package2.submodule2',
+            'test.test_import.data.package.submodule',
+            'test.test_importlib', 'test.test_importlib.abc',
+            'test.test_importlib.builtin',
+            'test.test_importlib.builtin.__main__',
+            'test.test_importlib.builtin.test_finder',
+            'test.test_importlib.builtin.test_loader',
+            'test.test_importlib.data', 'test.test_importlib.data01',
+            'test.test_importlib.data01.subdirectory',
+            'test.test_importlib.data02',
+            'test.test_importlib.data02.one',
+            'test.test_importlib.data02.two',
+            'test.test_importlib.data03',
+            'test.test_importlib.data03.namespace.portion1',
+            'test.test_importlib.data03.namespace.portion2',
+            'test.test_importlib.extension',
+            'test.test_importlib.extension.__main__',
+            'test.test_importlib.extension.test_case_sensitivity',
+            'test.test_importlib.extension.test_finder',
+            'test.test_importlib.extension.test_loader',
+            'test.test_importlib.extension.test_path_hook',
+            'test.test_importlib.fixtures',
+            'test.test_importlib.frozen',
+            'test.test_importlib.frozen.__main__',
+            'test.test_importlib.frozen.test_finder',
+            'test.test_importlib.frozen.test_loader',
+            'test.test_importlib.import_',
+            'test.test_importlib.import_.__main__',
+            'test.test_importlib.import_.test_api',
+            'test.test_importlib.import_.test_caching',
+            'test.test_importlib.import_.test_fromlist',
+            'test.test_importlib.import_.test___loader__',
+            'test.test_importlib.import_.test_meta_path',
+            'test.test_importlib.import_.test___package__',
+            'test.test_importlib.import_.test_packages',
+            'test.test_importlib.import_.test_path',
+            'test.test_importlib.import_.test_relative_imports',
+            'test.test_importlib.__main__',
+            'test.test_importlib.namespace_pkgs.both_portions.foo.one',
+            'test.test_importlib.namespace_pkgs.both_portions.foo.two',
+            'test.test_importlib.namespace_pkgs.module_and_namespace_package.a_test',
+            'test.test_importlib.namespace_pkgs.not_a_namespace_pkg.foo',
+            'test.test_importlib.namespace_pkgs.not_a_namespace_pkg.foo.one',
+            'test.test_importlib.namespace_pkgs.portion1.foo.one',
+            'test.test_importlib.namespace_pkgs.portion2.foo.two',
+            'test.test_importlib.namespace_pkgs.project1.parent.child.one',
+            'test.test_importlib.namespace_pkgs.project2.parent.child.two',
+            'test.test_importlib.namespace_pkgs.project3.parent.child.three',
+            'test.test_importlib.source',
+            'test.test_importlib.source.__main__',
+            'test.test_importlib.source.test_case_sensitivity',
+            'test.test_importlib.source.test_file_loader',
+            'test.test_importlib.source.test_finder',
+            'test.test_importlib.source.test_path_hook',
+            'test.test_importlib.source.test_source_encoding',
+            'test.test_importlib.test_abc',
+            'test.test_importlib.test_api',
+            'test.test_importlib.test_lazy',
+            'test.test_importlib.test_locks',
+            'test.test_importlib.test_main',
+            'test.test_importlib.test_metadata_api',
+            'test.test_importlib.test_namespace_pkgs',
+            'test.test_importlib.test_open',
+            'test.test_importlib.test_path',
+            'test.test_importlib.test_read',
+            'test.test_importlib.test_resource',
+            'test.test_importlib.test_spec',
+            'test.test_importlib.test_util',
+            'test.test_importlib.test_windows',
+            'test.test_importlib.test_zip',
+            'test.test_importlib.util',
+            'test.test_importlib.zipdata01',
+            'test.test_importlib.zipdata02',
+            'test.test_import.__main__', 'test.test_index',
+            'test.test_inspect', 'test.test_int',
+            'test.test_int_literal', 'test.test_io',
+            'test.test_ioctl', 'test.test_ipaddress',
+            'test.test_isinstance', 'test.test_iter',
+            'test.test_iterlen', 'test.test_itertools',
+            'test.test_json', 'test.test_json.__main__',
+            'test.test_json.test_decode',
+            'test.test_json.test_default', 'test.test_json.test_dump',
+            'test.test_json.test_encode_basestring_ascii',
+            'test.test_json.test_enum', 'test.test_json.test_fail',
+            'test.test_json.test_float', 'test.test_json.test_indent',
+            'test.test_json.test_pass1', 'test.test_json.test_pass2',
+            'test.test_json.test_pass3',
+            'test.test_json.test_recursion',
+            'test.test_json.test_scanstring',
+            'test.test_json.test_separators',
+            'test.test_json.test_speedups',
+            'test.test_json.test_tool', 'test.test_json.test_unicode',
+            'test.test_keyword', 'test.test_keywordonlyarg',
+            'test.test_kqueue', 'test.test_largefile',
+            'test.test_lib2to3', 'test.test_linecache',
+            'test.test_list', 'test.test_listcomps',
+            'test.test_lltrace', 'test.test__locale',
+            'test.test_locale', 'test.test_logging', 'test.test_long',
+            'test.test_longexp', 'test.test_lzma',
+            'test.test_mailbox', 'test.test_mailcap',
+            'test.test_marshal', 'test.test_math',
+            'test.test_memoryio', 'test.test_memoryview',
+            'test.test_metaclass', 'test.test_mimetypes',
+            'test.test_minidom', 'test.test_mmap', 'test.test_module',
+            'test.test_modulefinder', 'test.test_msilib',
+            'test.test_multibytecodec', 'test._test_multiprocessing',
+            'test.test_multiprocessing_fork',
+            'test.test_multiprocessing_forkserver',
+            'test.test_multiprocessing_main_handling',
+            'test.test_multiprocessing_spawn',
+            'test.test_named_expressions', 'test.test_netrc',
+            'test.test_nis', 'test.test_nntplib',
+            'test.test_normalization', 'test.test_ntpath',
+            'test.test_numeric_tower', 'test.test__opcode',
+            'test.test_opcodes', 'test.test_openpty',
+            'test.test_operator', 'test.test_optparse',
+            'test.test_ordered_dict', 'test.test_os',
+            'test.test_ossaudiodev', 'test.test_osx_env',
+            'test.test__osx_support', 'test.test_parser',
+            'test.test_pathlib', 'test.test_pdb',
+            'test.test_peepholer', 'test.test_pickle',
+            'test.test_picklebuffer', 'test.test_pickletools',
+            'test.test_pipes', 'test.test_pkg', 'test.test_pkgimport',
+            'test.test_pkgutil', 'test.test_platform',
+            'test.test_plistlib', 'test.test_poll', 'test.test_popen',
+            'test.test_poplib', 'test.test_positional_only_arg',
+            'test.test_posix', 'test.test_posixpath', 'test.test_pow',
+            'test.test_pprint', 'test.test_print',
+            'test.test_profile', 'test.test_property',
+            'test.test_pstats', 'test.test_pty', 'test.test_pulldom',
+            'test.test_pwd', 'test.test_pyclbr',
+            'test.test_py_compile', 'test.test_pydoc',
+            'test.test_pyexpat', 'test.test_queue',
+            'test.test_quopri', 'test.test_raise', 'test.test_random',
+            'test.test_range', 'test.test_re', 'test.test_readline',
+            'test.test_regrtest', 'test.test_repl',
+            'test.test_reprlib', 'test.test_resource',
+            'test.test_richcmp', 'test.test_rlcompleter',
+            'test.test_robotparser', 'test.test_runpy',
+            'test.test_sax', 'test.test_sched', 'test.test_scope',
+            'test.test_script_helper', 'test.test_secrets',
+            'test.test_select', 'test.test_selectors',
+            'test.test_set', 'test.test_setcomps', 'test.test_shelve',
+            'test.test_shlex', 'test.test_shutil', 'test.test_signal',
+            'test.test_site', 'test.test_slice', 'test.test_smtpd',
+            'test.test_smtplib', 'test.test_smtpnet',
+            'test.test_sndhdr', 'test.test_socket',
+            'test.test_socketserver', 'test.test_sort',
+            'test.test_source_encoding', 'test.test_spwd',
+            'test.test_sqlite', 'test.test_ssl',
+            'test.test_startfile', 'test.test_stat',
+            'test.test_statistics', 'test.test_strftime',
+            'test.test_string', 'test.test_string_literals',
+            'test.test_stringprep', 'test.test_strptime',
+            'test.test_strtod', 'test.test_struct',
+            'test.test_structmembers', 'test.test_structseq',
+            'test.test_subclassinit', 'test.test_subprocess',
+            'test.test_sunau', 'test.test_sundry', 'test.test_super',
+            'test.test_support', 'test.test_symbol',
+            'test.test_symtable', 'test.test_syntax', 'test.test_sys',
+            'test.test_sysconfig', 'test.test_syslog',
+            'test.test_sys_setprofile', 'test.test_sys_settrace',
+            'test.test_tabnanny', 'test.test_tarfile',
+            'test.test_tcl', 'test.test_telnetlib',
+            'test.test_tempfile', 'test.test_textwrap',
+            'test.test_thread', 'test.test_threaded_import',
+            'test.test_threadedtempfile', 'test.test_threading',
+            'test.test_threading_local', 'test.test_threadsignals',
+            'test.test_time', 'test.test_timeit', 'test.test_timeout',
+            'test.test_tix', 'test.test_tk', 'test.test_tokenize',
+            'test.test_tools', 'test.test_tools.__main__',
+            'test.test_tools.test_fixcid',
+            'test.test_tools.test_gprof2html',
+            'test.test_tools.test_i18n', 'test.test_tools.test_lll',
+            'test.test_tools.test_md5sum',
+            'test.test_tools.test_pathfix',
+            'test.test_tools.test_pdeps',
+            'test.test_tools.test_pindent',
+            'test.test_tools.test_reindent',
+            'test.test_tools.test_sundry',
+            'test.test_tools.test_unparse', 'test.test_trace',
+            'test.test_traceback', 'test.test_tracemalloc',
+            'test.test_ttk_guionly', 'test.test_ttk_textonly',
+            'test.test_tuple', 'test.test_turtle',
+            'test.test_typechecks', 'test.test_type_comments',
+            'test.test_types', 'test.test_typing', 'test.test_ucn',
+            'test.test_unary', 'test.test_unicode',
+            'test.test_unicodedata', 'test.test_unicode_file',
+            'test.test_unicode_file_functions',
+            'test.test_unicode_identifiers', 'test.test_unittest',
+            'test.test_univnewlines', 'test.test_unpack',
+            'test.test_unpack_ex', 'test.test_urllib',
+            'test.test_urllib2', 'test.test_urllib2_localnet',
+            'test.test_urllib2net', 'test.test_urllibnet',
+            'test.test_urllib_response', 'test.test_urlparse',
+            'test.test_userdict', 'test.test_userlist',
+            'test.test_userstring', 'test.test_utf8_mode',
+            'test.test_utf8source', 'test.test_uu', 'test.test_uuid',
+            'test.test_venv', 'test.test_wait3', 'test.test_wait4',
+            'test.test_warnings',
+            'test.test_warnings.data.import_warning',
+            'test.test_warnings.data.stacklevel',
+            'test.test_warnings.__main__', 'test.test_wave',
+            'test.test_weakref', 'test.test_weakset',
+            'test.test_webbrowser', 'test.test_winconsoleio',
+            'test.test_winreg', 'test.test_winsound',
+            'test.test_with', 'test.test_wsgiref', 'test.test_xdrlib',
+            'test.test_xml_dom_minicompat', 'test.test_xml_etree',
+            'test.test_xml_etree_c', 'test.test_xmlrpc',
+            'test.test_xmlrpc_net', 'test.test__xxsubinterpreters',
+            'test.test_xxtestfuzz', 'test.test_yield_from',
+            'test.test_zipapp', 'test.test_zipfile',
+            'test.test_zipfile64', 'test.test_zipimport',
+            'test.test_zipimport_support', 'test.test_zlib',
+            'test.tf_inherit_check', 'test.threaded_import_hangers',
+            'test.time_hashlib', 'test.tracedmodules',
+            'test.tracedmodules.testmod', 'test.win_console_handler',
+            'test.xmltests',
+            'test.ziptestdata.testdata_module_inside_zip', 'textwrap',
+            'this', '_thread', 'threading', '_threading_local',
+            'time', 'timeit', '_tkinter', 'tkinter',
+            'tkinter.colorchooser', 'tkinter.commondialog',
+            'tkinter.constants', 'tkinter.dialog', 'tkinter.dnd',
+            'tkinter.filedialog', 'tkinter.font', 'tkinter.__main__',
+            'tkinter.messagebox', 'tkinter.scrolledtext',
+            'tkinter.simpledialog', 'tkinter.test',
+            'tkinter.test.runtktests', 'tkinter.test.support',
+            'tkinter.test.test_tkinter',
+            'tkinter.test.test_tkinter.test_font',
+            'tkinter.test.test_tkinter.test_geometry_managers',
+            'tkinter.test.test_tkinter.test_images',
+            'tkinter.test.test_tkinter.test_loadtk',
+            'tkinter.test.test_tkinter.test_misc',
+            'tkinter.test.test_tkinter.test_text',
+            'tkinter.test.test_tkinter.test_variables',
+            'tkinter.test.test_tkinter.test_widgets',
+            'tkinter.test.test_ttk',
+            'tkinter.test.test_ttk.test_extensions',
+            'tkinter.test.test_ttk.test_functions',
+            'tkinter.test.test_ttk.test_style',
+            'tkinter.test.test_ttk.test_widgets',
+            'tkinter.test.widget_tests', 'tkinter.tix', 'tkinter.ttk',
+            'token', 'tokenize', 'trace', 'traceback', '_tracemalloc',
+            'tracemalloc', 'tty', 'turtle', 'turtledemo',
+            'turtledemo.bytedesign', 'turtledemo.chaos',
+            'turtledemo.clock', 'turtledemo.colormixer',
+            'turtledemo.forest', 'turtledemo.fractalcurves',
+            'turtledemo.lindenmayer', 'turtledemo.__main__',
+            'turtledemo.minimal_hanoi', 'turtledemo.nim',
+            'turtledemo.paint', 'turtledemo.peace',
+            'turtledemo.penrose', 'turtledemo.planet_and_moon',
+            'turtledemo.rosette', 'turtledemo.round_dance',
+            'turtledemo.sorting_animate', 'turtledemo.tree',
+            'turtledemo.two_canvases', 'turtledemo.yinyang', 'types',
+            'typing', 'typing.io', 'typing.re', 'unicodedata',
+            'unittest', 'unittest.async_case', 'unittest.case',
+            'unittest.loader', 'unittest._log', 'unittest.__main__',
+            'unittest.main', 'unittest.mock', 'unittest.result',
+            'unittest.runner', 'unittest.signals', 'unittest.suite',
+            'unittest.test', 'unittest.test.dummy',
+            'unittest.test.__main__', 'unittest.test.support',
+            'unittest.test.test_assertions',
+            'unittest.test.test_async_case',
+            'unittest.test.test_break', 'unittest.test.test_case',
+            'unittest.test.test_discovery',
+            'unittest.test.test_functiontestcase',
+            'unittest.test.test_loader', 'unittest.test.testmock',
+            'unittest.test.testmock.__main__',
+            'unittest.test.testmock.support',
+            'unittest.test.testmock.testasync',
+            'unittest.test.testmock.testcallable',
+            'unittest.test.testmock.testhelpers',
+            'unittest.test.testmock.testmagicmethods',
+            'unittest.test.testmock.testmock',
+            'unittest.test.testmock.testpatch',
+            'unittest.test.testmock.testsealable',
+            'unittest.test.testmock.testsentinel',
+            'unittest.test.testmock.testwith',
+            'unittest.test.test_program', 'unittest.test.test_result',
+            'unittest.test.test_runner', 'unittest.test.test_setups',
+            'unittest.test.test_skipping', 'unittest.test.test_suite',
+            'unittest.test._test_warnings', 'unittest.util', 'urllib',
+            'urllib.error', 'urllib.parse', 'urllib.request',
+            'urllib.response', 'urllib.robotparser', 'uu', '_uuid',
+            'uuid', 'venv', 'venv.__main__', '_warnings', 'warnings',
+            'wave', '_weakref', 'weakref', '_weakrefset',
+            'webbrowser', 'winreg', 'winsound', 'wsgiref',
+            'wsgiref.handlers', 'wsgiref.headers',
+            'wsgiref.simple_server', 'wsgiref.util',
+            'wsgiref.validate', 'xdrlib', 'xml', 'xml.dom',
+            'xml.dom.domreg', 'xml.dom.expatbuilder',
+            'xml.dom.minicompat', 'xml.dom.minidom',
+            'xml.dom.NodeFilter', 'xml.dom.pulldom',
+            'xml.dom.xmlbuilder', 'xml.etree',
+            'xml.etree.cElementTree', 'xml.etree.ElementInclude',
+            'xml.etree.ElementPath', 'xml.etree.ElementTree',
+            'xml.parsers', 'xml.parsers.expat',
+            'xml.parsers.expat.errors', 'xml.parsers.expat.model',
+            'xmlrpc', 'xmlrpc.client', 'xmlrpc.server', 'xml.sax',
+            'xml.sax._exceptions', 'xml.sax.expatreader',
+            'xml.sax.handler', 'xml.sax.saxutils',
+            'xml.sax.xmlreader', 'xxlimited', '_xxsubinterpreters',
+            'xxsubtype', '_xxtestfuzz', 'zipapp', 'zipfile',
+            'zipimport', 'zlib', 'zoneinfo', 'zoneinfo._common',
             'zoneinfo._tzpath', 'zoneinfo._zoneinfo']
         # Sometimes, a module is imported in python using a different name than is required in the "pip install" command. Keep track of these exceptions here.
-        self.module_aliases: Dict[str, str] = {
+        self.module_aliases: dict[str, str] = {
             # I added these manually by asking ChatGPT what pip aliases are different than their import commands:
             # 'import name' : 'pip install name'
-            'osgeo': 'gdal', #osgeo is the import name for gdal
+            'osgeo': 'gdal',  # osgeo is the import name for gdal
             'ffmpeg': 'ffmpeg-python',
             'cv2': 'opencv-python',
             'jnp': 'jax.numpy',
-#            'sm': 'statsmodels',
+            # 'sm': 'statsmodels',
             'netCDF4': 'netcdf4',
             'skill_metrics': 'SkillMetrics',
             # This list is from the pipreqs repo in file "mapping", retrieved on 2024-08-15 from here: https://github.com/bndr/pipreqs
@@ -2055,7 +2057,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
             'relstorage': 'RelStorage',
             'reportapi': 'django_reportapi',
             'reprlib': 'pies2overrides',
-            #'requests': 'Requests', # This doesn't work on my Ubuntu machine.
+            # 'requests': 'Requests', # This doesn't work on my Ubuntu machine.
             'requirements': 'requirements_parser',
             'rest_framework': 'djangorestframework',
             'restclient': 'py_restclient',
@@ -2164,7 +2166,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
             'twitter': 'python_twitter',
             'txclib': 'transifex_client',
             'u115': '115wangpan',
-            #'unidecode': 'Unidecode', # This doesn't work on my Ubuntu machine.
+            # 'unidecode': 'Unidecode', # This doesn't work on my Ubuntu machine.
             'universe': 'ansible_universe',
             'usb': 'pyusb',
             'useless': 'useless.pipes',
@@ -2216,12 +2218,12 @@ If you're using the bash shell, follow these steps to add the alias manually:
             'zopyx': 'zopyx.textindexng3'}
         self.reversed_module_aliases = {v: k for k, v in self.module_aliases.items()}
         # Set of known bad imports that should be ignored.
-        self.known_bad_imports: Set[str] = {'__builtin__', 'snakeClass', 'GPUampcor', 'pathfinding_salvo_rework', 'seaborn', 'DQN', 'bayesOpt', 'tkinter', 'msvcrt', 'BaseHTTPServer', 'urlparse', 'tkFileDialog', 'tkMessageBox', 'ConfigParser', 'Cookie', 'HTMLParser', 'Queue', 'SocketServer', 'StringIO', 'Tkinter', 'UserDict', 'cPickle', 'cStringIO', 'cookielib', 'htmlentitydefs', 'httplib', 'tkFont', 'tkMessageBox', 'urllib2', 'non_existent_module'} # 'BaseHTTPServer', 'urlparse', 'tkFileDialog', 'tkMessageBox', 'ConfigParser', 'Cookie', 'HTMLParser', 'Queue', 'SocketServer', 'StringIO', 'Tkinter', 'UserDict', 'cPickle', 'cStringIO', 'cookielib', 'htmlentitydefs', 'httplib', 'tkFont', 'tkMessageBox', 'urllib2' are Python 2 modules - we don't want to try to install them. A more general approach would involve importing stdlib_list and using that to filter out stdlib modules from Python 2 and Python 3: https://pypi.org/project/stdlib-list/
+        self.known_bad_imports: set[str] = {'__builtin__', 'snakeClass', 'GPUampcor', 'pathfinding_salvo_rework', 'seaborn', 'DQN', 'bayesOpt', 'tkinter', 'msvcrt', 'BaseHTTPServer', 'urlparse', 'tkFileDialog', 'tkMessageBox', 'ConfigParser', 'Cookie', 'HTMLParser', 'Queue', 'SocketServer', 'StringIO', 'Tkinter', 'UserDict', 'cPickle', 'cStringIO', 'cookielib', 'htmlentitydefs', 'httplib', 'tkFont', 'tkMessageBox', 'urllib2', 'non_existent_module'}  # 'BaseHTTPServer', 'urlparse', 'tkFileDialog', 'tkMessageBox', 'ConfigParser', 'Cookie', 'HTMLParser', 'Queue', 'SocketServer', 'StringIO', 'Tkinter', 'UserDict', 'cPickle', 'cStringIO', 'cookielib', 'htmlentitydefs', 'httplib', 'tkFont', 'tkMessageBox', 'urllib2' are Python 2 modules - we don't want to try to install them. A more general approach would involve importing stdlib_list and using that to filter out stdlib modules from Python 2 and Python 3: https://pypi.org/project/stdlib-list/
         # https://chatgpt.com/share/687000fd-be84-8006-a7f4-06af4b1e0eda
         # List of unusual imports that are not standard library modules or packages.
-        self.unusual_imports: List[str] = ['a', 'an', 'dl', 'the', 'it', 'x', 'xx', 'above', 'another', '__builtin__', 'within']
+        self.unusual_imports: list[str] = ['a', 'an', 'dl', 'the', 'it', 'x', 'xx', 'above', 'another', '__builtin__', 'within']
         # List of directories to stay out of when searching for local custom imports because they're filled with standard library modules or other irrelevant files.
-        self.stay_out_list: List[str] = ['myenv', 'anaconda3', '.conda',os.sep+'lib'+os.sep, '.vscode']
+        self.stay_out_list: list[str] = ['myenv', 'anaconda3', '.conda', os.sep+'lib'+os.sep, '.vscode']
 
     def set_venv_dir(self, venv_dir: str) -> None:
         """Set the directory for the virtual environment."""
@@ -2232,10 +2234,11 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.requirements_file    = os.path.join(self.venv_dir, "requirements.txt")
         self.download_script_path = os.path.join(self.venv_dir, "download_packages.sh")
 
+
 def parse_arguments(options: Options) -> None:
     """Parse command-line arguments."""
 
-    parser = argparse.ArgumentParser(description="Run a python script with optional flags.")    
+    parser = argparse.ArgumentParser(description="Run a python script with optional flags.")
     parser.add_argument('-version',     action='store_true', help='Print the version of this program.')
     parser.add_argument('-manual',      action='store_true', help='Print instructions for manually adding the alias to the shell configuration file.')
     parser.add_argument('-debug',       action='store_true', help='Run this program in debug mode, which prints additional debug messages.')
@@ -2259,10 +2262,11 @@ def parse_arguments(options: Options) -> None:
     if len(sys.argv) == 1:
         parser.print_help()
         sys.exit(0)
-    
+
     # Parse known args, and then manually add the script_args
     args = parser.parse_args()
     options.args = args
+
 
 def detect_shell() -> str:
     """Detect the current shell."""
@@ -2270,6 +2274,7 @@ def detect_shell() -> str:
     if shell:
         return os.path.basename(shell)
     return None
+
 
 def get_shell_rc_file(options: Options) -> str:
     """Get the shell configuration file for the current user."""
@@ -2286,6 +2291,7 @@ def get_shell_rc_file(options: Options) -> str:
         return os.path.join(home, ".tcshrc")
     return None
 
+
 def get_alias_command(options: Options) -> str:
     """Get the alias command for the shell."""
     if options.shell in ["bash", "zsh"]:
@@ -2296,6 +2302,7 @@ def get_alias_command(options: Options) -> str:
         return f"alias {options.args.alias} '{options.python_command} {options.my_filepath}'"
     return None
 
+
 def alias_exists(rc_file: str, alias_pattern: str) -> bool:
     """Check if an alias exists in a file using a pattern."""
     try:
@@ -2305,7 +2312,8 @@ def alias_exists(rc_file: str, alias_pattern: str) -> bool:
     except FileNotFoundError:
         return False
 
-def get_additional_alias_files(options: Options) -> List[str]:
+
+def get_additional_alias_files(options: Options) -> list[str]:
     """Get additional alias files for the shell."""
     home = os.path.expanduser("~")
     if options.shell == "bash":
@@ -2315,7 +2323,8 @@ def get_additional_alias_files(options: Options) -> List[str]:
     # Add other shells if they have alias files
     return []
 
-def add_alias_to_rc(options: Options, rc_file: str, alias_command: str, additional_files: List[str] = []) -> None:
+
+def add_alias_to_rc(options: Options, rc_file: str, alias_command: str, additional_files: list[str] = []) -> None:
     """Add an alias to the shell configuration file."""
     try:
         all_files = [rc_file] + additional_files
@@ -2338,6 +2347,7 @@ def add_alias_to_rc(options: Options, rc_file: str, alias_command: str, addition
         logging.error(f"An error occurred while adding the alias: {e}\nException type: ", exc_info=True)
         logging.error(options.manual_instructions)
 
+
 def add_alias(options: Options) -> None:
     """Add an alias to the shell configuration file."""
     options.shell = detect_shell()
@@ -2354,6 +2364,7 @@ def add_alias(options: Options) -> None:
             logging.info(f"Unsupported shell configuration file for shell: {options.shell}")
     else:
         logging.info("Could not detect shell")
+
 
 def _safe_eval_node(node: ast.AST) -> Any:
     """
@@ -2401,6 +2412,7 @@ def _safe_eval_node(node: ast.AST) -> Any:
     # anything else is disallowed
     raise ValueError(f"Unsupported expression: {ast.dump(node)}")
 
+
 def safe_eval(expr: str) -> Any | None:
     """
     Safely evaluate a Python expression string containing only:
@@ -2416,6 +2428,7 @@ def safe_eval(expr: str) -> Any | None:
     except (SyntaxError, ValueError) as e:
         logging.debug(f"safe_eval: Unsupported expression: {expr!r}: {e}")
         return None
+
 
 class SysPathVisitor(ast.NodeVisitor):
     """Visitor class to extract sys.path modifications."""
@@ -2449,6 +2462,7 @@ class SysPathVisitor(ast.NodeVisitor):
                     self.paths.add(path)
         self.generic_visit(node)
 
+
 def process_import(options: Options, module_name: str, file_path: str) -> bool:
     """Process an import by checking if it's a local custom module or a standard import, and handle it accordingly."""
     if module_name in options.standard_modules:
@@ -2478,7 +2492,7 @@ def process_import(options: Options, module_name: str, file_path: str) -> bool:
         options.samedir_files.append(potential_file_path)
         logging.debug(f"Added same directory file: {potential_file_path}")
         return True
-    
+
     # Check if the import is a package (directory with __init__.py)
     potential_dir_path = os.path.abspath(os.path.join(base_dir, module_path))
     logging.debug(f"Constructed potential directory path: {potential_dir_path}")
@@ -2489,28 +2503,31 @@ def process_import(options: Options, module_name: str, file_path: str) -> bool:
         options.subfolders.append(module_path)
         logging.debug(f"Added subfolder: {module_path}")
         return True
-    
+
     logging.debug(f"Could not resolve local import, treating as external: {module_name}")
     return False
+
 
 class FunctionInfo:
     """Class to hold information about a function."""
     def __init__(self, function_name: str) -> None:
         """Initialize the function information."""
         self.function_name                 = function_name
-        self.imports_in_function: Set[str] = set()
-        self.function_calls:      Set[str] = set()
+        self.imports_in_function: set[str] = set()
+        self.function_calls:      set[str] = set()
+
 
 class ModuleInfo:
     """Class to hold information about a module."""
     def __init__(self, module_name: str) -> None:
         """Initialize the module information."""
         self.module_name                                = module_name
-        self.top_level_imports: Set[str]                = set()
-        self.functions:         Dict[str, FunctionInfo] = {}
-        self.top_level_calls:   Set[str]                = set()
-        self.aliases:           Dict[str, str]          = {}
-        self.classes:           Set[str]                = set()
+        self.top_level_imports: set[str]                = set()
+        self.functions:         dict[str, FunctionInfo] = {}
+        self.top_level_calls:   set[str]                = set()
+        self.aliases:           dict[str, str]          = {}
+        self.classes:           set[str]                = set()
+
 
 class ImportFunctionCollector(ast.NodeVisitor):
     """Visitor class to collect function and import information from a module."""
@@ -2666,25 +2683,26 @@ class ImportFunctionCollector(ast.NodeVisitor):
 
     def get_full_name(self, node: ast.AST) -> str | None:
         """Get the full name of a node, including any aliases."""
-        if isinstance(node, ast.Name): # Handle variable names
-            if node.id in ('self', 'cls'): # Handle class methods
+        if isinstance(node, ast.Name):  # Handle variable names
+            if node.id in ('self', 'cls'):  # Handle class methods
                 if self.current_class:
                     return self.current_class
                 else:
                     return node.id
-            elif node.id == 'super': # Handle super() calls
+            elif node.id == 'super':  # Handle super() calls
                 return 'super'
             else:
                 return self.aliases.get(node.id, node.id)
-        elif isinstance(node, ast.Attribute): # Handle attribute access
+        elif isinstance(node, ast.Attribute):  # Handle attribute access
             value = self.get_full_name(node.value)
             return f"{value}.{node.attr}" if value else node.attr
-        elif isinstance(node, ast.Call): # Handle super() calls
+        elif isinstance(node, ast.Call):  # Handle super() calls
             func_name = self.get_full_name(node.func)
             return func_name
         return None
 
-def split_function_name(called_func: str, default_module: str) -> Tuple[str, str]:
+
+def split_function_name(called_func: str, default_module: str) -> tuple[str, str]:
     """Split a fully qualified function name into module and function parts. If there's no dot, the default_module is used as the module."""
     parts = called_func.split('.')
     if len(parts) > 1:
@@ -2695,7 +2713,8 @@ def split_function_name(called_func: str, default_module: str) -> Tuple[str, str
         called_name = called_func
     return called_module, called_name
 
-def build_call_graph(modules_info: Dict[str, ModuleInfo]) -> Dict[str, Set[str]]:
+
+def build_call_graph(modules_info: dict[str, ModuleInfo]) -> dict[str, set[str]]:
     """Build a call graph from the function calls in the modules."""
     call_graph = {}
     for module_name, module_info in modules_info.items():
@@ -2716,10 +2735,11 @@ def build_call_graph(modules_info: Dict[str, ModuleInfo]) -> Dict[str, Set[str]]
         logging.debug(f"{func} calls: {calls}")
     return call_graph
 
+
 def collect_used_imports(start_module: str, start_func: str,
-                         call_graph:   Dict[str, Set[str]],
-                         modules_info: Dict[str, ModuleInfo],
-                         visited: set[str] = None) -> Set[str]:
+                         call_graph:   dict[str, set[str]],
+                         modules_info: dict[str, ModuleInfo],
+                         visited: set[str] = None) -> set[str]:
     """Collect all imports used in a function and its callees."""
     if visited is None:
         visited = set()
@@ -2748,6 +2768,7 @@ def collect_used_imports(start_module: str, start_func: str,
     else:
         logging.debug(f"No module info found for {start_module}")
     return imports
+
 
 def find_imports_in_script(options: Options, first_path: str) -> None:
     """Find all imports in the script and its dependencies."""
@@ -2786,7 +2807,7 @@ def find_imports_in_script(options: Options, first_path: str) -> None:
             continue
         try:
             tree = ud.my_ast_parse(file_content, module_path)
-        except:
+        except BaseException:
             breakpoint()
         collector = ImportFunctionCollector(module_name, options, module_path)
         collector.visit(tree)
@@ -2811,6 +2832,7 @@ def find_imports_in_script(options: Options, first_path: str) -> None:
     # Collect used imports starting from the first module
     used_imports = set()
     visited_funcs = set()
+
     def collect_imports_from_module(module_name: str) -> None:
         """Recursively collect used imports from a module."""
         module_info = modules_info[module_name]
@@ -2820,7 +2842,7 @@ def find_imports_in_script(options: Options, first_path: str) -> None:
             logging.debug(f"Collecting used imports for module '{called_module}' and func_name '{called_name}'")
             used_imports.update(
                 collect_used_imports(
-                    called_module, # Use the extracted module name
+                    called_module,  # Use the extracted module name
                     called_name,   # Use the extracted function name
                     call_graph,
                     modules_info,
@@ -2874,18 +2896,19 @@ def find_imports_in_script(options: Options, first_path: str) -> None:
                 # If not a local module, add to options.all_imports
                 options.all_imports.add(import_name)
 
+
 def add_dependencies(options: Options) -> None:
     """Add dependencies for uninstalled imports."""
     # Create a copy to iterate over since we'll be modifying the set
     initial_packages = options.uninstalled_imports.copy()
-    
+
     for package in initial_packages:
         if package in options.also_needs:
             dependencies = options.also_needs[package]
             if not options.rawlog:
                 logging.info(f"Adding dependencies for {package}: {dependencies}")
             options.uninstalled_imports.update(dependencies)
-    
+
     # Handle nested dependencies by repeating this process until no new dependencies are added.
     added = True
     while added:
@@ -2900,6 +2923,7 @@ def add_dependencies(options: Options) -> None:
                         logging.info(f"Adding nested dependencies for {package}: {new_dependencies}")
                     options.uninstalled_imports.update(new_dependencies)
                     added = True
+
 
 def split_imports(options: Options) -> None:
     """Split imports into installed, uninstalled, and bad imports."""
@@ -2917,8 +2941,8 @@ def split_imports(options: Options) -> None:
         if not options.rawlog: logging.info("No imports found.")
         return
 
-    max_length = max(len(imp) for imp in options.all_imports) # Longest import name length, used for formatting
-    max_digits = len(str(len(options.all_imports))) # Maximum number of digits in import count, also used for formatting
+    max_length = max(len(imp) for imp in options.all_imports)  # Longest import name length, used for formatting
+    max_digits = len(str(len(options.all_imports)))  # Maximum number of digits in import count, also used for formatting
 
     with tempfile.TemporaryDirectory() as venv_dir:
         venv.create(venv_dir, with_pip=True)
@@ -2942,6 +2966,7 @@ def split_imports(options: Options) -> None:
         options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
     add_dependencies(options)
     return
+
 
 def is_python_script(path: str) -> bool:
     """
@@ -2969,6 +2994,7 @@ def is_python_script(path: str) -> bool:
         return False
     return bool(re.match(r'#!.*\bpython[0-9.]*\b', first_line))
 
+
 def list_packages(options: Options) -> None:
     """Examine command line arguments to determine if we're looking at a directory, a single python script, or a list of python scripts. List all installed and uninstalled packages that are imported in that directory or python script(s). Return these sets inside the options object."""
     if getattr(options.args, 'full', False):
@@ -2994,7 +3020,7 @@ def list_packages(options: Options) -> None:
                 options.script_dir_or_file_or_list = options.python_script
     logging.debug(f"{options.script_dir_or_file_or_list = }")
 
-    if type(options.script_dir_or_file_or_list) == str:
+    if isinstance(options.script_dir_or_file_or_list, str):
         options.script_dir_or_file_or_list = os.path.expanduser(options.script_dir_or_file_or_list)
         options.loaded_custom_modules = set()
         if os.path.isfile(options.script_dir_or_file_or_list):
@@ -3039,8 +3065,9 @@ def list_packages(options: Options) -> None:
 
     # Filter out invalid imports before splitting
     options.all_imports = {imp for imp in options.all_imports if re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', imp)}
-    
+
     split_imports(options)
+
 
 def get_all_imports(options: Options, directory: str) -> None:
     """Get all imports from all Python scripts in a directory."""
@@ -3060,12 +3087,14 @@ def get_all_imports(options: Options, directory: str) -> None:
 
     if not options.rawlog: logging.info(f"\nFinished processing files in {directory}.")
 
+
 def generate_requirements(directory: str) -> None:
     """Generate a requirements file using pipreqs."""
     try:
         pipreqs.generate_requirements(directory)
     except (pipreqs.PipreqsError, pipreqs.PipreqsWarning) as e:
         raise ValueError(f"Error generating requirements file in {directory}") from e
+
 
 def download_packages(options: Options) -> bool:
     """Install packages in a virtual environment."""
@@ -3107,6 +3136,7 @@ def download_packages(options: Options) -> bool:
         logging.error(f"Error writing or executing download script: {e}\nException type: ", exc_info=True)
         return False
 
+
 def install_packages_simultaneously(options: Options) -> bool:
     """Install all packages simultaneously in the virtual environment."""
     try:
@@ -3129,17 +3159,19 @@ def install_packages_simultaneously(options: Options) -> bool:
         logging.error(f"Error during simultaneous installation: {e}\nException type: ", exc_info=True)
         return False
 
+
 def install_packages_individually(options: Options) -> bool:
     """Install packages individually in the virtual environment."""
     failed_packages = []
     for package in options.uninstalled_imports:
         if not install_package(package, options):
             failed_packages.append(package)
-    
+
     if failed_packages:
         logging.error(f"Failed to install the following packages: {', '.join(failed_packages)}")
     else:
         if not options.rawlog: logging.info("All packages installed successfully.")
+
 
 def install_package(package_name: str, options: Options) -> bool:
     """Install a single package and return the success status (True if successful, False otherwise)."""
@@ -3171,6 +3203,7 @@ def install_package(package_name: str, options: Options) -> bool:
     except Exception as e:
         logging.error(f"Error installing package {package_name}: {e}\nException type: ", exc_info=True)
         return False
+
 
 def check_packages_in_venv(options: Options, package: str | None = None, venv_dir: str | None = None) -> bool:
     """Create and run a script to test package imports in the virtual environment. Add packages from the requirements.txt file if '-reqs' is specified as a runtime argument."""
@@ -3209,11 +3242,12 @@ END
         # Since ud.my_popen expects a list of commands, we'll pass the shell command directly as a single argument list
         command_list = ['/bin/bash', '-c', test_script]
         # Run the command using the custom ud.my_popen function
-        result = ud.my_popen(command_list, True) # True means to suppress output.
+        result = ud.my_popen(command_list, True)  # True means to suppress output.
         return "packages imported successfully" in result.stdout
     except subprocess.CalledProcessError as e:
         logging.error(f"Error running test script: {e}\nException type: ", exc_info=True)
         return False
+
 
 def recover_pip_versions(output: str, options: Options) -> None:
     """Parse the output to recover the current and new pip versions."""
@@ -3230,12 +3264,13 @@ def recover_pip_versions(output: str, options: Options) -> None:
         if not options.rawlog: logging.info(f"Recovered current pip version: {options.current_pip_version}")
     else:
         logging.warning("Failed to recover current pip version from output.")
-    
+
     if new_version_match:
         options.new_pip_version = new_version_match.group(1)
         if not options.rawlog: logging.info(f"Recovered new pip version: {options.new_pip_version}")
     else:
         logging.warning("Failed to recover new pip version from output.")
+
 
 def pretty_packages_list(options: Options) -> str:
     """Create a pretty string of the first five package names and the number of remaining packages."""
@@ -3247,8 +3282,9 @@ def pretty_packages_list(options: Options) -> str:
     else:
         first_five = '-'.join(packages_list)
         suffix = ''
-    
+
     return first_five + suffix
+
 
 def use_pip_list(options: Options) -> None:
     """Use the pip list command to find all installed packages and use that pip list to modify the uninstalled and installed imports. Add packages from the options.extra_requirements dictionary if '-reqs' is specified as a runtime argument."""
@@ -3301,7 +3337,7 @@ print("\\n".join(installed_packages + available_modules + list(builtin_modules))
         pip_list_filename = os.path.join(options.my_dir, f"pip_list_{options.timestamp}.txt")
         with open(pip_list_filename, 'w') as f:
             f.write('\n'.join(options.pip_list))
-    
+
     new_uninstalled_imports = options.installed_imports - set(options.pip_list)
     options.uninstalled_imports = options.uninstalled_imports.union(new_uninstalled_imports)
     if options.uninstalled_imports:
@@ -3311,7 +3347,8 @@ print("\\n".join(installed_packages + available_modules + list(builtin_modules))
     if getattr(options.args, 'reqs', False):
         options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
 
-def parse_extra_requirements(options: Options) -> Dict[str, str | None]:
+
+def parse_extra_requirements(options: Options) -> dict[str, str | None]:
     """Parse an extra requirements file and return a dictionary of package names (and version specifiers, if present)."""
     options.extra_requirements = {}
     file_content = ud.my_fopen(options.extra_requirements_file, suppress_errors=True, rawlog=options.rawlog)
@@ -3330,6 +3367,7 @@ def parse_extra_requirements(options: Options) -> Dict[str, str | None]:
                     options.extra_requirements[package] = version_spec
     except Exception as e:
         logging.error(f"Error parsing extra requirements file: {e}\nException type: ", exc_info=True)
+
 
 def write_requirements_file_with_extras(options: Options) -> bool:
     """Write the requirements file with the extra requirements added and generate a 'pretty' requirements string."""
@@ -3373,6 +3411,7 @@ def write_requirements_file_with_extras(options: Options) -> bool:
         return False
     return True
 
+
 def setup_virtualenv(options: Options) -> bool:
     """Setup a virtual environment and install packages."""
     use_pip_list(options)
@@ -3397,7 +3436,7 @@ def setup_virtualenv(options: Options) -> bool:
     if install_packages_simultaneously(options):
         options.simultaneous_success = True
     else:
-        options.simultaneous_success = False #This is redundant, but it's here for clarity. The 'failed' part of the venv_dir will not be removed if this is False.
+        options.simultaneous_success = False  # This is redundant, but it's here for clarity. The 'failed' part of the venv_dir will not be removed if this is False.
         logging.error("Failed to install packages simultaneously. Trying to install packages individually to see which fail, but this venv folder will still have 'failed-' in its name...")
         if not install_packages_individually(options):
             logging.error("Failed to install packages individually.")
@@ -3405,14 +3444,16 @@ def setup_virtualenv(options: Options) -> bool:
     # Check that all packages can be imported in the venv.
     return check_packages_in_venv(options)
 
+
 def is_virtualenv() -> bool:
     """Check if currently running in a virtual environment."""
     return sys.prefix != sys.base_prefix
 
+
 def get_file_operations(options: Options, script_path: str) -> None:
     """Find files that are read or written, store in options."""
     file_content = ud.my_fopen(script_path, rawlog=options.rawlog)
-    if not file_content: # Do NOT run a file if we can't read it!
+    if not file_content:  # Do NOT run a file if we can't read it!
         ud.my_critical_error(f"Failed to open {script_path}", choose_breakpoint=True)
     tree = ud.my_ast_parse(file_content, script_path)
     if not tree:
@@ -3450,10 +3491,11 @@ def get_file_operations(options: Options, script_path: str) -> None:
     visitor.visit(tree)
     return
 
+
 def get_network_operations(options: Options, script_path: str) -> None:
     """Find URLs that are downloaded and uploaded, store in options."""
     file_content = ud.my_fopen(script_path, rawlog=options.rawlog)
-    if not file_content: # Do NOT run a file if we can't read it!
+    if not file_content:  # Do NOT run a file if we can't read it!
         ud.my_critical_error(f"Failed to open {script_path}", choose_breakpoint=True)
     tree = ud.my_ast_parse(file_content, script_path)
     if not tree:
@@ -3502,6 +3544,7 @@ def get_network_operations(options: Options, script_path: str) -> None:
 
     return
 
+
 def guard_examines(options: Options) -> bool:
     """
     Examine options.python_script:
@@ -3542,13 +3585,14 @@ def guard_examines(options: Options) -> bool:
             logging.info("Download URLs: " + ", ".join(options.download_urls))
         if options.upload_urls:
             logging.info("Upload URLs: " + ", ".join(options.upload_urls))
-    
+
     return True
+
 
 def save_options_to_json(options: Options) -> None:
     """Save the options object to a JSON file."""
     options.json_filename = os.path.join(options.script_dir, f".{os.path.basename(options.python_script)}-{options.my_name}-last-used-on-{options.timestamp}.json")
-    
+
     # Convert options to a dictionary and handle sets
     options_dict = options.__dict__
 
@@ -3583,34 +3627,36 @@ def save_options_to_json(options: Options) -> None:
             elif non_serializable[key] == 'Namespace':
                 options_dict[key] = vars(options_dict[key])
             # Add more handling for other types if necessary
-    
+
     options_dict['sets'] = these_sets
 
     # Write the dictionary to a JSON file
     with open(options.json_filename, 'w') as json_file:
         json.dump(options_dict, json_file, indent=4)
 
+
 def load_options_from_json(options: Options, json_file: str) -> Options:
     """Load the options object from a JSON file."""
     with open(json_file, 'r') as file:
         options_dict = json.load(file)
-    
+
     # Create a new Options object and set attributes from the dictionary
     options_FROM_JSON = Options()
     for key, value in options_dict.items():
         setattr(options_FROM_JSON, key, value)
-    
-    #If "sets" is in options_FROM_JSON, then convert the lists back to sets.
+
+    # If "sets" is in options_FROM_JSON, then convert the lists back to sets.
     if 'sets' in options_dict:
         for key in options_dict['sets']:
             setattr(options_FROM_JSON, key, set(getattr(options_FROM_JSON, key)))
     else:
         logging.warning(f"No 'sets' key found in {json_file}.")
-    
+
     if not options.rawlog: logging.info(f"options loaded from {json_file}")
     return options_FROM_JSON
 
-def latest_venv(final_venv_folders: Dict[str, Dict[str, int]]) -> str:
+
+def latest_venv(final_venv_folders: dict[str, dict[str, int]]) -> str:
     """Return the folder with the latest timestamp."""
     latest_folder = None
     latest_timestamp = None
@@ -3622,7 +3668,8 @@ def latest_venv(final_venv_folders: Dict[str, Dict[str, int]]) -> str:
 
     return latest_folder
 
-def oldest_venv(final_venv_folders: Dict[str, Dict[str, int]]) -> str:
+
+def oldest_venv(final_venv_folders: dict[str, dict[str, int]]) -> str:
     """Return the folder with the oldest timestamp."""
     oldest_folder = None
     oldest_timestamp = None
@@ -3634,7 +3681,8 @@ def oldest_venv(final_venv_folders: Dict[str, Dict[str, int]]) -> str:
 
     return oldest_folder
 
-def smallest_venv(final_venv_folders: Dict[str, Dict[str, int]]) -> str:
+
+def smallest_venv(final_venv_folders: dict[str, dict[str, int]]) -> str:
     """Return the folder with the fewest packages."""
     smallest_folder = None
     smallest_num_packages = None
@@ -3645,6 +3693,7 @@ def smallest_venv(final_venv_folders: Dict[str, Dict[str, int]]) -> str:
             smallest_folder = folder
 
     return smallest_folder
+
 
 def check_venv_dir(options: Options, options_from_cache: Options) -> bool:
     """Check if the last used venv is still valid."""
@@ -3663,17 +3712,18 @@ def check_venv_dir(options: Options, options_from_cache: Options) -> bool:
             if not options.rawlog: logging.info(f"The cached venv directory {options_from_cache.venv_dir} is no longer valid.")
     return 0
 
+
 def find_match_dir_in_cache(options: Options) -> str:
     """Find a matching virtual environment directory in the cache."""
     if not getattr(options.args, 'latest', False) and \
        not getattr(options.args, 'oldest', False) and \
        not getattr(options.args, 'last_used', False) and \
        not getattr(options.args, 'smallest', False):
-        options.args.last_used = True #If no flags are set, then the default is to load the last used venv in the cache
+        options.args.last_used = True  # If no flags are set, then the default is to load the last used venv in the cache
     if     getattr(options.args, 'last_used', False) and \
        not getattr(options.args, 'latest', False) and \
        not getattr(options.args, 'smallest', False):
-        try: # Try to load the last used venv in the cache
+        try:  # Try to load the last used venv in the cache
             json_files = [f for f in os.listdir(options.script_dir) if f.startswith("."+os.path.basename(options.python_script)) and f.endswith('.json')]
             if json_files:
                 if len(json_files) > 1:
@@ -3687,29 +3737,29 @@ def find_match_dir_in_cache(options: Options) -> str:
             if not options.rawlog:
                 logging.error(f"Error loading last used venv from cache: {e}\nException type: ", exc_info=True)
                 logging.warning("The last used cache encountered a problem. Trying to load the latest matching venv now.")
-        options.args.latest    = True #If that didn't work, try to load the latest venv in the cache
-        options.args.last_used = False #And set this to False because it failed
+        options.args.latest    = True  # If that didn't work, try to load the latest venv in the cache
+        options.args.last_used = False  # And set this to False because it failed
     if not options.rawlog: logging.info("Checking the cache for a virtual environment with all the required packages...")
-    #Search for all venv_name folders in my_dir:
+    # Search for all venv_name folders in my_dir:
     all_venv_folders = [f for f in os.listdir(options.my_dir) if os.path.isdir(os.path.join(options.my_dir, f)) and f.startswith(options.venv_name)]
-    #Loop through the folders and eliminate folders that clearly don't have the right packages just based on their names:
+    # Loop through the folders and eliminate folders that clearly don't have the right packages just based on their names:
     venv_folders = []
     for folder in all_venv_folders:
-        #Extract the part of the folder name after the date/time:
+        # Extract the part of the folder name after the date/time:
         pretty_list = folder.split('-')[4:]
-        #Create a known_packages set from the pretty_list:
+        # Create a known_packages set from the pretty_list:
         known_packages = set()
         number_unknown_packages = 0
         for item in pretty_list:
             if item == 'and':
-                #Extract the number of unknown packages from the last part of the pretty_list:
+                # Extract the number of unknown packages from the last part of the pretty_list:
                 number_unknown_packages = int(pretty_list[-2].split('-')[0])
                 break
             known_packages.add(item)
         missing_packages = options.uninstalled_imports - known_packages
         if len(missing_packages) <= number_unknown_packages:
             venv_folders.append(folder)
-    #Loop through possibly valid venv folders and compare requirements in detail.
+    # Loop through possibly valid venv folders and compare requirements in detail.
     final_venv_folders = {}
     for folder in venv_folders:
         this_requirements_file = os.path.join(options.my_dir, folder, 'requirements.txt')
@@ -3735,10 +3785,10 @@ def find_match_dir_in_cache(options: Options) -> str:
             else:
                 if not options.rawlog: logging.error("The latest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
                 return None
-        elif    getattr(options.args, 'oldest', False) and \
-            not getattr(options.args, 'latest', False) and \
-            not getattr(options.args, 'last_used', False) and \
-            not getattr(options.args, 'smallest', False):
+        elif        getattr(options.args, 'oldest',    False) and \
+                not getattr(options.args, 'latest',    False) and \
+                not getattr(options.args, 'last_used', False) and \
+                not getattr(options.args, 'smallest',  False):
             # Return the oldest venv in the cache which has all the packages needed now
             options_oldest = copy.deepcopy(options)
             options_oldest.set_venv_dir(os.path.join(options.my_dir, oldest_venv(final_venv_folders)))
@@ -3748,10 +3798,10 @@ def find_match_dir_in_cache(options: Options) -> str:
             else:
                 if not options.rawlog: logging.error("The oldest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
                 return None
-        elif    getattr(options.args, 'smallest', False) and \
-            not getattr(options.args, 'latest', False) and \
-            not getattr(options.args, 'oldest', False) and \
-            not getattr(options.args, 'last_used', False):
+        elif        getattr(options.args, 'smallest',  False) and \
+                not getattr(options.args, 'latest',    False) and \
+                not getattr(options.args, 'oldest',    False) and \
+                not getattr(options.args, 'last_used', False):
             # Return the smallest venv in the cache which has all the packages needed now
             options_smallest = copy.deepcopy(options)
             options_smallest.set_venv_dir(os.path.join(options.my_dir, smallest_venv(final_venv_folders)))
@@ -3761,8 +3811,9 @@ def find_match_dir_in_cache(options: Options) -> str:
             else:
                 if not options.rawlog: logging.error("The smallest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
                 return None
-        else: # This should never happen
+        else:  # This should never happen
             logging.error(f"Invalid combination of flags. {getattr(options.args, 'latest', False) = }, {getattr(options.args, 'oldest', False) = }, {getattr(options.args, 'last_used', False) = }, {getattr(options.args, 'smallest', False) = }")
+
 
 def is_standard_path(options: Options, path: str) -> bool:
     """Check if the given path is a standard system path or part of a virtual environment."""
@@ -3774,39 +3825,44 @@ def is_standard_path(options: Options, path: str) -> bool:
     if any(substring in path for substring in options.stay_out_list):
         return True
     # Check if path contains virtual environment indicators
-    if 'site-packages' in path and (os.path.join('lib','python') in path or os.path.join('lib64','python') in path):
+    if 'site-packages' in path and (os.path.join('lib', 'python') in path or os.path.join('lib64', 'python') in path):
         return True
     return False
+
 
 def only_search_here_filename_boolean(filename: str, thestring: str) -> bool:
     """Check if the given filename contains thestring, which is used to determine if the search is limited to the current directory."""
     return thestring in filename
 
+
 def search_anywhere_filename_boolean(filename: str, thestring: str) -> bool:
     """Check if the given filename does NOT contain thestring. By default, those files are assumed to have been created by searching above the current directory."""
     return thestring not in filename
+
 
 def only_search_here_path_boolean(options: Options, path: str) -> bool:
     """Check if the given path is in the current directory."""
     return os.path.abspath(path).startswith(os.path.abspath('.'))
 
+
 def search_anywhere_path_boolean(options: Options, path: str) -> bool:
     """Return True regardless."""
     return True
 
-def dict_of_custom_modules(options: Options) -> Dict[str, str]:
+
+def dict_of_custom_modules(options: Options) -> dict[str, str]:
     """Create a dictionary of all local custom modules in the non-standard sys.path directories and their associated filepaths."""
-    #If -rc and -no-cache were not specified, look for a pickle file with the custom modules dictionary the last time this script was run.
+    # If -rc and -no-cache were not specified, look for a pickle file with the custom modules dictionary the last time this script was run.
 
     # I.f.f. options.search_above_this_dir is True, then search above the current directory for custom modules.
     # Either way, only load custom module pickle files that searched in the same places as requested.
-    search_above_text_to_match = 'only_search_here_' # For legacy reasons, custom module pickle files are assumed to have searched above the current directory unless this text is present in the filename.
+    search_above_text_to_match = 'only_search_here_'  # For legacy reasons, custom module pickle files are assumed to have searched above the current directory unless this text is present in the filename.
     if options.search_above_this_dir:
-        search_above_text_to_write = '_' # This will be added to the filename of the custom modules pickle file.
+        search_above_text_to_write = '_'  # This will be added to the filename of the custom modules pickle file.
         search_constraint_filename_boolean = search_anywhere_filename_boolean
         search_constraint_path_boolean     = search_anywhere_path_boolean
     else:
-        search_above_text_to_write = search_above_text_to_match # This will be added to the filename of the custom modules pickle file.
+        search_above_text_to_write = search_above_text_to_match  # This will be added to the filename of the custom modules pickle file.
         search_constraint_filename_boolean = only_search_here_filename_boolean
         search_constraint_path_boolean     = only_search_here_path_boolean
 
@@ -3841,13 +3897,14 @@ def dict_of_custom_modules(options: Options) -> Dict[str, str]:
                                 module_name = os.path.splitext(file)[0]
                                 if module_name in custom_modules and package_path == os.path.dirname(custom_modules[module_name]):
                                     del custom_modules[module_name]
-    #Now save to a pickle file:
+    # Now save to a pickle file:
     current_time = dt.datetime.now().strftime('%Y%m%d-%H%M%S')
     custom_filename = f'.{options.my_name}_custom_modules_{options.computer_name}{search_above_text_to_write}{current_time}.pkl'
     with open(custom_filename, 'wb') as f:
         if not options.rawlog: logging.info(f"Saving custom modules to {custom_filename}")
         pickle.dump(custom_modules, f)
     return custom_modules
+
 
 def check_python_version(command: str) -> bool:
     """Check if the given Python command is available and has a version of PY_VERSION or higher."""
@@ -3865,6 +3922,7 @@ def check_python_version(command: str) -> bool:
         logging.error(f"Error checking {command}: {e}\nException type: ", exc_info=True)
         return False
 
+
 def find_preferred_python_version() -> str | None:
     """Find the command for the preferred version of python (stored in univ_defs.py as PY_VERSION)."""
     try:
@@ -3878,11 +3936,12 @@ def find_preferred_python_version() -> str | None:
         preferred_python_path = subprocess.run(['which', f'python{ud.PY_VERSION}'], capture_output=True, text=True).stdout.strip()
         if preferred_python_path and check_python_version(f'python{ud.PY_VERSION}'):
             return os.path.basename(preferred_python_path)
-        
+
         return None
     except Exception as e:
         logging.error(f"Error finding python{ud.PY_VERSION}: {e}\nException type: ", exc_info=True)
         return None
+
 
 def main() -> None:
     """Main function."""
@@ -3946,7 +4005,7 @@ def main() -> None:
                     try:
                         logging.info(f"Deleting {file}")
                         os.remove(os.path.join(options.cwd, file))
-                    except:
+                    except BaseException:
                         logging.error(f"Error deleting {file}")
         sys.exit(0)
     elif getattr(options.args, 'full', False) and not getattr(options.args, 'script', False):
@@ -3974,18 +4033,18 @@ def main() -> None:
     time2 = dt.datetime.now()
     elapsed_time = time2 - time1
     if not options.rawlog: logging.info(f"dict_of_custom_modules() took {elapsed_time}")
-    
-    #Look for files in options.my_dir that start with pip_list and load the most recent one.
+
+    # Look for files in options.my_dir that start with pip_list and load the most recent one.
     options.pip_list = []
-    pip_list_files = sorted([f for f in os.listdir(options.my_dir) if f.startswith('pip_list')],reverse=True)
+    pip_list_files = sorted([f for f in os.listdir(options.my_dir) if f.startswith('pip_list')], reverse=True)
     logging.debug(f"{pip_list_files = }")
-    #If -rc was not specified, look for a text file with the pip list the last time this script was run.
+    # If -rc was not specified, look for a text file with the pip list the last time this script was run.
     if not getattr(options.args, 'rc', False) and pip_list_files:
         try:
             with open(os.path.join(options.my_dir, pip_list_files[0]), 'r') as file:
                 for line in file:
                     options.pip_list.append(line.strip())
-        except:
+        except BaseException:
             logging.error(f"Error reading {pip_list_files[0]}")
 
     start_list_packages_time = dt.datetime.now()
@@ -4052,7 +4111,7 @@ def main() -> None:
                 else:
                     echo_statement = ""
                 activate_cmd = f"bash -c '{options.activate_script}{echo_statement} && {options.venv_python} {options.python_script} {' '.join(options.script_args)}'"
-                #I want to capture the output of the subprocess.run() so that I can print it at the end.
+                # I want to capture the output of the subprocess.run() so that I can print it at the end.
                 result = subprocess.run(activate_cmd, shell=True)
                 end_time = dt.datetime.now()
                 elapsed_time = end_time - start_venv_time
@@ -4060,10 +4119,10 @@ def main() -> None:
                 if result.returncode != 0 and not options.rawlog:
                     logging.error(f"Error running script: {result.stderr}")
             if os.path.basename(options.venv_dir).startswith('failed-') and options.simultaneous_success:
-                #If the program has made it to this point, it has run successfully, so the venv directory can be renamed. It HASN'T failed. However, if it couldn't install simultaneously, then it's still a failed venv.
+                # If the program has made it to this point, it has run successfully, so the venv directory can be renamed. It HASN'T failed. However, if it couldn't install simultaneously, then it's still a failed venv.
                 os.rename(options.venv_dir, options.venv_dir.replace('failed-', ''))
                 options.set_venv_dir(options.venv_dir.replace('failed-', ''))
-                #Now edit the pyvenv.cfg file inside it:
+                # Now edit the pyvenv.cfg file inside it:
                 cfg_file_path = os.path.join(options.venv_dir, 'pyvenv.cfg')
                 # Read the content of the file
                 with open(cfg_file_path, 'r') as file:
@@ -4093,6 +4152,7 @@ def main() -> None:
 
     ud.print_all_errors(memory_handler, options.rawlog)
     logging.shutdown()
+
 
 if __name__ == "__main__":
     main()
