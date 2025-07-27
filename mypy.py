@@ -20,10 +20,11 @@ from collections.abc import Iterable
 import logging
 import tempfile
 import stat
+import shlex  # For safely quoting shell commands
 
 import univ_defs as ud
 
-__version__ = '0.1.6'
+__version__ = '0.1.7'
 
 
 class Options():
@@ -83,7 +84,6 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.script_dir_or_file_or_list: str | Iterable[str] = ''
         self.current_pip_version: str = ''
         self.new_pip_version: str = ''
-        self.activate_script: str = ''
         self.venv_dir: str = ''
         self.venv_python: str = ''
         self.venv_pip: str = ''
@@ -103,6 +103,10 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.bad_imports: set[str] = set()
         self.rawlog: bool = False
         self.pipreqs_available: bool = False
+        self.mydiff_path: str = os.path.join(self.my_dir, 'mydiff.py')
+        ud.verify_script(self.mydiff_path, ud.MYDIFF_SCRIPT)
+        self.myaudit_path: str = os.path.join(self.my_dir, 'myaudit.py')
+        ud.verify_script(self.myaudit_path, ud.MYAUDIT_SCRIPT)
         self.read_files:    list[str] = []  # List of files read       by the Python script.
         self.write_files:   list[str] = []  # List of files written    by the Python script.
         self.download_urls: list[str] = []  # List of  URLs downloaded by the Python script.
@@ -2227,8 +2231,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
 
     def set_venv_dir(self, venv_dir: str) -> None:
         """Set the directory for the virtual environment."""
-        self.venv_dir = os.path.expanduser(venv_dir)
-        self.activate_script   = 'source ' + os.path.join(self.venv_dir, 'bin', 'activate')
+        self.venv_dir             = os.path.expanduser(venv_dir)
         self.venv_python          = os.path.join(self.venv_dir, 'bin', 'python')
         self.venv_pip             = os.path.join(self.venv_dir, 'bin', 'pip')
         self.requirements_file    = os.path.join(self.venv_dir, "requirements.txt")
@@ -2239,33 +2242,34 @@ def parse_arguments(options: Options) -> None:
     """Parse command-line arguments."""
 
     parser = argparse.ArgumentParser(description="Run a python script with optional flags.")
-    parser.add_argument('-version',     action='store_true', help='Print the version of this program.')
-    parser.add_argument('-manual',      action='store_true', help='Print instructions for manually adding the alias to the shell configuration file.')
-    parser.add_argument('-debug',       action='store_true', help='Run this program in debug mode, which prints additional debug messages.')
-    parser.add_argument('-blank-slate', action='store_true', help=f"Delete ~/{options.my_name}/ and all {options.my_name} .out and .err and .json and .pkl files in the current directory.")
-    parser.add_argument('-full',        action='store_true', help="Build a virtual environment (venv) that can run every python script in the specified directory (defaults to the current working directory).")
-    parser.add_argument('-y',           action='store_true', help='Automatically say yes to any prompts.')
-    parser.add_argument('-no-cache',    action='store_true', help="Don't search the cache. Instead, create a new virtual environment. Also, refresh the custom modules cache and the pip list.")
-    parser.add_argument('-latest',      action='store_true', help="Load the latest venv in the cache which has all the packages needed now.")
-    parser.add_argument('-oldest',      action='store_true', help="Load the oldest venv in the cache which has all the packages needed now.")
-    parser.add_argument('-last-used',   action='store_true', help="Load the last used venv in the cache, but if that fails try the latest venv which has all the packages needed now.")
-    parser.add_argument('-smallest',    action='store_true', help="Load the smallest venv in the cache (with the fewest packages) which has all the packages needed now.")
-    parser.add_argument('-rc',          action='store_true', help='Refresh the custom modules cache and the pip list.')
-    parser.add_argument('-reqs',        action='store_true', help='Read the extra_requirements.txt file in the current directory and install the packages listed there (with specific versions if present in the file) into the venv (along with the other packages needed to run the script as determined elsewhere in this program).')
-    parser.add_argument('-alias',       type=str,            help='Add an alias to the shell configuration file so that typing ALIAS anywhere runs this program.')
-    parser.add_argument('-rawlog',      action='store_true', help=f'Do not add timestamps or INFO level to log messages, and do not add extra INFO level log statements. Just produce the same output that would be seen when running the program without {options.my_name}.')
-    parser.add_argument('-justprint',   action='store_true', help="Don't run the script, just print its package requirements.")
-    parser.add_argument('script',      nargs='?',                help="The script to run.")
-    parser.add_argument('script_args', nargs=argparse.REMAINDER, help="Optional arguments for the python script.")
+    parser.add_argument('-version',     action='store_true',      help="Print the version of this program.")
+    parser.add_argument('-manual',      action='store_true',      help="Print instructions for manually adding the alias to the shell configuration file.")
+    parser.add_argument('-audit',       action='store_true',      help="BROKEN! REQUIRES flake8 TO BE INSTALLED, WHICH REQUIRES A venv! CONSIDER AUTOMATICALLY WRITING A FILE LIKE test_checker.py TO ~/mypy, THEN REPLACING THE given 'options.python_script' with THAT test_checker.py AND MOVING THE SPECIFIED SCRIPT TO A SCRIPT_ARG, THEN RUNNING mypy AS USUAL. THIS SHOULD WORK, RIGHT? NO, REMOVE THIS FLAG AND JUST ADD A 'myaudit' alias that runs 'mypy ~/mypy/myaudit.py SCRIPT' DO THE SAME FOR 'mydiff'!!!! Run an interactive formatting audit of the script to check for common issues and suggest fixes using autopep8.")
+    parser.add_argument('-feeling-lucky', action='store_true', help="NOT FINISHED!!! Run the script with the -feeling-lucky flag, which will try to run the script with the last used virtual environment, or if that fails, try the latest virtual environment which has all the packages needed now.")
+    parser.add_argument('-debug',       action='store_true',      help="Run this program in debug mode, which prints additional debug messages."    )
+    parser.add_argument('-blank-slate', action='store_true',      help=f"Delete ~/{options.my_name}/ and all {options.my_name} .out and .err and .json and .pkl files in the current directory.")
+    parser.add_argument('-full',        action='store_true',      help="Build a virtual environment (venv) that can run every python script in the specified directory (defaults to the current working directory).")
+    parser.add_argument('-y',           action='store_true',      help="Automatically say yes to any prompts.")
+    parser.add_argument('-no-cache',    action='store_true',      help="Don't search the cache. Instead, create a new virtual environment. Also, refresh the custom modules cache and the pip list.")
+    parser.add_argument('-latest',      action='store_true',      help="Load the latest venv in the cache which has all the packages needed now.")
+    parser.add_argument('-oldest',      action='store_true',      help="Load the oldest venv in the cache which has all the packages needed now.")
+    parser.add_argument('-last-used',   action='store_true',      help="Load the last used venv in the cache, but if that fails try the latest venv which has all the packages needed now.")
+    parser.add_argument('-smallest',    action='store_true',      help="Load the smallest venv in the cache (with the fewest packages) which has all the packages needed now.")
+    parser.add_argument('-rc',          action='store_true',      help="Refresh the custom modules cache and the pip list.")
+    parser.add_argument('-reqs',        action='store_true',      help="Read the extra_requirements.txt file in the current directory and install the packages listed there (with specific versions if present in the file) into the venv (along with the other packages needed to run the script as determined elsewhere in this program).")
+    parser.add_argument('-alias',       type=str,                 help="Add an alias to the shell configuration file so that typing ALIAS anywhere runs this program.")
+    parser.add_argument('-rawlog',      action='store_true',      help=f"Do not add timestamps or INFO level to log messages, and do not add extra INFO level log statements. Just produce the same output that would be seen when running the program without {options.my_name}.")
+    parser.add_argument('-justprint',   action='store_true',      help="Don't run the script, just print its package requirements.")
+    parser.add_argument('script',       nargs='?',                help="The script to run.")
+    parser.add_argument('script_args',  nargs=argparse.REMAINDER, help="Optional arguments for the python script.")
 
     # If no arguments are provided, print a short guide
     if len(sys.argv) == 1:
         parser.print_help()
         sys.exit(0)
 
-    # Parse known args, and then manually add the script_args
-    args = parser.parse_args()
-    options.args = args
+    # Otherwise, parse the arguments and store them in options.args for later use.
+    options.args = parser.parse_args()
 
 
 def detect_shell() -> str:
@@ -2774,7 +2778,7 @@ def find_imports_in_script(options: Options, first_path: str) -> None:
     """Find all imports in the script and its dependencies."""
     # is_python_script() has already been called to verify that the first_path file LOOKS like a Python script.
     # However, it's still necessary to check if the file is a VALID Python script. If not, skip it.
-    if not ud.compile_script(first_path):
+    if not ud.compile_code(first_path):
         logging.error(f"Skipping invalid Python script: {first_path}")
         return
     processed_modules = set()
@@ -3205,47 +3209,51 @@ def install_package(package_name: str, options: Options) -> bool:
         return False
 
 
-def check_packages_in_venv(options: Options, package: str | None = None, venv_dir: str | None = None) -> bool:
-    """Create and run a script to test package imports in the virtual environment. Add packages from the requirements.txt file if '-reqs' is specified as a runtime argument."""
+def check_packages_in_venv(options: Options, package: str | None = None,
+                           venv_dir: str | None = None) -> bool:
+    """Check if packages can be imported in the specified virtual environment."""
     if not venv_dir:
         venv_dir = options.venv_dir
-    venv_python = os.path.join(venv_dir, 'bin', 'python')
     if sys.platform == "win32":
-        venv_python = os.path.join(venv_dir, 'Scripts', 'python.exe')
+        venv_python = os.path.join(venv_dir, "Scripts", "python.exe")
+    else:
+        venv_python = os.path.join(venv_dir, "bin", "python")
     if package:
-        packages_str = f"'{options.reversed_module_aliases.get(package, package)}'"
+        packages = [options.reversed_module_aliases.get(package, package)]
     else:
         use_pip_list(options)
-        packages_str = ", ".join(f"'{options.reversed_module_aliases.get(pkg, pkg)}'" for pkg in options.uninstalled_imports)
-    test_script = f"""
-source {venv_dir}/bin/activate
-{venv_python} - << END
+        packages = [options.reversed_module_aliases.get(pkg, pkg) for pkg in options.uninstalled_imports]
+    python_code = f"""
+import sys
+from importlib import import_module
 successes = []
 failures = []
 counter = 0
-for package in [{packages_str}]:
+for package in {packages!r}:
     counter += 1
     try:
-        __import__(package)
+        import_module(package)
         successes.append(package)
     except ImportError:
         failures.append(package)
 if failures:
     print("Failed packages: " + ", ".join(failures))
-elif len(successes) != counter: #This should never happen.
-    print(f"Warning: No failures, but only recorded {{len(successes)}} successes out of {{counter}} iterations through the loop.")
+    sys.exit(1)
+elif len(successes) != counter:
+    print(f"Warning: No failures, but only recorded {{len(successes)}} successes out of {{counter}}.")
+    sys.exit(2)
 else:
     print(f"All {{len(successes)}} (out of {{counter}}) packages imported successfully.")
-END
+    sys.exit(0)
 """
     try:
-        # Since ud.my_popen expects a list of commands, we'll pass the shell command directly as a single argument list
-        command_list = ['/bin/bash', '-c', test_script]
-        # Run the command using the custom ud.my_popen function
-        result = ud.my_popen(command_list, True)  # True means to suppress output.
+        result = subprocess.run([venv_python, "-c", python_code],
+                                capture_output=True, text=True, check=False)
+        logging.debug("check_packages_in_venv stdout:\n%s", result.stdout)
+        logging.debug("check_packages_in_venv stderr:\n%s", result.stderr)
         return "packages imported successfully" in result.stdout
-    except subprocess.CalledProcessError as e:
-        logging.error(f"Error running test script: {e}\nException type: ", exc_info=True)
+    except Exception as e:
+        logging.error("Error running import test script: %s", e, exc_info=True)
         return False
 
 
@@ -3428,8 +3436,9 @@ def setup_virtualenv(options: Options) -> bool:
     if not options.rawlog: logging.info("Virtual environment created.")
 
     # Activate virtual environment and install wheel
-    install_command = f"bash -c '{options.activate_script} && {options.venv_pip} install wheel'"
-    subprocess.run(install_command, shell=True, check=True)
+    install_command = [options.venv_pip, "install", "wheel"]
+    logging.info("Running pip install: %s", ' '.join(shlex.quote(arg) for arg in install_command))
+    subprocess.run(install_command, check=True)
     if not options.rawlog: logging.info("Wheel installed in the virtual environment.")
 
     download_packages(options)
@@ -3503,11 +3512,7 @@ def get_network_operations(options: Options, script_path: str) -> None:
 
     class NetworkOperationsVisitor(ast.NodeVisitor):
         """Visitor class to find network operations in the AST (Abstract Syntax Tree)."""
-        def visit_Call(self, node: ast.Call) -> None:
-            """Visit function calls to find network operations."""
 
-    class NetworkOperationsVisitor(ast.NodeVisitor):
-        """Visitor class to find network operations in the AST (Abstract Syntax Tree)."""
         def visit_Call(self, node: ast.Call) -> None:
             """Visit function calls to find network operations."""
             # Check if the function is a requests function
@@ -3562,7 +3567,7 @@ def guard_examines(options: Options) -> bool:
         get_network_operations(options, script_path)
 
     # Examine the main script to make sure it's a valid Python script.
-    if is_python_script(options.python_script) and ud.compile_script(options.python_script):
+    if is_python_script(options.python_script) and ud.compile_code(options.python_script):
         try:
             aggregate_operations(options.python_script)
         except Exception as e:
@@ -3578,13 +3583,13 @@ def guard_examines(options: Options) -> bool:
 
     if not options.rawlog:
         if options.read_files:
-            logging.info("Files read: " + ", ".join(options.read_files))
+            logging.info("Files read:\n" + "\n".join(options.read_files))
         if options.write_files:
-            logging.info("Files written: " + ", ".join(options.write_files))
+            logging.info("Files written:\n" + "\n".join(options.write_files))
         if options.download_urls:
-            logging.info("Download URLs: " + ", ".join(options.download_urls))
+            logging.info("Download URLs:\n" + "\n".join(options.download_urls))
         if options.upload_urls:
-            logging.info("Upload URLs: " + ", ".join(options.upload_urls))
+            logging.info("Upload URLs:\n" + "\n".join(options.upload_urls))
 
     return True
 
@@ -3635,25 +3640,75 @@ def save_options_to_json(options: Options) -> None:
         json.dump(options_dict, json_file, indent=4)
 
 
-def load_options_from_json(options: Options, json_file: str) -> Options:
+def load_options_from_json(options: Options, json_file: str) -> Options | None:
     """Load the options object from a JSON file."""
+    if not os.path.isfile(json_file):
+        logging.error(f"JSON file {json_file} does not exist.")
+        return None
     with open(json_file, 'r') as file:
         options_dict = json.load(file)
-
     # Create a new Options object and set attributes from the dictionary
     options_FROM_JSON = Options()
     for key, value in options_dict.items():
         setattr(options_FROM_JSON, key, value)
-
     # If "sets" is in options_FROM_JSON, then convert the lists back to sets.
     if 'sets' in options_dict:
         for key in options_dict['sets']:
             setattr(options_FROM_JSON, key, set(getattr(options_FROM_JSON, key)))
     else:
         logging.warning(f"No 'sets' key found in {json_file}.")
-
     if not options.rawlog: logging.info(f"options loaded from {json_file}")
     return options_FROM_JSON
+
+def load_last_used_options(options: Options) -> Options | None:
+    """Look for the most recent JSON file in the script directory that matches the script name and load it into a new Options object."""
+    json_files = [f for f in os.listdir(options.script_dir) if f.startswith("."+os.path.basename(options.python_script)) and f.endswith('.json')]
+    if not json_files:
+        if not options.rawlog: logging.info("No previous JSON files found in the script directory.")
+        return None
+    if len(json_files) > 1:
+        json_files.sort(key=lambda x: dt.datetime.strptime(x.split('-')[-2] + x.split('-')[-1].replace('.json', ''), "%Y%m%d%H%M%S"), reverse=True)
+    return load_options_from_json(options, os.path.join(options.script_dir, json_files[0]))
+
+
+def load_last_used_venv_dir(options: Options) -> str | None:
+    """Look for the most recent JSON file in the script directory that matches the script name and return the venv_dir from it."""
+    last_used_options = load_last_used_options(options)
+    if not last_used_options:
+        if not options.rawlog: logging.info("No last used options found, so no venv directory to return.")
+        return None
+    elif not hasattr(last_used_options, 'venv_dir'):
+        if not options.rawlog: logging.info("Last used options do not have a venv_dir attribute.")
+        return None
+    elif last_used_options.venv_dir is None:
+        if not options.rawlog: logging.info("Last used venv directory is None.")
+        return None
+    elif not os.path.isdir(last_used_options.venv_dir):
+        if not options.rawlog: logging.warning(f"Last used venv directory {last_used_options.venv_dir} is no longer valid.")
+        return None
+    else:
+        if not options.rawlog: logging.info(f"Last used venv directory found: {last_used_options.venv_dir}")
+        return last_used_options.venv_dir
+
+
+def load_last_used_venv_python(options: Options) -> str | None:
+    """Look for the most recent JSON file in the script directory that matches the script name and return the venv_python from it."""
+    last_used_options = load_last_used_options(options)
+    if not last_used_options:
+        if not options.rawlog: logging.info("No last used options found, so no venv_python to return.")
+        return None
+    elif not hasattr(last_used_options, 'venv_python'):
+        if not options.rawlog: logging.info("Last used options do not have a venv_python attribute.")
+        return None
+    elif last_used_options.venv_python is None:
+        if not options.rawlog: logging.info("Last used venv_python is None.")
+        return None
+    elif not os.path.isfile(last_used_options.venv_python):
+        if not options.rawlog: logging.warning(f"Last used venv_python {last_used_options.venv_python} is no longer valid.")
+        return None
+    else:
+        if not options.rawlog: logging.info(f"Last used venv_python found: {last_used_options.venv_python}")
+        return last_used_options.venv_python
 
 
 def latest_venv(final_venv_folders: dict[str, dict[str, int]]) -> str:
@@ -3703,14 +3758,14 @@ def check_venv_dir(options: Options, options_from_cache: Options) -> bool:
                 options_from_cache.uninstalled_imports = options.uninstalled_imports
                 options_from_cache.installed_imports = options.installed_imports
                 if check_packages_in_venv(options_from_cache):
-                    return 1
+                    return True
                 else:
                     logging.error(f"The cached venv directory {options_from_cache.venv_dir} failed check_packages_in_venv.")
             else:
                 if not options.rawlog: logging.info(f"The cached venv directory {options_from_cache.venv_dir} does not have all the currently required packages.")
         else:
             if not options.rawlog: logging.info(f"The cached venv directory {options_from_cache.venv_dir} is no longer valid.")
-    return 0
+    return False
 
 
 def find_match_dir_in_cache(options: Options) -> str:
@@ -3724,15 +3779,11 @@ def find_match_dir_in_cache(options: Options) -> str:
        not getattr(options.args, 'latest', False) and \
        not getattr(options.args, 'smallest', False):
         try:  # Try to load the last used venv in the cache
-            json_files = [f for f in os.listdir(options.script_dir) if f.startswith("."+os.path.basename(options.python_script)) and f.endswith('.json')]
-            if json_files:
-                if len(json_files) > 1:
-                    json_files.sort(key=lambda x: dt.datetime.strptime(x.split('-')[-2] + x.split('-')[-1].replace('.json', ''), "%Y%m%d%H%M%S"), reverse=True)
-                options_last_used = load_options_from_json(options, os.path.join(options.script_dir, json_files[0]))
-                if check_venv_dir(options, options_last_used):
-                    return options_last_used.venv_dir
-                else:
-                    if not options.rawlog: logging.info("Trying to load the latest matching venv now.")
+            options_last_used = load_last_used_options(options)
+            if check_venv_dir(options, options_last_used):
+                return options_last_used.venv_dir
+            else:
+                if not options.rawlog: logging.info("Trying to load the latest matching venv now.")
         except Exception as e:
             if not options.rawlog:
                 logging.error(f"Error loading last used venv from cache: {e}\nException type: ", exc_info=True)
@@ -3948,23 +3999,34 @@ def main() -> None:
     start_time = dt.datetime.now()
     options = Options()
     parse_arguments(options)
-    options.python_script = getattr(options.args, 'script', None)
-    options.script_args = getattr(options.args, 'script_args', [])
-    options.rawlog = getattr(options.args, 'rawlog', False)
+    options.python_script = getattr(options.args, 'script',      None)
+    options.script_args   = getattr(options.args, 'script_args', [])
+    options.rawlog        = getattr(options.args, 'rawlog',      False)
+
+    if getattr(options.args, 'feeling_lucky', False):
+        options.script_dir = os.path.abspath(os.path.dirname(options.python_script))
+        last_used_venv_python = load_last_used_venv_python(options)
+        if last_used_venv_python:
+            command_list = [last_used_venv_python, options.python_script] + options.script_args
+            result = subprocess.run(command_list)
+            if result.returncode != 0 and not options.rawlog:
+                print(f"Error running script: {result.stderr}")
+            sys.exit(result.returncode)
+        else:
+            print("No luck: no last used virtual environment found. Running the script as normal.")
 
     if getattr(options.args, 'version', False):
         print(__version__)
         sys.exit(0)
-    if getattr(options.args, 'manual', False):
-        # Print instructions for manually adding the alias to the shell configuration file
+    if getattr(options.args, 'manual', False):  # Print instructions for manually adding the alias to the shell configuration file, etc.
         print(options.manual_instructions)
         sys.exit(0)
 
+    # Debug mode can be enabled using the debug argument, or manually at the top of this program at the beginning of Options().
     if getattr(options.args, 'debug', False):
         options.log_mode = 'DEBUG'
 
-    memory_handler = ud.configure_logging(options.my_name,
-                                          log_level=options.log_mode,
+    memory_handler = ud.configure_logging(options.my_name, log_level=options.log_mode,
                                           rawlog=options.rawlog)
 
     options.python_command = find_preferred_python_version()
@@ -3973,19 +4035,20 @@ def main() -> None:
     else:
         logging.debug(f"Python {ud.PY_VERSION} is not available.")
 
-    try:
-        import pipreqs
-        logging.debug("pipreqs is available, so it will be used.")
-        options.pipreqs_available = True
-    except ImportError:
-        logging.debug("pipreqs is not available. Try installing it with 'pip install pipreqs'.")
-        options.pipreqs_available = False
-
     if getattr(options.args, 'alias', False):
         # Add the alias to the shell configuration file
         add_alias(options)
         sys.exit(0)
-    elif getattr(options.args, 'script', False):
+    elif getattr(options.args, 'audit', False):
+        if not ud.check_python_formatting(options.python_script):
+            sys.exit(0)
+        # 0 = old‐style diff
+        # 1 = unified diff with 0 context lines
+        # 2+ = unified diff with "DIFF_CHOICE - 1" context lines
+        diff_choice = 1
+        ud.interactive_flake8(options.python_script, diff_choice=diff_choice, ignore_codes=ud.IGNORED_CODES, max_line_length=1000)
+        sys.exit(0)
+    elif options.python_script:  # If a script was provided as an argument, skip the rest of these checks.
         pass
     elif getattr(options.args, 'blank_slate', False):
         if not getattr(options.args, 'y', False):
@@ -3998,17 +4061,17 @@ def main() -> None:
         for file in os.listdir(options.cwd):
             logging.debug(f"Checking {file}")
             if os.path.isfile(file):
-               if (file.startswith(f'.{options.my_name}-') and file.endswith('.out')) or \
-                  (file.startswith(f'.{options.my_name}-') and file.endswith('.err')) or \
-                  (file.startswith(f'.{options.my_name}_custom_modules_') and file.endswith('.pkl')) or \
-                  (file.startswith('.') and f'-{options.my_name}-' in file and file.endswith('.json')):
+                if (file.startswith(f'.{options.my_name}-')                 and file.endswith('.out') ) or \
+                   (file.startswith(f'.{options.my_name}-')                 and file.endswith('.err') ) or \
+                   (file.startswith(f'.{options.my_name}_custom_modules_')  and file.endswith('.pkl') ) or \
+                   (file.startswith('.') and f'-{options.my_name}-' in file and file.endswith('.json')):
                     try:
                         logging.info(f"Deleting {file}")
                         os.remove(os.path.join(options.cwd, file))
                     except BaseException:
                         logging.error(f"Error deleting {file}")
         sys.exit(0)
-    elif getattr(options.args, 'full', False) and not getattr(options.args, 'script', False):
+    elif getattr(options.args, 'full', False) and not options.python_script:
         options.args.script   = options.cwd
         options.python_script = options.cwd
     else:
@@ -4050,6 +4113,14 @@ def main() -> None:
     start_list_packages_time = dt.datetime.now()
     elapsed_time = start_list_packages_time - start_time
     if not options.rawlog: logging.info(f"Elapsed time: {elapsed_time}")
+
+    try:
+        import pipreqs
+        logging.debug("pipreqs is available, so it will be used.")
+        options.pipreqs_available = True
+    except ImportError:
+        logging.debug("pipreqs is not available. Try installing it with 'pip install pipreqs'.")
+        options.pipreqs_available = False
 
     list_packages(options)
 
@@ -4105,46 +4176,34 @@ def main() -> None:
             elapsed_time = start_venv_time - start_time
             if not options.rawlog: logging.info(f"Elapsed time: {elapsed_time}")
             if guard_examines(options):
-                if not options.rawlog:
-                    logging.info(f"Activating virtual environment: {options.activate_script}")
-                    echo_statement = " && echo \"Virtual environment activated.\""
-                else:
-                    echo_statement = ""
-                activate_cmd = f"bash -c '{options.activate_script}{echo_statement} && {options.venv_python} {options.python_script} {' '.join(options.script_args)}'"
-                # I want to capture the output of the subprocess.run() so that I can print it at the end.
-                result = subprocess.run(activate_cmd, shell=True)
+                command_list = [options.venv_python, options.python_script] + options.script_args
+                if not options.rawlog: logging.info("Running command: %s", ' '.join(shlex.quote(arg) for arg in command_list))
+                result = subprocess.run(command_list)
                 end_time = dt.datetime.now()
                 elapsed_time = end_time - start_venv_time
                 if not options.rawlog: logging.info(f"Elapsed time since activating virtual environment: {elapsed_time}")
                 if result.returncode != 0 and not options.rawlog:
                     logging.error(f"Error running script: {result.stderr}")
             if os.path.basename(options.venv_dir).startswith('failed-') and options.simultaneous_success:
-                # If the program has made it to this point, it has run successfully, so the venv directory can be renamed. It HASN'T failed. However, if it couldn't install simultaneously, then it's still a failed venv.
+                # If the program has made it to this point, it has run successfully, so the venv directory can be renamed because it DIDN'T fail.
                 os.rename(options.venv_dir, options.venv_dir.replace('failed-', ''))
                 options.set_venv_dir(options.venv_dir.replace('failed-', ''))
-                # Now edit the pyvenv.cfg file inside it:
                 cfg_file_path = os.path.join(options.venv_dir, 'pyvenv.cfg')
-                # Read the content of the file
                 with open(cfg_file_path, 'r') as file:
                     lines = file.readlines()
-                # Modify the command line
                 modified_lines = []
                 for line in lines:
                     if line.startswith("command = "):
                         line = line.replace(os.sep+"failed-", os.sep)
                     modified_lines.append(line)
-                # Write the modified content back to the file
                 with open(cfg_file_path, 'w') as file:
                     file.writelines(modified_lines)
-                # Read the content of the file
                 with open(options.download_script_path, 'r') as file:
                     lines = file.readlines()
-                # Modify the command line
                 modified_lines = []
                 for line in lines:
                     line = line.replace(os.sep+"failed-", os.sep)
                     modified_lines.append(line)
-                # Write the modified content back to the file
                 with open(options.download_script_path , 'w') as file:
                     file.writelines(modified_lines)
 

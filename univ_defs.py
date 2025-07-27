@@ -1,31 +1,65 @@
 #!/usr/bin/env python3
 
 # Written by Emmy Killett (she/her), ChatGPT 4o (it/its), ChatGPT o1-preview (it/its), ChatGPT o3-mini-high (it/its), ChatGPT o4-mini-high (it/its), and GitHub Copilot (it/its).
-from __future__ import annotations # For Python 3.7+ compatibility with type annotations
-import os, sys, subprocess
+from __future__ import annotations  # For Python 3.7+ compatibility with type annotations
+import os
+import sys
 import logging
-from typing import Dict, TextIO, Any, TypeAlias, Type
-import re # Used to precompile regexes for performance
+from typing import TextIO, Any, TypeAlias, Type
+import re  # Used to precompile regexes for performance
 
 # This is the version of univ_defs.py
-__version__ = '0.1.5'
+__version__ = '0.1.6'
 
 # This is the version of python which should be used in scripts that import this module.
 PY_VERSION = 3.11
 
+DEFAULT_ENCODING = 'utf-8'  # This is the default encoding used for reading and writing text files.
+
 valid_basins = ["California", "Sacramento", "San Joaquin", "Tulare-Buena Vista Lakes"]
+
+# ANSI escape codes
+ANSI_RED    = "\033[91m"
+ANSI_GREEN  = "\033[92m"  # this is supposed to be bold/bright green but it looks orange to me.
+ANSI_YELLOW = "\033[93m"
+ANSI_CYAN   = "\033[94m"  # this is called bright blue but it looks cyan to me.
+ANSI_RESET  = "\033[0m"
+
+# All the formatting rules to ignore when running flake8 to check Python formatting.
+IGNORED_CODES = [
+    'E701',  # multiple statements on one line (colon)
+    'E201',  # whitespace after ‘(’
+    'E202',  # whitespace before ‘)’
+    'E203',  # whitespace before ‘:’
+    'E211',  # whitespace before '('
+    'E221',  # multiple spaces before operator
+    'E222',  # multiple spaces after  operator
+    'E226',  # missing whitespace around arithmetic operator        (the fix doesn't work on the right side even with --aggressive)
+    'E227',  # missing whitespace around bitwise or shift operator  (the fix doesn't work on the right side even with --aggressive)
+    'E241',  # multiple spaces after ','
+    'E251',  # unexpected spaces around keyword / parameter equals
+    'E262',  # inline comment should start with '# '
+    'W503',  # line break before binary operator (W503 and W504 are mutually exclusive, so ignore both)
+    'W504',  # line break  after binary operator (W503 and W504 are mutually exclusive, so ignore both)
+    'E271',  # multiple spaces  after keyword
+    'E272',  # multiple spaces before keyword
+]
+
 
 def parent_unused_function() -> None:
     """This function is not used in the test.py script."""
     unused_function()
+
 
 def unused_function() -> None:
     """This function is not used in the test.py script."""
     print("This function is not used in the test.py script.")
     import numpy as np
 
+
 class PlotOptions:
     """Global figure options."""
+
     def __init__(self) -> None:
         """Initialize PlotOptions class with default values."""
         # Ideas for improving this parent class: https://chatgpt.com/share/6876a7e2-da84-8006-9c8f-100d243b73e4
@@ -34,9 +68,9 @@ class PlotOptions:
         self.dpi_choice  = 300
         self.markers     = ['o',     's',      '^',         'v',          '<',           '>']
         self.colors      = ['black', 'red',    'blue',      'green',      'purple']      # Used for lines in light mode or for shaded areas in dark mode
-        self.lightcolors = ['grey',  'pink',   'lightblue', 'lightgreen', 'lightpurple'] # Used for shaded areas in light mode or for lines in dark mode
+        self.lightcolors = ['grey',  'pink',   'lightblue', 'lightgreen', 'lightpurple']  # Used for shaded areas in light mode or for lines in dark mode
         self.linestyles  = ['solid', 'dashed', 'dashdot',   'dotted']
-        self.dark_mode   = 0 # 1 = dark mode, 0 = light mode
+        self.dark_mode   = 0  # 1 = dark mode, 0 = light mode
         if self.dark_mode:
             self.background_color = '#000000'
             self.text_color       = '#FFFFFF'
@@ -46,8 +80,10 @@ class PlotOptions:
             self.background_color = '#FFFFFF'
             self.text_color       = '#000000'
 
+
 class UnivClass:
     """Class that handles the import and operation of large language model APIs."""
+
     def __init__(self) -> None:
         """Initialize the class and import the necessary modules."""
         self.import_test()
@@ -56,8 +92,10 @@ class UnivClass:
         """ Test the import of this module by printing a message and the version of Python being used."""
         import openai
 
+
 class LLMs:
     """Class that handles the import and operation of large language model APIs."""
+
     def __init__(self) -> None:
         """Initialize the LLM class and import the necessary modules."""
         self.init_llms()
@@ -121,9 +159,8 @@ class LLMs:
                     print(f"Can't create client for unknown LLM: {llm}")
                     sys.exit()
 
-    def send_prompt(self, prompt: str,
-                    system_message: str, model: str,
-                    company: str, temperature: float,
+    def send_prompt(self, prompt: str, system_message: str,
+                    model: str, company: str, temperature: float,
                     max_tokens: int = 1000) -> str:
         """Call the chosen LLM's API and return the text response."""
         try:
@@ -152,19 +189,24 @@ class LLMs:
         except Exception as e:
             my_critical_error(f"An error occurred: {e}", choose_breakpoint=True)
 
+
 class MemoryHandler(logging.Handler):
     """A logging handler that stores logs in memory so the errors can be printed at the end."""
+
     def __init__(self, level: int = logging.ERROR) -> None:
         """Initialize the MemoryHandler with the specified logging level."""
         super().__init__(level)
         self.logs = []
+
     def emit(self, record: logging.LogRecord) -> None:
         """Capture the log record and store it in memory."""
         if record.levelno >= self.level:  # Only capture logs with the appropriate level
             self.logs.append(self.format(record))
 
+
 class FlushingStreamHandler(logging.StreamHandler):
     """A logging handler that flushes the stream after emitting each log so the logs are immediately visible."""
+
     def emit(self, record: logging.LogRecord) -> None:
         """Emit a log record and immediately flush the stream."""
         # Call the original emit method to handle the logging
@@ -172,14 +214,18 @@ class FlushingStreamHandler(logging.StreamHandler):
         # Immediately flush the stream after emitting the log
         self.flush()
 
+
 class MaxLevelFilter(logging.Filter):
     """A logging filter that only allows logs up to a certain level to pass through, so that error messages aren't printed multiple times."""
+
     def __init__(self, max_level: int) -> None:
         """Initialize the MaxLevelFilter with the specified maximum logging level."""
         self.max_level = max_level
+
     def filter(self, record: logging.LogRecord) -> bool:
         """Filter out log records above the maximum level."""
         return record.levelno <= self.max_level
+
 
 def fallback_logging_config(level: str = 'INFO') -> None:
     """Configure the root logger with a basic configuration if no handlers are set."""
@@ -188,11 +234,12 @@ def fallback_logging_config(level: str = 'INFO') -> None:
                             format="%(asctime)s %(name)s %(levelname)s: %(message)s",
                             datefmt="%Y-%m-%d %H:%M:%S")
 
+
 def configure_logging(basename: str, log_level: str = 'INFO',
                       rawlog: bool = False, logdir: str = '') -> MemoryHandler:
     """Configure logging to write to files and stdout/stderr, and return a MemoryHandler to capture ERROR logs for later (duplicate) printing."""
     import datetime as dt
-    
+
     root_logger = logging.getLogger()
 
     # Check if logging is already configured by checking for any handlers
@@ -202,7 +249,7 @@ def configure_logging(basename: str, log_level: str = 'INFO',
                 return handler
 
     # Proceed with configuring logging if no MemoryHandler was found
-    if not logdir: # Default to the current working directory if no logdir is provided.
+    if not logdir:  # Default to the current working directory if no logdir is provided.
         logdir = os.getcwd()
     os.makedirs(logdir, exist_ok=True)
 
@@ -225,8 +272,8 @@ def configure_logging(basename: str, log_level: str = 'INFO',
 
     # Stream handler for stdout (WARNING and lower)
     console_handler_stdout = FlushingStreamHandler(stream=sys.stdout)
-    console_handler_stdout.setLevel(logging.DEBUG) # Set to lowest level
-    console_handler_stdout.addFilter(MaxLevelFilter(logging.WARNING)) # Highest
+    console_handler_stdout.setLevel(logging.DEBUG)  # Set to lowest level
+    console_handler_stdout.addFilter(MaxLevelFilter(logging.WARNING))  # Highest
 
     # Stream handler for stderr (ERROR and above)
     console_handler_stderr = FlushingStreamHandler(stream=sys.stderr)
@@ -256,6 +303,7 @@ def configure_logging(basename: str, log_level: str = 'INFO',
 
     return memory_handler
 
+
 def get_log_level(log_level: str) -> int:
     """Return the logging level based on the input string."""
     value_map = {'INFO'     : logging.INFO,
@@ -266,6 +314,7 @@ def get_log_level(log_level: str) -> int:
                  'CRITICAL' : logging.CRITICAL}
     return value_map.get(log_level, logging.INFO)
 
+
 def print_all_errors(memory_handler: MemoryHandler,
                      rawlog: bool = False) -> None:
     """Print all the captured error messages."""
@@ -273,6 +322,7 @@ def print_all_errors(memory_handler: MemoryHandler,
         print("\n****************************\n****************************\nError messages:")
         for log in memory_handler.logs:
             print(log)
+
 
 def my_critical_error(message: str = "A critical error occurred.",
                       choose_breakpoint: bool = False,
@@ -293,8 +343,10 @@ def my_critical_error(message: str = "A critical error occurred.",
     else:
         sys.exit(exit_code)
 
+
 class MyPopenResult:
     """A class to store the results of a customized subprocess.Popen call."""
+
     def __init__(self, stdout: str, stderr: str, returncode: int) -> None:
         """Initialize the MyPopenResult with stdout, stderr, and returncode."""
         self.stdout = stdout
@@ -302,14 +354,16 @@ class MyPopenResult:
         self.returncode = returncode
         self.success = (returncode == 0)
 
+
 def my_popen(command_list: list, suppress_info: bool = False,
              suppress_error: bool = False) -> MyPopenResult:
     """Execute a command using subprocess.Popen and capture the output line by line using threads."""
     import threading
+    import subprocess
     fallback_logging_config(level='INFO' if not suppress_info else 'ERROR')
     command_list_str = [str(item) for item in command_list]
     the_statement = "Executing command: " + ' '.join(command_list_str)
-    
+
     if not suppress_info:
         logging.info(the_statement)
     else:
@@ -369,6 +423,7 @@ def my_popen(command_list: list, suppress_info: bool = False,
         logging.error(f"An error occurred: {e}")
         return MyPopenResult(stdout="", stderr=str(e), returncode=-1)
 
+
 def my_fopen(file_path: str, suppress_errors: bool = False,
              rawlog: bool = False, numlines: int | None = None) -> TextIO | bool | str:
     """Attempt to read the file with various encodings and return the file content if successful. Optionally, specify numlines to limit the number of lines read and return a string instead of a file object."""
@@ -426,6 +481,7 @@ def my_fopen(file_path: str, suppress_errors: bool = False,
             return False
     return False
 
+
 def my_ast_parse(file_content: str, file_path: str) -> ast.AST:
     """Attempt to parse the file with ast.parse and return the tree if successful."""
     import ast
@@ -435,10 +491,11 @@ def my_ast_parse(file_content: str, file_path: str) -> ast.AST:
     except SyntaxError as e:
         raise SyntaxError(f"Syntax error in {file_path}: {e.msg} at line {e.lineno}, column {e.offset}") from e.filename
 
+
 def load_ast_var(var_name: str, script_path: str, rawlog: bool = False) -> Any:
     """
     Load a top-level literal Python variable from a module without executing it.
-    
+
     :param options: Command line options and various sundries.
     :param var_name: Name of the global variable to extract.
     :param script_path: Path to the .py file.
@@ -475,7 +532,8 @@ def load_ast_var(var_name: str, script_path: str, rawlog: bool = False) -> Any:
 
     raise AttributeError(f"Top-level variable {var_name!r} not found in {script_path}")
 
-def normalize_to_dict(value: Any, var_name: str, script_path: str) -> Dict:
+
+def normalize_to_dict(value: Any, var_name: str, script_path: str) -> dict:
     """Ensure that 'value' is a dict. If it's a JSON-style string, try to parse it. Otherwise, log a warning and return an empty dict."""
     import json
     fallback_logging_config()
@@ -495,29 +553,37 @@ def normalize_to_dict(value: Any, var_name: str, script_path: str) -> Dict:
         logging.warning(f"Variable {var_name!r} in {script_path} is of type {type(value).__name__}, expected dict or JSON string.")
     return {}
 
+
 def get_hostname_socket() -> str:
     """Retrieves the hostname using socket.gethostname()."""
     import socket
     return socket.gethostname()
+
 
 def get_hostname_platform() -> str:
     """Retrieves the hostname using platform.node()."""
     import platform
     return platform.node()
 
+
 def get_hostname_os_uname() -> str:
     """Retrieves the hostname using os.uname().nodename."""
     return os.uname().nodename
 
+
 def get_hostname_subprocess_hostname() -> str:
     """Retrieves the hostname using the 'hostname' system command via subprocess."""
+    import subprocess
     result = subprocess.run(['hostname'], capture_output=True, text=True, check=True)
     return result.stdout.strip()
 
+
 def get_hostname_subprocess_scutil() -> str:
     """Retrieves the hostname using the 'scutil --get ComputerName' command on macOS via subprocess."""
+    import subprocess
     result = subprocess.run(['scutil', '--get', 'ComputerName'], capture_output=True, text=True, check=True)
     return result.stdout.strip()
+
 
 def get_computer_name() -> str:
     """Attempts multiple methods to retrieve the computer's name and returns the most common one."""
@@ -544,10 +610,11 @@ def get_computer_name() -> str:
 
     return computer_name
 
-def analyze_results(results: Dict[str, str]) -> str:
+
+def analyze_results(results: dict[str, str]) -> str:
     """
     Analyzes the retrieved computer names.
-    
+
     Args:
         results (dict): Dictionary with method names as keys and computer names as values.
     Returns:
@@ -565,15 +632,15 @@ def analyze_results(results: Dict[str, str]) -> str:
 
     if len(name_counts) == 1:
         # All names are identical
-        #print(f"Computer Name: {most_common[0][0]}")
+        # print(f"Computer Name: {most_common[0][0]}")
         return most_common[0][0]
     else:
         # Names are not identical
         primary_name, primary_count = most_common[0]
         differing = {name: count for name, count in most_common if name != primary_name}
-        
+
         print(f"Most Common Computer Name: {primary_name} (appeared {primary_count} times)")
-        
+
         print("Other Names:")
         for name, count in differing.items():
             print(f" - {name} (appeared {count} times)")
@@ -582,23 +649,24 @@ def analyze_results(results: Dict[str, str]) -> str:
         print("\nDetailed Method Outputs:")
         for method, name in results.items():
             print(f" - {method}: {name}")
-        
+
         return primary_name
+
 
 def kill_process(pname: str) -> None:
     """Kill a process by its name, then check if it is still running and retry if needed. Make sure the process name is unique to avoid killing unintended processes."""
     import time
     import signal
-
+    import subprocess
     while True:
         # Find the process IDs of the given process name
         process_ids = []
         try:
-            process_list = subprocess.check_output(["pgrep", "-f", pname]).decode("utf-8")
+            process_list = subprocess.check_output(["pgrep", "-f", pname]).decode(DEFAULT_ENCODING)
             process_ids = process_list.splitlines()
         except subprocess.CalledProcessError as e:
             raise ValueError(f"Failed to find process with name {pname}. Make sure the process name is correct and unique.") from e
-        
+
         if process_ids:
             for pid in process_ids:
                 print(f"Killing {pname} process with PID: {pid}")
@@ -610,16 +678,17 @@ def kill_process(pname: str) -> None:
         else:
             print(f"No {pname} process found.")
             break
-        
+
         # Check if the process is still running
         time.sleep(2)  # Wait for 2 seconds before checking again
-        process_ids = subprocess.check_output(["pgrep", "-f", pname]).decode("utf-8").splitlines()
-        
+        process_ids = subprocess.check_output(["pgrep", "-f", pname]).decode(DEFAULT_ENCODING).splitlines()
+
         if not process_ids:
             print(f"{pname} process successfully killed.")
             break  # Exit the loop when the process is no longer running
         else:
             print(f"{pname} is still running. Retrying...")
+
 
 def ensure_even_dimensions(image_path: str) -> None:
     """Ensure the image at 'image_path' has dimensions divisible by 2 by resizing if necessary."""
@@ -630,7 +699,7 @@ def ensure_even_dimensions(image_path: str) -> None:
         width, height = img.size
         new_width = width if width % 2 == 0 else width - 1
         new_height = height if height % 2 == 0 else height - 1
-        
+
         if new_width != width or new_height != height:
             try:
                 img = img.resize((new_width, new_height), Image.LANCZOS)
@@ -641,13 +710,15 @@ def ensure_even_dimensions(image_path: str) -> None:
         else:
             logging.info(f"Image already has even dimensions: width = {width}, height = {height}")
 
-def human_bytesize(num: int, suffix: str='B') -> str:
+
+def human_bytesize(num: int, suffix: str = 'B') -> str:
     """Convert a file size in bytes to a human-readable string with units like KB, MB, GB, etc."""
-    for unit in ['','K','M','G','T','P','E','Z','Y']:
+    for unit in ['', 'K', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y']:
         if abs(num) < 1024.0:
             return "%3.1f%s%s" % (num, unit, suffix)
         num /= 1024.0
     return "%.1f%s%s" % (num, 'Y', suffix)
+
 
 def human_timespan(timespan: float) -> str:
     """Input: A timespan specified by a floating point number of seconds.
@@ -689,7 +760,7 @@ def human_timespan(timespan: float) -> str:
         components.append(f"{minutes} minute" if minutes == 1 else f"{minutes} minutes")
     else:
         components.append(f"{remaining:.3f} second" if round(remaining, 3) == 1.0 else f"{remaining:.3f} seconds")
-    
+
     # Joining the components with commas, and "and" for the last component
     if len(components) > 1:
         time_str = ", ".join(components[:-1]) + " and " + components[-1]
@@ -699,6 +770,7 @@ def human_timespan(timespan: float) -> str:
         time_str = "0 seconds"
 
     return time_str
+
 
 def format_date_range(date1: dt.datetime, date2: dt.datetime | None = None) -> str:
     """Process a pair of datetime.datetime dates and produce a formatted date range string where each date looks like 'Jan  7, 2025'. If date2 is not provided, it is set to date1."""
@@ -713,7 +785,7 @@ def format_date_range(date1: dt.datetime, date2: dt.datetime | None = None) -> s
     # If date2 is not provided, set date2 to date1
     if date2 is None:
         date2 = date1
-    
+
     # Make sure both dates are datetime.datetime objects
     if not isinstance(date1, dt.datetime) or not isinstance(date2, dt.datetime):
         raise ValueError(f"Both dates must be datetime.datetime objects, but date1 is {date1} with type {type(date1)} and date2 {date2} with type {type(date2)}.")
@@ -732,16 +804,17 @@ def format_date_range(date1: dt.datetime, date2: dt.datetime | None = None) -> s
         else:                return f"{month1} {day1:2d} - {month2} {day2:2d}, {year1}"
     else: return f"{month1} {day1:2d}, {year1} - {month2} {day2:2d}, {year2}"
 
+
 # Mapping of unit aliases to their equivalent in seconds
 _UNIT_SECONDS = {
-    **dict.fromkeys(['year', 'years', 'yr', 'yrs', 'calendar year', 'calendar years'],    31_556_952), # Average calender year = 365.2425 days (accounting for leap years)
-    **dict.fromkeys(['solar year', 'solar years', 'tropical year', 'tropical years'],     31_556_925.216), # Average solar/tropical year = 365.24219 solar days = time for Earth to orbit the Sun once relative to the Sun/equinoxes
-    **dict.fromkeys(['sidereal year', 'sidereal years'],                                  31_558_149.54), # Sidereal year = 365.25636 days = time for Earth to orbit the Sun once relative to the "fixed" stars
-    **dict.fromkeys(['month', 'months', 'mo', 'mos', 'calendar month', 'calendar months'], 2_629_746.0), # Average calendar month = 30.436875 solar days
-    **dict.fromkeys(['lunar month', 'lunar months', 'synodic month', 'synodic months'],    2_551_442.9), # Average lunar month (synodic month) = 29.53 solar days
-    **dict.fromkeys(['week', 'weeks', 'wk', 'wks'],                                          604_800.0), # 7 solar days
-    **dict.fromkeys(['day', 'days', 'd', 'solar day', 'solar days', 'ephemeris day', 'ephemeris days'], 86_400), # 24 hours = time for Earth to rotate once relative to the Sun
-    **dict.fromkeys(['sidereal day', 'sidereal days'],                                                  86_164.0905), # 23 hours, 56 minutes, 4.1 seconds = time for Earth to rotate once relative to the "fixed" stars
+    **dict.fromkeys(['year', 'years', 'yr', 'yrs', 'calendar year', 'calendar years'],    31_556_952),  # Average calender year = 365.2425 days (accounting for leap years)
+    **dict.fromkeys(['solar year', 'solar years', 'tropical year', 'tropical years'],     31_556_925.216),  # Average solar/tropical year = 365.24219 solar days = time for Earth to orbit the Sun once relative to the Sun/equinoxes
+    **dict.fromkeys(['sidereal year', 'sidereal years'],                                  31_558_149.54),  # Sidereal year = 365.25636 days = time for Earth to orbit the Sun once relative to the "fixed" stars
+    **dict.fromkeys(['month', 'months', 'mo', 'mos', 'calendar month', 'calendar months'], 2_629_746.0),  # Average calendar month = 30.436875 solar days
+    **dict.fromkeys(['lunar month', 'lunar months', 'synodic month', 'synodic months'],    2_551_442.9),  # Average lunar month (synodic month) = 29.53 solar days
+    **dict.fromkeys(['week', 'weeks', 'wk', 'wks'],                                          604_800.0),  # 7 solar days
+    **dict.fromkeys(['day', 'days', 'd', 'solar day', 'solar days', 'ephemeris day', 'ephemeris days'], 86_400),  # 24 hours = time for Earth to rotate once relative to the Sun
+    **dict.fromkeys(['sidereal day', 'sidereal days'],                                                  86_164.0905),  # 23 hours, 56 minutes, 4.1 seconds = time for Earth to rotate once relative to the "fixed" stars
     **dict.fromkeys(['hour',   'hours',   'hr',  'hrs'],          3600),
     **dict.fromkeys(['minute', 'minutes', 'min', 'mins'],           60),
     **dict.fromkeys(['second', 'seconds', 'sec', 'secs', 's'],    1.00),
@@ -755,27 +828,28 @@ _UNIT_SECONDS = {
     **dict.fromkeys(['attosecond',  'attoseconds',  'as'],       1E-18),
     **dict.fromkeys(['zeptosecond', 'zeptoseconds', 'zs'],       1E-21),
     **dict.fromkeys(['yoctosecond', 'yoctoseconds', 'ys'],       1E-24),
-    **dict.fromkeys(['planck time', 'planck times', 'planck', 'plancks', 'pt'], 5.391_247E-44), # Planck time
-    **dict.fromkeys(['decade', 'decades'],                                  315_569_252.16), #   10 solar years
-    **dict.fromkeys(['century', 'centuries'],                             3_155_692_521.60), #  100 solar years
-    **dict.fromkeys(['millennium', 'millennia'],                         31_556_925_216.00), # 1000 solar years
-    **dict.fromkeys(['megayear', 'megayears', 'mya', 'myr'],         31_556_925_216_000.00), # 1E06 solar years
-    **dict.fromkeys(['gigayear', 'gigayears', 'gya', 'gyr'],     31_556_925_216_000_000.00), # 1E09 solar years
-    **dict.fromkeys(['terayear', 'terayears', 'tya', 'tyr'], 31_556_925_216_000_000_000.00), # 1E12 solar years
-    **dict.fromkeys(['fortnight',    'fortnights'],                           1_209_600.00), # 2 weeks = 604_800 * 2 seconds
+    **dict.fromkeys(['planck time', 'planck times', 'planck', 'plancks', 'pt'], 5.391_247E-44),  # Planck time
+    **dict.fromkeys(['decade', 'decades'],                                  315_569_252.16),  #   10 solar years
+    **dict.fromkeys(['century', 'centuries'],                             3_155_692_521.60),  #  100 solar years
+    **dict.fromkeys(['millennium', 'millennia'],                         31_556_925_216.00),  # 1000 solar years
+    **dict.fromkeys(['megayear', 'megayears', 'mya', 'myr'],         31_556_925_216_000.00),  # 1E06 solar years
+    **dict.fromkeys(['gigayear', 'gigayears', 'gya', 'gyr'],     31_556_925_216_000_000.00),  # 1E09 solar years
+    **dict.fromkeys(['terayear', 'terayears', 'tya', 'tyr'], 31_556_925_216_000_000_000.00),  # 1E12 solar years
+    **dict.fromkeys(['fortnight',    'fortnights'],                           1_209_600.00),  # 2 weeks = 604_800 * 2 seconds
     **dict.fromkeys(['decasecond',   'decaseconds',   'das'], 1E01),
     **dict.fromkeys(['hectosecond',  'hectoseconds',  'hs'],  1E02),
     **dict.fromkeys(['kilosecond',   'kiloseconds',   'ks'],  1E03),
-    **dict.fromkeys(['megasecond',   'megaseconds'],          1E06), # no Ms because .lower() would convert it to ms
+    **dict.fromkeys(['megasecond',   'megaseconds'],          1E06),  # no Ms because .lower() would convert it to ms
     **dict.fromkeys(['gigasecond',   'gigaseconds',   'gs'],  1E09),
     **dict.fromkeys(['terasecond',   'teraseconds',   'ts'],  1E12),
-    **dict.fromkeys(['petasecond',   'petaseconds'],          1E15), # no Ps because .lower() would convert it to ps
+    **dict.fromkeys(['petasecond',   'petaseconds'],          1E15),  # no Ps because .lower() would convert it to ps
     **dict.fromkeys(['exasecond',    'exaseconds',    'es'],  1E18),
-    **dict.fromkeys(['zettasecond',  'zettaseconds'],         1E21), # no Zs because .lower() would convert it to zs
-    **dict.fromkeys(['yottasecond',  'yottaseconds'],         1E24), # no Ys because .lower() would convert it to ys
+    **dict.fromkeys(['zettasecond',  'zettaseconds'],         1E21),  # no Zs because .lower() would convert it to zs
+    **dict.fromkeys(['yottasecond',  'yottaseconds'],         1E24),  # no Ys because .lower() would convert it to ys
     **dict.fromkeys(['ronnasecond',  'ronnaseconds',  'rs'],  1E27),
     **dict.fromkeys(['quettasecond', 'quettaseconds', 'qs'],  1E30),
 }
+
 
 def seconds_in_unit(unit: str) -> float:
     """Return the number of seconds in a given time unit."""
@@ -784,13 +858,14 @@ def seconds_in_unit(unit: str) -> float:
     except KeyError:
         raise ValueError(f"Unknown time unit: {unit!r}")
 
+
 # Common US & UTC/GMT abbreviations → IANA zone names
-_TZ_ABBREV_TO_ZONE: dict[str,str] = {
+_TZ_ABBREV_TO_ZONE: dict[str, str] = {
     "UTC" : "UTC",
     "GMT" : "Etc/GMT",
     "EST" : "America/New_York",
     "EDT" : "America/New_York",
-    "CST" : "America/Chicago", # WARNING! "CST" can also mean China Standard Time (Asia/Shanghai, UTC+8), so use with caution!
+    "CST" : "America/Chicago",  # WARNING! "CST" can also mean China Standard Time (Asia/Shanghai, UTC+8), so use with caution!
     "CDT" : "America/Chicago",
     "MST" : "America/Denver",
     "MDT" : "America/Denver",
@@ -840,6 +915,7 @@ _TZ_OFFSET_RE = re.compile(r'''
     $
 ''', re.VERBOSE)
 
+
 def parse_timezone(tz_arg: str | dt.tzinfo | None = None) -> dt.tzinfo | str:
     """
     Parse the given timezone string or tzinfo object into a datetime.tzinfo object.
@@ -852,7 +928,7 @@ def parse_timezone(tz_arg: str | dt.tzinfo | None = None) -> dt.tzinfo | str:
       - "Z", "UTC", or "GMT" (case‐insensitive) to represent UTC.
       - A string "Naive" to represent a naive datetime (no timezone).
     If tz_arg is already a tzinfo object, return it as is.
-    
+
     Raises:
       ValueError if the string cannot be converted to a valid timezone.
     """
@@ -868,7 +944,7 @@ def parse_timezone(tz_arg: str | dt.tzinfo | None = None) -> dt.tzinfo | str:
         return tz_arg
 
     # If tz_arg is a string, try to parse it
-    if isinstance(tz_arg, str):        
+    if isinstance(tz_arg, str):
         s = tz_arg.strip()
         up = s.upper()
 
@@ -881,7 +957,7 @@ def parse_timezone(tz_arg: str | dt.tzinfo | None = None) -> dt.tzinfo | str:
             return dt.timezone.utc
 
         # Strip leading "UTC" or "GMT" prefix
-        if up.startswith(('UTC','GMT')):
+        if up.startswith(('UTC', 'GMT')):
             rest = s[3:].strip()
             if rest == '':
                 return dt.timezone.utc
@@ -910,11 +986,11 @@ def parse_timezone(tz_arg: str | dt.tzinfo | None = None) -> dt.tzinfo | str:
 
             offset = dt.timedelta(hours=hours, minutes=minutes) * sign
             return dt.timezone(offset)
-        
+
         # Otherwise, fall back to ZoneInfo
         try:
             from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-        except ImportError: # for Python < 3.9, fall back to backports.zoneinfo
+        except ImportError:  # for Python < 3.9, fall back to backports.zoneinfo
             from backports.zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
         # Try to interpret the string as a timezone abbreviation
@@ -929,6 +1005,7 @@ def parse_timezone(tz_arg: str | dt.tzinfo | None = None) -> dt.tzinfo | str:
             raise ValueError(f"Unknown timezone {tz_arg!r}") from e
 
     raise TypeError(f"Expected None, str, or tzinfo; got {type(tz_arg).__name__!r}")
+
 
 def decimal_year_to_datetime(dec: float, use_astropy: bool = False) -> dt.datetime:
     """
@@ -949,12 +1026,13 @@ def decimal_year_to_datetime(dec: float, use_astropy: bool = False) -> dt.dateti
     try:
         year = int(dec)
         rem = dec - year
-        start_dt = dt.datetime(year,   1, 1, tzinfo=dt.timezone.utc)
-        end_dt   = dt.datetime(year+1, 1, 1, tzinfo=dt.timezone.utc)
+        start_dt = dt.datetime(year,     1, 1, tzinfo=dt.timezone.utc)
+        end_dt   = dt.datetime(year + 1, 1, 1, tzinfo=dt.timezone.utc)
         year_secs = (end_dt - start_dt).total_seconds()
         return start_dt + dt.timedelta(seconds=rem * year_secs)
     except ValueError as e:
         raise ValueError(f"Failed to convert decimal year {dec} to datetime") from e
+
 
 def _parse_iso(given_date: str) -> dt.datetime:
     """Parse an ISO8601 date string and return a datetime object. Raises ValueError if the date string is invalid."""
@@ -965,6 +1043,7 @@ def _parse_iso(given_date: str) -> dt.datetime:
     except ParserError as e:
         raise ValueError(f"Invalid ISO8601 date '{given_date}'") from e
 
+
 def is_float(s: str) -> bool:
     """Check if a string can be parsed as a float."""
     try:
@@ -972,6 +1051,7 @@ def is_float(s: str) -> bool:
         return True
     except ValueError:
         return False
+
 
 # Precompile Julian/MJD regex
 # This regex is just used to check if a string looks like a JD or MJD:
@@ -984,6 +1064,7 @@ _OFFSET_IN_STR  = re.compile(r"(Z|[+-]\d{2}:\d{2}|[+-]\d{4})$")
 # Enclose the type alias annotation in quotes because not all of these types have been imported yet.
 AnyDateTimeType: TypeAlias = "str | float | int | np.datetime64 | pd.Timestamp | dt.datetime"
 
+
 def _should_convert(given_date: AnyDateTimeType, format_str: str | None = None) -> bool:
     """Determine if the given date should be converted to a timezone (i.e. if the wall clock should be shifted) or if the timezone should just be attached without shifting the clock."""
     import datetime as dt
@@ -994,10 +1075,10 @@ def _should_convert(given_date: AnyDateTimeType, format_str: str | None = None) 
         return True
     if isinstance(given_date, str):
         u = given_date.strip().upper()
-        if u in ('J2000','UNIX','NOW'):
+        if u in ('J2000', 'UNIX', 'NOW'):
             logging.debug(f"Given date is a special keyword: {u}, so it will be converted by shifting the clock")
             return True
-        if format_str and format_str.upper() in ('JD','MJD'):
+        if format_str and format_str.upper() in ('JD', 'MJD'):
             logging.debug(f"Given date has a format_str: {format_str}, so it will be converted by shifting the clock")
             return True
         if _JD_MJD_SIMPLE.fullmatch(given_date):
@@ -1016,6 +1097,7 @@ def _should_convert(given_date: AnyDateTimeType, format_str: str | None = None) 
     logging.debug(f"Given date is not a number, JD/MJD, or aware datetime: {given_date}, so the timezone will be attached without shifting the clock")
     return False
 
+
 def _finalize_datetime(parsed_dt: dt.datetime, original_input: AnyDateTimeType, format_str: str | None,
                        tz_arg: str | dt.tzinfo | None, should_convert: bool | None = None) -> dt.datetime:
     """Finalize the datetime object by either converting it to the target timezone or just attaching the timezone without shifting the clock. The boolean argument 'should_convert' can override the default behavior, which is determined by the function _should_convert()."""
@@ -1030,6 +1112,7 @@ def _finalize_datetime(parsed_dt: dt.datetime, original_input: AnyDateTimeType, 
         logging.debug(f"Attaching timezone {target_tz} to datetime {parsed_dt} without shifting the clock")
         return parsed_dt.replace(tzinfo=target_tz)
 
+
 def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None = None,
                    format_str: str | None = None, should_convert: bool | None = None) -> dt.datetime:
     """
@@ -1039,18 +1122,18 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
      - "seconds" or "milliseconds" indicating the number of seconds or milliseconds since an epoch (Unix epoch by default).
      - "YYYY-MM-DD" or similar ISO8601 formats such as "YYYY-MM-DDTHH:MM:SS", "MM/DD/YYYY", etc.
      - A custom string following this pattern: "units (optional: since/after epoch)", where "units" can be anything that the function seconds_in_unit() accepts (e.g. "days", "weeks", "months", etc.). The optional epoch time can be a string, float, int, numpy.datetime64, pandas.Timestamp, or datetime.datetime object. Example: "days since 1990", "milliseconds after J2000", "sidereal days since 2000-01-01", etc. If the epoch is not specified, it defaults to the Unix epoch (1970-01-01T00:00:00Z)
-    
+
     If a boolean "should_convert" is provided, it will override the default behavior of whether to convert the datetime to the specified timezone by shifting the clock or just attaching the timezone without shifting. If None, the function will determine this based on the type of given_date and format_str.
 
     If a given_date starts with "JD" or "MJD", it will be treated as a Julian Date or Modified Julian Date, respectively.
 
     Otherwise, if given_date is a float or int, treat it as a decimal year by default if format_str is not provided.
 
-    Any call that doesn't provide a timezone argument will default to UTC. 
+    Any call that doesn't provide a timezone argument will default to UTC.
     The timezone can be a datetime.tzinfo object or a string that can be converted to a ZoneInfo object (e.g. 'America/New_York').
     If the given_date is an "aware" datetime.datetime object which already has a timezone attached, it will be converted to the specified timezone (which may involve changing its date and time if the specified timezone is different).
     The timezone can also be a fixed‐offset like "+05:30" or "-04:00", or the string "Naive" to indicate that the datetime should be treated as a naive datetime (i.e. without any timezone information).
-    
+
     Accepts:
       - 'NOW' (case-insensitive) → current datetime
       - strings in YYYY, YYYY-MM, YYYY-MM-DD, YYYY-MM-DDTHH:MM:SS, or other ISO8601 formats (e.g. '2002-10-18T07:00:00Z', '2002-10-18 07:00:00+00:00').
@@ -1062,7 +1145,7 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
       - numpy.datetime64 objects (e.g. np.datetime64('2002-10-18T07:00:00'))
       - pandas.Timestamp objects (e.g. pd.Timestamp('2002-10-18 07:00:00'))
       - datetime.datetime objects (e.g. datetime.datetime(2002, 10, 18, 7, 0, 0))
-    
+
     Returns:
       datetime.datetime object in the specified timezone.
       Note that datetime.datetime objects cannot represent dates before 1 January 1, 0001 or after 31 December 9999.
@@ -1075,7 +1158,7 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
     parsed_tz = parse_timezone(timezone)  # Ensure timezone is a valid tzinfo object or string
 
     parsed_dt = None
-    
+
     # Handle special cases:
     if isinstance(given_date, str):
         if given_date.strip().upper() == 'J2000':
@@ -1139,7 +1222,7 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
             # If the given_date is a decimal year, convert it to datetime in the specified timezone
             # Note: This will not shift the clock, just attach the tzinfo.
             parsed_dt = decimal_year_to_datetime(float(given_date))
-        else: # If format is provided, parse the date using the specified format.
+        else:  # If format is provided, parse the date using the specified format.
             if not isinstance(format_str, str):
                 raise TypeError(f"Expected 'format' to be a string, got {type(format_str).__name__!r}")
             # Make sure the format string is a valid example of "units (optionally: since/after epoch)"
@@ -1162,18 +1245,18 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
             else:
                 # If the format_parts list has three parts, the third part is the epoch.
                 epoch_str = format_parts[2].strip()
-            try:                
+            try:
                 epoch = parse_datetime(epoch_str, timezone=parsed_tz)
             except ValueError as e:
                 raise ValueError(f"Invalid epoch '{epoch}' in format string '{format_str}'.") from e
             # Now we can calculate the datetime based on the given_date (and the multiplier from 'units') and the epoch
             parsed_dt = epoch + dt.timedelta(seconds=float(given_date) * multiplier)
 
-    if parsed_dt is None and type(given_date) is dt.datetime: # Don't use isinstance() here, because it will also match subclasses like Pandas Timestamp
+    if parsed_dt is None and type(given_date) is dt.datetime:  # Don't use isinstance() here, because it will also match subclasses like Pandas Timestamp
         parsed_dt = given_date
-    elif isinstance(given_date, dt.date): # Handle date objects (without time) as midnight
+    elif isinstance(given_date, dt.date):  # Handle date objects (without time) as midnight
         parsed_dt = dt.datetime.combine(given_date, dt.time.min)
-    
+
     if parsed_dt is None:
         try:
             import numpy as np
@@ -1192,16 +1275,16 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
             parsed_dt = given_date.to_pydatetime()
 
     error_message = f"The date '{given_date}' is type {type(given_date).__name__!r} in an unknown format. Please use NOW, YYYY, YYYY-MM, YYYY-MM-DD, YYYY-MM-DDTHH:MM:SS, other ISO8601 strings, or a decimal year like 2002.291. Datetimes in pandas.Timestamp, numpy.datetime64, or datetime.datetime formats are also accepted and will be converted to datetime.datetime objects in the specified timezone ({parsed_tz})."
-    
+
     if parsed_dt is None and not isinstance(given_date, str):
         raise TypeError(error_message)
-    
+
     if parsed_dt is None and format_str is not None:
         try:
             parsed_dt = dt.datetime.strptime(given_date, format_str)
         except ValueError as e:
             raise ValueError(f"Invalid date format '{given_date}' with specified format '{format_str}'.") from e
-    
+
     # Try parsing the date string in various formats
     # Start with RFC 2822 format, then ISO8601, then free-form strings
     # Store any errors encountered in a list to provide feedback if all parsing attempts fail.
@@ -1224,11 +1307,11 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
     if parsed_dt is None:
         try:
             from dateutil.parser import parse as parse_fuzzy
-            parsed_dt = parse_fuzzy(given_date, default=dt.datetime(1900,1,1))
+            parsed_dt = parse_fuzzy(given_date, default=dt.datetime(1900, 1, 1))
         except ValueError as e:
             errors.append(f"Failed to parse '{given_date}' as a free-form date string: {e}")
 
-    if parsed_dt is None:    
+    if parsed_dt is None:
         if np is None:
             errors.append("The numpy package is not installed, so numpy.datetime64 objects cannot be parsed.")
         if pd is None:
@@ -1239,11 +1322,13 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
 
     raise ValueError(error_message + "\n".join(errors) + "\nPlease check the input format and try again.")
 
+
 def sci_exp(float_input: float | int, max_digits: int = 15) -> int:
     """Return the scientific exponent of an integer or floating point number. An optional max_digits parameter can be specified to determine the maximum number of digits to consider for very small numbers; if the number is smaller than 10^(-max_digits), just say it has max_digits. By default, max_digits is 15."""
     import math
     if abs(float_input) < 10**(-max_digits): return -max_digits
     return int(math.floor(math.log10(abs(float_input))))
+
 
 def round_out(x: float, round_digits: int = 3, max_digits: int = 15) -> float:
     """Round a number away from zero (i.e. rounds up for x>0 and down for x<0) to the specified number of significant figures (defaults to 3). If the number is smaller than 10^(-max_digits), it will be returned as is. The max_digits parameter defaults to 15, but can be changed to a different value if needed."""
@@ -1252,20 +1337,23 @@ def round_out(x: float, round_digits: int = 3, max_digits: int = 15) -> float:
     these_digits = sci_exp(x) - round_digits + 1
     thisfactor = 10**these_digits
     x = x/thisfactor
-    if x > 0: x = np.ceil(x) 
+    if x > 0: x = np.ceil(x)
     else:     x = np.floor(x)
     return x*(thisfactor*1.0)
+
 
 def get_user_input(prompt: str) -> bool:
     """Prompt the user with the given message and return True if the user enters 'yes', False otherwise."""
     user_input = input(prompt)
     return user_input.casefold() == 'yes' or user_input.casefold() == 'y'
 
+
 def my_capitalize(string_to_capitalize: str) -> str:
     """Capitalize ONLY the first letter of a string and DON'T modify the rest of it."""
     if not string_to_capitalize:
         return ""
     return string_to_capitalize[0].upper() + string_to_capitalize[1:]
+
 
 def my_title_case(the_title: str) -> str:
     """Capitalize the first letter of each word, but if a word already has ANY uppercase letters, leave it as is. This way, words like "WW2" or "iZombie" won't be modified."""
@@ -1274,10 +1362,11 @@ def my_title_case(the_title: str) -> str:
                          else word.title() for word in words]
     return ' '.join(capitalized_words)
 
+
 def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
     """
     Turn arbitrary text into an ASCII-only, filesystem‐safe filename.
-    
+
     Steps:
       1. Unicode → ASCII
       2. Treat dots, underscores & whitespace as word separators
@@ -1285,12 +1374,12 @@ def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
       4. Collapse runs of separators into a single one
       5. Trim separators from ends
       6. Optionally truncate to max_length (preserving word boundaries)
-    
+
     Args:
         text:        Original filename or title
         sep:         Single-character separator (default: "_")
         max_length:  If set, strongest‐effort truncate to this many chars
-    
+
     Returns:
         A clean, filename-safe string.
     """
@@ -1304,29 +1393,28 @@ def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
     #    (dots, underscores, whitespace) but keep dashes
     #    e.g. "hello.world--foo_bar" → "hello world--foo bar"
     text = re.sub(r"[._\s]+", sep, text)
-    
-    # 3. Remove anything but a–z, 0–9, dashes, or our sep
-    allowed = f"A-Za-z0-9\-{re.escape(sep)}"
+
+    # 3. Remove anything but dashes, a–z, 0–9, or our sep
+    allowed = f"-A-Za-z0-9{re.escape(sep)}"
     text = re.sub(fr"[^{allowed}]+", "", text)
-    
+
     # 4. Collapse runs of sep (e.g. “__” → “_”)
     text = re.sub(fr"{re.escape(sep)}{{2,}}", sep, text)
-    
+
     # 5. Strip leading/trailing seps
     text = text.strip(sep)
-    
+
     # 6. Optionally truncate (try not to cut in middle of a word)
     if max_length is not None and len(text) > max_length:
         # cut at max_length, then drop a partial trailing token if any
         truncated = text[:max_length]
         # if the next char in original isn't sep and our chop landed mid-token, trim back to last sep
-        if (len(text) > max_length and
-            not truncated.endswith(sep) and
-            sep in truncated):
+        if (len(text) > max_length and not truncated.endswith(sep) and sep in truncated):
             truncated = truncated.rsplit(sep, 1)[0]
         text = truncated
-    
+
     return text
+
 
 def compile_script(file_path: str) -> bool:
     """Attempt to compile the given file in 'exec' mode. If it compiles, return True. On syntax or I/O problems, log an error and return False."""
@@ -1343,7 +1431,7 @@ def compile_script(file_path: str) -> bool:
     except PermissionError:
         logging.error(f"Permission denied: {file_path}")
     except UnicodeDecodeError as e:
-        logging.error(f"Could not decode {file_path!r} as UTF-8: {e}")
+        logging.error(f"Could not decode {file_path!r}: {e}")
     except SyntaxError as e:
         # protect against None offsets
         lineno = e.lineno or '?'
@@ -1363,12 +1451,12 @@ def compile_script(file_path: str) -> bool:
 # That means any names used as base classes (e.g., ast.NodeVisitor) must already
 # be defined in the current scope when the class is created.
 #
-# If we defer importing `ast` until inside a function but still try to define
+# If we defer importing 'ast' until inside a function but still try to define
 # the class at the module level, Python will raise:
 #     NameError: name 'ast' is not defined
 #
 # Wrapping the class definition in a factory function lets us:
-#   1) Import `ast` inside the function, so it’s guaranteed to be in scope
+#   1) Import 'ast' inside the function, so it’s guaranteed to be in scope
 #      when we define the class.
 #   2) Keep module‑level imports to a minimum (only __future__ and typing).
 #   3) Return the fully‑constructed class and assign it to the module name.
@@ -1376,21 +1464,24 @@ def compile_script(file_path: str) -> bool:
 # In short: by defining FormatChecker inside this helper, we avoid NameError
 # and still get a clean, well‑typed class available at the module level.
 # --------------------------------------------------------------------------------
+
+
 def _make_format_checker() -> Type[FormatChecker]:
     """Factory function to create the FormatChecker class with the necessary imports."""
     import ast
-    from typing import List, Tuple
+
     class FormatChecker(ast.NodeVisitor):
         """
         Walks a module AST and collects formatting violations:
         - missing type hints on params / return
         - missing docstring or incorrect docstring quote style
         """
+
         def __init__(self, source: str) -> None:
             """Initialize the FormatChecker with the source code string."""
             self.source = source
-            self.errors: List[Tuple[str, str, str, int]] = []
-            self._seen_funcs: set[int] = set() # keep track of which FunctionDef/AsyncFunctionDef nodes we've already checked
+            self.errors: list[tuple[str, str, str, int]] = []
+            self._seen_funcs: set[int] = set()  # keep track of which FunctionDef/AsyncFunctionDef nodes we've already checked
 
         def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
             """Visit a FunctionDef node and check for formatting violations."""
@@ -1419,15 +1510,15 @@ def _make_format_checker() -> Type[FormatChecker]:
 
         def _check_function(self, node: ast.FunctionDef, *, in_method: bool = False, container: str | None = None) -> None:
             """Check a function or method node for formatting violations.
-            If `in_method` is True, it indicates that this is a method (e.g. inside a class).
-            If `container` is provided, it indicates the context (e.g. class name)."""
-            if id(node) in self._seen_funcs: # ←─ skip if we’ve already run this exact node
+            If 'in_method' is True, it indicates that this is a method (e.g. inside a class).
+            If 'container' is provided, it indicates the context (e.g. class name)."""
+            if id(node) in self._seen_funcs:  # ←─ skip if we’ve already run this exact node
                 return
             self._seen_funcs.add(id(node))
             who = (f'function "{node.name}"' if container is None else f'{container} → method "{node.name}"')
             self._check_docstring(node, who)
 
-            missing: List[str] = []
+            missing: list[str] = []
             args = [a for a in node.args.args if a.arg != "self"]
             for a in args + node.args.kwonlyargs:
                 if a.annotation is None:
@@ -1444,7 +1535,7 @@ def _make_format_checker() -> Type[FormatChecker]:
         def _check_docstring(self, node: ast.AST, who: str) -> None:
             """Check a node for a docstring and its formatting.
             If the node has no docstring or the docstring is not formatted correctly, an error is added to self.errors.
-            The `who` parameter is a string describing the context (e.g. function or class name)."""
+            The 'who' parameter is a string describing the context (e.g. function or class name)."""
             if not node.body or not isinstance(node.body[0], ast.Expr):
                 self.errors.append((node.__class__.__name__.lower(), who, "no docstring", node.lineno))
                 return
@@ -1460,17 +1551,22 @@ def _make_format_checker() -> Type[FormatChecker]:
             if first_line.startswith("'''"):
                 self.errors.append((node.__class__.__name__.lower(), who, 'docstring should use triple double quotes ("""…""")', node.lineno))
     return FormatChecker
+
+
 FormatChecker = _make_format_checker()
 
+
 def check_python_formatting(path: str) -> None:
-    """Reads a .py file at `path` via ud.my_fopen, parses it with ud.my_ast_parse, and prints any formatting violations to stdout."""
+    """Reads a .py file at 'path' via my_fopen, parses it with my_ast_parse, and prints any custom formatting violations to stdout."""
     src = my_fopen(path)
     if src is False:
         logging.error(f"❌ Failed to open file: {path}")
         return
 
     if '`' in src:
-        logging.info(f"File {path} contains the backtick character (`). This is not recommended in Python source code, as it may cause issues with syntax highlighting or string formatting. Consider replacing it with a single quote (').")
+        logging.warning(f"File {path} contains the backtick character (`).")
+    if '“' in src or '”' in src:
+        logging.warning(f'File {path} contains curly quotation marks (“ or ”). Use straight quotation marks (") instead.')
 
     try:
         tree = my_ast_parse(src, path)
@@ -1482,27 +1578,288 @@ def check_python_formatting(path: str) -> None:
     checker.visit(tree)
 
     if not checker.errors:
-        logging.info("🎉 All functions and classes conform to the formatting rules.")
+        logging.info("🎉 All functions and classes conform to the custom formatting rules.")
     else:
         max_lineno = max(err[3] for err in checker.errors)
         the_digits = sci_exp(max_lineno) + 1
         for kind, name, msg, lineno in checker.errors:
             logging.error(f"{lineno:>{the_digits}} – {kind.capitalize()} {name}: {msg}")
-    
+
     if compile_script(path):
         logging.info(f"✅ {path} compiled successfully.")
+
+
+def run_flake8(path: str, ignore_codes: list[str] = [], max_line_length: int = 100) -> flake8.Report:
+    """
+    Run Flake8 on 'path', but:
+      - only flag E501 if a line exceeds 'max_line_length',
+      - ignore whatever codes are in 'ignore_codes'.
+
+    :param path:       File or directory to lint.
+    :param max_line_length:  The line‑length threshold for E501 (default 100).
+    :return:           A Flake8 Report object with all violations.
+    """
+    from flake8.api import legacy as flake8
+    style_guide = flake8.get_style_guide(max_line_length=max_line_length, ignore=ignore_codes)
+    return style_guide.check_files([path])
+
+
+def _gather_flake8_issues( path: str, ignore_codes: list[str] = [], max_line_length: int = 100) -> dict[str, str]:
+    """
+    Returns a dict mapping each Flake8 error code to its first-seen description
+    in the file at 'path'.
+    Tries the 'flake8' CLI (fast), but if it's not on PATH, falls back
+    to an in-process Application/API solution.
+    """
+    try:
+        return _gather_via_cli(path, max_line_length, ignore_codes)
+    except FileNotFoundError:
+        return _gather_via_app(path, max_line_length, ignore_codes)
+
+
+def _gather_via_cli(path: str, max_line_length: int, ignore_codes: list[str]) -> dict[str, str]:
+    """Use the flake8 CLI to gather codes and descriptions."""
+    import subprocess
+    fmt = "%(row)d:%(col)d: %(code)s %(text)s"
+    args = [
+        "flake8",
+        f"--max-line-length={max_line_length}",
+        f"--ignore={','.join(ignore_codes)}",
+        f"--format={fmt}",
+        path,
+    ]
+    proc = subprocess.run(args, capture_output=True, text=True)
+    codes: dict[str, str] = {}
+    for line in proc.stdout.splitlines():
+        # e.g. "12:5: E302 expected 2 blank lines, found 1"
+        parts = line.split(": ", 1)
+        if len(parts) != 2:
+            continue
+        _, rest = parts
+        code, desc = rest.split(" ", 1)
+        codes.setdefault(code, desc)
+    return codes
+
+
+def _gather_via_app(path: str, max_line_length: int, ignore_codes: list[str]) -> dict[str, str]:
+    """Use the flake8 Application API to gather codes and descriptions."""
+    from flake8.main.application import Application
+    from flake8.formatting.base import BaseFormatter
+    from flake8.violation import Violation
+
+    class CodeDictFormatter(BaseFormatter):
+        """Custom formatter that collects codes and their first descriptions."""
+        def __init__(self, options: dict[str, str]) -> None:
+            """Initialize the formatter with options."""
+            super().__init__(options)
+            self.codes: dict[str, str] = {}
+
+        def format(self, error: Violation) -> str:
+            """Format a single error, capturing its code and description."""
+            # capture the first description we see for each code
+            self.codes.setdefault(error.code, error.text)
+            # suppress any actual stdout
+            return ""
+
+    class CodeDictApp(Application):
+        """Custom Application subclass to use our CodeDictFormatter."""
+        def make_formatter(self) -> BaseFormatter:
+            """Create a custom formatter that collects codes and descriptions."""
+            # force our custom formatter
+            self.formatter = CodeDictFormatter(self.options)
+            return self.formatter
+
+    app = CodeDictApp()
+    # supply exactly the same CLI settings in-process
+    cli_args = [f"--max-line-length={max_line_length}", f"--ignore={','.join(ignore_codes)}", path]
+    # this will parse, run checks, and invoke our formatter behind the scenes
+    app.run(cli_args)
+    # the formatter collected everything into .codes
+    return app.formatter.codes
+
+
+def get_autopep8_fixable_codes() -> set[str]:
+    """
+    Run 'autopep8 --list-fixes' (via subprocess) to discover exactly
+    which Flake8 error‐codes autopep8 knows how to fix.
+    Returns a set like {"E101","E111", …}.
+    """
+    import subprocess
+    try:
+        proc = subprocess.run(["autopep8", "--list-fixes"], capture_output=True, text=True, check=True)
+    except (FileNotFoundError, subprocess.CalledProcessError) as e:
+        logging.warning(f"autopep8 not found or failed: {e!r}")
+        # autopep8 not on PATH or error—assume nothing fixable
+        return set()
+
+    fixable: set[str] = set()
+    for line in proc.stdout.splitlines():
+        # the output looks like:
+        #   E101 - indentation not consistent
+        #   E111 - indent does not match any outer indentation level
+        # so take the code before the colon
+        if " - " in line:
+            code = line.split(" - ", 1)[0].strip()
+            if code:
+                fixable.add(code)
+    return fixable
+
+
+def _vis_trailing_ws(line: str) -> str:
+    """
+    Replace only the trailing spaces and tabs in `line`
+    with visible glyphs (· for space, → for tab).
+    """
+    core = line.rstrip(" \t")
+    trail = line[len(core):]
+    return core + trail.replace(" ", "·").replace("\t", "→")
+
+
+def _ask_and_fix(path: str, code: str, desc: str, diff_choice: int = 1) -> bool:
+    """
+    Prompt the user about fixing ALL occurrences of 'code' in 'path',
+    and if yes, apply autopep8.fix_file with --select=code.
+    The fix will be applied without saving, and the user will be shown a diff
+    of the changes before saving to the file.
+
+    Returns true if the user wants to continue, False if they want to quit.
+    """
+    import autopep8
+    import difflib
+    from pathlib import Path
+    # The number of blank lines expected in various contexts.
+    blank_line_overrides = {
+        'E301': 1,  # expected 1 blank line, found 0
+        'E302': 2,  # expected 2 blank lines, found 1
+        'E303': 5,  # too many blank lines (give a lot of context to see what is around the blank lines)
+        'E305': 2,  # expected 2 blank lines after class/method
+    }
+    orig = my_fopen(path)
+    fixed = orig
+    for level in (0, 1, 2):  # try with 0, 1, then 2 "-a” flags
+        flags = ['-a'] * level
+        the_fix = f"autopep8 {' '.join(flags)} --select={code}"
+        args = [f"--select={code}", "--in-place"] + flags + [path]
+        opts = autopep8.parse_args(args)
+        candidate = autopep8.fix_code(orig, options=opts)
+        if candidate != orig:
+            fixed = candidate
+            break
+    if fixed == orig:
+        logging.info(f"No changes for {code} in {path} using {the_fix}.")
+        return True
+    logging.info(f"Start of proposed {code} changes to {path}: {the_fix}")
+    orig_lines = orig.splitlines  (keepends=True)
+    fixed_lines = fixed.splitlines(keepends=True)
+    # Number of lines in the original file
+    max_orig_lineno = len(orig_lines)
+    the_digits = sci_exp(max_orig_lineno) + 1
+    if not isinstance(diff_choice, int) or diff_choice < 0:
+        logging.error(f"Invalid diff_choice={diff_choice}. Must be a non-negative integer.")
+        return False
+    # If this is a blank‑line code, force unified with the number of context lines specified in blank_line_overrides.
+    if code in blank_line_overrides:
+        # +1 so that unified_diff(n=override‑1) gives you exactly override context
+        effective = blank_line_overrides[code] + 1
+    else:
+        effective = diff_choice
+    if effective == 0:  # old style diff
+        orig_lineno = new_lineno = 1
+        for line in difflib.Differ().compare(orig_lines, fixed_lines):
+            tag, text = line[:2], line[2:].rstrip('\n')
+            if tag == '  ':    # context line
+                orig_lineno += 1
+                new_lineno  += 1
+            elif tag == '- ':  # original line
+                logging.info(f"< {orig_lineno:>{the_digits}}: {_vis_trailing_ws(text)}")
+                orig_lineno += 1
+            elif tag == '+ ':  # fixed line
+                logging.info(f"{ANSI_CYAN}> {new_lineno:>{the_digits}}: {_vis_trailing_ws(text)}{ANSI_RESET}")
+                new_lineno += 1
+            # we skip '? ' lines entirely
+    elif effective >= 1:  # unified or context diff
+        ctx = max(effective - 1, 0)
+        diff = difflib.unified_diff(orig_lines, fixed_lines, fromfile=path, tofile=path, n=ctx, lineterm="")
+        orig_lineno = new_lineno = None
+        # allow for “@@ -57,1 +57,1 @@” *or* “@@ -57 +57 @@”
+        header_re = re.compile(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+        for d in diff:
+            # skip --- and +++ lines
+            if d.startswith(("---", "+++")):
+                continue
+            # pull both old/new start lines out of the first @@
+            if d.startswith("@@"):
+                m = header_re.match(d)
+                orig_lineno = int(m.group(1))
+                new_lineno  = int(m.group(2))
+                continue
+            tag, text = d[0], d[1:].rstrip("\n")
+            if tag == " ":    # context (show old line number)
+                logging.info(f"  {orig_lineno:>{the_digits}}: {_vis_trailing_ws(text)}")
+                orig_lineno += 1
+                new_lineno  += 1
+            elif tag == "-":  # original line
+                logging.info(f"< {orig_lineno:>{the_digits}}: {_vis_trailing_ws(text)}")
+                orig_lineno += 1
+            elif tag == "+":  # fixed line
+                logging.info(f"{ANSI_CYAN}> {new_lineno:>{the_digits}}: {_vis_trailing_ws(text)}{ANSI_RESET}")
+                new_lineno += 1
+    else:
+        logging.error(f"Unsupported effective diff_choice = {effective} (original: {diff_choice}). Must be 0 (old), 1 (unified), or 2+ (context).")
+        return False
+
+    logging.info(f"End of proposed {code} changes to {path} using {the_fix}.")
+    logging.info(f"{code}: {desc}")
+    ans = input("Apply these changes? [y/N/q] ").strip().lower()
+    if ans in ("y", "yes"):
+        Path(path).write_text(fixed, encoding=DEFAULT_ENCODING)
+        logging.info(f"{ANSI_GREEN}Applied {the_fix} to {path}{ANSI_RESET}")
+    elif ans in ("q", "quit", "exit"):
+        logging.info(f"{ANSI_YELLOW}Exiting without further changes.{ANSI_RESET}")
+        return False
+    else:
+        logging.info(f"{ANSI_YELLOW}Skipped writing changes.{ANSI_RESET}")
+    return True
+
+
+def interactive_flake8(path: str, diff_choice: int = 1, ignore_codes: list[str] = [], max_line_length: int = 100) -> None:
+    """
+    1) Run the flake8 API for summary counts.
+    2) Shell out to flake8 CLI once to harvest one description per code.
+    3) For each code, ask the user; on “yes”, call autopep8 to fix only that code.
+    """
+    report = run_flake8(path, ignore_codes=ignore_codes, max_line_length=max_line_length)
+    if report.total_errors == 0:
+        logging.info("No flake8 errors—nothing to do.")
+        return
+    logging.error(f"\nFound {report.total_errors} total violations in {path}:")
+    for stat in report.get_statistics(""):
+        logging.error(f"  {stat}")
+    codes = _gather_flake8_issues(path, ignore_codes=ignore_codes, max_line_length=max_line_length)
+    fixable_codes = get_autopep8_fixable_codes()
+    logging.debug(f"Autopep8 can fix these codes: {fixable_codes}")
+    for code, desc in codes.items():
+        if code not in fixable_codes:
+            logging.debug(f"Skipping {code}: no autopep8 fixer")
+            continue
+        logging.info(f"\n→ {ANSI_RED}{code}{ANSI_RESET}: {ANSI_CYAN}{desc}{ANSI_RESET}")
+        if not _ask_and_fix(path, code, desc):
+            break
+    logging.info(f"{ANSI_GREEN}Done. You may want to re-run flake8 to confirm everything is fixed.{ANSI_RESET}")
+
 
 def open_dir_in_VLC(the_dir: str, sort_choice: str = "sort_by_name",
                     recursive: bool = False,
                     no_start:  bool = False) -> None:
     """Create a playlist of the files in the specified directory, then play that playlist in VLC. By default, don't search the directory recursively and sort the files by name. Optional arguments allow recursive loading or sorting by modification time. If no_start is True, don't start playback in VLC."""
+    import subprocess
     if the_dir is None:
         raise ValueError("The directory path cannot be None.")
     elif not isinstance(the_dir, str):
         raise TypeError(f"Expected 'the_dir' to be a string, got {type(the_dir).__name__!r}")
     elif not os.path.isdir(the_dir):
         raise ValueError(f"The specified path '{the_dir}' is not a valid directory.")
-    #start_flag = "--start-paused" if no_start else False # The "--start-paused" flag forces you to press play in VLC EACH TIME YOU GO TO A NEW PLAYLIST ENTRY!
+    # start_flag = "--start-paused" if no_start else False # The "--start-paused" flag forces you to press play in VLC EACH TIME YOU GO TO A NEW PLAYLIST ENTRY!
     start_flag = "--no-playlist-autostart" if no_start else False
     # List to store files with their modification times
     files_with_times = []
@@ -1531,8 +1888,8 @@ def open_dir_in_VLC(the_dir: str, sort_choice: str = "sort_by_name",
         # Sort files by name
         files_with_times.sort(key=lambda x: x[1])
     elif sort_choice == "sort_by_time":
-      # Sort files by modification time (earliest first)
-      files_with_times.sort(key=lambda x: x[0])
+        # Sort files by modification time (earliest first)
+        files_with_times.sort(key=lambda x: x[0])
     # Create the .m3u playlist content
     playlist_content = "#EXTM3U\n"
     for _, file_path in files_with_times:
@@ -1547,6 +1904,7 @@ def open_dir_in_VLC(the_dir: str, sort_choice: str = "sort_by_name",
     else:          command_list = ["vlc",             playlist_path]
     subprocess.Popen(command_list, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+
 def remove_prefix_from_filename(filepath: str, prefix: str) -> bool:
     """If the given filepath's base filename starts with the given prefix, remove the prefix, move the file (but only if that doesn't cause errors) and return True. Otherwise, return False."""
     file = os.path.basename(filepath)
@@ -1555,7 +1913,7 @@ def remove_prefix_from_filename(filepath: str, prefix: str) -> bool:
         # If the first character is now in " _-", remove it:
         while new_file[0] in " _-":
             new_file = new_file[1:]
-        new_filepath = os.path.join(os.path.dirname(filepath), new_file) 
+        new_filepath = os.path.join(os.path.dirname(filepath), new_file)
         if not os.path.exists(new_filepath):
             try:
                 os.rename(filepath, new_filepath)
@@ -1568,6 +1926,7 @@ def remove_prefix_from_filename(filepath: str, prefix: str) -> bool:
             return False
     else:
         return False
+
 
 def remove_prefix_from_html_title(filepath: str, prefix: str) -> bool:
     """If the given filepath is an HTML file and its title starts with the given prefix, remove the prefix from the title and save the file, then return True. Otherwise, return False."""
@@ -1585,18 +1944,20 @@ def remove_prefix_from_html_title(filepath: str, prefix: str) -> bool:
     if title.startswith(prefix):
         new_title = title.replace(prefix, "", 1)  # Replace only the first occurrence
         new_html = html[:title_start] + new_title + html[title_end:]
-        with open(filepath, 'w', encoding='utf-8') as file:
+        with open(filepath, 'w', encoding=DEFAULT_ENCODING) as file:
             file.write(new_html)
         print(f"Removed prefix '{prefix}' from the title in '{filepath}'.")
         return True
     else:
         return False
 
+
 def check_list_for_duplicates(the_list: list) -> bool:
     """Check a list for duplicate elements and return True if duplicates are found."""
     duplicates = [ext for ext in set(the_list) if the_list.count(ext) > 1]
     print("Duplicates:", duplicates)
     return len(duplicates) > 0
+
 
 # A comprehensive list of encodings to try when reading files, with most likely encodings first.
 text_encodings = [
@@ -1605,7 +1966,7 @@ text_encodings = [
     'cp1252',       'cp1251',       'cp1250',         'cp1253',          'cp1254',       'cp1255',
     'cp1256',       'cp1257',       'cp1258',         'iso-8859-2',      'iso-8859-3',   'iso-8859-4',
     'iso-8859-5',   'iso-8859-6',   'iso-8859-7',     'iso-8859-8',      'iso-8859-9',   'iso-8859-10',
-    'iso-8859-11',  'iso-8859-13',  'iso-8859-14',    'iso-8859-15',     'iso-8859-16',  'cp437',        
+    'iso-8859-11',  'iso-8859-13',  'iso-8859-14',    'iso-8859-15',     'iso-8859-16',  'cp437',
     'cp850',        'cp852',        'cp855',          'cp857',           'cp858',        'cp860',
     'cp861',        'cp862',        'cp863',          'cp864',           'cp865',        'cp866',
     'cp869',        'cp037',        'cp424',          'cp500',           'cp720',        'cp737',
@@ -1623,16 +1984,26 @@ text_encodings = [
 # A comprehensive list of python extensions.
 python_extensions = ['.py', '.pyw']
 
+# A comprehensive list of text file extensions.
+text_extensions = [
+    '.txt',  '.html',     '.htm',      '.csv',        '.json', '.xml'
+    '.adoc', '.asciidoc', '.bib',      '.cfg',        '.conf', '.ini',
+    '.log',  '.md',       '.markdown', '.properties', '.rtf',  '.rst',
+    '.sgm',  '.sgml',     '.tex',      '.toml',       '.tsv',  '.xhtml',
+    '.yaml', '.yml',
+]
+# check_list_for_duplicates(text_extensions) # Run this after adding new extensions to ensure there are no duplicates.
+
 # A comprehensive list of video file extensions.
 video_extensions = [
     '.mp4',   '.mkv',   '.mov',   '.avi',  '.mpg',  '.mpeg',
     '.wmv',   '.m4v',   '.flv',   '.divx', '.vob',  '.iso',
-    '.3gp',   '.webm',  '.mts',   '.m2ts', '.ts',   '.ogv', 
+    '.3gp',   '.webm',  '.mts',   '.m2ts', '.ts',   '.ogv',
     '.rm',    '.rmvb',  '.asf',   '.f4v',  '.mxf',  '.dv',
     '.swf',   '.m2v',   '.svi',   '.mpe',  '.ogm',  '.bik',
     '.xvid',  '.yuv',   '.qt',    '.gvi',  '.viv',  '.fli',
     '.mjpg',  '.mjpeg', '.amv',   '.drc',  '.flc',  '.wve',
-    '.avchd', '.vp6',   '.ivf',   '.mps',  '.vro',  '.ssf', 
+    '.avchd', '.vp6',   '.ivf',   '.mps',  '.vro',  '.ssf',
     '.hevc',  '.h265',  '.264',   '.str',  '.evo',  '.3g2',
     '.h264',  '.av1',   '.ogx',   '.mlv',  '.ps',   '.tsx',
     '.mp2v',  '.dvs',   '.gxf',   '.m4p',  '.webp', '.vp8',
