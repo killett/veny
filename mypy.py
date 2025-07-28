@@ -31,8 +31,7 @@ class Options():
     """Class that has all global options in one place."""
     def __init__(self) -> None:
         """Initialize the Options class with default values."""
-        self.log_mode = "INFO"
-        # self.log_mode = "DEBUG" # Instead of uncommenting this line, just use the -debug command line argument.
+        self.log_mode = "INFO"  # Use the -debug command line argument to change to DEBUG.
         self.search_above_this_dir = True
         self.my_filepath: str = os.path.abspath(__file__)  # This file's full path and filename
         self.my_name = os.path.splitext(os.path.basename(self.my_filepath))[0]  # The base name of this script without the .py extension
@@ -2508,6 +2507,14 @@ def process_import(options: Options, module_name: str, file_path: str) -> bool:
         logging.debug(f"Added subfolder: {module_path}")
         return True
 
+    # Check if this module is in the custom_modules dictionary.
+    if module_name in options.custom_modules:
+        module_file = options.custom_modules[module_name]
+        if module_name not in options.loaded_custom_modules:
+            options.loaded_custom_modules.add(module_name)
+            logging.debug(f"Resolved via custom_modules: {module_name} → {module_file}")
+        return True
+
     logging.debug(f"Could not resolve local import, treating as external: {module_name}")
     return False
 
@@ -3917,9 +3924,12 @@ def dict_of_custom_modules(options: Options) -> dict[str, str]:
         search_constraint_filename_boolean = only_search_here_filename_boolean
         search_constraint_path_boolean     = only_search_here_path_boolean
 
-    if not getattr(options.args, 'rc', False) and not getattr(options.args, 'no_cache', False):
+    if not getattr(options.args, 'rc',       False) and \
+       not getattr(options.args, 'no_cache', False):
         for file in os.listdir('.'):
-            if file.startswith(f'.{options.my_name}_custom_modules_') and file.endswith('.pkl') and options.computer_name in file and search_constraint_filename_boolean(file, search_above_text_to_match):
+            if file.startswith(f'.{options.my_name}_custom_modules_') and \
+               file.endswith('.pkl') and options.computer_name in file and \
+               search_constraint_filename_boolean(file, search_above_text_to_match):
                 if not options.rawlog: logging.info(f"Loading custom modules from {file}")
                 with open(file, 'rb') as f:
                     custom_modules = pickle.load(f)

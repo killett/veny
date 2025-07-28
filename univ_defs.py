@@ -20,17 +20,19 @@ valid_basins = ["California", "Sacramento", "San Joaquin", "Tulare-Buena Vista L
 
 # ANSI escape codes
 ANSI_RED    = "\033[91m"
-ANSI_GREEN  = "\033[92m"  # this is supposed to be bold/bright green but it looks orange to me.
+ANSI_GREEN  = "\033[92m"  # this is bold/bright green on Linux but orange on my Mac
 ANSI_YELLOW = "\033[93m"
-ANSI_CYAN   = "\033[94m"  # this is called bright blue but it looks cyan to me.
+ANSI_CYAN   = "\033[94m"  # this is blue on Linux but cyan on my Mac
 ANSI_RESET  = "\033[0m"
 
 # All the formatting rules to ignore when running flake8 to check Python formatting.
 IGNORED_CODES = [
-    'E701',  # multiple statements on one line (colon)
-    'E201',  # whitespace after ‘(’
-    'E202',  # whitespace before ‘)’
-    'E203',  # whitespace before ‘:’
+    'W503',  # line break before binary operator (W503 and W504 are mutually exclusive, so ignore both)
+    'W504',  # line break  after binary operator (W503 and W504 are mutually exclusive, so ignore both)
+    'E128',  # continuation line under-indented for visual indent
+    'E201',  # whitespace after '('
+    'E202',  # whitespace before ')'
+    'E203',  # whitespace before ':'
     'E211',  # whitespace before '('
     'E221',  # multiple spaces before operator
     'E222',  # multiple spaces after  operator
@@ -39,10 +41,9 @@ IGNORED_CODES = [
     'E241',  # multiple spaces after ','
     'E251',  # unexpected spaces around keyword / parameter equals
     'E262',  # inline comment should start with '# '
-    'W503',  # line break before binary operator (W503 and W504 are mutually exclusive, so ignore both)
-    'W504',  # line break  after binary operator (W503 and W504 are mutually exclusive, so ignore both)
     'E271',  # multiple spaces  after keyword
     'E272',  # multiple spaces before keyword
+    'E701',  # multiple statements on one line (colon)
 ]
 
 
@@ -227,12 +228,22 @@ class MaxLevelFilter(logging.Filter):
         return record.levelno <= self.max_level
 
 
-def fallback_logging_config(level: str = 'INFO') -> None:
-    """Configure the root logger with a basic configuration if no handlers are set."""
+def fallback_logging_config(level: str = 'INFO', rawlog: bool = False) -> None:
+    """
+    Configure the root logger with a basic configuration if no handlers are set.
+    Run this at the start of functions which might be run without first configuring logging.
+
+    Parameters:
+        level (str): The logging level to set. Defaults to 'INFO'.
+        rawlog (bool): If True, use a simple log format without timestamps or levels.
+    """
     if not logging.getLogger().handlers:
-        logging.basicConfig(level=level,
-                            format="%(asctime)s %(name)s %(levelname)s: %(message)s",
-                            datefmt="%Y-%m-%d %H:%M:%S")
+        if not rawlog:  # Use a full logging format with timestamps and levels.
+            logging.basicConfig(level=get_log_level(level),
+                                format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+                                datefmt="%Y-%m-%d %H:%M:%S")
+        else:  # rawlog is True, so use a simple format without timestamps or levels.
+            logging.basicConfig(level=get_log_level(level), format="%(message)s")
 
 
 def configure_logging(basename: str, log_level: str = 'INFO',
@@ -1140,7 +1151,7 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
       - If YYYY is provided, it will default to January 1st of that year at midnight.
       - If YYYY-MM is provided, it will default to the first day of that month at midnight.
       - If YYYY-MM-DD is provided, it will default to midnight on that day.
-      - fallback to dateutil.parser.parse for free-form strings (“18 Oct 2002”, “March 5th, 2020”, etc.)
+      - fallback to dateutil.parser.parse for free-form strings ("18 Oct 2002", "March 5th, 2020", etc.)
       - floats (e.g. 2002.29178082191777) or integer (e.g. 2002) → decimal year
       - numpy.datetime64 objects (e.g. np.datetime64('2002-10-18T07:00:00'))
       - pandas.Timestamp objects (e.g. pd.Timestamp('2002-10-18 07:00:00'))
@@ -1293,7 +1304,7 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
     if parsed_dt is None:
         import email.utils
         try:
-            # parses “Tue, 25 Jun 2025 14:00:00 GMT”
+            # parses "Tue, 25 Jun 2025 14:00:00 GMT"
             parsed_dt = email.utils.parsedate_to_datetime(given_date)
         except (TypeError, ValueError) as e:
             errors.append(f"Failed to parse '{given_date}' as an RFC 2822 date: {e}")
@@ -1348,6 +1359,30 @@ def get_user_input(prompt: str) -> bool:
     return user_input.casefold() == 'yes' or user_input.casefold() == 'y'
 
 
+def prompt_choice(prompt: str, choices: list[str], default: str = None) -> str:
+    """Simple numbered prompt."""
+    fallback_logging_config()
+
+    logging.info(prompt)
+    for i, choice in enumerate(choices, 1):
+        logging.info(f"  {i}) {choice}")
+    prompt = f"Select [1-{len(choices)}]"
+    if default is not None:
+        prompt += f" (default {default}): "
+    else:
+        prompt += ": "
+
+    while True:
+        ans = input(prompt).strip()
+        if not ans and default:
+            logging.info(f"No input provided, using default: {default}")
+            return default
+        if ans.isdigit() and 1 <= int(ans) <= len(choices):
+            logging.info(f"User selected choice {ans}: {choices[int(ans)-1]}")
+            return choices[int(ans)-1]
+        logging.warning("Invalid choice, try again.")
+
+
 def my_capitalize(string_to_capitalize: str) -> str:
     """Capitalize ONLY the first letter of a string and DON'T modify the rest of it."""
     if not string_to_capitalize:
@@ -1365,7 +1400,9 @@ def my_title_case(the_title: str) -> str:
 
 def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
     """
-    Turn arbitrary text into an ASCII-only, filesystem‐safe filename.
+    Turn arbitrary text into an ASCII-only, filesystem‐safe base filename.
+    WARNING: Do not include an extension in the text, because this function
+    will remove the dot which separates the filename from the extension.
 
     Steps:
       1. Unicode → ASCII
@@ -1383,13 +1420,17 @@ def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
     Returns:
         A clean, filename-safe string.
     """
-    import re
-    import unidecode
-
+    fallback_logging_config()  # Ensure logging is configured
     # 1. Normalize to ASCII
-    text = unidecode.unidecode(text)
+    try:
+        import unidecode
+        text = unidecode.unidecode(text)
+    except ImportError:
+        logging.warning("unidecode package not found, falling back to ASCII encoding.")
+        # Fallback: encode to ASCII, ignore errors
+        text = text.encode('ascii', 'ignore').decode('ascii')
 
-    # 2. Replace common “word boundaries” with sep
+    # 2. Replace common "word boundaries" with sep
     #    (dots, underscores, whitespace) but keep dashes
     #    e.g. "hello.world--foo_bar" → "hello world--foo bar"
     text = re.sub(r"[._\s]+", sep, text)
@@ -1398,7 +1439,7 @@ def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
     allowed = f"-A-Za-z0-9{re.escape(sep)}"
     text = re.sub(fr"[^{allowed}]+", "", text)
 
-    # 4. Collapse runs of sep (e.g. “__” → “_”)
+    # 4. Collapse runs of sep (e.g. "__" → "_")
     text = re.sub(fr"{re.escape(sep)}{{2,}}", sep, text)
 
     # 5. Strip leading/trailing seps
@@ -1416,22 +1457,32 @@ def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
     return text
 
 
-def compile_script(file_path: str) -> bool:
-    """Attempt to compile the given file in 'exec' mode. If it compiles, return True. On syntax or I/O problems, log an error and return False."""
-    import logging
+def compile_code(source: str) -> bool:
+    """Attempt to compile the given source code in 'exec' mode. If it compiles, return True. On syntax or I/O problems, log an error and return False."""
     fallback_logging_config()
+    # Is "source" a file path? If so, read it first.
+    if os.path.isfile(source):
+        file_path = source
+        try:
+            source = my_fopen(file_path, suppress_errors=True)
+            if not source:
+                logging.error(f"Could not read file: {file_path}")
+        except FileNotFoundError:
+            logging.error(f"File not found: {file_path}")
+        except PermissionError:
+            logging.error(f"Permission denied: {file_path}")
+        except UnicodeDecodeError as e:
+            logging.error(f"Could not decode {file_path!r}: {e}")
+    else:  # Otherwise, treat "source" as a string containing Python code.
+        if not isinstance(source, str):
+            raise TypeError(f"Expected 'source' to be a string or file path, got {type(source).__name__!r}")
+        # If it's a string, we need to provide a dummy file path for the compiler.
+        # This is just to satisfy the compiler, it won't be used.
+        file_path = "<string>"
+
     try:
-        source = my_fopen(file_path, suppress_errors=True)
-        if not source:
-            logging.error(f"Could not read file: {file_path}")
-        compile(source, file_path, 'exec')
+        compile(source, file_path, "exec")
         return True
-    except FileNotFoundError:
-        logging.error(f"File not found: {file_path}")
-    except PermissionError:
-        logging.error(f"Permission denied: {file_path}")
-    except UnicodeDecodeError as e:
-        logging.error(f"Could not decode {file_path!r}: {e}")
     except SyntaxError as e:
         # protect against None offsets
         lineno = e.lineno or '?'
@@ -1446,6 +1497,7 @@ def compile_script(file_path: str) -> bool:
         logging.error(f"Unexpected error checking syntax of {file_path!r}: {e}")
     return False
 
+
 # --------------------------------------------------------------------------------
 # Note: Python resolves base classes at the moment a class statement is executed.
 # That means any names used as base classes (e.g., ast.NodeVisitor) must already
@@ -1456,7 +1508,7 @@ def compile_script(file_path: str) -> bool:
 #     NameError: name 'ast' is not defined
 #
 # Wrapping the class definition in a factory function lets us:
-#   1) Import 'ast' inside the function, so it’s guaranteed to be in scope
+#   1) Import 'ast' inside the function, so it's guaranteed to be in scope
 #      when we define the class.
 #   2) Keep module‑level imports to a minimum (only __future__ and typing).
 #   3) Return the fully‑constructed class and assign it to the module name.
@@ -1512,7 +1564,7 @@ def _make_format_checker() -> Type[FormatChecker]:
             """Check a function or method node for formatting violations.
             If 'in_method' is True, it indicates that this is a method (e.g. inside a class).
             If 'container' is provided, it indicates the context (e.g. class name)."""
-            if id(node) in self._seen_funcs:  # ←─ skip if we’ve already run this exact node
+            if id(node) in self._seen_funcs:  # ←─ skip if we've already run this exact node
                 return
             self._seen_funcs.add(id(node))
             who = (f'function "{node.name}"' if container is None else f'{container} → method "{node.name}"')
@@ -1556,23 +1608,57 @@ def _make_format_checker() -> Type[FormatChecker]:
 FormatChecker = _make_format_checker()
 
 
-def check_python_formatting(path: str) -> None:
-    """Reads a .py file at 'path' via my_fopen, parses it with my_ast_parse, and prints any custom formatting violations to stdout."""
+def check_python_formatting(path: str, diff_choice: int = 1) -> bool:
+    """
+    Reads a .py file at 'path' via my_fopen, makes sure it compiles, parses it with my_ast_parse,
+    prints any custom formatting violations to stdout,
+    and asks the user to fix any backticks or curly quotes in the file. If the user quits, it returns False.
+
+    Parameters:
+        path:        The path to the Python file to check.
+        diff_choice: How many context lines to show in the diff (0 = old-style diff, 1 = unified diff with 0 context lines, 2+ = unified diff with 'diff_choice - 1' context lines).
+    """
+    fallback_logging_config()
     src = my_fopen(path)
     if src is False:
         logging.error(f"❌ Failed to open file: {path}")
         return
 
-    if '`' in src:
-        logging.warning(f"File {path} contains the backtick character (`).")
-    if '“' in src or '”' in src:
-        logging.warning(f'File {path} contains curly quotation marks (“ or ”). Use straight quotation marks (") instead.')
+    if compile_code(src):
+        logging.info(f"✅ {path} compiled successfully.")
 
+    BACKTICK  = "\u0060"      # U+0060 "GRAVE ACCENT" (the backtick)
+    LSQUOTE   = "\u2018"      # U+2018 "LEFT  SINGLE QUOTATION MARK" (curly apostrophe)
+    RSQUOTE   = "\u2019"      # U+2019 "RIGHT SINGLE QUOTATION MARK" (curly apostrophe)
+    LDQUOTE   = "\u201C"      # U+201C "LEFT  DOUBLE QUOTATION MARK"
+    RDQUOTE   = "\u201D"      # U+201D "RIGHT DOUBLE QUOTATION MARK"
+
+    if BACKTICK in src:
+        logging.warning(f"File {path} contains the backtick character ({BACKTICK!r}). Use straight quotation marks (') instead.")
+        if not ask_and_replace(path, old=BACKTICK, new="'", label='backtick', diff_choice=diff_choice,
+                               description=f"Replace backtick ({BACKTICK}) with straight apostrophe (')"):
+            return False
+    if LSQUOTE in src or RSQUOTE in src:
+        logging.warning(f"File {path} contains curly single quotation marks ({LSQUOTE!r} or {RSQUOTE!r}). Use straight apostrophes (') instead.")
+        if not ask_and_replace(path, old=LSQUOTE, new="'", label='left-curly-apostrophe', diff_choice=diff_choice,
+                               description=f"Replace left curly apostrophe ({LSQUOTE}) with straight apostrophe (')"):
+            return False
+        if not ask_and_replace(path, old=RSQUOTE, new="'", label='right-curly-apostrophe', diff_choice=diff_choice,
+                               description=f"Replace right curly apostrophe ({RSQUOTE}) with straight apostrophe (')"):
+            return False
+    if LDQUOTE in src or RDQUOTE in src:
+        logging.warning(f'File {path} contains curly double quotation marks ({LDQUOTE!r} or {RDQUOTE!r}). Use straight quotation marks (") instead.')
+        if not ask_and_replace(path, old=LDQUOTE, new='"', label='left-curly-quotation-mark', diff_choice=diff_choice,
+                               description=f'Replace left curly double quotation mark ({LDQUOTE}) with straight double quotation mark (")'):
+            return False
+        if not ask_and_replace(path, old=RDQUOTE, new='"', label='right-curly-quotation-mark', diff_choice=diff_choice,
+                               description=f'Replace right curly double quotation mark ({RDQUOTE}) with straight double quotation mark (")'):
+            return False
     try:
         tree = my_ast_parse(src, path)
     except SyntaxError as e:
         logging.error(f"❌ {e}")
-        return
+        return False
 
     checker = FormatChecker(src)
     checker.visit(tree)
@@ -1585,8 +1671,7 @@ def check_python_formatting(path: str) -> None:
         for kind, name, msg, lineno in checker.errors:
             logging.error(f"{lineno:>{the_digits}} – {kind.capitalize()} {name}: {msg}")
 
-    if compile_script(path):
-        logging.info(f"✅ {path} compiled successfully.")
+    return True
 
 
 def run_flake8(path: str, ignore_codes: list[str] = [], max_line_length: int = 100) -> flake8.Report:
@@ -1685,6 +1770,7 @@ def get_autopep8_fixable_codes() -> set[str]:
     Returns a set like {"E101","E111", …}.
     """
     import subprocess
+    fallback_logging_config()
     try:
         proc = subprocess.run(["autopep8", "--list-fixes"], capture_output=True, text=True, check=True)
     except (FileNotFoundError, subprocess.CalledProcessError) as e:
@@ -1707,7 +1793,7 @@ def get_autopep8_fixable_codes() -> set[str]:
 
 def _vis_trailing_ws(line: str) -> str:
     """
-    Replace only the trailing spaces and tabs in `line`
+    Replace only the trailing spaces and tabs in 'line'
     with visible glyphs (· for space, → for tab).
     """
     core = line.rstrip(" \t")
@@ -1715,104 +1801,227 @@ def _vis_trailing_ws(line: str) -> str:
     return core + trail.replace(" ", "·").replace("\t", "→")
 
 
-def _ask_and_fix(path: str, code: str, desc: str, diff_choice: int = 1) -> bool:
+def _vis_all_ws(s: str) -> str:
     """
-    Prompt the user about fixing ALL occurrences of 'code' in 'path',
-    and if yes, apply autopep8.fix_file with --select=code.
-    The fix will be applied without saving, and the user will be shown a diff
-    of the changes before saving to the file.
+    Show *all* spaces/tabs in s as visible glyphs:
+      · for space, → for tab
+    """
+    return s.replace(" ", "·").replace("\t", "→")
 
-    Returns true if the user wants to continue, False if they want to quit.
+
+def highlight_changes(orig: str, new: str, unchanged_color: str,
+                      added_color: str, deleted_color: str) -> tuple[str, str]:
     """
-    import autopep8
+    Compare 'orig' and 'new' strings and return a tuple
+    (old_highlighted, new_highlighted), where:
+    - old_highlighted has parts present only in 'orig' wrapped in deleted_color.
+    - new_highlighted has parts present only in 'new' wrapped in added_color
+      and unchanged parts in unchanged_color.
+    """
     import difflib
-    from pathlib import Path
-    # The number of blank lines expected in various contexts.
-    blank_line_overrides = {
-        'E301': 1,  # expected 1 blank line, found 0
-        'E302': 2,  # expected 2 blank lines, found 1
-        'E303': 5,  # too many blank lines (give a lot of context to see what is around the blank lines)
-        'E305': 2,  # expected 2 blank lines after class/method
-    }
-    orig = my_fopen(path)
-    fixed = orig
-    for level in (0, 1, 2):  # try with 0, 1, then 2 "-a” flags
-        flags = ['-a'] * level
-        the_fix = f"autopep8 {' '.join(flags)} --select={code}"
-        args = [f"--select={code}", "--in-place"] + flags + [path]
-        opts = autopep8.parse_args(args)
-        candidate = autopep8.fix_code(orig, options=opts)
-        if candidate != orig:
-            fixed = candidate
-            break
-    if fixed == orig:
-        logging.info(f"No changes for {code} in {path} using {the_fix}.")
-        return True
-    logging.info(f"Start of proposed {code} changes to {path}: {the_fix}")
-    orig_lines = orig.splitlines  (keepends=True)
-    fixed_lines = fixed.splitlines(keepends=True)
-    # Number of lines in the original file
-    max_orig_lineno = len(orig_lines)
-    the_digits = sci_exp(max_orig_lineno) + 1
-    if not isinstance(diff_choice, int) or diff_choice < 0:
-        logging.error(f"Invalid diff_choice={diff_choice}. Must be a non-negative integer.")
-        return False
-    # If this is a blank‑line code, force unified with the number of context lines specified in blank_line_overrides.
-    if code in blank_line_overrides:
-        # +1 so that unified_diff(n=override‑1) gives you exactly override context
-        effective = blank_line_overrides[code] + 1
-    else:
-        effective = diff_choice
-    if effective == 0:  # old style diff
-        orig_lineno = new_lineno = 1
-        for line in difflib.Differ().compare(orig_lines, fixed_lines):
-            tag, text = line[:2], line[2:].rstrip('\n')
-            if tag == '  ':    # context line
+    sm = difflib.SequenceMatcher(None, orig, new)
+    new_out = []
+    old_out = []
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        old_segment = orig[i1:i2]
+        new_segment =  new[j1:j2]
+        if tag == 'equal':
+            new_out.append(f"{unchanged_color}{new_segment}{ANSI_RESET}")
+            old_out.append(old_segment)
+        elif tag == 'replace':  # segments changed: mark old text as deleted, new text as added
+            new_out.append(f"{added_color}{new_segment}{ANSI_RESET}")
+            old_out.append(f"{deleted_color}{old_segment}{ANSI_RESET}")
+        elif tag == 'delete':  # text removed: mark in old, nothing in new
+            old_out.append(f"{deleted_color}{old_segment}{ANSI_RESET}")
+        elif tag == 'insert':  # text added: mark in new, nothing in old
+            # text added: if it's *only* whitespace, render it visibly
+            if set(new_segment) <= {' ', '\t'}:
+                visible = _vis_all_ws(new_segment)
+            else:
+                visible = new_segment
+            new_out.append(f"{added_color}{visible}{ANSI_RESET}")
+    return ''.join(old_out), ''.join(new_out)
+
+
+def my_diff(orig_text: str, changed_text: str, orig_path: str,
+            changed_path: str | None = None,
+            diff_choice: int = 1, changed_color: str = ANSI_CYAN,
+            deleted_color: str = ANSI_RED, added_color: str = ANSI_YELLOW) -> None:
+    """
+    Show a unified diff of orig_text → changed_text with 'context' lines
+    around each hunk, log using 'label' and 'description', then prompt.
+    If the user confirms, overwrite 'path' with changed_text and return True.
+    If the user chooses to quit, log a message and return False.
+
+    Parameters:
+        orig_text:      Original text to compare against.
+        changed_text:   Proposed changes to the original text.
+        orig_path:      Path to the original file.
+        changed_path:   Optional path to the changed file (if different).
+        label:          A short label for the issue being fixed.
+        diff_choice:    How many context lines to show in the diff (0 = old-style diff, 1 = unified diff with 0 context lines, 2+ = unified diff with 'diff_choice - 1' context lines).
+        changed_color:  Color to use for unchanged characters in the changed lines in the diff (default ANSI_CYAN).
+        deleted_color:  Color to use for the deleted characters in orig lines (default ANSI_YELLOW).
+    """
+    import difflib
+    fallback_logging_config(rawlog=True)
+    if not changed_path:
+        changed_path = orig_path
+    logging.debug(f"At the top of the function {sys._getframe(1).f_code.co_name}(), {diff_choice=}")
+    orig_lines    =    orig_text.splitlines(keepends=True)
+    changed_lines = changed_text.splitlines(keepends=True)
+    the_digits = max(len(str(len(orig_lines))), len(str(len(changed_lines))))
+    last_removed = None  # there is no last removed line initially
+    # shared buffer for the current hunk's deletes/inserts
+    hunk_entries: list[tuple[str, str, int, int]] = []
+    # each entry is (tag, text, orig_lineno, new_lineno)
+    # orig_lineno or new_lineno will be None for pure inserts/deletes.
+
+    def process_hunk() -> None:
+        """Pair up deletes and inserts in the current hunk and print them with highlights."""
+        nonlocal hunk_entries
+        if not hunk_entries:
+            return
+        deletes = [e for e in hunk_entries if e[0] == "-"]
+        inserts = [e for e in hunk_entries if e[0] == "+"]
+        pair_count = min(len(deletes), len(inserts))
+        di = ii = 0
+        for tag, text, dln, nln in hunk_entries:
+            if tag == "-":
+                if di < pair_count:
+                    old_vis = _vis_trailing_ws(text)
+                    new_vis = _vis_trailing_ws(inserts[di][1])
+                    old_hl, new_hl = highlight_changes(
+                        old_vis, new_vis,
+                        unchanged_color=changed_color,
+                        added_color=added_color,
+                        deleted_color=deleted_color
+                    )
+                    logging.info(f"< {dln:>{the_digits}}: {old_hl}{ANSI_RESET}")
+                    logging.info(f"{changed_color}> {inserts[di][3]:>{the_digits}}:{ANSI_RESET} {new_hl}{ANSI_RESET}")
+                else:
+                    logging.info(f"< {dln:>{the_digits}}: "
+                                 f"{deleted_color}{_vis_trailing_ws(text)}{ANSI_RESET}")
+                di += 1
+            elif tag == "+":
+                if ii >= pair_count:
+                    logging.info(f"{changed_color}> {nln:>{the_digits}}:{ANSI_RESET} "
+                                 f"{ANSI_RED}{_vis_trailing_ws(text)}{ANSI_RESET}")
+                ii += 1
+        hunk_entries.clear()
+
+    def flush_removed(orig_lineno: int) -> None:
+        """Flush the last removed line if it exists."""
+        nonlocal last_removed
+        if last_removed is not None:
+            highlighted_old = f"{deleted_color}{last_removed}{ANSI_RESET}"
+            logging.info(f"< {orig_lineno:>{the_digits}}: {highlighted_old}")
+            last_removed = None
+
+    if diff_choice == 0:  # old style diff (difflib.Differ)
+        logging.debug(f"Using old-style diff for {orig_path} with {len(orig_lines)} original and {len(changed_lines)} fixed lines.")
+        orig_lineno = 1
+        new_lineno  = 1
+        for line in difflib.Differ().compare(orig_lines, changed_lines):
+            tag, body = line[:2], line[2:].rstrip("\n")
+            if tag == "  ":    # context line
+                # end of any previous mini‑hunk
+                process_hunk()
+                flush_removed(orig_lineno)
+                # show context lines if you like, e.g.:
+                # logging.info(f"  {orig_lineno:>{the_digits}}: {_vis_trailing_ws(body)}")
                 orig_lineno += 1
                 new_lineno  += 1
-            elif tag == '- ':  # original line
-                logging.info(f"< {orig_lineno:>{the_digits}}: {_vis_trailing_ws(text)}")
+            elif tag == "- ":  # original line
+                # buffer a delete
+                hunk_entries.append(("-", body, orig_lineno, None))
                 orig_lineno += 1
-            elif tag == '+ ':  # fixed line
-                logging.info(f"{ANSI_CYAN}> {new_lineno:>{the_digits}}: {_vis_trailing_ws(text)}{ANSI_RESET}")
+            elif tag == "+ ":  # fixed line
+                # buffer an insert
+                hunk_entries.append(("+", body, None, new_lineno))
                 new_lineno += 1
-            # we skip '? ' lines entirely
-    elif effective >= 1:  # unified or context diff
-        ctx = max(effective - 1, 0)
-        diff = difflib.unified_diff(orig_lines, fixed_lines, fromfile=path, tofile=path, n=ctx, lineterm="")
-        orig_lineno = new_lineno = None
-        # allow for “@@ -57,1 +57,1 @@” *or* “@@ -57 +57 @@”
+            # skip '? ' lines entirely
+        # flush any trailing buffered pairs/inserts
+        process_hunk()
+        flush_removed(orig_lineno)
+    elif diff_choice >= 1:  # unified or context diff
+        logging.debug(f"Using unified diff for {orig_path} with {len(orig_lines)} original and {len(changed_lines)} fixed lines.")
+        ctx  = max(diff_choice - 1, 0)
+        diff = difflib.unified_diff(
+            orig_lines, changed_lines,
+            fromfile=orig_path, tofile=changed_path,
+            n=ctx, lineterm=""
+        )
         header_re = re.compile(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
-        for d in diff:
-            # skip --- and +++ lines
-            if d.startswith(("---", "+++")):
-                continue
-            # pull both old/new start lines out of the first @@
-            if d.startswith("@@"):
-                m = header_re.match(d)
+        orig_lineno = new_lineno = None
+        for line in diff:
+            if line.startswith("@@"):  # hunk header?
+                # flush any leftover from the prior hunk
+                process_hunk()
+                m = header_re.match(line)
                 orig_lineno = int(m.group(1))
                 new_lineno  = int(m.group(2))
                 continue
-            tag, text = d[0], d[1:].rstrip("\n")
-            if tag == " ":    # context (show old line number)
-                logging.info(f"  {orig_lineno:>{the_digits}}: {_vis_trailing_ws(text)}")
+            if line.startswith(("---", "+++")):  # skip file header lines
+                continue
+            tag, body = line[0], line[1:].rstrip("\n")
+            if tag == " ":  # context line: flush and emit
+                process_hunk()
+                flush_removed(orig_lineno)
+                logging.info(f"  {orig_lineno:>{the_digits}}: {_vis_trailing_ws(body)}")
                 orig_lineno += 1
                 new_lineno  += 1
-            elif tag == "-":  # original line
-                logging.info(f"< {orig_lineno:>{the_digits}}: {_vis_trailing_ws(text)}")
+            elif tag == "-":  # buffer a delete
+                hunk_entries.append(("-", body, orig_lineno, None))
                 orig_lineno += 1
-            elif tag == "+":  # fixed line
-                logging.info(f"{ANSI_CYAN}> {new_lineno:>{the_digits}}: {_vis_trailing_ws(text)}{ANSI_RESET}")
+            elif tag == "+":  # buffer an insert
+                hunk_entries.append(("+", body, None, new_lineno))
                 new_lineno += 1
+        # final flush
+        process_hunk()
+        flush_removed(orig_lineno)
     else:
-        logging.error(f"Unsupported effective diff_choice = {effective} (original: {diff_choice}). Must be 0 (old), 1 (unified), or 2+ (context).")
-        return False
+        logging.error(f"Unsupported diff_choice = {diff_choice}. Must be a non-negative integer.")
 
-    logging.info(f"End of proposed {code} changes to {path} using {the_fix}.")
-    logging.info(f"{code}: {desc}")
+
+def diff_and_confirm(orig_text: str, changed_text: str, path: str, label: str, skip_compile: bool = False,
+                     diff_choice: int = 1, changed_color: str = ANSI_CYAN,
+                     deleted_color: str = ANSI_RED, added_color: str = ANSI_YELLOW,
+                     the_fix: str = "", description: str = "") -> bool:
+    """
+    Show a unified diff of orig_text → changed_text with a number of context lines
+    (determined by 'diff_choice') around each hunk, log using 'label' and 'description', then prompt.
+    If the user confirms, overwrite 'path' with changed_text and return True.
+    If the user chooses to quit, log a message and return False.
+
+    Parameters:
+        orig_text:     Original text to compare against.
+        changed_text:  Proposed changes to the original text.
+        path:          Path to the file being modified.
+        label:         A short label for the issue being fixed.
+        skip_compile:  If True, do not try to compile the changed text before writing.
+        diff_choice:   How many context lines to show in the diff (0 = old-style diff, 1 = unified diff with 0 context lines, 2+ = unified diff with 'diff_choice - 1' context lines).
+        changed_color: Color to use for unchanged characters in the changed lines in the diff (default ANSI_CYAN).
+        deleted_color: Color to use for the deleted characters in orig lines (default ANSI_YELLOW).
+        added_color:   Color to use for the added characters in changed lines (default ANSI_GREEN).
+        the_fix:       A string describing the fix being applied (e.g. "autopep8", "manual edit").
+        description:   A longer description of the issue being fixed.
+
+    Returns False if the user chose to quit; True otherwise.
+    """
+    from pathlib import Path
+    fallback_logging_config()
+    logging.debug(f"At the top of the function {sys._getframe(1).f_code.co_name}(), {diff_choice=}")
+    my_diff(orig_text, changed_text, path, diff_choice=diff_choice,
+            changed_color=changed_color, deleted_color=deleted_color, added_color=added_color)
+    logging.info(f"End of proposed {ANSI_RED}{label}{ANSI_RESET} changes to {path} using {the_fix}.")
+    logging.info(f"{ANSI_RED}{label}{ANSI_RESET}: {ANSI_YELLOW}{description}{ANSI_RESET}")
     ans = input("Apply these changes? [y/N/q] ").strip().lower()
     if ans in ("y", "yes"):
-        Path(path).write_text(fixed, encoding=DEFAULT_ENCODING)
+        if not skip_compile and not compile_code(changed_text):
+            logging.error(f"{ANSI_RED}Failed to compile the changed text. Aborting write.{ANSI_RESET}")
+            return True  # don't write if it won't compile
+        Path(path).write_text(changed_text, encoding=DEFAULT_ENCODING)
         logging.info(f"{ANSI_GREEN}Applied {the_fix} to {path}{ANSI_RESET}")
     elif ans in ("q", "quit", "exit"):
         logging.info(f"{ANSI_YELLOW}Exiting without further changes.{ANSI_RESET}")
@@ -1822,12 +2031,97 @@ def _ask_and_fix(path: str, code: str, desc: str, diff_choice: int = 1) -> bool:
     return True
 
 
-def interactive_flake8(path: str, diff_choice: int = 1, ignore_codes: list[str] = [], max_line_length: int = 100) -> None:
+def ask_and_autopep8(path: str, code: str, description: str, diff_choice: int = 1,
+                     changed_color: str = ANSI_CYAN, deleted_color: str = ANSI_RED,
+                     added_color: str = ANSI_YELLOW) -> bool:
+    """
+    Prompt the user about fixing ALL occurrences of 'code' in 'path',
+    and if yes, apply autopep8.fix_file with --select=code.
+    The fix will be applied without saving, and the user will be shown a diff
+    of the changes before saving to the file.
+
+    Parameters:
+        path:          The path to the file to modify.
+        code:          The specific PEP 8 violation code to fix.
+        description:   A description of the issue being fixed.
+        diff_choice:   How many context lines to show in the diff (0 = old-style diff, 1 = unified diff with 0 context lines, 2+ = unified diff with 'diff_choice - 1' context lines).
+        changed_color: Color to use for unchanged characters in the changed lines in the diff (default ANSI_CYAN).
+        deleted_color: Color to use for the deleted characters in orig lines (default ANSI_YELLOW).
+        added_color:   Color to use for the added characters in changed lines (default ANSI_GREEN).
+
+    Returns true if the user wants to continue, False if they want to quit.
+    """
+    import autopep8
+    fallback_logging_config()
+    logging.debug(f"At the top of the function {sys._getframe(1).f_code.co_name}(), {diff_choice=}")
+    # The number of blank lines expected in various contexts.
+    blank_line_overrides = {
+        'E301': 1,  # expected 1 blank line, found 0
+        'E302': 2,  # expected 2 blank lines, found 1
+        'E303': 5,  # too many blank lines (give a lot of context to see what is around the blank lines)
+        'E305': 2,  # expected 2 blank lines after class/method
+    }
+    orig_text = my_fopen(path)
+    changed_text = orig_text
+    for level in (0, 1, 2):  # try with 0, 1, then 2 "-a" flags
+        flags = ['-a'] * level
+        the_fix = f"autopep8 {' '.join(flags)} --select={code}"
+        args = [f"--select={code}", "--in-place"] + flags + [path]
+        opts      = autopep8.parse_args(args)
+        candidate = autopep8.fix_code(orig_text, options=opts)
+        if candidate != orig_text:
+            changed_text = candidate
+            break
+    if changed_text == orig_text:
+        logging.info(f"No changes for {code} in {path} using {the_fix}.")
+        return True
+    if not isinstance(diff_choice, int) or diff_choice < 0:
+        logging.error(f"Invalid diff_choice={diff_choice}. Must be a non-negative integer.")
+        return False
+    # If this is a blank‑line code, force unified with the number of context lines specified in blank_line_overrides.
+    if code in blank_line_overrides:
+        # +1 so that unified_diff(n=override‑1) gives you exactly override context
+        effective = blank_line_overrides[code] + 1
+    else:
+        effective = diff_choice
+    return diff_and_confirm(orig_text, changed_text, path, label=code, diff_choice=effective,
+                            changed_color=changed_color, deleted_color=deleted_color, added_color=added_color,
+                            the_fix=the_fix, description=description)
+
+
+def ask_and_replace(path: str, old: str, new: str, label: str, diff_choice: int = 1, description: str = "",
+                    changed_color: str = ANSI_CYAN, deleted_color: str = ANSI_RED, added_color: str = ANSI_YELLOW) -> bool:
+    """Read 'path', do orig.replace(old, new), then show a diff and ask to confirm."""
+    fallback_logging_config()
+    orig_text = my_fopen(path)
+    changed_text = orig_text.replace(old, new)
+    if changed_text == orig_text:
+        logging.info(f"No occurrences of {label} in {path}.")
+        return True
+    the_fix = f"replace '{old}' with '{new}'"
+    return diff_and_confirm(orig_text, changed_text, path, label=label, diff_choice=diff_choice,
+                            changed_color=changed_color, deleted_color=deleted_color, added_color=added_color,
+                            the_fix=the_fix, description=description)
+
+
+def interactive_flake8(path: str, diff_choice: int = 1, ignore_codes: list[str] = [], max_line_length: int = 100,
+                       changed_color: str = ANSI_CYAN, deleted_color: str = ANSI_RED, added_color: str = ANSI_YELLOW) -> None:
     """
     1) Run the flake8 API for summary counts.
     2) Shell out to flake8 CLI once to harvest one description per code.
-    3) For each code, ask the user; on “yes”, call autopep8 to fix only that code.
+    3) For each code, ask the user; on "yes", call autopep8 to fix only that code.
+
+    Parameters:
+        path:            Path to the Python file to check.
+        diff_choice:     How many context lines to show in the diff (0 = old-style diff, 1 = unified diff with 0 context lines, 2+ = unified diff with 'diff_choice - 1' context lines).
+        ignore_codes:    List of Flake8 codes to ignore (default: empty list).
+        max_line_length: Maximum line length for E501 (default: 100).
+        changed_color:   Color for unchanged characters in changed lines (default: ANSI_CYAN).
+        deleted_color:   Color for deleted characters in original lines (default: ANSI_RED).
+        added_color:     Color for added characters in changed lines (default: ANSI_YELLOW).
     """
+    fallback_logging_config()
+    logging.debug(f"At the top of the function {sys._getframe(1).f_code.co_name}(), {diff_choice=}")
     report = run_flake8(path, ignore_codes=ignore_codes, max_line_length=max_line_length)
     if report.total_errors == 0:
         logging.info("No flake8 errors—nothing to do.")
@@ -1842,15 +2136,282 @@ def interactive_flake8(path: str, diff_choice: int = 1, ignore_codes: list[str] 
         if code not in fixable_codes:
             logging.debug(f"Skipping {code}: no autopep8 fixer")
             continue
-        logging.info(f"\n→ {ANSI_RED}{code}{ANSI_RESET}: {ANSI_CYAN}{desc}{ANSI_RESET}")
-        if not _ask_and_fix(path, code, desc):
+        logging.info(f"\n→ {ANSI_RED}{code}{ANSI_RESET}: {ANSI_YELLOW}{desc}{ANSI_RESET}")
+        if not ask_and_autopep8(path, code, desc, diff_choice=diff_choice,
+                                changed_color=changed_color, deleted_color=deleted_color, added_color=added_color):
             break
     logging.info(f"{ANSI_GREEN}Done. You may want to re-run flake8 to confirm everything is fixed.{ANSI_RESET}")
 
 
+MYDIFF_SCRIPT = '''import argparse
+
+import univ_defs as ud
+
+
+def main() -> None:
+    """Main entry point for the script."""
+    ud.configure_logging("mydiff", log_level="INFO", rawlog=True)
+    parser = argparse.ArgumentParser(description="Diff two files using ud.my_diff().")
+    parser.add_argument("orig_path", type=str, help="Path to original file.")
+    parser.add_argument("changed_path", type=str, help="Path to changed file.")
+    parser.add_argument("--diff_choice", type=int, default=1,
+                        help="0 = old-style diff, 1 = unified diff with 0 context lines, "
+                             "2+ = unified diff with 'diff_choice - 1' context lines")
+    parser.add_argument("--changed_color", type=str, default=ud.ANSI_CYAN,
+                        help="Color for unchanged characters in changed lines (default: ANSI_CYAN)")
+    parser.add_argument("--deleted_color", type=str, default=ud.ANSI_RED,
+                        help="Color for deleted characters in original lines (default: ANSI_RED)")
+    parser.add_argument("--added_color", type=str, default=ud.ANSI_GREEN,
+                        help="Color for added characters in changed lines (default: ANSI_GREEN)")
+    args = parser.parse_args()
+
+    orig_text    = ud.my_fopen(args.orig_path)
+    changed_text = ud.my_fopen(args.changed_path)
+    if orig_text is False or changed_text is False:
+        return
+    ud.my_diff(orig_text, changed_text, args.orig_path,
+               changed_path=args.changed_path, diff_choice=args.diff_choice,
+               changed_color=args.changed_color, deleted_color=args.deleted_color,
+               added_color=args.added_color)
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+MYAUDIT_SCRIPT = '''import argparse
+
+import univ_defs as ud
+
+
+def main() -> None:
+    """Main entry point for the script."""
+    ud.configure_logging("format_checker", log_level="INFO")
+    parser = argparse.ArgumentParser(description="Check Python formatting in a file.")
+    parser.add_argument("path", type=str, help="Path to the Python file to check")
+    parser.add_argument("--diff_choice", type=int, default=1,
+                        help="0 = old-style diff, 1 = unified diff with 0 context lines, "
+                             "2+ = unified diff with 'diff_choice - 1' context lines")
+    parser.add_argument("--changed_color", type=str, default=ud.ANSI_CYAN,
+                        help="Color for unchanged characters in changed lines (default: ANSI_CYAN)")
+    parser.add_argument("--deleted_color", type=str, default=ud.ANSI_RED,
+                        help="Color for deleted characters in original lines (default: ANSI_RED)")
+    parser.add_argument("--added_color", type=str, default=ud.ANSI_GREEN,
+                        help="Color for added characters in changed lines (default: ANSI_GREEN)")
+    args = parser.parse_args()
+
+    if not ud.check_python_formatting(args.path, diff_choice=args.diff_choice):
+        return
+
+    ud.interactive_flake8(args.path, diff_choice=args.diff_choice, ignore_codes=ud.IGNORED_CODES, max_line_length=1000,
+                          changed_color=args.changed_color, deleted_color=args.deleted_color, added_color=args.added_color)
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+def verify_script(thepath: str, thescript: str) -> None:
+    """
+    Ensure that `thepath` exists and contains exactly `thescript`.
+    - If `thepath` does not exist or is not a file, it will be created and populated.
+    - If it exists but its contents differ, it will be overwritten.
+    - Otherwise, nothing happens.
+    """
+    # Check if it exists and is a file
+    if not os.path.isfile(thepath):
+        if os.path.isdir(thepath):
+            logging.error(f"Expected a file at {thepath}, but it is a directory.")
+            return
+        with open(thepath, 'w', encoding=DEFAULT_ENCODING) as f:
+            logging.info(f"Creating {thepath} with the audit script.")
+            f.write(thescript)
+        return
+
+    # It is a file: read and compare
+    with open(thepath, 'r', encoding=DEFAULT_ENCODING) as f:
+        existing = f.read()
+
+    # Overwrite if different
+    if existing != thescript:
+        logging.info(f"Contents of {thepath} differ from the audit script in {__file__} as follows:")
+        my_diff(existing, thescript, thepath, diff_choice=1)
+        logging.info(f"Overwriting {thepath} with the audit script.")
+        with open(thepath, 'w', encoding=DEFAULT_ENCODING) as f:
+            f.write(thescript)
+    # else: contents match exactly, nothing to do
+
+
+def treeview_new_files(directory: str, last_file_path: str, last_mtime: float, prefix: str = '',
+                       is_last: bool = True, level: int = 0, state: dict = None) -> bool:
+    """Recursively scan the directory, print the contents of files newer than last_file_path (and store its modification date in last_mtime). Return True if any relevant files are found."""
+    fallback_logging_config(rawlog=True)
+    if state is None:
+        state = {'excluded_dirs'   : {'__pycache__'},
+                 'already_printed' : set(),
+                 'my_filepath'     : os.path.abspath(__file__)}
+    already_printed = state['already_printed']
+    excluded_dirs   = state['excluded_dirs']
+    my_filepath     = state['my_filepath']
+
+    already_printed.add(directory)
+    has_relevant_files = False  # Flag to indicate if current directory has relevant files
+
+    try:
+        entries = sorted(os.scandir(directory), key=lambda e: e.name.lower())
+    except PermissionError:
+        logging.error(f"{prefix}└── [Permission Denied]")
+        return False
+
+    # Filter out entries that should be skipped at the directory level
+    entries = [
+        entry for entry in entries
+        if not (
+            (entry.is_file() and (
+                entry.path == last_file_path or
+                entry.path == my_filepath    or
+                os.path.basename(entry.path).startswith('.')
+            )) or
+            (entry.is_dir() and os.path.basename(entry.path) in excluded_dirs) or
+            (entry.is_dir() and entry.path in already_printed)
+        )
+    ]
+
+    # Collect relevant entries
+    relevant_entries = []
+    subdirectories = []
+
+    for entry in entries:
+        if entry.is_file():
+            file_mtime = entry.stat().st_mtime
+            if file_mtime > last_mtime:
+                relevant_entries.append(entry)
+                has_relevant_files = True
+        elif entry.is_dir():
+            sub_has_relevant = treeview_new_files(
+                entry.path, last_file_path, last_mtime,
+                prefix + ('    ' if is_last else '│   '), False, level + 1
+            )
+            if sub_has_relevant:
+                subdirectories.append(entry)
+                has_relevant_files = True
+
+    if has_relevant_files:
+        if level > 0:
+            # Print the directory name only if it's not the root directory
+            connector = '└── ' if is_last else '├── '
+            logging.info(f"{prefix}{connector}{os.path.basename(directory)}/")
+
+            # Update the prefix for child entries
+            child_prefix = prefix + ('    ' if is_last else '│   ')
+        else:
+            # For root level, do not print the directory name
+            child_prefix = prefix
+
+        # Print relevant files
+        for i, file_entry in enumerate(relevant_entries):
+            # Determine if this is the last file to adjust connector
+            is_file_last = (i == len(relevant_entries) - 1) and not subdirectories
+            file_connector = '└── ' if is_file_last else '├── '
+            logging.info(f"{child_prefix}{file_connector}{os.path.basename(file_entry.path)} contents:")
+            try:
+                with open(file_entry.path, 'r', encoding=DEFAULT_ENCODING) as f:
+                    contents = f.read()
+                    # Indent file contents for better readability
+                    indented_contents = '\n'.join([f"{child_prefix}    {line}" for line in contents.splitlines()])
+                    logging.info(indented_contents)
+            except Exception as e:
+                logging.error(f"{child_prefix}    Error reading '{file_entry.path}': {e}")
+            logging.info("")  # Add an empty line for separation
+
+        # Print subdirectories
+        for i, subdir in enumerate(subdirectories):
+            is_sub_last = (i == len(subdirectories) - 1)
+            # Only scan the subdirectory if it isn't excluded
+            if os.path.basename(subdir.path) not in excluded_dirs and subdir.path not in already_printed:
+                treeview_new_files(subdir.path, last_file_path, last_mtime, child_prefix, is_sub_last, level + 1)
+
+    return has_relevant_files
+
+
+def open_terminal_and_run_command(the_command: str,
+                                  close_after: bool = False) -> None:
+    """Open a terminal window and run the_command while sourcing the .bashrc to access aliases. If close_after is True, the terminal will close after the command finishes."""
+    import subprocess
+    fallback_logging_config()
+    logging.info(f"Opening terminal and running '{the_command}'...")
+    # Adjust the terminal emulator if not using GNOME Terminal
+    if close_after:
+        terminal_command = ['gnome-terminal',
+                            '--', 'bash', '-ic',
+                            f'{the_command}; exit']
+    else:
+        terminal_command = ['gnome-terminal',
+                            '--', 'bash', '-ic',
+                            f'{the_command}; exec bash']
+    
+    subprocess.Popen(terminal_command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def is_process_running(process_name: str) -> bool:
+    """Check if a process with the given name is running."""
+    import subprocess
+    try:
+        # Use pgrep to search for the process
+        subprocess.run(['pgrep', '-x', process_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+def start_only_one_instance(process_name: str) -> None:
+    """Start a process, but only if it's not already running."""
+    import subprocess
+    import time
+    fallback_logging_config()
+    if not is_process_running(process_name):
+        logging.info(f"Starting {process_name}...")
+        subprocess.Popen([process_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Wait briefly to ensure the command is processed
+        time.sleep(1)
+    else:
+        logging.info(f"{process_name} is already running.")
+
+
+def open_filemanager_with_dirs(directories: list) -> None:
+    """
+    Open the file manager with the specified directories.
+    Note: Most file managers don't support multiple tabs via command line, so open separate windows.
+    """
+    import subprocess
+    import time
+    fallback_logging_config()
+    logging.info("Opening file manager with specified directories...")
+    for directory in directories:
+        if os.path.isdir(directory):
+            subprocess.Popen(['nemo', directory], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # Optional: Wait briefly between opening directories
+            time.sleep(0.5)
+        else:
+            logging.warning(f"Directory does not exist: {directory}")
+
+
+def open_playlist_in_VLC(playlist: str, no_start:  bool = False) -> None:
+    """Open a playlist in VLC. If no_start is True, don't start playback in VLC."""
+    import subprocess
+    if playlist is None:
+        raise ValueError("The directory path cannot be None.")
+    elif not isinstance(playlist, str):
+        raise TypeError(f"Expected 'playlist' to be a string, got {type(playlist).__name__!r}")
+    elif not os.path.isfile(playlist):
+        raise ValueError(f"The specified path '{playlist}' is not a valid file.")
+    if no_start: command_list = ["vlc", "--no-playlist-autostart", playlist]
+    else:        command_list = ["vlc",                            playlist]
+    subprocess.Popen(command_list, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def open_dir_in_VLC(the_dir: str, sort_choice: str = "sort_by_name",
-                    recursive: bool = False,
-                    no_start:  bool = False) -> None:
+                    recursive: bool = False, no_start:  bool = False) -> None:
     """Create a playlist of the files in the specified directory, then play that playlist in VLC. By default, don't search the directory recursively and sort the files by name. Optional arguments allow recursive loading or sorting by modification time. If no_start is True, don't start playback in VLC."""
     import subprocess
     if the_dir is None:
@@ -1863,26 +2424,23 @@ def open_dir_in_VLC(the_dir: str, sort_choice: str = "sort_by_name",
     start_flag = "--no-playlist-autostart" if no_start else False
     # List to store files with their modification times
     files_with_times = []
-    recursive_string = "recursive" if recursive else "NOT_recursive"
     if recursive:
         # Recursively iterate over the files in the directory
         for root, dirs, files in os.walk(the_dir):
             for filename in files:
                 file_path = os.path.join(root, filename)
-                if os.path.isfile(file_path):
+                if os.path.isfile(file_path) and not filename.endswith('.m3u'):
                     mod_time = os.path.getmtime(file_path)
                     files_with_times.append((mod_time, file_path))
     else:
         for item in os.listdir(the_dir):
             item_path = os.path.join(the_dir, item)
-            if os.path.isfile(item_path):
+            if os.path.isfile(item_path) and not item.endswith('.m3u'):
                 mod_time = os.path.getmtime(item_path)
                 files_with_times.append((mod_time, item_path))
             elif os.path.isdir(item_path):
                 mod_time = os.path.getmtime(item_path)
                 files_with_times.append((mod_time, item_path))
-            else:
-                print(f"Skipping {item_path} as it is not a file or directory.")
 
     if sort_choice == "sort_by_name":
         # Sort files by name
@@ -1895,8 +2453,10 @@ def open_dir_in_VLC(the_dir: str, sort_choice: str = "sort_by_name",
     for _, file_path in files_with_times:
         base_name = os.path.basename(file_path)
         playlist_content += f"#EXTINF:-1,{base_name.replace(',', '').replace('-', '')}\n{file_path}\n"
-    # Write the playlist to disk in the specified directory
-    playlist_path = os.path.join(the_dir, f"playlist_{sort_choice}_{recursive_string}.m3u")
+    # Get the base directory name for the playlist filename
+    base_dir = os.path.basename(os.path.normpath(the_dir))
+    # Write the playlist to disk in the parent directory
+    playlist_path = os.path.join(the_dir, f"{filename_format(base_dir)}_playlist.m3u")
     with open(playlist_path, "w") as playlist_file:
         playlist_file.write(playlist_content)
     # Open the playlist in VLC
