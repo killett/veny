@@ -26,6 +26,7 @@ import univ_defs as ud
 
 __version__ = '0.1.7'
 
+print("REPLACE ALL WRITE AND APPEND STATEMENTS WITH ud.atomic_write() AND ud.atomic_append() RESPECTIVELY! OH, AND WRITE ud.atomic_append() SO IT CAN BE USED!!!")
 
 class Options():
     """Class that has all global options in one place."""
@@ -61,18 +62,22 @@ If you're using the bash shell, follow these steps to add the alias manually:
 """
         self.python_command: str = ''
         self.shell: str = ''
+        self.rc_file: str = ''
+        self.additional_files: list[str] = []
+        self.alias = ''               # The alias to use for this script, if any.
+        self.alias_command: str = ''  # The command to run when the alias is used.
         self.computer_name: str = ud.get_computer_name()
         self.cwd: str = os.getcwd()
         self.venv_name: str = 'myenv'  # Can NOT include dashes ('-')
         self.packages_dir: str = os.path.join(self.my_dir, 'packages')
         self.test_dir: str = os.path.join(self.my_dir, 'test')
-        self.uninstalled_imports: set[str] = set()
-        self.installed_imports: set[str] = set()
-        self.bad_imports: set[str] = set()
-        self.custom_modules: dict[str, str] = {}
-        self.subfolders: list[str] = []
-        self.samedir_files: list[str] = []
-        self.pip_list: list[str] = []
+        self.uninstalled_imports: set[str]      = set()
+        self.installed_imports:   set[str]      = set()
+        self.bad_imports:         set[str]      = set()
+        self.custom_modules:     dict[str, str] = {}
+        self.subfolders:         list[str]      = []
+        self.samedir_files:      list[str]      = []
+        self.pip_list:           list[str]      = []
         self.loaded_custom_modules: set[str] = set()
         self.pretty_list: str = ''
         self.timestamp: str = dt.datetime.now().strftime('%Y%m%d-%H%M%S')
@@ -102,10 +107,8 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.bad_imports: set[str] = set()
         self.rawlog: bool = False
         self.pipreqs_available: bool = False
-        self.mydiff_path: str = os.path.join(self.my_dir, 'mydiff.py')
-        ud.verify_script(self.mydiff_path, ud.MYDIFF_SCRIPT)
+        self.mydiff_path:  str = os.path.join(self.my_dir, 'mydiff.py')
         self.myaudit_path: str = os.path.join(self.my_dir, 'myaudit.py')
-        ud.verify_script(self.myaudit_path, ud.MYAUDIT_SCRIPT)
         self.read_files:    list[str] = []  # List of files read       by the Python script.
         self.write_files:   list[str] = []  # List of files written    by the Python script.
         self.download_urls: list[str] = []  # List of  URLs downloaded by the Python script.
@@ -2243,7 +2246,6 @@ def parse_arguments(options: Options) -> None:
     parser = argparse.ArgumentParser(description="Run a python script with optional flags.")
     parser.add_argument('-version',     action='store_true',      help="Print the version of this program.")
     parser.add_argument('-manual',      action='store_true',      help="Print instructions for manually adding the alias to the shell configuration file.")
-    parser.add_argument('-audit',       action='store_true',      help="BROKEN! REQUIRES flake8 TO BE INSTALLED, WHICH REQUIRES A venv! CONSIDER AUTOMATICALLY WRITING A FILE LIKE test_checker.py TO ~/mypy, THEN REPLACING THE given 'options.python_script' with THAT test_checker.py AND MOVING THE SPECIFIED SCRIPT TO A SCRIPT_ARG, THEN RUNNING mypy AS USUAL. THIS SHOULD WORK, RIGHT? NO, REMOVE THIS FLAG AND JUST ADD A 'myaudit' alias that runs 'mypy ~/mypy/myaudit.py SCRIPT' DO THE SAME FOR 'mydiff'!!!! Run an interactive formatting audit of the script to check for common issues and suggest fixes using autopep8.")
     parser.add_argument('-feeling-lucky', action='store_true', help="NOT FINISHED!!! Run the script with the -feeling-lucky flag, which will try to run the script with the last used virtual environment, or if that fails, try the latest virtual environment which has all the packages needed now.")
     parser.add_argument('-debug',       action='store_true',      help="Run this program in debug mode, which prints additional debug messages."    )
     parser.add_argument('-blank-slate', action='store_true',      help=f"Delete ~/{options.my_name}/ and all {options.my_name} .out and .err and .json and .pkl files in the current directory.")
@@ -2271,45 +2273,65 @@ def parse_arguments(options: Options) -> None:
     options.args = parser.parse_args()
 
 
-def detect_shell() -> str:
-    """Detect the current shell."""
-    shell = os.getenv("SHELL")
-    if shell:
-        return os.path.basename(shell)
-    return None
+def detect_shell() -> str | None:
+    """Detect the current interactive shell, falling back to parent process name."""
+    shell_path = os.getenv("SHELL")
+    if not shell_path: # If shell_path is None or empty (""), try to get the parent process name
+        try:
+            ppid   = os.getppid()
+            result = subprocess.run(["ps", "-p", str(ppid), "-o", "comm="],
+                                    capture_output=True, text=True, check=True)
+            shell_path = result.stdout.strip()
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            logging.error(f"Error detecting shell via ps: {e}")
+            return None
+    if shell_path:
+        name = os.path.basename(shell_path).lstrip("-")
+        return name
+    else:
+        logging.warning("Could not detect shell from SHELL environment variable or parent process.")
+        return None
 
 
-def get_shell_rc_file(options: Options) -> str:
-    """Get the shell configuration file for the current user."""
+def get_shell_rc_file(options: Options) -> None:
+    """Get the shell configuration file for the current user, store in options.rc_file."""
     home = os.path.expanduser("~")
     if options.shell == "bash":
-        return os.path.join(home, ".bashrc")
+        options.rc_file = os.path.join(home, ".bashrc")
     elif options.shell == "zsh":
-        return os.path.join(home, ".zshrc")
+        options.rc_file = os.path.join(home, ".zshrc")
     elif options.shell == "fish":
-        return os.path.join(home, ".config", "fish", "config.fish")
+        options.rc_file = os.path.join(home, ".config", "fish", "config.fish")
     elif options.shell == "csh":
-        return os.path.join(home, ".cshrc")
+        options.rc_file = os.path.join(home, ".cshrc")
     elif options.shell == "tcsh":
-        return os.path.join(home, ".tcshrc")
-    return None
+        options.rc_file = os.path.join(home, ".tcshrc")
+    else:
+        logging.warning(f"Unsupported shell: {options.shell}")
+        options.rc_file = None
 
 
-def get_alias_command(options: Options) -> str:
-    """Get the alias command for the shell."""
+def define_alias_command(options: Options) -> None:
+    """Define the alias command for the shell, store in options.alias_command."""
+    if not options.alias:
+        logging.error("No alias specified, skipping alias command generation.")
+        options.alias_command = None
+        return
     if options.shell in ["bash", "zsh"]:
-        return f'alias {options.args.alias}="{options.python_command} {options.my_filepath}"'
+        options.alias_command = f'alias {options.alias}="{options.python_command} {options.my_filepath}"'
     elif options.shell == "fish":
-        return f'alias {options.args.alias} "{options.python_command} {options.my_filepath}"'
+        options.alias_command = f'alias {options.alias} "{options.python_command} {options.my_filepath}"'
     elif options.shell in ["csh", "tcsh"]:
-        return f"alias {options.args.alias} '{options.python_command} {options.my_filepath}'"
-    return None
+        options.alias_command = f"alias {options.alias} '{options.python_command} {options.my_filepath}'"
+    else:
+        logging.error(f"Unsupported shell for alias command: {options.shell}")
+        options.alias_command = None
 
 
-def alias_exists(rc_file: str, alias_pattern: str) -> bool:
-    """Check if an alias exists in a file using a pattern."""
+def alias_exists(options: Options, alias_pattern: str) -> bool:
+    """Check if an alias exists in the shell configuration ("rc") file using a pattern."""
     try:
-        with open(rc_file, "r") as file:
+        with open(options.rc_file, 'r') as file:
             lines = file.readlines()
         return any(re.search(alias_pattern, line) for line in lines)
     except FileNotFoundError:
@@ -2319,7 +2341,7 @@ def alias_exists(rc_file: str, alias_pattern: str) -> bool:
 def get_additional_alias_files(options: Options) -> list[str]:
     """Get additional alias files for the shell."""
     home = os.path.expanduser("~")
-    if options.shell == "bash":
+    if   options.shell == "bash":
         return [os.path.join(home, ".bash_aliases")]
     elif options.shell == "zsh":
         return [os.path.join(home, ".zsh_aliases")]
@@ -2327,24 +2349,30 @@ def get_additional_alias_files(options: Options) -> list[str]:
     return []
 
 
-def add_alias_to_rc(options: Options, rc_file: str, alias_command: str, additional_files: list[str] = []) -> None:
+def add_alias_to_rc(options: Options) -> None:
     """Add an alias to the shell configuration file."""
     try:
-        all_files = [rc_file] + additional_files
-        alias_pattern = rf"alias\s+{options.args.alias}\s*=.*"
+        all_files = [options.rc_file] + options.additional_files
+        # If a user chooses an alias name containing regex metacharacters (e.g. alias .foo),
+        # using the unescaped options.alias could produce a malformed pattern or false positives/negatives.
+        alias_name = re.escape(options.alias)
+        # The following pattern covers both aliases written with "=" (Bash/Zsh) and aliases written without "=" (Fish/Csh).
+        # It also accounts for potential whitespace variations.
+        alias_pattern = rf'^\s*alias\s+{alias_name}(?:\s*=|\s+).+'
         found_alias = False
         for file in all_files:
             if alias_exists(file, alias_pattern):
                 found_alias = True
-                logging.info(f"Alias {options.args.alias} already exists in {file}")
+                logging.info(f"Alias {options.alias} already exists in {file}")
         if not found_alias:
             try:
-                if ud.get_user_input(f"Type 'yes' or 'y' to write this alias command:\n{alias_command}\nTo this file:\n{rc_file}\n... or type anything else to quit: "):
-                    with open(rc_file, "a") as file:
-                        file.write(f"\n{alias_command}\n")
-                    logging.info(f"Alias added to {rc_file}")
+                if ud.prompt_then_confirm(f"Type 'yes' or 'y' to write this alias command:\n{options.alias_command}\n"
+                                          f"To this file:\n{options.rc_file}\n... or type anything else to quit: "):
+                    with open(options.rc_file, 'a') as file:
+                        file.write(f"\n{options.alias_command}\n")
+                    logging.info(f"Alias added to {options.rc_file}")
             except (IOError, OSError) as e:
-                logging.error(f"Failed to write alias to {rc_file}: {e}\nException type: ", exc_info=True)
+                logging.error(f"Failed to write alias to {options.rc_file}: {e}\nException type: ", exc_info=True)
                 logging.error(options.manual_instructions)
     except Exception as e:
         logging.error(f"An error occurred while adding the alias: {e}\nException type: ", exc_info=True)
@@ -2355,12 +2383,12 @@ def add_alias(options: Options) -> None:
     """Add an alias to the shell configuration file."""
     options.shell = detect_shell()
     if options.shell:
-        rc_file = get_shell_rc_file(options)
-        additional_files = get_additional_alias_files(options)
-        if rc_file:
-            alias_command = get_alias_command(options)
-            if alias_command:
-                add_alias_to_rc(options, rc_file, alias_command, additional_files)
+        get_shell_rc_file(options)
+        get_additional_alias_files(options)
+        if options.rc_file:
+            define_alias_command(options)
+            if options.alias_command:
+                add_alias_to_rc(options)
             else:
                 logging.info(f"Unsupported shell: {options.shell}")
         else:
@@ -2396,14 +2424,12 @@ def _safe_eval_node(node: ast.AST) -> Any:
         # Check for os.path.abspath
         func = node.func
         # attr.value.value.id == 'os' && attr.value.attr == 'path' && attr.attr == 'abspath'
-        if (
-            isinstance(func, ast.Attribute)
+        if (isinstance(func, ast.Attribute)
             and func.attr == "abspath"
             and isinstance(func.value, ast.Attribute)
             and func.value.attr == "path"
             and isinstance(func.value.value, ast.Name)
-            and func.value.value.id == "os"
-        ):
+            and func.value.value.id == "os"):
             # exactly one argument?
             if len(node.args) == 1:
                 arg_val = _safe_eval_node(node.args[0])
@@ -4013,6 +4039,11 @@ def main() -> None:
     options.script_args   = getattr(options.args, 'script_args', [])
     options.rawlog        = getattr(options.args, 'rawlog',      False)
 
+    if options.python_script == options.mydiff_path:
+        ud.verify_script(options.mydiff_path,  ud.MYDIFF_SCRIPT)
+    elif options.python_script == options.myaudit_path:
+        ud.verify_script(options.myaudit_path, ud.MYAUDIT_SCRIPT)
+
     if getattr(options.args, 'feeling_lucky', False):
         options.script_dir = os.path.abspath(os.path.dirname(options.python_script))
         last_used_venv_python = load_last_used_venv_python(options)
@@ -4047,23 +4078,15 @@ def main() -> None:
 
     if getattr(options.args, 'alias', False):
         # Add the alias to the shell configuration file
+        options.alias = options.args.alias
         add_alias(options)
-        sys.exit(0)
-    elif getattr(options.args, 'audit', False):
-        if not ud.check_python_formatting(options.python_script):
-            sys.exit(0)
-        # 0 = old‐style diff
-        # 1 = unified diff with 0 context lines
-        # 2+ = unified diff with "DIFF_CHOICE - 1" context lines
-        diff_choice = 1
-        ud.interactive_flake8(options.python_script, diff_choice=diff_choice, ignore_codes=ud.IGNORED_CODES, max_line_length=1000)
         sys.exit(0)
     elif options.python_script:  # If a script was provided as an argument, skip the rest of these checks.
         pass
     elif getattr(options.args, 'blank_slate', False):
         if not getattr(options.args, 'y', False):
-            response = input(f"Are you sure you want to delete everything in ~/{options.my_name}/ and all {options.my_name} .json files in the current directory? (y/n) ")
-            if response.casefold() != 'y':
+            if not ud.prompt_then_confirm(f"Are you sure you want to delete everything in ~/{options.my_name}/"
+                                      f" and all {options.my_name} .json files in the current directory? (y/n) "):
                 logging.info("Exiting without deleting anything.")
                 sys.exit(0)
         logging.info(f"Deleting everything in ~/{options.my_name}/ and all {options.my_name} .out and .err and .json and .pkl files in the current directory.")

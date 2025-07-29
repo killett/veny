@@ -234,8 +234,8 @@ def fallback_logging_config(level: str = 'INFO', rawlog: bool = False) -> None:
     Run this at the start of functions which might be run without first configuring logging.
 
     Parameters:
-        level (str): The logging level to set. Defaults to 'INFO'.
-        rawlog (bool): If True, use a simple log format without timestamps or levels.
+        level  : The logging level to set. Defaults to 'INFO'.
+        rawlog : If True, use a simple log format without timestamps or levels.
     """
     if not logging.getLogger().handlers:
         if not rawlog:  # Use a full logging format with timestamps and levels.
@@ -702,10 +702,9 @@ def kill_process(pname: str) -> None:
 
 
 def ensure_even_dimensions(image_path: str) -> None:
-    """Ensure the image at 'image_path' has dimensions divisible by 2 by resizing if necessary."""
+    """Ensure the image at 'image_path' has dimensions divisible by 2, by resizing if necessary."""
     from PIL import Image
     fallback_logging_config()
-    """Ensure the image has dimensions divisible by 2 by resizing if necessary."""
     with Image.open(image_path) as img:
         width, height = img.size
         new_width = width if width % 2 == 0 else width - 1
@@ -1033,7 +1032,6 @@ def decimal_year_to_datetime(dec: float, use_astropy: bool = False) -> dt.dateti
         t = Time(dec, format='jyear', scale='utc')
         return t.to_datetime().replace(tzinfo=dt.timezone.utc)
 
-    import datetime as dt
     try:
         year = int(dec)
         rem = dec - year
@@ -1109,8 +1107,9 @@ def _should_convert(given_date: AnyDateTimeType, format_str: str | None = None) 
     return False
 
 
-def _finalize_datetime(parsed_dt: dt.datetime, original_input: AnyDateTimeType, format_str: str | None,
-                       tz_arg: str | dt.tzinfo | None, should_convert: bool | None = None) -> dt.datetime:
+def _finalize_datetime(parsed_dt: dt.datetime, original_input: AnyDateTimeType,
+                       format_str: str | None, tz_arg: str | dt.tzinfo | None,
+                       should_convert: bool | None = None) -> dt.datetime:
     """Finalize the datetime object by either converting it to the target timezone or just attaching the timezone without shifting the clock. The boolean argument 'should_convert' can override the default behavior, which is determined by the function _should_convert()."""
     if isinstance(tz_arg, str) and tz_arg.strip().upper() == 'NAIVE':
         logging.debug(f"Naive timezone requested, returning datetime {parsed_dt} without any timezone info")
@@ -1125,7 +1124,8 @@ def _finalize_datetime(parsed_dt: dt.datetime, original_input: AnyDateTimeType, 
 
 
 def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None = None,
-                   format_str: str | None = None, should_convert: bool | None = None) -> dt.datetime:
+                   format_str: str | None = None,
+                   should_convert: bool | None = None) -> dt.datetime:
     """
     Try parsing the given_date string or number into a datetime.datetime object in the specified timezone.
 
@@ -2242,6 +2242,105 @@ def verify_script(thepath: str, thescript: str) -> None:
     # else: contents match exactly, nothing to do
 
 
+def is_valid_utf8(path: str) -> bool:
+    """Return True if the file at `path` can be read as UTF-8 without errors."""
+    try:
+        with open(path, 'rb') as f:
+            f.read().decode('utf-8')
+        return True
+    except UnicodeDecodeError:
+        return False
+
+
+# THIS IS TOO GENERAL! IT CAN FALSE-POSITIVE ON VALID UTF-8 TEXT WITH APOSTROPHES OR QUOTES
+# def contains_mojibake(text: str) -> bool:
+#     """Use ftfy.badness.is_bad() to detect any likely mojibake in the text."""
+#     import ftfy
+#     return ftfy.badness.is_bad(text)
+# I HAVEN'T TRIED THIS NEXT LINE, BUT IT MIGHT CAUSE FEWER FALSE POSITIVES:
+#     return ftfy.badness(text) > 1
+
+
+def contains_mojibake(text: str) -> bool:
+    """Check for common mojibake patterns like “Â“” or “Â”."""
+    return '\u00C2' in text or '\u00C3' in text
+
+
+def fix_file(path: str, make_backup: bool = True, dry_run: bool = False) -> bool:
+    """
+    Fix mojibake in an existing UTF-8 text file using ftfy.fix_encoding().
+    Returns True if a fix was applied.
+    """
+    import ftfy
+    with open(path, 'r', encoding='utf-8', errors='strict') as f:
+        original = f.read()
+    if not contains_mojibake(original):
+        return False
+    if dry_run:
+        logging.info(f"[DRY RUN] Would fix mojibake in: {path}")
+        return True
+    fixed = ftfy.fix_encoding(original)
+    if make_backup:
+        os.rename(path, path + '.bak')
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(fixed)
+    return True
+
+
+def recode_cp1252_to_utf8(path: str, make_backup: bool = True,
+                          dry_run: bool = False) -> bool:
+    """
+    Assume a non-UTF-8 file is Windows-1252, decode it, and re-save as UTF-8.
+    Returns True if successful.
+    """
+    raw = open(path, 'rb').read()
+    try:
+        text = raw.decode('cp1252', errors='strict')
+    except UnicodeDecodeError:
+        logging.warning(f"File {path} is not valid UTF-8 or CP1252, skipping.")
+        return False
+
+    if dry_run:
+        logging.info(f"[DRY RUN] Would recode CP1252→UTF-8: {path}")
+        return True
+
+    if make_backup:
+        os.rename(path, path + '.bak')
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(text)
+    return True
+
+
+def fix_mojibake(path: str, make_backup: bool = True,
+                 dry_run: bool = False) -> None:
+    """
+    Fix mojibake in a text file, recoding from CP1252 to UTF-8 if necessary.
+    If the file is already valid UTF-8, it will only fix mojibake.
+    """
+    fallback_logging_config()
+    if not os.path.isfile(path):
+        logging.error(f"{path} is not a file")
+        return
+
+    # If not valid UTF-8, attempt CP1252→UTF-8 recode
+    if not is_valid_utf8(path):
+        if recode_cp1252_to_utf8(path, make_backup=make_backup):
+            logging.info(f'↻ Recoded CP1252→UTF-8: {path}')
+            # Then run ftfy on it in case there’s leftover mojibake
+            if fix_file(path, make_backup=False, dry_run=dry_run):
+                logging.info(f'    ✔ Plus ftfy-cleaned: {path}')
+        else:
+            logging.warning(f'⚠ Skipped (not UTF-8 or CP1252): {path}')
+        return
+
+    # If valid UTF-8, fix mojibake only
+    try:
+        if fix_file(path, make_backup=make_backup, dry_run=dry_run):
+            logging.info(f'✔ Fixed mojibake: {path}')
+    except UnicodeDecodeError:
+        logging.warning(f'Skipped (decode error): {path}')
+
+
 def treeview_new_files(directory: str, last_file_path: str, last_mtime: float, prefix: str = '',
                        is_last: bool = True, level: int = 0, state: dict = None) -> bool:
     """Recursively scan the directory, print the contents of files newer than last_file_path (and store its modification date in last_mtime). Return True if any relevant files are found."""
@@ -2510,6 +2609,45 @@ def remove_prefix_from_html_title(filepath: str, prefix: str) -> bool:
         return True
     else:
         return False
+
+
+def combine_html_files(file_paths: list[str],
+                       output_file_path: str) -> None:
+    """
+    Combine multiple HTML files into a single HTML file.
+    The first file's <head> is preserved, and all <body> contents are concatenated.
+
+    Parameters:
+    - file_paths: List of (presorted) file paths to the HTML files to combine.
+    - output_file_path: Path to save the combined HTML file.
+    """
+    from bs4 import BeautifulSoup
+    fallback_logging_config()
+    combined_body = ''
+    head_content = ''
+    first_file_processed = False
+    for file_path in file_paths:
+        file = my_fopen(file_path)
+        try:
+            soup = BeautifulSoup(file, 'html.parser')
+            # Extract <head> from the first Chapter1.html
+            if not first_file_processed:
+                head_content = str(soup.head)
+                first_file_processed = True            
+            # Extract <body> content
+            body_content = soup.body
+            combined_body += str(body_content)
+        except Exception as e:
+            logging.error(f"File {file_path} encountered error {e}")
+    # Create the new HTML structure
+    combined_html = f"<!DOCTYPE html>\n<html>\n{head_content}\n<body>\n{combined_body}\n</body>\n</html>"
+    # Save to the output file path
+    try:
+        with open(output_file_path, 'w', encoding=DEFAULT_ENCODING) as output_file:
+            output_file.write(combined_html)
+    except Exception as e:
+        logging.error(f"Error saving combined HTML to {output_file_path}: {e}")
+    logging.info(f"Saved combined HTML to '{output_file_path}'.")
 
 
 def check_list_for_duplicates(the_list: list) -> bool:
