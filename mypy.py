@@ -26,7 +26,8 @@ import univ_defs as ud
 
 __version__ = '0.1.7'
 
-print("REPLACE ALL WRITE AND APPEND STATEMENTS WITH ud.atomic_write() AND ud.atomic_append() RESPECTIVELY! OH, AND WRITE ud.atomic_append() SO IT CAN BE USED!!!")
+print("REPLACE ALL WRITE AND APPEND STATEMENTS WITH ud.my_atomic_write()!")
+
 
 class Options():
     """Class that has all global options in one place."""
@@ -63,7 +64,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.python_command: str = ''
         self.shell: str = ''
         self.rc_file: str = ''
-        self.additional_files: list[str] = []
+        self.additional_alias_files: list[str] = []
         self.alias = ''               # The alias to use for this script, if any.
         self.alias_command: str = ''  # The command to run when the alias is used.
         self.computer_name: str = ud.get_computer_name()
@@ -2244,25 +2245,25 @@ def parse_arguments(options: Options) -> None:
     """Parse command-line arguments."""
 
     parser = argparse.ArgumentParser(description="Run a python script with optional flags.")
-    parser.add_argument('-version',     action='store_true',      help="Print the version of this program.")
-    parser.add_argument('-manual',      action='store_true',      help="Print instructions for manually adding the alias to the shell configuration file.")
-    parser.add_argument('-feeling-lucky', action='store_true', help="NOT FINISHED!!! Run the script with the -feeling-lucky flag, which will try to run the script with the last used virtual environment, or if that fails, try the latest virtual environment which has all the packages needed now.")
-    parser.add_argument('-debug',       action='store_true',      help="Run this program in debug mode, which prints additional debug messages."    )
-    parser.add_argument('-blank-slate', action='store_true',      help=f"Delete ~/{options.my_name}/ and all {options.my_name} .out and .err and .json and .pkl files in the current directory.")
-    parser.add_argument('-full',        action='store_true',      help="Build a virtual environment (venv) that can run every python script in the specified directory (defaults to the current working directory).")
-    parser.add_argument('-y',           action='store_true',      help="Automatically say yes to any prompts.")
-    parser.add_argument('-no-cache',    action='store_true',      help="Don't search the cache. Instead, create a new virtual environment. Also, refresh the custom modules cache and the pip list.")
-    parser.add_argument('-latest',      action='store_true',      help="Load the latest venv in the cache which has all the packages needed now.")
-    parser.add_argument('-oldest',      action='store_true',      help="Load the oldest venv in the cache which has all the packages needed now.")
-    parser.add_argument('-last-used',   action='store_true',      help="Load the last used venv in the cache, but if that fails try the latest venv which has all the packages needed now.")
-    parser.add_argument('-smallest',    action='store_true',      help="Load the smallest venv in the cache (with the fewest packages) which has all the packages needed now.")
-    parser.add_argument('-rc',          action='store_true',      help="Refresh the custom modules cache and the pip list.")
-    parser.add_argument('-reqs',        action='store_true',      help="Read the extra_requirements.txt file in the current directory and install the packages listed there (with specific versions if present in the file) into the venv (along with the other packages needed to run the script as determined elsewhere in this program).")
-    parser.add_argument('-alias',       type=str,                 help="Add an alias to the shell configuration file so that typing ALIAS anywhere runs this program.")
-    parser.add_argument('-rawlog',      action='store_true',      help=f"Do not add timestamps or INFO level to log messages, and do not add extra INFO level log statements. Just produce the same output that would be seen when running the program without {options.my_name}.")
-    parser.add_argument('-justprint',   action='store_true',      help="Don't run the script, just print its package requirements.")
-    parser.add_argument('script',       nargs='?',                help="The script to run.")
-    parser.add_argument('script_args',  nargs=argparse.REMAINDER, help="Optional arguments for the python script.")
+    parser.add_argument('-version',       action='store_true',      help="Print the version of this program.")
+    parser.add_argument('-manual',        action='store_true',      help="Print instructions for manually adding the alias to the shell configuration file.")
+    parser.add_argument('-feeling-lucky', action='store_true',    help="NOT FINISHED!!! Run the script with the -feeling-lucky flag, which will try to run the script with the last used virtual environment, or if that fails, try the latest virtual environment which has all the packages needed now.")
+    parser.add_argument('-debug',         action='store_true',      help="Run this program in debug mode, which prints additional debug messages."    )
+    parser.add_argument('-blank-slate',   action='store_true',      help=f"Delete ~/{options.my_name}/ and all {options.my_name} .out and .err and .json and .pkl files in the current directory.")
+    parser.add_argument('-full',          action='store_true',      help="Build a virtual environment (venv) that can run every python script in the specified directory (defaults to the current working directory).")
+    parser.add_argument('-y',             action='store_true',      help="Automatically say yes to any prompts to allow this program to run without the need for user interaction.")
+    parser.add_argument('-no-cache',      action='store_true',      help="Don't search the cache. Instead, create a new virtual environment. Also, refresh the custom modules cache and the pip list.")
+    parser.add_argument('-latest',        action='store_true',      help="Load the latest venv in the cache which has all the packages needed now.")
+    parser.add_argument('-oldest',        action='store_true',      help="Load the oldest venv in the cache which has all the packages needed now.")
+    parser.add_argument('-last-used',     action='store_true',      help="Load the last used venv in the cache, but if that fails try the latest venv which has all the packages needed now.")
+    parser.add_argument('-smallest',      action='store_true',      help="Load the smallest venv in the cache (with the fewest packages) which has all the packages needed now.")
+    parser.add_argument('-rc',            action='store_true',      help="Refresh the custom modules cache and the pip list.")
+    parser.add_argument('-reqs',          action='store_true',      help="Read the extra_requirements.txt file in the current directory and install the packages listed there (with specific versions if present in the file) into the venv (along with the other packages needed to run the script as determined elsewhere in this program).")
+    parser.add_argument('-alias',         type=str,                 help="Add an alias to the shell configuration file so that typing ALIAS anywhere runs this program.")
+    parser.add_argument('-rawlog',        action='store_true',      help=f"Do not add timestamps or INFO level to log messages, and do not add extra INFO level log statements. Just produce the same output that would be seen when running the program without {options.my_name}.")
+    parser.add_argument('-justprint',     action='store_true',      help="Don't run the script, just print its package requirements.")
+    parser.add_argument('script',         nargs='?',                help="The script to run.")
+    parser.add_argument('script_args',    nargs=argparse.REMAINDER, help="Optional arguments for the python script.")
 
     # If no arguments are provided, print a short guide
     if len(sys.argv) == 1:
@@ -2273,128 +2274,194 @@ def parse_arguments(options: Options) -> None:
     options.args = parser.parse_args()
 
 
-def detect_shell() -> str | None:
-    """Detect the current interactive shell, falling back to parent process name."""
+def detect_shell(options: Options) -> None:
+    """
+    Detect the current interactive shell, falling back to parent process name if needed.
+
+    Parameters:
+    - options: Options object to store the detected shell information.
+
+    Returns:
+    - None, but updates options.shell with the detected shell name.
+    """
     shell_path = os.getenv("SHELL")
     if not shell_path: # If shell_path is None or empty (""), try to get the parent process name
         try:
+            logging.debug("SHELL environment variable not set, trying to detect shell from parent process.")
             ppid   = os.getppid()
             result = subprocess.run(["ps", "-p", str(ppid), "-o", "comm="],
                                     capture_output=True, text=True, check=True)
             shell_path = result.stdout.strip()
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             logging.error(f"Error detecting shell via ps: {e}")
-            return None
     if shell_path:
-        name = os.path.basename(shell_path).lstrip("-")
-        return name
+        options.shell = os.path.basename(shell_path).lstrip("-")
     else:
-        logging.warning("Could not detect shell from SHELL environment variable or parent process.")
-        return None
+        logging.error("Could not detect shell from SHELL environment variable or parent process.")
+        options.shell = None
 
 
-def get_shell_rc_file(options: Options) -> None:
-    """Get the shell configuration file for the current user, store in options.rc_file."""
+def find_shell_rc_file(options: Options) -> None:
+    """
+    Find the shell configuration file for the current user, store in options.rc_file.
+    For bash/zsh, also consider login‐shell files if the usual rc isn’t present.
+
+    Parameters:
+    - options: Options object containing the shell type and rc_file attribute.
+
+    Returns:
+    - None, but updates options.rc_file with the path to the shell configuration file.
+    """
     home = os.path.expanduser("~")
+    candidates = []
+
     if options.shell == "bash":
-        options.rc_file = os.path.join(home, ".bashrc")
+        candidates = [".bashrc", ".bash_profile", ".bash_login", ".profile"]
     elif options.shell == "zsh":
-        options.rc_file = os.path.join(home, ".zshrc")
+        candidates = [".zshrc", ".zprofile"]
     elif options.shell == "fish":
-        options.rc_file = os.path.join(home, ".config", "fish", "config.fish")
+        candidates = [os.path.join(".config", "fish", "config.fish")]
     elif options.shell == "csh":
-        options.rc_file = os.path.join(home, ".cshrc")
+        candidates = [".cshrc"]
     elif options.shell == "tcsh":
-        options.rc_file = os.path.join(home, ".tcshrc")
+        candidates = [".tcshrc"]
     else:
-        logging.warning(f"Unsupported shell: {options.shell}")
+        logging.error(f"Unsupported shell: {options.shell}")
         options.rc_file = None
+        return
+
+    # pick the first one that actually exists
+    for fname in candidates:
+        path = os.path.join(home, fname)
+        if os.path.isfile(path):
+            options.rc_file = path
+            break
+    else:
+        options.rc_file = None
+        logging.error(f"No existing rc file found for {options.shell} shell in {home}. Tried: {', '.join(candidates)}.")
+
+
+def find_additional_alias_files(options: Options) -> None:
+    """Find additional alias files for the shell."""
+    home = os.path.expanduser("~")
+    # Define common potential additional alias files based on the shell type.
+    if options.shell == "bash":
+        options.additional_alias_files.append(os.path.join(home, ".bash_aliases"))
+    elif options.shell == "zsh":
+        options.additional_alias_files.append(os.path.join(home, ".zsh_aliases"))
+    elif options.shell == "fish":
+        options.additional_alias_files.append(os.path.join(home, ".config", "fish", "conf.d", "aliases.fish"))
+    elif options.shell == "csh":
+        options.additional_alias_files.append(os.path.join(home, ".csh_aliases"))
+    elif options.shell == "tcsh":
+        options.additional_alias_files.append(os.path.join(home, ".tcsh_aliases"))
+    else:
+        logging.error(f"Unsupported shell for additional alias files: {options.shell}")
+    valid_files = []
+    for this_file in options.additional_alias_files:
+        if os.path.isfile(this_file):
+            valid_files.append(this_file)
+        else:
+            logging.error(f"Additional alias file {this_file} does not exist for shell {options.shell}.")
+    options.additional_alias_files = valid_files
 
 
 def define_alias_command(options: Options) -> None:
-    """Define the alias command for the shell, store in options.alias_command."""
+    """
+    Define the alias command for the shell, store in options.alias_command.
+
+    Parameters:
+    - options: Options object containing the alias, python_command, and my_filepath attributes.
+
+    Returns:
+    - None, but updates options.alias_command with the appropriate alias command string.
+    """
     if not options.alias:
         logging.error("No alias specified, skipping alias command generation.")
         options.alias_command = None
         return
+
+    cmd = f"{options.python_command} {options.my_filepath}"
     if options.shell in ["bash", "zsh"]:
-        options.alias_command = f'alias {options.alias}="{options.python_command} {options.my_filepath}"'
+        options.alias_command = f'alias {options.alias}="{cmd}"'
     elif options.shell == "fish":
-        options.alias_command = f'alias {options.alias} "{options.python_command} {options.my_filepath}"'
+        options.alias_command = (f"function {options.alias};\n"
+                                 f"    {cmd} $argv;\n"
+                                 f"end")
     elif options.shell in ["csh", "tcsh"]:
-        options.alias_command = f"alias {options.alias} '{options.python_command} {options.my_filepath}'"
+        options.alias_command = f"alias {options.alias} '{cmd}'"
     else:
         logging.error(f"Unsupported shell for alias command: {options.shell}")
         options.alias_command = None
 
 
-def alias_exists(options: Options, alias_pattern: str) -> bool:
-    """Check if an alias exists in the shell configuration ("rc") file using a pattern."""
+def alias_exists(this_file: str, alias_pattern: str) -> bool:
+    """
+    Check if an alias exists in this_file using a regex pattern "alias_pattern".
+
+    Parameters:
+    - this_file: The file to check for the alias.
+    - alias_pattern: The regex pattern to match the alias.
+
+    Returns:
+    - True if the alias exists, False otherwise.
+    """
     try:
-        with open(options.rc_file, 'r') as file:
+        with open(this_file, 'r') as file:
             lines = file.readlines()
         return any(re.search(alias_pattern, line) for line in lines)
     except FileNotFoundError:
+        logging.error(f"File {this_file} not found while checking for alias.")
         return False
 
 
-def get_additional_alias_files(options: Options) -> list[str]:
-    """Get additional alias files for the shell."""
-    home = os.path.expanduser("~")
-    if   options.shell == "bash":
-        return [os.path.join(home, ".bash_aliases")]
-    elif options.shell == "zsh":
-        return [os.path.join(home, ".zsh_aliases")]
-    # Add other shells if they have alias files
-    return []
-
-
-def add_alias_to_rc(options: Options) -> None:
-    """Add an alias to the shell configuration file."""
+def add_alias_to_rc_file(options: Options) -> None:
+    """Add an alias to the shell configuration file if it’s not already there."""
+    if not (options.rc_file and options.alias and options.alias_command):
+        logging.error("Missing rc_file, alias, or alias_command. Skipping alias install.")
+        return
+    all_files = [options.rc_file] + options.additional_alias_files
+    alias_name = re.escape(options.alias)
+    # Only match alias <name> exactly, with optional spaces around '='
+    alias_pattern = rf'^\s*alias\s+{alias_name}(?:\s*=\s*|\s+).+'
+    # This "next" function will return the first file that contains the alias, or None if not found.
+    found_file = next((f for f in all_files if f and alias_exists(f, alias_pattern)), None)
+    if found_file:
+        logging.info(f"Alias {options.alias} already exists in {found_file}")
+        return
+    the_prompt = (f"Type 'yes' or 'y' to write this alias/function:\n\n"
+                    f"{options.alias_command}\n\n"
+                    f"into {options.rc_file}\n"
+                    f"...or anything else to cancel: ")
     try:
-        all_files = [options.rc_file] + options.additional_files
-        # If a user chooses an alias name containing regex metacharacters (e.g. alias .foo),
-        # using the unescaped options.alias could produce a malformed pattern or false positives/negatives.
-        alias_name = re.escape(options.alias)
-        # The following pattern covers both aliases written with "=" (Bash/Zsh) and aliases written without "=" (Fish/Csh).
-        # It also accounts for potential whitespace variations.
-        alias_pattern = rf'^\s*alias\s+{alias_name}(?:\s*=|\s+).+'
-        found_alias = False
-        for file in all_files:
-            if alias_exists(file, alias_pattern):
-                found_alias = True
-                logging.info(f"Alias {options.alias} already exists in {file}")
-        if not found_alias:
-            try:
-                if ud.prompt_then_confirm(f"Type 'yes' or 'y' to write this alias command:\n{options.alias_command}\n"
-                                          f"To this file:\n{options.rc_file}\n... or type anything else to quit: "):
-                    with open(options.rc_file, 'a') as file:
-                        file.write(f"\n{options.alias_command}\n")
-                    logging.info(f"Alias added to {options.rc_file}")
-            except (IOError, OSError) as e:
-                logging.error(f"Failed to write alias to {options.rc_file}: {e}\nException type: ", exc_info=True)
-                logging.error(options.manual_instructions)
-    except Exception as e:
-        logging.error(f"An error occurred while adding the alias: {e}\nException type: ", exc_info=True)
+        if getattr(options.args, 'y', False) or ud.prompt_then_confirm(the_prompt):
+            with open(options.rc_file, 'a') as f:
+                f.write("\n" + options.alias_command + "\n")
+            logging.info(f"Alias added to {options.rc_file}")
+    except (IOError, OSError) as e:
+        logging.error(f"Failed to write alias to {options.rc_file}: {e}\nException type: ", exc_info=True)
         logging.error(options.manual_instructions)
 
 
 def add_alias(options: Options) -> None:
-    """Add an alias to the shell configuration file."""
-    options.shell = detect_shell()
+    """
+    This function detects the shell, finds the appropriate rc file,
+    and adds the alias command to it if it doesn't already exist.
+
+    Parameters:
+    - options: Options object containing shell type, rc_file, alias, and alias_command attributes.
+
+    Returns:
+    - None, but updates options.rc_file and options.alias_command as needed.
+    """
+    detect_shell(options)
     if options.shell:
-        get_shell_rc_file(options)
-        get_additional_alias_files(options)
+        find_shell_rc_file(options)
+        find_additional_alias_files(options)
         if options.rc_file:
             define_alias_command(options)
             if options.alias_command:
-                add_alias_to_rc(options)
-            else:
-                logging.info(f"Unsupported shell: {options.shell}")
-        else:
-            logging.info(f"Unsupported shell configuration file for shell: {options.shell}")
-    else:
-        logging.info("Could not detect shell")
+                add_alias_to_rc_file(options)
 
 
 def _safe_eval_node(node: ast.AST) -> Any:
@@ -2842,10 +2909,7 @@ def find_imports_in_script(options: Options, first_path: str) -> None:
         if not file_content:
             logging.error(f"Could not read file: {module_path}")
             continue
-        try:
-            tree = ud.my_ast_parse(file_content, module_path)
-        except BaseException:
-            breakpoint()
+        tree = ud.my_ast_parse(file_content, module_path)
         collector = ImportFunctionCollector(module_name, options, module_path)
         collector.visit(tree)
         module_info = collector.module_info
@@ -3130,7 +3194,7 @@ def generate_requirements(directory: str) -> None:
     try:
         pipreqs.generate_requirements(directory)
     except (pipreqs.PipreqsError, pipreqs.PipreqsWarning) as e:
-        raise ValueError(f"Error generating requirements file in {directory}") from e
+        raise ValueError(f"Error generating requirements file in {directory}: {e}") from e
 
 
 def download_packages(options: Options) -> bool:
@@ -3176,24 +3240,20 @@ def download_packages(options: Options) -> bool:
 
 def install_packages_simultaneously(options: Options) -> bool:
     """Install all packages simultaneously in the virtual environment."""
-    try:
-        # Construct the install command
-        install_command = [
-            options.venv_python, "-m", "pip", "install",
-            "--no-index", "--find-links", options.packages_dir,
-            "-r", options.requirements_file
-        ]
-        if not options.rawlog: logging.info("Installing all packages simultaneously...")
-        # Run the command and capture the output line by line using ud.my_popen
-        result = ud.my_popen(install_command)
-        if result.returncode == 0:
-            if not options.rawlog: logging.info("All packages installed successfully.")
-            return True
-        else:
-            logging.error("Failed to install some packages.")
-            return False
-    except Exception as e:
-        logging.error(f"Error during simultaneous installation: {e}\nException type: ", exc_info=True)
+    # Construct the install command
+    install_command = [
+        options.venv_python, "-m", "pip", "install",
+        "--no-index", "--find-links", options.packages_dir,
+        "-r", options.requirements_file
+    ]
+    if not options.rawlog: logging.info("Installing all packages simultaneously...")
+    # Run the command and capture the output line by line using ud.my_popen
+    result = ud.my_popen(install_command)
+    if result.returncode == 0:
+        if not options.rawlog: logging.info("All packages installed successfully.")
+        return True
+    else:
+        logging.error("Failed to install some packages.")
         return False
 
 
@@ -3212,34 +3272,28 @@ def install_packages_individually(options: Options) -> bool:
 
 def install_package(package_name: str, options: Options) -> bool:
     """Install a single package and return the success status (True if successful, False otherwise)."""
-    try:
-        result = subprocess.run(
-            [options.venv_python, "-m", "pip", "install", package_name, "--no-index", "--find-links", options.packages_dir],
-            capture_output=True,
-            text=True
-        )
-        if not options.rawlog: logging.info(result.stdout)
-        if result.stderr:
-            logging.error(result.stderr)
-        if result.returncode != 0:
-            # Use pip to download files for package_name to options.packages_dir
-            download_command = [options.venv_python, "-m", "pip", "download", "--dest", options.packages_dir, package_name]
-            download_result = subprocess.run(download_command, capture_output=True, text=True)
-            if download_result.returncode != 0:
-                ud.my_critical_error(f"Failed to download {package_name}. Error: {download_result.stderr}")
-            # Use pip to install package_name from the file that was just downloaded to options.packages_dir
-            install_command = [options.venv_python, "-m", "pip", "install", "--no-index",
-                               "--find-links", options.packages_dir, package_name]
-            install_result = subprocess.run(install_command, capture_output=True, text=True)
-            if install_result.returncode != 0:
-                logging.error(f"Failed to install {package_name}. Error: {install_result.stderr}")
-            else:
-                if not options.rawlog: logging.info(f"Successfully installed {package_name}")
-            return result.returncode == 0
+    result = subprocess.run(
+        [options.venv_python, "-m", "pip", "install", package_name, "--no-index", "--find-links", options.packages_dir],
+        capture_output=True, text=True)
+    if not options.rawlog: logging.info(result.stdout)
+    if result.stderr:
+        logging.error(result.stderr)
+    if result.returncode != 0:
+        # Use pip to download files for package_name to options.packages_dir
+        download_command = [options.venv_python, "-m", "pip", "download", "--dest", options.packages_dir, package_name]
+        download_result = subprocess.run(download_command, capture_output=True, text=True)
+        if download_result.returncode != 0:
+            ud.my_critical_error(f"Failed to download {package_name}. Error: {download_result.stderr}")
+        # Use pip to install package_name from the file that was just downloaded to options.packages_dir
+        install_command = [options.venv_python, "-m", "pip", "install", "--no-index",
+                            "--find-links", options.packages_dir, package_name]
+        install_result = subprocess.run(install_command, capture_output=True, text=True)
+        if install_result.returncode != 0:
+            logging.error(f"Failed to install {package_name}. Error: {install_result.stderr}")
+        else:
+            if not options.rawlog: logging.info(f"Successfully installed {package_name}")
         return result.returncode == 0
-    except Exception as e:
-        logging.error(f"Error installing package {package_name}: {e}\nException type: ", exc_info=True)
-        return False
+    return result.returncode == 0
 
 
 def check_packages_in_venv(options: Options, package: str | None = None,
@@ -3279,15 +3333,11 @@ else:
     print(f"All {{len(successes)}} (out of {{counter}}) packages imported successfully.")
     sys.exit(0)
 """
-    try:
-        result = subprocess.run([venv_python, "-c", python_code],
-                                capture_output=True, text=True, check=False)
-        logging.debug("check_packages_in_venv stdout:\n%s", result.stdout)
-        logging.debug("check_packages_in_venv stderr:\n%s", result.stderr)
-        return "packages imported successfully" in result.stdout
-    except Exception as e:
-        logging.error("Error running import test script: %s", e, exc_info=True)
-        return False
+    result = subprocess.run([venv_python, "-c", python_code],
+                            capture_output=True, text=True, check=False)
+    logging.debug("check_packages_in_venv stdout:\n%s", result.stdout)
+    logging.debug("check_packages_in_venv stderr:\n%s", result.stderr)
+    return "packages imported successfully" in result.stdout
 
 
 def recover_pip_versions(output: str, options: Options) -> None:
@@ -3397,60 +3447,50 @@ def parse_extra_requirements(options: Options) -> dict[str, str | None]:
         return
     # Regular expression to capture package name and version specifier
     pattern = re.compile(r'^\s*([A-Za-z0-9_\-\.]+)\s*(.*)$')
-    try:
-        for line in file_content.splitlines():
-            line = line.strip()
-            if line and not line.startswith('#'):
-                match = pattern.match(line)
-                if match:
-                    package = match.group(1)
-                    version_spec = match.group(2).strip() if match.group(2) else ''
-                    options.extra_requirements[package] = version_spec
-    except Exception as e:
-        logging.error(f"Error parsing extra requirements file: {e}\nException type: ", exc_info=True)
+    for line in file_content.splitlines():
+        line = line.strip()
+        if line and not line.startswith('#'):
+            match = pattern.match(line)
+            if match:
+                package = match.group(1)
+                version_spec = match.group(2).strip() if match.group(2) else ''
+                options.extra_requirements[package] = version_spec
 
 
-def write_requirements_file_with_extras(options: Options) -> bool:
+def write_requirements_file_with_extras(options: Options) -> None:
     """Write the requirements file with the extra requirements added and generate a 'pretty' requirements string."""
     logging.debug(f"Writing packages to {options.requirements_file}")
     options.pretty_requirements = ''
     # Define the symbol replacements
-    replacements = [
-        ('>=', '_ge'),
-        ('<=', '_le'),
-        ('==', '_eq'),
-        ('~=', '_approx'),
-        ('>', '_gt'),
-        ('<', '_lt'),
-        (',', '_and'),
-    ]
-    try:
-        with open(options.requirements_file, 'w') as f:
-            # Write the packages in alphabetical order so the requirements file is deterministic.
-            for idx, package in enumerate(sorted(options.uninstalled_imports)):
-                if package in options.extra_requirements:
-                    version_spec = options.extra_requirements[package]
-                    if version_spec:
-                        f.write(f"{package}{version_spec}\n")
-                        # Replace symbols in version_spec for the pretty_requirements string
-                        pretty_version_spec = version_spec
-                        for old, new in replacements:
-                            pretty_version_spec = pretty_version_spec.replace(old, new)
-                        pretty_package = f"{package}{pretty_version_spec}"
-                    else:
-                        f.write(f"{package}\n")
-                        pretty_package = package
+    replacements = [('>=', '_ge'),
+                    ('<=', '_le'),
+                    ('==', '_eq'),
+                    ('~=', '_approx'),
+                    ('>', '_gt'),
+                    ('<', '_lt'),
+                    (',', '_and')]
+    with open(options.requirements_file, 'w') as f:
+        # Write the packages in alphabetical order so the requirements file is deterministic.
+        for idx, package in enumerate(sorted(options.uninstalled_imports)):
+            if package in options.extra_requirements:
+                version_spec = options.extra_requirements[package]
+                if version_spec:
+                    f.write(f"{package}{version_spec}\n")
+                    # Replace symbols in version_spec for the pretty_requirements string
+                    pretty_version_spec = version_spec
+                    for old, new in replacements:
+                        pretty_version_spec = pretty_version_spec.replace(old, new)
+                    pretty_package = f"{package}{pretty_version_spec}"
                 else:
                     f.write(f"{package}\n")
                     pretty_package = package
-                # Append to the pretty_requirements string with underscores
-                if idx > 0:
-                    options.pretty_requirements += '_'
-                options.pretty_requirements += pretty_package
-    except Exception as e:
-        logging.error(f"Error writing packages to {options.requirements_file}: {e}\nException type: ", exc_info=True)
-        return False
-    return True
+            else:
+                f.write(f"{package}\n")
+                pretty_package = package
+            # Append to the pretty_requirements string with underscores
+            if idx > 0:
+                options.pretty_requirements += '_'
+            options.pretty_requirements += pretty_package
 
 
 def setup_virtualenv(options: Options) -> bool:
@@ -3461,8 +3501,7 @@ def setup_virtualenv(options: Options) -> bool:
     options.set_venv_dir(os.path.join(options.my_dir, f"failed-{options.venv_name}-versionless-{options.timestamp}-{options.pretty_list}"))
     os.makedirs(options.venv_dir, exist_ok=True)
 
-    if not write_requirements_file_with_extras(options):
-        return False
+    write_requirements_file_with_extras(options)
 
     if not options.rawlog: logging.info("Creating virtual environment...")
     subprocess.check_call([sys.executable, '-m', 'venv', options.venv_dir])
@@ -3494,6 +3533,7 @@ def is_virtualenv() -> bool:
 
 def get_file_operations(options: Options, script_path: str) -> None:
     """Find files that are read or written, store in options."""
+    logging.debug(f"Analyzing file operations in {script_path}")
     file_content = ud.my_fopen(script_path, rawlog=options.rawlog)
     if not file_content:  # Do NOT run a file if we can't read it!
         ud.my_critical_error(f"Failed to open {script_path}", choose_breakpoint=True)
@@ -3503,39 +3543,41 @@ def get_file_operations(options: Options, script_path: str) -> None:
 
     class FileOperationsVisitor(ast.NodeVisitor):
         """Visitor class to find file operations in the AST (Abstract Syntax Tree)."""
+
         def visit_Call(self, node: ast.Call) -> None:
             """Visit function calls to find file operations."""
             # Check if the function called is 'open'
+            logging.debug(f"FileVisiting Call node: {ast.dump(node)}")
             if isinstance(node.func, ast.Name) and node.func.id == 'open':
+                logging.debug(f"Found 'open' call: {ast.dump(node)}")
                 # Get the filename
                 if isinstance(node.args[0], ast.Constant):  # For Python 3.8+
                     filename = node.args[0].value
+                    logging.debug(f"Found filename: {filename}")
                 else:
                     return
-
                 # Determine if the file is being read or written
                 if len(node.args) > 1:
                     if isinstance(node.args[1], ast.Constant):
                         mode = node.args[1].s if isinstance(node.args[1], ast.Constant) else node.args[1].value
+                        logging.debug(f"Found mode: {mode}")
                     else:
                         return
                 else:
                     mode = 'r'  # Default mode
-
                 if 'r' in mode:
                     options.read_files.append(filename)
                 elif 'w' in mode or 'a' in mode or 'x' in mode:
                     options.write_files.append(filename)
-
             self.generic_visit(node)
 
     visitor = FileOperationsVisitor()
     visitor.visit(tree)
-    return
 
 
 def get_network_operations(options: Options, script_path: str) -> None:
     """Find URLs that are downloaded and uploaded, store in options."""
+    logging.debug(f"Analyzing network operations in {script_path}")
     file_content = ud.my_fopen(script_path, rawlog=options.rawlog)
     if not file_content:  # Do NOT run a file if we can't read it!
         ud.my_critical_error(f"Failed to open {script_path}", choose_breakpoint=True)
@@ -3548,8 +3590,10 @@ def get_network_operations(options: Options, script_path: str) -> None:
 
         def visit_Call(self, node: ast.Call) -> None:
             """Visit function calls to find network operations."""
+            logging.debug(f"NetworkVisiting Call node: {ast.dump(node)}")
             # Check if the function is a requests function
             if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
+                logging.debug(f"Found function call: {node.func.value.id}.{node.func.attr}")
                 if node.func.value.id == 'requests':
                     if node.func.attr in ['get', 'options', 'head', 'post', 'put', 'patch', 'delete']:
                         if len(node.args) > 0 and isinstance(node.args[0], ast.Str):
@@ -3564,9 +3608,9 @@ def get_network_operations(options: Options, script_path: str) -> None:
                                 options.download_urls.append(url)
                             else:
                                 options.upload_urls.append(url)
-
             # Check if the function is a urllib request function
             elif isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Attribute):
+                logging.debug(f"Found urllib function call: {node.func.value.attr}.{node.func.attr}")
                 if node.func.value.attr in ['urlopen', 'Request']:
                     if len(node.args) > 0 and isinstance(node.args[0], ast.Str):
                         url = node.args[0].s
@@ -3574,56 +3618,74 @@ def get_network_operations(options: Options, script_path: str) -> None:
                     elif len(node.args) > 0 and isinstance(node.args[0], ast.Constant):  # For Python 3.8+
                         url = node.args[0].value
                         options.download_urls.append(url)
-
             self.generic_visit(node)
 
     visitor = NetworkOperationsVisitor()
     visitor.visit(tree)
 
-    return
 
-
-def guard_examines(options: Options) -> bool:
+def guard_examines_one_script(options: Options, script_path: str) -> bool:
     """
-    Examine options.python_script:
-      1. Is it a valid python script? If not, return False and skip the rest of this function.
-      2. If so, return True and list the files that it reads and writes, as well as the URLs it downloads and uploads.
+    Examine a single Python script for validity, ability to compile, and file and network operations.
+
+    Parameters:
+    - options : Options object containing paths to the python script and custom modules.
+    - script_path : Path to the Python script to examine.
+
+    Returns:
+    bool : True if all examinations pass, False otherwise.
+    """
+    if is_python_script(script_path) and ud.compile_code(script_path):
+        get_file_operations(options,    script_path)
+        get_network_operations(options, script_path)
+    else:
+        logging.warning(f"Skipping file and network operations analysis for {script_path} because it doesn't look like a valid Python script.")
+        return False
+    return True
+
+
+def guard_examines_everything(options: Options) -> bool:
+    """
+    Examine options.python_script and all custom modules for validity, ability to compile, and file and network operations.
+
+    Parameters:
+    options : Options object containing paths to the python script and custom modules.
+
+    Returns:
+    bool : True if all examinations pass, False otherwise.
     """
     options.read_files    = []
     options.write_files   = []
     options.download_urls = []
     options.upload_urls   = []
-
-    def aggregate_operations(script_path: str) -> None:
-        """Aggregate file and network operations from script_path."""
-        get_file_operations(options, script_path)
-        get_network_operations(options, script_path)
-
-    # Examine the main script to make sure it's a valid Python script.
-    if is_python_script(options.python_script) and ud.compile_code(options.python_script):
-        try:
-            aggregate_operations(options.python_script)
-        except Exception as e:
-            raise RuntimeError(f"Error examining {options.python_script} for file operations: {e}") from e
-    else:
-        logging.warning(f"Skipping file operations analysis for {options.python_script} because it doesn't look like a valid Python script.")
+    if not guard_examines_one_script(options, options.python_script):
         return False
-
     # Examine each custom module
     for custom_load in options.loaded_custom_modules:
         module_path = options.custom_modules[custom_load]
-        aggregate_operations(module_path)
-
+        if not guard_examines_one_script(options, module_path):
+            return False
     if not options.rawlog:
-        if options.read_files:
-            logging.info("Files read:\n" + "\n".join(options.read_files))
-        if options.write_files:
-            logging.info("Files written:\n" + "\n".join(options.write_files))
-        if options.download_urls:
-            logging.info("Download URLs:\n" + "\n".join(options.download_urls))
-        if options.upload_urls:
-            logging.info("Upload URLs:\n" + "\n".join(options.upload_urls))
-
+        if any([options.read_files, options.write_files, options.download_urls, options.upload_urls]):
+            logging.info("Guard found the following file and network operations:\n")
+            if options.read_files:
+                logging.info("Files read:\n" + "\n".join(options.read_files) + "\n")
+            else:
+                logging.info("No files read.\n")
+            if options.write_files:
+                logging.info("Files written:\n" + "\n".join(options.write_files) + "\n")
+            else:
+                logging.info("No files written.\n")
+            if options.download_urls:
+                logging.info("Download URLs:\n" + "\n".join(options.download_urls) + "\n")
+            else:
+                logging.info("No download URLs found.\n")
+            if options.upload_urls:
+                logging.info("Upload URLs:\n" + "\n".join(options.upload_urls) + "\n")
+            else:
+                logging.info("No upload URLs found.\n")
+        else:
+            logging.info(f"Guard found no file or network operations in the python script ({options.python_script}) or custom modules ({', '.join(options.loaded_custom_modules)}).")
     return True
 
 
@@ -3671,6 +3733,7 @@ def save_options_to_json(options: Options) -> None:
     # Write the dictionary to a JSON file
     with open(options.json_filename, 'w') as json_file:
         json.dump(options_dict, json_file, indent=4)
+    logging.debug(f"Options saved to JSON file: {options.json_filename}")
 
 
 def load_options_from_json(options: Options, json_file: str) -> Options | None:
@@ -3801,26 +3864,29 @@ def check_venv_dir(options: Options, options_from_cache: Options) -> bool:
     return False
 
 
-def find_match_dir_in_cache(options: Options) -> str:
-    """Find a matching virtual environment directory in the cache."""
-    if not getattr(options.args, 'latest', False) and \
-       not getattr(options.args, 'oldest', False) and \
+def find_match_dir_in_cache(options: Options) -> str | None:
+    """
+    Try to find a matching virtual environment directory in the cache.
+
+    Parameters:
+    - options: Options object containing the necessary parameters.
+
+    Returns:
+    - The path to the matching virtual environment directory if found, otherwise None.
+    """
+    if not getattr(options.args, 'latest',    False) and \
+       not getattr(options.args, 'oldest',    False) and \
        not getattr(options.args, 'last_used', False) and \
-       not getattr(options.args, 'smallest', False):
+       not getattr(options.args, 'smallest',  False):
         options.args.last_used = True  # If no flags are set, then the default is to load the last used venv in the cache
     if     getattr(options.args, 'last_used', False) and \
-       not getattr(options.args, 'latest', False) and \
-       not getattr(options.args, 'smallest', False):
-        try:  # Try to load the last used venv in the cache
-            options_last_used = load_last_used_options(options)
-            if check_venv_dir(options, options_last_used):
-                return options_last_used.venv_dir
-            else:
-                if not options.rawlog: logging.info("Trying to load the latest matching venv now.")
-        except Exception as e:
-            if not options.rawlog:
-                logging.error(f"Error loading last used venv from cache: {e}\nException type: ", exc_info=True)
-                logging.warning("The last used cache encountered a problem. Trying to load the latest matching venv now.")
+       not getattr(options.args, 'latest',    False) and \
+       not getattr(options.args, 'smallest',  False):
+        options_last_used = load_last_used_options(options)
+        if check_venv_dir(options, options_last_used):
+            return options_last_used.venv_dir
+        else:
+            if not options.rawlog: logging.info("Trying to load the latest matching venv now.")
         options.args.latest    = True  # If that didn't work, try to load the latest venv in the cache
         options.args.last_used = False  # And set this to False because it failed
     if not options.rawlog: logging.info("Checking the cache for a virtual environment with all the required packages...")
@@ -3896,7 +3962,11 @@ def find_match_dir_in_cache(options: Options) -> str:
                 if not options.rawlog: logging.error("The smallest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
                 return None
         else:  # This should never happen
-            logging.error(f"Invalid combination of flags. {getattr(options.args, 'latest', False) = }, {getattr(options.args, 'oldest', False) = }, {getattr(options.args, 'last_used', False) = }, {getattr(options.args, 'smallest', False) = }")
+            logging.error(f"Invalid combination of flags!\n"
+                          f"{getattr(options.args, 'latest',    False) = }\n"
+                          f"{getattr(options.args, 'oldest',    False) = }\n"
+                          f"{getattr(options.args, 'last_used', False) = }\n"
+                          f"{getattr(options.args, 'smallest',  False) = }")
 
 
 def is_standard_path(options: Options, path: str) -> bool:
@@ -3995,39 +4065,29 @@ def dict_of_custom_modules(options: Options) -> dict[str, str]:
 
 def check_python_version(command: str) -> bool:
     """Check if the given Python command is available and has a version of PY_VERSION or higher."""
-    try:
-        preferred_major = int(ud.PY_VERSION)
-        preferred_minor = int((ud.PY_VERSION - preferred_major) * 100)
-        result = subprocess.run([command, '--version'], capture_output=True, text=True)
-        if result.returncode == 0:
-            version = result.stdout.strip().split()[1]
-            major, minor = map(int, version.split('.')[:2])
-            if major == preferred_major and minor >= preferred_minor:
-                return True
-        return False
-    except Exception as e:
-        logging.error(f"Error checking {command}: {e}\nException type: ", exc_info=True)
-        return False
+    preferred_major = int(ud.PY_VERSION)
+    preferred_minor = int((ud.PY_VERSION - preferred_major) * 100)
+    result = subprocess.run([command, '--version'], capture_output=True, text=True)
+    if result.returncode == 0:
+        version = result.stdout.strip().split()[1]
+        major, minor = map(int, version.split('.')[:2])
+        if major == preferred_major and minor >= preferred_minor:
+            return True
+    return False
 
 
 def find_preferred_python_version() -> str | None:
     """Find the command for the preferred version of python (stored in univ_defs.py as PY_VERSION)."""
-    try:
-        # Check if the preferred python command (only specifying integer part of the preferred version) exists and returns a valid path
-        preferred_major = int(ud.PY_VERSION)
-        preferred_python_path = subprocess.run(['which', f'python{preferred_major}'], capture_output=True, text=True).stdout.strip()
-        if preferred_python_path and check_python_version(f'python{preferred_major}'):
-            return os.path.basename(preferred_python_path)
-
-        # Check if the preferred python command (with complete version specified) exists and returns a valid path
-        preferred_python_path = subprocess.run(['which', f'python{ud.PY_VERSION}'], capture_output=True, text=True).stdout.strip()
-        if preferred_python_path and check_python_version(f'python{ud.PY_VERSION}'):
-            return os.path.basename(preferred_python_path)
-
-        return None
-    except Exception as e:
-        logging.error(f"Error finding python{ud.PY_VERSION}: {e}\nException type: ", exc_info=True)
-        return None
+    # Check if the preferred python command (only specifying integer part of the preferred version) exists and returns a valid path
+    preferred_major = int(ud.PY_VERSION)
+    preferred_python_path = subprocess.run(['which', f'python{preferred_major}'], capture_output=True, text=True).stdout.strip()
+    if preferred_python_path and check_python_version(f'python{preferred_major}'):
+        return os.path.basename(preferred_python_path)
+    # Check if the preferred python command (with complete version specified) exists and returns a valid path
+    preferred_python_path = subprocess.run(['which', f'python{ud.PY_VERSION}'], capture_output=True, text=True).stdout.strip()
+    if preferred_python_path and check_python_version(f'python{ud.PY_VERSION}'):
+        return os.path.basename(preferred_python_path)
+    return None
 
 
 def main() -> None:
@@ -4172,7 +4232,7 @@ def main() -> None:
 
     if not options.uninstalled_imports:
         if not options.rawlog: logging.info("All required packages are already installed.")
-        if guard_examines(options):
+        if guard_examines_everything(options):
             start_raw_time = dt.datetime.now()
             subprocess.run([sys.executable, options.python_script] + options.script_args)
             elapsed_raw_time = dt.datetime.now() - start_raw_time
@@ -4180,7 +4240,7 @@ def main() -> None:
     elif is_virtualenv():
         if not options.rawlog: logging.info("Already in a virtual environment.")
         if check_packages_in_venv(options):
-            if guard_examines(options):
+            if guard_examines_everything(options):
                 start_raw_time = dt.datetime.now()
                 subprocess.run([sys.executable, options.python_script] + options.script_args)
                 elapsed_raw_time = dt.datetime.now() - start_raw_time
@@ -4208,7 +4268,7 @@ def main() -> None:
             start_venv_time = dt.datetime.now()
             elapsed_time = start_venv_time - start_time
             if not options.rawlog: logging.info(f"Elapsed time: {elapsed_time}")
-            if guard_examines(options):
+            if guard_examines_everything(options):
                 command_list = [options.venv_python, options.python_script] + options.script_args
                 if not options.rawlog: logging.info("Running command: %s", ' '.join(shlex.quote(arg) for arg in command_list))
                 result = subprocess.run(command_list)

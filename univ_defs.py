@@ -3,13 +3,16 @@
 # Written by Emmy Killett (she/her), ChatGPT 4o (it/its), ChatGPT o1-preview (it/its), ChatGPT o3-mini-high (it/its), ChatGPT o4-mini-high (it/its), and GitHub Copilot (it/its).
 from __future__ import annotations  # For Python 3.7+ compatibility with type annotations
 import os
+from pathlib import Path  # Preferred over os.path for path manipulations.
 import sys
 import logging
-from typing import TextIO, Any, TypeAlias, Type
+from typing import TextIO, Any, TypeAlias, Type, Literal
 import re  # Used to precompile regexes for performance
 
+print("REPLACE ALL WRITE AND APPEND STATEMENTS WITH ud.my_atomic_write()!")
+
 # This is the version of univ_defs.py
-__version__ = '0.1.6'
+__version__ = '0.1.7'
 
 # This is the version of python which should be used in scripts that import this module.
 PY_VERSION = 3.11
@@ -164,31 +167,26 @@ class LLMs:
                     model: str, company: str, temperature: float,
                     max_tokens: int = 1000) -> str:
         """Call the chosen LLM's API and return the text response."""
-        try:
-            # ADD NEW COMPANY LLMs HERE.
-            if company == "OpenAI":
-                response_obj = self.clients[company].chat.completions.create(
-                    model=model,
-                    temperature=temperature,
-                    messages=[
-                        {"role": "system", "content": system_message},
-                        {"role": "user",   "content": prompt},
-                    ]
-                )
-                return response_obj.choices[0].message.content
-            elif company == "Anthropic":
-                response_obj = self.clients[company].messages.create(
-                    model=model,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    system=system_message,
-                    messages=[{"role": "user", "content": [{"type": "text", "text": prompt}]}]
-                )
-                return response_obj.content[0].text
-            else:
-                my_critical_error(f"Unknown company: {company}")
-        except Exception as e:
-            my_critical_error(f"An error occurred: {e}", choose_breakpoint=True)
+        # ADD NEW COMPANY LLMs HERE.
+        if company == "OpenAI":
+            response_obj = self.clients[company].chat.completions.create(
+                model=model,
+                temperature=temperature,
+                messages=[{"role": "system", "content": system_message},
+                            {"role": "user",   "content": prompt}]
+            )
+            return response_obj.choices[0].message.content
+        elif company == "Anthropic":
+            response_obj = self.clients[company].messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                system=system_message,
+                messages=[{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+            )
+            return response_obj.content[0].text
+        else:
+            my_critical_error(f"Unknown company: {company}")
 
 
 class MemoryHandler(logging.Handler):
@@ -228,7 +226,7 @@ class MaxLevelFilter(logging.Filter):
         return record.levelno <= self.max_level
 
 
-def fallback_logging_config(level: str = 'INFO', rawlog: bool = False) -> None:
+def fallback_logging_config(log_level: int | str = 'INFO', rawlog: bool = False) -> None:
     """
     Configure the root logger with a basic configuration if no handlers are set.
     Run this at the start of functions which might be run without first configuring logging.
@@ -239,14 +237,14 @@ def fallback_logging_config(level: str = 'INFO', rawlog: bool = False) -> None:
     """
     if not logging.getLogger().handlers:
         if not rawlog:  # Use a full logging format with timestamps and levels.
-            logging.basicConfig(level=get_log_level(level),
+            logging.basicConfig(level=log_level,
                                 format="%(asctime)s %(name)s %(levelname)s: %(message)s",
                                 datefmt="%Y-%m-%d %H:%M:%S")
         else:  # rawlog is True, so use a simple format without timestamps or levels.
-            logging.basicConfig(level=get_log_level(level), format="%(message)s")
+            logging.basicConfig(level=log_level, format="%(message)s")
 
 
-def configure_logging(basename: str, log_level: str = 'INFO',
+def configure_logging(basename: str, log_level: int | str = 'INFO',
                       rawlog: bool = False, logdir: str = '') -> MemoryHandler:
     """Configure logging to write to files and stdout/stderr, and return a MemoryHandler to capture ERROR logs for later (duplicate) printing."""
     import datetime as dt
@@ -304,33 +302,24 @@ def configure_logging(basename: str, log_level: str = 'INFO',
     console_handler_stderr.setFormatter(log_format)
     memory_handler.setFormatter(log_format)
 
-    root_logger.setLevel(get_log_level(log_level))
+    root_logger.setLevel(log_level)
     root_logger.addHandler(debug_info_handler)
     root_logger.addHandler(warning_error_handler)
     root_logger.addHandler(console_handler_stdout)
     root_logger.addHandler(console_handler_stderr)
     root_logger.addHandler(memory_handler)
-    if not rawlog: root_logger.info(f'Logging to {log_info} and {log_errors} with level {logging.getLevelName(get_log_level(log_level))}')
+    if not rawlog: root_logger.info(f'Logging to {log_info} and {log_errors} with level {logging.getLevelName(root_logger.level)}')
 
     return memory_handler
-
-
-def get_log_level(log_level: str) -> int:
-    """Return the logging level based on the input string."""
-    value_map = {'INFO'     : logging.INFO,
-                 'DEBUG'    : logging.DEBUG,
-                 'WARNING'  : logging.WARNING,
-                 'WARN'     : logging.WARNING,
-                 'ERROR'    : logging.ERROR,
-                 'CRITICAL' : logging.CRITICAL}
-    return value_map.get(log_level, logging.INFO)
 
 
 def print_all_errors(memory_handler: MemoryHandler,
                      rawlog: bool = False) -> None:
     """Print all the captured error messages."""
     if memory_handler.logs and not rawlog:
-        print("\n****************************\n****************************\nError messages:")
+        print("\n******************************\n"
+              "******************************\n"
+              "All Error messages from above:")
         for log in memory_handler.logs:
             print(log)
 
@@ -371,7 +360,7 @@ def my_popen(command_list: list, suppress_info: bool = False,
     """Execute a command using subprocess.Popen and capture the output line by line using threads."""
     import threading
     import subprocess
-    fallback_logging_config(level='INFO' if not suppress_info else 'ERROR')
+    fallback_logging_config(log_level='INFO' if not suppress_info else 'ERROR')
     command_list_str = [str(item) for item in command_list]
     the_statement = "Executing command: " + ' '.join(command_list_str)
 
@@ -430,15 +419,18 @@ def my_popen(command_list: list, suppress_info: bool = False,
 
         return MyPopenResult(stdout=stdout, stderr=stderr, returncode=process.returncode)
 
-    except Exception as e:
-        logging.error(f"An error occurred: {e}")
+    except Exception as e:  # I don't want any exception here to crash the script, so I catch it and return a MyPopenResult with an error message.
+        if not suppress_error:
+            logging.error(f"An error occurred while executing the command '{command_list_str}'", exc_info=True)
+        else:
+            logging.info( f"An error occurred while executing the command '{command_list_str}'", exc_info=True)
         return MyPopenResult(stdout="", stderr=str(e), returncode=-1)
 
 
 def my_fopen(file_path: str, suppress_errors: bool = False,
              rawlog: bool = False, numlines: int | None = None) -> TextIO | bool | str:
     """Attempt to read the file with various encodings and return the file content if successful. Optionally, specify numlines to limit the number of lines read and return a string instead of a file object."""
-    fallback_logging_config(level='INFO' if not suppress_errors else 'CRITICAL')
+    fallback_logging_config(log_level='INFO' if not suppress_errors else 'CRITICAL')
 
     if not os.path.isfile(file_path):
         this_message = f"File does not exist: {file_path}"
@@ -478,17 +470,18 @@ def my_fopen(file_path: str, suppress_errors: bool = False,
                     file_content = file.read()
                 else:
                     file_content = ''.join(file.readline() for _ in range(numlines))
+            logging.debug(f"Successfully read {file_path} with encoding {encoding}")
             return file_content  # Exit the function if reading is successful
         except UnicodeDecodeError:
             this_message = f"Unicode decode error with encoding {encoding} reading file {file_path}"
-            if not suppress_errors: logging.warning(this_message)
-            else:                   logging.info(this_message)
+            if not suppress_errors: logging.warning(this_message, exc_info=True)
+            else:                   logging.info(   this_message, exc_info=True)
             continue
-        except Exception as e:
-            this_message = f"Error reading file {file_path} with encoding {encoding}: {str(e)}"
+        except Exception: # Catch any other exceptions that might occur, but don't crash.
+            this_message = f"Error reading file {file_path} with encoding {encoding}."
             if not rawlog:
-                if not suppress_errors: logging.error(this_message)
-                else:                   logging.info(this_message)
+                if not suppress_errors: logging.error(this_message, exc_info=True)
+                else:                   logging.info( this_message, exc_info=True)
             return False
     return False
 
@@ -531,7 +524,7 @@ def load_ast_var(var_name: str, script_path: str, rawlog: bool = False) -> Any:
                     try:
                         return ast.literal_eval(node.value)
                     except ValueError as e:
-                        raise ValueError(f"Cannot literal_eval the value of {var_name}") from e
+                        raise ValueError(f"Cannot literal_eval the value of {var_name}: {e}") from e
         # also handle annotated assignments: var_name: Type = <expr>
         elif isinstance(node, ast.AnnAssign):
             target = node.target
@@ -539,7 +532,7 @@ def load_ast_var(var_name: str, script_path: str, rawlog: bool = False) -> Any:
                 try:
                     return ast.literal_eval(node.value)
                 except ValueError as e:
-                    raise ValueError(f"Cannot literal_eval the value of {var_name}") from e
+                    raise ValueError(f"Cannot literal_eval the value of {var_name}: {e}") from e
 
     raise AttributeError(f"Top-level variable {var_name!r} not found in {script_path}")
 
@@ -559,7 +552,7 @@ def normalize_to_dict(value: Any, var_name: str, script_path: str) -> dict:
                 return parsed
             logging.warning(f"Variable {var_name!r} in {script_path} JSON-decoded to {type(parsed).__name__}, expected dict.")
         except json.JSONDecodeError as e:
-            logging.warning(f"Failed to JSON-decode variable {var_name!r} from {script_path}: {e}. Expected a dict or JSON string.")
+            logging.warning(f"Failed to JSON-decode variable {var_name!r} from {script_path}. Expected a dict or JSON string.", exc_info=e)
     else:
         logging.warning(f"Variable {var_name!r} in {script_path} is of type {type(value).__name__}, expected dict or JSON string.")
     return {}
@@ -612,9 +605,8 @@ def get_computer_name() -> str:
         try:
             name = method_func()
             results[method_name] = name
-        except Exception as e:
-            # Optionally, you can log the exception or print it for debugging
-            # print(f"Method {method_name} failed with error: {e}")
+        except Exception:  # Ignore all exceptions for individual methods
+            # logging.exception(f"Method {method_name} failed.")
             pass  # Skip methods that fail
 
     computer_name = analyze_results(results)
@@ -676,7 +668,7 @@ def kill_process(pname: str) -> None:
             process_list = subprocess.check_output(["pgrep", "-f", pname]).decode(DEFAULT_ENCODING)
             process_ids = process_list.splitlines()
         except subprocess.CalledProcessError as e:
-            raise ValueError(f"Failed to find process with name {pname}. Make sure the process name is correct and unique.") from e
+            raise ValueError(f"Failed to find process with name {pname}. Make sure the process name is correct and unique: {e}") from e
 
         if process_ids:
             for pid in process_ids:
@@ -685,7 +677,7 @@ def kill_process(pname: str) -> None:
                     os.kill(int(pid), signal.SIGTERM)  # Send SIGTERM to terminate the process
                     print(f"Sent SIGTERM to PID {pid}")
                 except ProcessLookupError as e:
-                    raise ValueError(f"Process with PID {pid} not found. It may have already exited.") from e
+                    raise ValueError(f"Process with PID {pid} not found. It may have already exited: {e}") from e
         else:
             print(f"No {pname} process found.")
             break
@@ -716,7 +708,7 @@ def ensure_even_dimensions(image_path: str) -> None:
                 img.save(image_path)
                 logging.info(f"Resized image to even dimensions: width = {new_width}, height = {new_height}")
             except OSError as e:
-                raise ValueError(f"Could not resize image {image_path} to even dimensions.") from e
+                raise ValueError(f"Could not resize image {image_path} to even dimensions: {e}") from e
         else:
             logging.info(f"Image already has even dimensions: width = {width}, height = {height}")
 
@@ -1012,7 +1004,7 @@ def parse_timezone(tz_arg: str | dt.tzinfo | None = None) -> dt.tzinfo | str:
         try:
             return ZoneInfo(tz_arg)
         except ZoneInfoNotFoundError as e:
-            raise ValueError(f"Unknown timezone {tz_arg!r}") from e
+            raise ValueError(f"Unknown timezone {tz_arg!r}: {e}") from e
 
     raise TypeError(f"Expected None, str, or tzinfo; got {type(tz_arg).__name__!r}")
 
@@ -1028,7 +1020,7 @@ def decimal_year_to_datetime(dec: float, use_astropy: bool = False) -> dt.dateti
         try:
             from astropy.time import Time
         except ImportError as e:
-            raise ValueError("'use_astropy=True' requires the astropy package") from e
+            raise ValueError(f"'use_astropy=True' requires the astropy package: {e}") from e
         t = Time(dec, format='jyear', scale='utc')
         return t.to_datetime().replace(tzinfo=dt.timezone.utc)
 
@@ -1040,7 +1032,7 @@ def decimal_year_to_datetime(dec: float, use_astropy: bool = False) -> dt.dateti
         year_secs = (end_dt - start_dt).total_seconds()
         return start_dt + dt.timedelta(seconds=rem * year_secs)
     except ValueError as e:
-        raise ValueError(f"Failed to convert decimal year {dec} to datetime") from e
+        raise ValueError(f"Failed to convert decimal year {dec} to datetime: {e}") from e
 
 
 def _parse_iso(given_date: str) -> dt.datetime:
@@ -1050,7 +1042,7 @@ def _parse_iso(given_date: str) -> dt.datetime:
     try:
         return isoparse(given_date)
     except ParserError as e:
-        raise ValueError(f"Invalid ISO8601 date '{given_date}'") from e
+        raise ValueError(f"Invalid ISO8601 date '{given_date}': {e}") from e
 
 
 def is_float(s: str) -> bool:
@@ -1247,7 +1239,7 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
                 units = format_parts[0].strip()
                 multiplier = seconds_in_unit(units)  # This will raise ValueError if the unit is unknown
             except ValueError as e:
-                raise ValueError(f"Invalid time unit '{units}' in format string '{format_str}'.") from e
+                raise ValueError(f"Invalid time unit '{units}' in format string '{format_str}': {e}") from e
             # If the format_parts list has only one part, it means the epoch defaults to the Unix epoch (1970-01-01T00:00:00Z).
             if len(format_parts) == 1:
                 # If the format_parts list has only one part, it means the format is just "units" (e.g. "days", "weeks", etc.)
@@ -1259,7 +1251,7 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
             try:
                 epoch = parse_datetime(epoch_str, timezone=parsed_tz)
             except ValueError as e:
-                raise ValueError(f"Invalid epoch '{epoch}' in format string '{format_str}'.") from e
+                raise ValueError(f"Invalid epoch '{epoch}' in format string '{format_str}': {e}") from e
             # Now we can calculate the datetime based on the given_date (and the multiplier from 'units') and the epoch
             parsed_dt = epoch + dt.timedelta(seconds=float(given_date) * multiplier)
 
@@ -1294,7 +1286,7 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
         try:
             parsed_dt = dt.datetime.strptime(given_date, format_str)
         except ValueError as e:
-            raise ValueError(f"Invalid date format '{given_date}' with specified format '{format_str}'.") from e
+            raise ValueError(f"Invalid date format '{given_date}' with specified format '{format_str}': {e}") from e
 
     # Try parsing the date string in various formats
     # Start with RFC 2822 format, then ISO8601, then free-form strings
@@ -1342,7 +1334,20 @@ def sci_exp(float_input: float | int, max_digits: int = 15) -> int:
 
 
 def round_out(x: float, round_digits: int = 3, max_digits: int = 15) -> float:
-    """Round a number away from zero (i.e. rounds up for x>0 and down for x<0) to the specified number of significant figures (defaults to 3). If the number is smaller than 10^(-max_digits), it will be returned as is. The max_digits parameter defaults to 15, but can be changed to a different value if needed."""
+    """
+    Round a number away from zero (i.e. rounds up for x>0 and down for x<0) to
+    the specified number of significant figures (defaults to 3).
+    If the number is smaller than 10^(-max_digits), it will be returned as is.
+    The max_digits parameter defaults to 15, but can be changed to a different value if needed.
+
+    Parameters:
+        x            : The number to round.
+        round_digits : The number of significant figures to round to (default is 3).
+        max_digits   : The maximum number of digits to consider for very small numbers (default is 15).
+
+    Returns:
+        float : The rounded number, or the original number if it is smaller than 10^(-max_digits).
+    """
     import numpy as np
     if np.abs(x) < 10**(-max_digits): return x
     these_digits = sci_exp(x) - round_digits + 1
@@ -1353,14 +1358,24 @@ def round_out(x: float, round_digits: int = 3, max_digits: int = 15) -> float:
     return x*(thisfactor*1.0)
 
 
-def get_user_input(prompt: str) -> bool:
+def prompt_then_confirm(prompt: str) -> bool:
     """Prompt the user with the given message and return True if the user enters 'yes', False otherwise."""
-    user_input = input(prompt)
-    return user_input.casefold() == 'yes' or user_input.casefold() == 'y'
+    confirmation = input(prompt)
+    return confirmation.casefold() == 'yes' or confirmation.casefold() == 'y'
 
 
-def prompt_choice(prompt: str, choices: list[str], default: str = None) -> str:
-    """Simple numbered prompt."""
+def prompt_then_choose(prompt: str, choices: list[str], default: str = None) -> str:
+    """
+    Show a numbered list of choices and prompt the user to select one.
+
+    Parameters:
+        prompt : The message to display before the choices.
+        choices : A list of choices to present to the user.
+        default : The default choice to return if the user presses Enter without inputting a choice.
+
+    Returns:
+        str : The selected choice from the list (or the default if provided).
+    """
     fallback_logging_config()
 
     logging.info(prompt)
@@ -1457,32 +1472,68 @@ def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
     return text
 
 
-def compile_code(source: str) -> bool:
-    """Attempt to compile the given source code in 'exec' mode. If it compiles, return True. On syntax or I/O problems, log an error and return False."""
+def if_filepath_then_read(input_string_or_filepath: str,
+                          force_string: bool = False) -> str:
+    """
+    If 'input_string_or_filepath' is a file path, read its contents and return as a string. If not, return the input_string as is.
+
+    Parameters:
+        input_string_or_filepath : The source can be a file path or a string.
+        force_string : If True, treat 'input_string_or_filepath' as a string even if it looks like a file path.
+
+    Returns:
+        str : The contents of the file if input_string is a file path, or the input_string itself if it is not a file path.
+
+    Raises:
+        TypeError : If input_string is not a string or a file path.
+    """
     fallback_logging_config()
-    # Is "source" a file path? If so, read it first.
-    if os.path.isfile(source):
-        file_path = source
+    # Is "input_string" a file path, and is "force_string" False?
+    # If so, read the file contents.
+    if os.path.isfile(input_string_or_filepath) and not force_string:
+        file_path = input_string_or_filepath
         try:
-            source = my_fopen(file_path, suppress_errors=True)
-            if not source:
+            contents = my_fopen(file_path, suppress_errors=True)
+            if not contents:
                 logging.error(f"Could not read file: {file_path}")
-        except FileNotFoundError:
-            logging.error(f"File not found: {file_path}")
-        except PermissionError:
-            logging.error(f"Permission denied: {file_path}")
+                return ""
+            return contents
+        except FileNotFoundError as e:
+            logging.exception(f"File not found: {file_path}")
+        except PermissionError as e:
+            logging.exception(f"Permission denied: {file_path}")
         except UnicodeDecodeError as e:
-            logging.error(f"Could not decode {file_path!r}: {e}")
-    else:  # Otherwise, treat "source" as a string containing Python code.
-        if not isinstance(source, str):
-            raise TypeError(f"Expected 'source' to be a string or file path, got {type(source).__name__!r}")
+            logging.exception(f"Could not decode {file_path!r}.")
+    else:  # Otherwise, treat "input_string" as a string.
+        if not isinstance(input_string_or_filepath, str):
+            raise TypeError(f"Expected 'input_string_or_filepath' to be a string or file path, got {type(input_string_or_filepath).__name__!r}")
+        return input_string_or_filepath  # Just return the input string as is.
+
+
+def compile_code(source_or_filepath: str,
+                 force_source: bool = False) -> bool:
+    """
+    Attempt to compile the given source code in 'exec' mode.
+    If 'source_or_filepath' is a file path, read its contents first.
+
+    Parameters:
+        source_or_filepath : The source code string or file path to compile.
+        force_source : If True, treat 'source_or_filepath' as a source code string even if it looks like a file path.
+
+    Returns:
+        bool : True if compilation succeeds, False if it fails with a SyntaxError or other exception
+    """
+    fallback_logging_config()
+    # Read from file if source is a file path
+    source = if_filepath_then_read(source_or_filepath, force_string=force_source)
+    if source != source_or_filepath:
+        file_path = source_or_filepath
+    else:
         # If it's a string, we need to provide a dummy file path for the compiler.
         # This is just to satisfy the compiler, it won't be used.
         file_path = "<string>"
-
     try:
         compile(source, file_path, "exec")
-        return True
     except SyntaxError as e:
         # protect against None offsets
         lineno = e.lineno or '?'
@@ -1492,10 +1543,9 @@ def compile_code(source: str) -> bool:
         logging.error(f"Syntax error in {e.filename!r}, line {lineno}, column {offset}:\n"
                       f"    {line}\n"
                       f"    {pointer}\n"
-                      f"    {e.msg!r}")
-    except Exception as e:
-        logging.error(f"Unexpected error checking syntax of {file_path!r}: {e}")
-    return False
+                      f"    {e.msg!r}", exc_info=True)
+        return False
+    return True
 
 
 # --------------------------------------------------------------------------------
@@ -1529,9 +1579,10 @@ def _make_format_checker() -> Type[FormatChecker]:
         - missing docstring or incorrect docstring quote style
         """
 
-        def __init__(self, source: str) -> None:
+        def __init__(self, source: str, doc_style: str = "None") -> None:
             """Initialize the FormatChecker with the source code string."""
             self.source = source
+            self.doc_style = doc_style # "None", "NumPy", "Google", "reStructuredText"
             self.errors: list[tuple[str, str, str, int]] = []
             self._seen_funcs: set[int] = set()  # keep track of which FunctionDef/AsyncFunctionDef nodes we've already checked
 
@@ -1582,26 +1633,114 @@ def _make_format_checker() -> Type[FormatChecker]:
             if node.returns is None:
                 missing.append("return")
             if missing:
-                self.errors.append(("function", node.name, "missing type hints for " + ", ".join(missing), node.lineno))
+                self.errors.append(("function", node.name,
+                                    "missing type hints for " + ", ".join(missing),
+                                    node.lineno))
 
         def _check_docstring(self, node: ast.AST, who: str) -> None:
-            """Check a node for a docstring and its formatting.
-            If the node has no docstring or the docstring is not formatted correctly, an error is added to self.errors.
-            The 'who' parameter is a string describing the context (e.g. function or class name)."""
+            """
+            Check a node for a docstring and its formatting.
+            An error is added to self.errors if:
+              - The node has no docstring
+              - The docstring is not formatted correctly
+              - There is more than one docstring
+            The 'who' parameter is a string describing the context (e.g. function or class name).
+            """
             if not node.body or not isinstance(node.body[0], ast.Expr):
-                self.errors.append((node.__class__.__name__.lower(), who, "no docstring", node.lineno))
+                self.errors.append((node.__class__.__name__.lower(), who, "no docstring",
+                                    node.lineno))
                 return
 
             expr = node.body[0]
             if not (isinstance(expr.value, ast.Constant) and isinstance(expr.value.value, str)):
-                self.errors.append((node.__class__.__name__.lower(), who, "no docstring", node.lineno))
+                self.errors.append((node.__class__.__name__.lower(), who, "no docstring",
+                                    node.lineno))
                 return
 
-            # recover the exact literal to verify triple-double-quote
+            # Recover the exact literal to verify triple-double-quote
             literal = ast.get_source_segment(self.source, expr.value) or ""
             first_line = literal.strip().splitlines()[0]
             if first_line.startswith("'''"):
-                self.errors.append((node.__class__.__name__.lower(), who, 'docstring should use triple double quotes ("""…""")', node.lineno))
+                self.errors.append((node.__class__.__name__.lower(), who,
+                                    'docstring should use triple double quotes ("""…""")',
+                                    node.lineno))
+
+            # Now scan for any extra standalone triple‐quoted strings
+            for extra in node.body[1:]:
+                # Only look at Exprs, i.e. un‐assigned string literals
+                if  isinstance(extra, ast.Expr) \
+                and isinstance(extra.value, ast.Constant) \
+                and isinstance(extra.value.value, str):
+                    literal = ast.get_source_segment(self.source, extra.value) or ""
+                    first = literal.strip().splitlines()[0]
+                    # If it starts with triple quotes, it’s an extra docstring
+                    if first.startswith(('"""', "'''")):
+                        self.errors.append((node.__class__.__name__.lower(),
+                                            who, "extra docstring", extra.lineno))
+
+            # Check the docstring style
+            self._check_docstring_style(node, who)
+
+        def _check_docstring_style(self, node: ast.AST, who: str) -> None:
+            """Dispatch to the style‑specific docstring checker."""
+            if not self.doc_style or self.doc_style.casefold() == "none":
+                return
+            checker = {
+                "NumPy"              : self._check_numpy_docstring,
+                # "Google"           : self._check_google_docstring,
+                # "reStructuredText" : self._check_rst_docstring,
+            }.get(self.doc_style)
+
+            if checker is not None:
+                checker(node, who)
+
+        def _check_numpy_docstring(self, node: ast.AST, who: str) -> None:
+            """
+            Very basic NumPy‑style docstring validator:
+            - must have a 'Parameters' and 'Returns' section header
+            - every non‑self arg must be listed under Parameters
+            """
+            # Get the cleaned docstring
+            doc = ast.get_docstring(node)
+            if not doc:
+                return  # already flagged as missing
+
+            lines = doc.splitlines()
+            # Locate the section headers
+            try:
+                params_idx = next(i for i, L in enumerate(lines) if L.strip() == "Parameters")
+            except StopIteration:
+                self.errors.append((node.__class__.__name__.lower(), who,
+                                    "NumPy docstring missing 'Parameters' section",
+                                    node.lineno))
+                return
+
+            try:
+                returns_idx = next(i for i, L in enumerate(lines) if L.strip() == "Returns")
+            except StopIteration:
+                self.errors.append((node.__class__.__name__.lower(), who,
+                                    "NumPy docstring missing 'Returns' section",
+                                    node.lineno))
+
+            # Collect documented params: lines immediately under 'Parameters'
+            documented = set()
+            for line in lines[params_idx+1:]:
+                if not line.strip():
+                    break
+                m = re.match(r'^(\w+)\s*:\s*(.+)$', line)
+                if m:
+                    documented.add(m.group(1))
+
+            # Get function args (excluding self)
+            sig_args = []
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                sig_args = [a.arg for a in node.args.args if a.arg != "self"]
+
+            missing = [a for a in sig_args if a not in documented]
+            if missing:
+                self.errors.append((node.__class__.__name__.lower(), who,
+                                    "NumPy docstring missing parameter(s): " + ", ".join(missing), node.lineno))
+
     return FormatChecker
 
 
@@ -1656,8 +1795,8 @@ def check_python_formatting(path: str, diff_choice: int = 1) -> bool:
             return False
     try:
         tree = my_ast_parse(src, path)
-    except SyntaxError as e:
-        logging.error(f"❌ {e}")
+    except SyntaxError:
+        logging.exception(f"❌ {path} contains a syntax error.")
         return False
 
     checker = FormatChecker(src)
@@ -1684,9 +1823,54 @@ def run_flake8(path: str, ignore_codes: list[str] = [], max_line_length: int = 1
     :param max_line_length:  The line‑length threshold for E501 (default 100).
     :return:           A Flake8 Report object with all violations.
     """
+    import io
+    from collections import defaultdict
     from flake8.api import legacy as flake8
     style_guide = flake8.get_style_guide(max_line_length=max_line_length, ignore=ignore_codes)
-    return style_guide.check_files([path])
+    report = style_guide.check_files([path])
+    if report.total_errors == 0:
+        logging.info(f"✅ No Flake8 violations found in {path}.")
+        return report
+    logging.error(f"Found {report.total_errors} total violations in {path}:")
+    for stat in report.get_statistics(""):
+        logging.error(f"  {stat}")
+
+    # This section was SUPPOSED to print a grouped summary of violations by code with line numbers.
+    # However, it CORRUPTS THE FILE IT IS EXAMINING! https://chatgpt.com/share/688ba75b-7860-8006-bc9f-1bce8cb01359
+    # BEWARE: DO NOT USE THIS CODE!
+    # # Create a StringIO and tell flake8 to write its output there
+    # buf = io.StringIO()
+    # style = flake8.get_style_guide(max_line_length=max_line_length, ignore=ignore_codes, output_file=buf)
+
+    # # Run the checks
+    # report = style.check_files([path])  # path is your filename or list of files
+    # # now force every violation to be written into our StringIO
+    # formatter = style._application.formatter
+    # for violation in style._application.file_checker_manager.results:
+    #     formatter.handle(violation)
+    # formatter.stop()
+
+    # # Rewind and parse each line of the report
+    # buf.seek(0)
+    # logging.info("\n" + buf.getvalue())
+    # buf.seek(0)
+    # by_code = defaultdict(list)
+    # for line in buf:
+    #     # Each line looks like: "univ_defs.py:1501:9: F841 local variable 'e' is assigned to but never used"
+    #     parts = line.strip().split(":", 3)
+    #     if len(parts) < 4:
+    #         continue
+    #     _, lineno_str, _, rest = parts
+    #     code = rest.strip().split()[0]      # e.g. "F841"
+    #     by_code[code].append(int(lineno_str))
+
+    # # Print a grouped summary
+    # breakpoint()
+    # for code, lines in sorted(by_code.items()):
+    #     lines = sorted(set(lines))
+    #     print(f"{code}: line{'s' if len(lines)>1 else ''} {', '.join(map(str, lines))}")
+
+    return report
 
 
 def _gather_flake8_issues( path: str, ignore_codes: list[str] = [], max_line_length: int = 100) -> dict[str, str]:
@@ -1773,8 +1957,8 @@ def get_autopep8_fixable_codes() -> set[str]:
     fallback_logging_config()
     try:
         proc = subprocess.run(["autopep8", "--list-fixes"], capture_output=True, text=True, check=True)
-    except (FileNotFoundError, subprocess.CalledProcessError) as e:
-        logging.warning(f"autopep8 not found or failed: {e!r}")
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        logging.warning(f"autopep8 not found or failed.", exc_info=True)
         # autopep8 not on PATH or error—assume nothing fixable
         return set()
 
@@ -2122,13 +2306,9 @@ def interactive_flake8(path: str, diff_choice: int = 1, ignore_codes: list[str] 
     """
     fallback_logging_config()
     logging.debug(f"At the top of the function {sys._getframe(1).f_code.co_name}(), {diff_choice=}")
-    report = run_flake8(path, ignore_codes=ignore_codes, max_line_length=max_line_length)
-    if report.total_errors == 0:
+    if not run_flake8(path, ignore_codes=ignore_codes, max_line_length=max_line_length):
         logging.info("No flake8 errors—nothing to do.")
         return
-    logging.error(f"\nFound {report.total_errors} total violations in {path}:")
-    for stat in report.get_statistics(""):
-        logging.error(f"  {stat}")
     codes = _gather_flake8_issues(path, ignore_codes=ignore_codes, max_line_length=max_line_length)
     fixable_codes = get_autopep8_fixable_codes()
     logging.debug(f"Autopep8 can fix these codes: {fixable_codes}")
@@ -2140,7 +2320,8 @@ def interactive_flake8(path: str, diff_choice: int = 1, ignore_codes: list[str] 
         if not ask_and_autopep8(path, code, desc, diff_choice=diff_choice,
                                 changed_color=changed_color, deleted_color=deleted_color, added_color=added_color):
             break
-    logging.info(f"{ANSI_GREEN}Done. You may want to re-run flake8 to confirm everything is fixed.{ANSI_RESET}")
+    logging.info(f"{ANSI_GREEN}Done. Re-running flake8 to confirm fixes...{ANSI_RESET}")
+    run_flake8(path, ignore_codes=ignore_codes, max_line_length=max_line_length)
 
 
 MYDIFF_SCRIPT = '''import argparse
@@ -2152,8 +2333,8 @@ def main() -> None:
     """Main entry point for the script."""
     ud.configure_logging("mydiff", log_level="INFO", rawlog=True)
     parser = argparse.ArgumentParser(description="Diff two files using ud.my_diff().")
-    parser.add_argument("orig_path", type=str, help="Path to original file.")
-    parser.add_argument("changed_path", type=str, help="Path to changed file.")
+    parser.add_argument("orig_path",     type=str, help="Path to original file.")
+    parser.add_argument("changed_path",  type=str, help="Path to changed file.")
     parser.add_argument("--diff_choice", type=int, default=1,
                         help="0 = old-style diff, 1 = unified diff with 0 context lines, "
                              "2+ = unified diff with 'diff_choice - 1' context lines")
@@ -2161,7 +2342,7 @@ def main() -> None:
                         help="Color for unchanged characters in changed lines (default: ANSI_CYAN)")
     parser.add_argument("--deleted_color", type=str, default=ud.ANSI_RED,
                         help="Color for deleted characters in original lines (default: ANSI_RED)")
-    parser.add_argument("--added_color", type=str, default=ud.ANSI_GREEN,
+    parser.add_argument("--added_color",   type=str, default=ud.ANSI_GREEN,
                         help="Color for added characters in changed lines (default: ANSI_GREEN)")
     args = parser.parse_args()
 
@@ -2188,7 +2369,7 @@ def main() -> None:
     """Main entry point for the script."""
     ud.configure_logging("format_checker", log_level="INFO")
     parser = argparse.ArgumentParser(description="Check Python formatting in a file.")
-    parser.add_argument("path", type=str, help="Path to the Python file to check")
+    parser.add_argument("filepath", type=str, help="Path to the Python file to check")
     parser.add_argument("--diff_choice", type=int, default=1,
                         help="0 = old-style diff, 1 = unified diff with 0 context lines, "
                              "2+ = unified diff with 'diff_choice - 1' context lines")
@@ -2200,10 +2381,10 @@ def main() -> None:
                         help="Color for added characters in changed lines (default: ANSI_GREEN)")
     args = parser.parse_args()
 
-    if not ud.check_python_formatting(args.path, diff_choice=args.diff_choice):
+    if not ud.check_python_formatting(args.filepath, diff_choice=args.diff_choice):
         return
 
-    ud.interactive_flake8(args.path, diff_choice=args.diff_choice, ignore_codes=ud.IGNORED_CODES, max_line_length=1000,
+    ud.interactive_flake8(args.filepath, diff_choice=args.diff_choice, ignore_codes=ud.IGNORED_CODES, max_line_length=1000,
                           changed_color=args.changed_color, deleted_color=args.deleted_color, added_color=args.added_color)
 
 if __name__ == "__main__":
@@ -2242,107 +2423,209 @@ def verify_script(thepath: str, thescript: str) -> None:
     # else: contents match exactly, nothing to do
 
 
-def is_valid_utf8(path: str) -> bool:
-    """Return True if the file at `path` can be read as UTF-8 without errors."""
+def decode_utf8(raw_bytes: bytes, path: str = "input string") -> str | None:
+    """
+    If the file at `path` is valid UTF-8 without lone C1 controls,
+    return the decoded string. Otherwise, return None.
+    """
+    fallback_logging_config()
     try:
-        with open(path, 'rb') as f:
-            f.read().decode('utf-8')
-        return True
+        text = raw_bytes.decode('utf-8', errors='strict')
     except UnicodeDecodeError:
-        return False
+        logging.debug(f"{path} failed to decode as UTF‑8.")
+        return None
+    if any(0x0080 <= ord(ch) <= 0x009F for ch in text):
+        logging.debug(f"{path} contains lone C1 controls, not valid UTF-8.")
+        return None
+    logging.debug(f"{path} decoded as valid UTF‑8.")
+    return text
 
 
-# THIS IS TOO GENERAL! IT CAN FALSE-POSITIVE ON VALID UTF-8 TEXT WITH APOSTROPHES OR QUOTES
-# def contains_mojibake(text: str) -> bool:
-#     """Use ftfy.badness.is_bad() to detect any likely mojibake in the text."""
-#     import ftfy
-#     return ftfy.badness.is_bad(text)
-# I HAVEN'T TRIED THIS NEXT LINE, BUT IT MIGHT CAUSE FEWER FALSE POSITIVES:
-#     return ftfy.badness(text) > 1
+def decode_cp1252(raw_bytes: bytes, path: str = "input string") -> str | None:
+    """
+    Attempt to decode CP1252 bytes and return as a string.
+    If it fails, return None.
+    """
+    fallback_logging_config()
+    try:
+        text = raw_bytes.decode('cp1252', errors='strict')
+        logging.debug(f"{path} decoded as valid CP1252.")
+        return text
+    except UnicodeDecodeError:
+        logging.debug(f"{path} failed to decode as CP1252.", exc_info=True)
+        return None
 
 
 def contains_mojibake(text: str) -> bool:
-    """Check for common mojibake patterns like “Â“” or “Â”."""
-    return '\u00C2' in text or '\u00C3' in text
+    """Use ftfy.badness.is_bad() to detect any likely mojibake in the text."""
+    import ftfy
+    fallback_logging_config()
+    try:
+        mojibake_present = ftfy.badness.is_bad(text)
+    except Exception: # Catch any unexpected errors from ftfy without crashing
+        logging.debug(f"Failed to check for mojibake.", exc_info=True)
+        mojibake_present = False
+    logging.debug(f"Mojibake present: {mojibake_present}")
+    # I HAVEN'T TRIED THIS NEXT LINE, BUT IT MIGHT CAUSE FEWER FALSE POSITIVES:
+    # return ftfy.badness(text) > 1
+    return mojibake_present
 
 
-def fix_file(path: str, make_backup: bool = True, dry_run: bool = False) -> bool:
+def fix_text(current_text: str, path: str, raw_bytes: bytes) -> str | None:
     """
-    Fix mojibake in an existing UTF-8 text file using ftfy.fix_encoding().
-    Returns True if a fix was applied.
+    Fix mojibake in a string using ftfy.fix_encoding().
     """
     import ftfy
-    with open(path, 'r', encoding='utf-8', errors='strict') as f:
-        original = f.read()
-    if not contains_mojibake(original):
-        return False
-    if dry_run:
-        logging.info(f"[DRY RUN] Would fix mojibake in: {path}")
-        return True
-    fixed = ftfy.fix_encoding(original)
-    if make_backup:
-        os.rename(path, path + '.bak')
-    with open(path, 'w', encoding='utf-8') as f:
-        f.write(fixed)
-    return True
-
-
-def recode_cp1252_to_utf8(path: str, make_backup: bool = True,
-                          dry_run: bool = False) -> bool:
-    """
-    Assume a non-UTF-8 file is Windows-1252, decode it, and re-save as UTF-8.
-    Returns True if successful.
-    """
-    raw = open(path, 'rb').read()
+    fallback_logging_config()
+    logging.debug(f"Checking {path} for mojibake.")
+    if not contains_mojibake(current_text):
+        return None
     try:
-        text = raw.decode('cp1252', errors='strict')
-    except UnicodeDecodeError:
-        logging.warning(f"File {path} is not valid UTF-8 or CP1252, skipping.")
-        return False
+        fixed = ftfy.fix_encoding(current_text)
+    except Exception:  # Catch any unexpected errors from ftfy without crashing
+        logging.error(f"Failed to fix mojibake in {path}.", exc_info=True)
+        return None
+    # If logging level is set to DEBUG, show my diff of original vs fixed:
+    if logging.getLogger().isEnabledFor(logging.DEBUG):
+        try:
+            # Mangle the original string to simulate browser encoding issues:
+            mangled_original = raw_bytes.decode('cp1252', errors='replace')
+            my_diff(mangled_original, fixed, path)
+        except Exception:  # Catch any unexpected errors from decoding but don't crash.
+            logging.debug(f"Could not simulate browser mangling in {path}.", exc_info=True)
+    return fixed
 
-    if dry_run:
-        logging.info(f"[DRY RUN] Would recode CP1252→UTF-8: {path}")
-        return True
 
-    if make_backup:
-        os.rename(path, path + '.bak')
-    with open(path, 'w', encoding='utf-8') as f:
-        f.write(text)
-    return True
+def ensure_utf8_meta(html: str) -> str:
+    """
+    Ensure the HTML text has a <meta charset="utf-8"> tag.
+    If one already exists—either as a charset attribute or
+    as an http-equiv Content-Type declaration—normalize it to
+    <meta charset="utf-8">. Otherwise, insert that tag right
+    after the opening <head> tag.
+    """
+    # 1) Normalize any <meta ... charset=...> to <meta charset="utf-8">
+    #    This covers both <meta charset="XYZ"> and
+    #    <meta http-equiv="Content-Type" content="text/html; charset=XYZ">
+    def _replace_charset_attr(match: re.Match) -> str:
+        """
+        Replace a <meta> tag with a charset attribute
+        with a normalized <meta charset="utf-8"> tag.
+        """
+        # Always produce exactly: <meta charset="utf-8">
+        return '<meta charset="utf-8">'
+    
+    # Pattern A: <meta ... charset=XYZ ...>
+    pattern_a = r'<meta\b[^>]*\bcharset=["\']?[^"\'>\s]+["\']?[^>]*>'
+    # Pattern B: <meta ... http-equiv=["\']Content-Type["\'] ... content="...; charset=XYZ"...>
+    pattern_b = (r'<meta\b[^>]*\bhttp-equiv=["\']?Content-Type["\']?[^>]*'
+                 r'\bcontent=["\'][^"\'>]*;\s*charset=[^"\'>]+["\'][^>]*>')
+
+    if re.search(pattern_a, html, flags=re.IGNORECASE) or \
+       re.search(pattern_b, html, flags=re.IGNORECASE):
+        # First collapse any Pattern B occurrences
+        html = re.sub(pattern_b, _replace_charset_attr, html, flags=re.IGNORECASE)
+        # Then collapse any remaining Pattern A
+        html = re.sub(pattern_a, _replace_charset_attr, html, flags=re.IGNORECASE)
+        return html
+
+    # 2) If no existing meta‐charset, insert one just after <head>
+    return re.sub(r'(<head\b[^>]*>)',
+                  r'\1\n    <meta charset="utf-8">',
+                  html, count=1, flags=re.IGNORECASE)
 
 
-def fix_mojibake(path: str, make_backup: bool = True,
+def my_atomic_write(filepath: str | Path | os.PathLike, data: str | bytes | bytearray,
+                    write_mode: Literal['w', 'a'], encoding: str = DEFAULT_ENCODING,
+                    lock_timeout: float = None,  # seconds to wait for lock (None = forever)
+                   ) -> None:
+    """
+    Atomically write `data` to `filepath` with an advisory lock.
+    
+    - If write_mode='a' and file exists, data is appended.
+    - If write_mode='a' and file does *not* exist, file is created.
+    - A `.lock` file beside `filepath` prevents concurrent writers.
+    """
+    from atomicwrites import atomic_write
+    from filelock import FileLock, Timeout
+    path = Path(filepath)
+    # ensure parent directory exists
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # choose text or binary mode
+    is_bytes = isinstance(data, (bytes, bytearray))
+    mode     = write_mode + ('b' if is_bytes else '')
+    text_enc = None if is_bytes else encoding
+    lock_path = str(path) + '.lock'
+    lock = FileLock(lock_path, timeout=lock_timeout)
+    try:
+        with lock:
+            # atomicwrites will write to a temp file in the same dir then os.replace()
+            # overwrite=(write_mode=='w') means "w" replaces, "a" appends
+            with atomic_write(path, mode=mode, overwrite=(write_mode == 'w'),
+                              encoding=text_enc, preserve_mode=True) as f:
+                f.write(data)
+    except Timeout:
+        raise RuntimeError(f"Could not acquire lock on {lock_path!r} within {lock_timeout} seconds")
+
+
+def fix_mojibake(filepath: str, make_backup: bool = True,
                  dry_run: bool = False) -> None:
     """
     Fix mojibake in a text file, recoding from CP1252 to UTF-8 if necessary.
     If the file is already valid UTF-8, it will only fix mojibake.
     """
+    import datetime as dt
     fallback_logging_config()
-    if not os.path.isfile(path):
-        logging.error(f"{path} is not a file")
+    if not os.path.isfile(filepath):
+        logging.error(f"{filepath} is not a file")
         return
 
-    # If not valid UTF-8, attempt CP1252→UTF-8 recode
-    if not is_valid_utf8(path):
-        if recode_cp1252_to_utf8(path, make_backup=make_backup):
-            logging.info(f'↻ Recoded CP1252→UTF-8: {path}')
-            # Then run ftfy on it in case there’s leftover mojibake
-            if fix_file(path, make_backup=False, dry_run=dry_run):
-                logging.info(f'    ✔ Plus ftfy-cleaned: {path}')
-        else:
-            logging.warning(f'⚠ Skipped (not UTF-8 or CP1252): {path}')
-        return
-
-    # If valid UTF-8, fix mojibake only
     try:
-        if fix_file(path, make_backup=make_backup, dry_run=dry_run):
-            logging.info(f'✔ Fixed mojibake: {path}')
-    except UnicodeDecodeError:
-        logging.warning(f'Skipped (decode error): {path}')
+        with open(filepath, 'rb') as f:
+            raw_bytes = f.read()
+    except Exception:  # Catch any unexpected errors from reading the file without crashing.
+        logging.error(f"Failed to read {filepath}.", exc_info=True)
+        return
+
+    original_text =      decode_utf8(raw_bytes, filepath) \
+                    or decode_cp1252(raw_bytes, filepath)
+    if original_text is None:
+        return
+
+    # Start with the original text but keep it in memory unmodified.
+    current_text = original_text
+
+    # Either way, check for mojibake and fix it if necessary
+    maybe_fixed = fix_text(current_text, filepath, raw_bytes)
+    if maybe_fixed is not None:
+        current_text = maybe_fixed
+        logging.info(f"✔ Fixed mojibake: {filepath}")
+
+    # If the text is from an HTML file, ensure it has a UTF-8 meta tag
+    if filepath.lower().endswith(('.html','.htm')):
+        current_text = ensure_utf8_meta(current_text)
+
+    # If we have fixed the text, write it back
+    if current_text != original_text:
+        if dry_run:
+            logging.info(f"Dry run: would write changes to {filepath}")
+        else:
+            if make_backup:
+                current_datetime = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+                backup_path = f"{filepath}_{current_datetime}.bak"
+                try:
+                    os.rename(filepath, backup_path)
+                    logging.info(f"Backup created: {backup_path}")
+                except OSError:
+                    logging.exception(f"Failed to create backup for {filepath}.")
+                    return
+            my_atomic_write(filepath, current_text, 'w', encoding='utf-8')
+            logging.info(f"✔ Successfully fixed mojibake in {filepath}")
 
 
-def treeview_new_files(directory: str, last_file_path: str, last_mtime: float, prefix: str = '',
-                       is_last: bool = True, level: int = 0, state: dict = None) -> bool:
+def treeview_new_files(directory: str, last_file_path: str, last_mtime: float,
+                       prefix: str = '', is_last: bool = True, level: int = 0,
+                       state: dict = None) -> bool:
     """Recursively scan the directory, print the contents of files newer than last_file_path (and store its modification date in last_mtime). Return True if any relevant files are found."""
     fallback_logging_config(rawlog=True)
     if state is None:
@@ -2419,8 +2702,8 @@ def treeview_new_files(directory: str, last_file_path: str, last_mtime: float, p
                     # Indent file contents for better readability
                     indented_contents = '\n'.join([f"{child_prefix}    {line}" for line in contents.splitlines()])
                     logging.info(indented_contents)
-            except Exception as e:
-                logging.error(f"{child_prefix}    Error reading '{file_entry.path}': {e}")
+            except Exception:  # Catch any unexpected errors from reading the file without crashing.
+                logging.exception(f"{child_prefix}    Error reading '{file_entry.path}'.", exc_info=True)
             logging.info("")  # Add an empty line for separation
 
         # Print subdirectories
@@ -2556,7 +2839,7 @@ def open_dir_in_VLC(the_dir: str, sort_choice: str = "sort_by_name",
     base_dir = os.path.basename(os.path.normpath(the_dir))
     # Write the playlist to disk in the parent directory
     playlist_path = os.path.join(the_dir, f"{filename_format(base_dir)}_playlist.m3u")
-    with open(playlist_path, "w") as playlist_file:
+    with open(playlist_path, 'w') as playlist_file:
         playlist_file.write(playlist_content)
     # Open the playlist in VLC
     if start_flag: command_list = ["vlc", start_flag, playlist_path]
@@ -2579,7 +2862,7 @@ def remove_prefix_from_filename(filepath: str, prefix: str) -> bool:
                 print(f"Renamed '{filepath}' to '{new_filepath}'.")
                 return True
             except OSError as e:
-                raise OSError(f"Failed to rename '{filepath}' to '{new_filepath}'") from e
+                raise OSError(f"Failed to rename '{filepath}' to '{new_filepath}': {e}") from e
         else:
             print(f"Cannot rename '{filepath}' to '{new_filepath}': New path already exists.")
             return False
@@ -2637,16 +2920,16 @@ def combine_html_files(file_paths: list[str],
             # Extract <body> content
             body_content = soup.body
             combined_body += str(body_content)
-        except Exception as e:
-            logging.error(f"File {file_path} encountered error {e}")
+        except Exception:  # Catch any unexpected errors from BeautifulSoup without crashing.
+            logging.exception(f"File {file_path} encountered an error.")
     # Create the new HTML structure
     combined_html = f"<!DOCTYPE html>\n<html>\n{head_content}\n<body>\n{combined_body}\n</body>\n</html>"
     # Save to the output file path
     try:
         with open(output_file_path, 'w', encoding=DEFAULT_ENCODING) as output_file:
             output_file.write(combined_html)
-    except Exception as e:
-        logging.error(f"Error saving combined HTML to {output_file_path}: {e}")
+    except Exception:  # Catch any unexpected errors from writing the file without crashing.
+        logging.exception(f"Error saving combined HTML to {output_file_path}.")
     logging.info(f"Saved combined HTML to '{output_file_path}'.")
 
 
