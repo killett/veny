@@ -486,16 +486,6 @@ def my_fopen(file_path: str, suppress_errors: bool = False,
     return False
 
 
-def my_ast_parse(file_content: str, file_path: str) -> ast.AST:
-    """Attempt to parse the file with ast.parse and return the tree if successful."""
-    import ast
-    try:
-        tree = ast.parse(file_content, filename=file_path)
-        return tree
-    except SyntaxError as e:
-        raise SyntaxError(f"Syntax error in {file_path}: {e.msg} at line {e.lineno}, column {e.offset}") from e.filename
-
-
 def load_ast_var(var_name: str, script_path: str, rawlog: bool = False) -> Any:
     """
     Load a top-level literal Python variable from a module without executing it.
@@ -512,7 +502,7 @@ def load_ast_var(var_name: str, script_path: str, rawlog: bool = False) -> Any:
     file_content = my_fopen(script_path, rawlog=rawlog)
     if not file_content:
         my_critical_error(f"Failed to open {script_path}", choose_breakpoint=True)
-    tree = my_ast_parse(file_content, script_path)
+    tree = ast.parse(file_content, script_path)
     if tree is None:
         raise SyntaxError(f"Could not parse {script_path}")
 
@@ -1749,7 +1739,7 @@ FormatChecker = _make_format_checker()
 
 def check_python_formatting(path: str, diff_choice: int = 1) -> bool:
     """
-    Reads a .py file at 'path' via my_fopen, makes sure it compiles, parses it with my_ast_parse,
+    Reads a .py file at 'path' via my_fopen, makes sure it compiles, parses it with AST,
     prints any custom formatting violations to stdout,
     and asks the user to fix any backticks or curly quotes in the file. If the user quits, it returns False.
 
@@ -1757,6 +1747,7 @@ def check_python_formatting(path: str, diff_choice: int = 1) -> bool:
         path:        The path to the Python file to check.
         diff_choice: How many context lines to show in the diff (0 = old-style diff, 1 = unified diff with 0 context lines, 2+ = unified diff with 'diff_choice - 1' context lines).
     """
+    import ast
     fallback_logging_config()
     src = my_fopen(path)
     if src is False:
@@ -1766,11 +1757,13 @@ def check_python_formatting(path: str, diff_choice: int = 1) -> bool:
     if compile_code(src):
         logging.info(f"✅ {path} compiled successfully.")
 
-    BACKTICK  = "\u0060"      # U+0060 "GRAVE ACCENT" (the backtick)
-    LSQUOTE   = "\u2018"      # U+2018 "LEFT  SINGLE QUOTATION MARK" (curly apostrophe)
-    RSQUOTE   = "\u2019"      # U+2019 "RIGHT SINGLE QUOTATION MARK" (curly apostrophe)
-    LDQUOTE   = "\u201C"      # U+201C "LEFT  DOUBLE QUOTATION MARK"
-    RDQUOTE   = "\u201D"      # U+201D "RIGHT DOUBLE QUOTATION MARK"
+    # Check for some characters that I personally dislike in Python source code:
+    BACKTICK            = "\u0060"  # U+0060 "GRAVE ACCENT" (the backtick)
+    LSQUOTE             = "\u2018"  # U+2018 "LEFT  SINGLE QUOTATION MARK" (curly apostrophe)
+    RSQUOTE             = "\u2019"  # U+2019 "RIGHT SINGLE QUOTATION MARK" (curly apostrophe)
+    LDQUOTE             = "\u201C"  # U+201C "LEFT  DOUBLE QUOTATION MARK"
+    RDQUOTE             = "\u201D"  # U+201D "RIGHT DOUBLE QUOTATION MARK"
+    HORIZONTAL_ELLIPSIS = "\u2026"  # U+2026 "HORIZONTAL ELLIPSIS" (three closely spaced periods)
 
     if BACKTICK in src:
         logging.warning(f"File {path} contains the backtick character ({BACKTICK!r}). Use straight quotation marks (') instead.")
@@ -1793,8 +1786,14 @@ def check_python_formatting(path: str, diff_choice: int = 1) -> bool:
         if not ask_and_replace(path, old=RDQUOTE, new='"', label='right-curly-quotation-mark', diff_choice=diff_choice,
                                description=f'Replace right curly double quotation mark ({RDQUOTE}) with straight double quotation mark (")'):
             return False
+    if HORIZONTAL_ELLIPSIS in src:
+        logging.warning(f"File {path} contains the horizontal ellipsis character ({HORIZONTAL_ELLIPSIS!r}). Use three periods (...) instead.")
+        if not ask_and_replace(path, old=HORIZONTAL_ELLIPSIS, new='...', label='horizontal-ellipsis', diff_choice=diff_choice,
+                               description=f"Replace horizontal ellipsis ({HORIZONTAL_ELLIPSIS}) with three periods (...)"):
+            return False
+
     try:
-        tree = my_ast_parse(src, path)
+        tree = ast.parse(src, path)
     except SyntaxError:
         logging.exception(f"❌ {path} contains a syntax error.")
         return False
@@ -2716,6 +2715,12 @@ def treeview_new_files(directory: str, last_file_path: str, last_mtime: float,
     return has_relevant_files
 
 
+def check_if_command_exists(command: str) -> bool:
+    """Check if a command exists on the system."""
+    import subprocess
+    return subprocess.run(['which', command], capture_output=True).returncode == 0
+
+
 def open_terminal_and_run_command(the_command: str,
                                   close_after: bool = False) -> None:
     """Open a terminal window and run the_command while sourcing the .bashrc to access aliases. If close_after is True, the terminal will close after the command finishes."""
@@ -2776,6 +2781,170 @@ def open_filemanager_with_dirs(directories: list) -> None:
             time.sleep(0.5)
         else:
             logging.warning(f"Directory does not exist: {directory}")
+
+
+def detect_country() -> str | None:
+    """
+    Detect the country of the IP address using ipinfo.io service.
+    If the request fails, it falls back to wtfismyip.com service.
+    """
+    import subprocess
+    import requests
+    import json
+    try:
+        if 'IPINFO_API_TOKEN' in os.environ:
+            ipinfo_access_token = os.environ['IPINFO_API_TOKEN']
+        else:
+            raise ValueError("IPINFO_API_TOKEN environment variable is not set. If you don't have one, you can sign up for a free account here: https://ipinfo.io/signup")
+
+        logging.info("Attempting to detect country using IPinfo...")
+        # Uncomment the following lines if you want to use the ipinfo library instead of curl
+        # import ipinfo
+        # handler = ipinfo.getHandler(ipinfo_access_token,
+        #                             request_options={'timeout': ipinfo_timeout_seconds})
+        # details = handler.getDetails()
+        # logging.debug(f"IPinfo DETAILS:\n{details}")
+        # thecountryname = details.country
+        the_command = ["curl", f"https://api.ipinfo.io/lite/8.8.8.8?token={ipinfo_access_token}"]
+        logging.debug(f"Running command: {' '.join(the_command)}")
+        result = subprocess.run(the_command, capture_output=True,
+                                text=True, timeout=5)
+        if result.returncode != 0:
+            logging.error(f"curl command failed with return code {result.returncode}")
+            raise Exception("Curl command failed")
+        logging.debug(f"curl output: {result.stdout}")
+        dct = json.loads(result.stdout)
+        thecountryname = dct.get('country', '')
+        logging.debug(f"Detected country from curl: {thecountryname}")
+    except Exception as e:
+        logging.warning(f"IPinfo exception:\n{e}\nFalling back to using wtfismyip.com.")
+        public_json = requests.get("http://wtfismyip.com/json", verify=False).text
+        dct = json.loads(public_json)
+        thecountryname = dct['YourFuckingCountry']
+        logging.debug(f"Detailed results:\n{dct}")
+    return thecountryname.strip() if thecountryname else None
+
+
+def set_system_volume(percent: int, tolerance: int = 1,
+                      change_mute: Literal['mute', 'unmute'] | None = None) -> None:
+    """
+    Set the system volume to a specific level.
+    On Linux, this function will:
+    Try to set the PulseAudio default sink volume to `percent`% via pulsectl,
+    verify it, and if that fails, fall back to pactl.
+
+    Parameters:
+        percent     : Desired volume level (0–100).
+        tolerance   : Allowed percent difference when verifying (default: 1%).
+        change_mute : If set to "mute", the function will mute the audio instead of
+                      setting a specific volume. If set to "unmute", it will unmute
+                      the audio. If None, it will not change the mute state.
+
+    Returns:
+        None
+
+    Raises:
+        RuntimeError: If the volume could not be set or verified.
+    """
+    import subprocess
+    import logging
+    fallback_logging_config()
+    if sys.platform != 'linux':
+        raise RuntimeError("This function is only intended to run on Linux systems.")
+    fraction = percent / 100.0
+    mute_arg = None
+    if change_mute is not None:
+        if change_mute.lower() == "mute":
+            mute_arg = 1
+        elif change_mute.lower() == "unmute":
+            mute_arg = 0
+        else:
+            raise ValueError("change_mute must be 'mute', 'unmute', or None")
+    # First, try using pulsectl to set the volume.
+    try:
+        from pulsectl import Pulse, PulseError
+        logging.debug(f"[pulsectl] Attempting to set the volume to {percent}% using pulsectl...")
+        with Pulse('volume-setter') as pulse:
+            default_name = pulse.server_info().default_sink_name
+            sink = pulse.get_sink_by_name(default_name)
+            pulse.volume_set_all_chans(sink, fraction)
+            # Optionally set mute
+            if mute_arg is not None:
+                pulse.sink_mute(sink.index, mute_arg)
+                sink_after = pulse.get_sink_by_name(default_name)
+                # Verify mute state
+                if   mute_arg == 1 and not sink_after.mute:
+                    raise RuntimeError("[pulsectl] Volume is not muted even though the user requested it to be muted.")
+                elif mute_arg == 0 and     sink_after.mute:
+                    raise RuntimeError("[pulsectl] Volume is still muted even though the user requested it to be unmuted.")
+            else:
+                # Fetch volume again to verify
+                sink_after = pulse.get_sink_by_name(default_name)
+            vols = sink_after.volume.values  # list of channel floats 0.0–1.0
+            avg = sum(vols) / len(vols)
+            actual = int(round(avg * 100))
+            if abs(actual - percent) > tolerance:
+                raise RuntimeError(f"[pulsectl] Expected {percent}%, but got {actual}%")
+            if mute_arg is not None and sink_after.mute != mute_arg:
+                state = "muted" if sink_after.mute else "unmuted"
+                raise RuntimeError(f"[pulsectl] Mute verify failed: got {state}")
+            logging.info(f"[pulsectl] Volume set to {actual}%"
+                        + (f", {'muted' if mute_arg else 'unmuted'}" if mute_arg is not None else ""))
+            return  # Successfully set volume and verified
+    except (ImportError, ModuleNotFoundError):
+        logging.warning("[pulsectl] Not installed; falling back to pactl…")
+    except PulseError as e:
+        logging.error(f"[pulsectl] PulseError: {e}; falling back to pactl…")
+    except RuntimeError as e:
+        logging.error(f"{e}; falling back to pactl…")
+    except Exception as e:
+        logging.error(f"[pulsectl] Unexpected error: {e}; falling back to pactl…")
+    # Fallback to pactl if pulsectl is not available or fails
+    try:
+        logging.debug(f"[pactl] Attempting to set the volume to {percent}% using pactl...")
+        the_command = ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{percent}%"]
+        logging.debug(f"[pactl] Running command: {' '.join(the_command)}")
+        result = subprocess.run(the_command, check=True, capture_output=True, text=True)
+        if result.stderr:
+            raise RuntimeError(f"[pactl] Error setting volume: {result.stderr.strip()}")
+        # Set mute if requested
+        if mute_arg is not None:
+            cmd = ["pactl", "set-sink-mute", "@DEFAULT_SINK@", str(mute_arg)]
+            logging.debug(f"[pactl] {' '.join(cmd)}")
+            mute_result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            if mute_result.stderr:
+                raise RuntimeError(f"[pactl] Error setting mute: {mute_result.stderr.strip()}")
+            # Verify mute state
+            mute_check_cmd = ["pactl", "get-sink-mute", "@DEFAULT_SINK@"]
+            logging.debug(f"[pactl] Running command: {' '.join(mute_check_cmd)}")
+            mute_result = subprocess.run(mute_check_cmd, check=True, capture_output=True, text=True)
+            if mute_result.stderr:
+                raise RuntimeError(f"[pactl] Error getting mute state: {mute_result.stderr.strip()}")
+            mute_output = mute_result.stdout.strip()
+            if   mute_arg == 1 and "yes" not in mute_output:
+                raise RuntimeError("[pactl] Volume is not muted even though the user requested it to be muted.")
+            elif mute_arg == 0 and "no"  not in mute_output:
+                raise RuntimeError("[pactl] Volume is still muted even though the user requested it to be unmuted.")
+            logging.info(f"[pactl] Audio {'muted' if mute_arg else 'unmuted'}")
+        # Verify volume setting with pactl
+        the_command = ["pactl", "get-sink-volume", "@DEFAULT_SINK@"]
+        logging.debug(f"[pactl] Running command: {' '.join(the_command)}")
+        result = subprocess.run(the_command, check=True, capture_output=True, text=True)
+        if result.stderr:
+            raise RuntimeError(f"[pactl] Error getting volume: {result.stderr.strip()}")
+        output = result.stdout.strip()
+        # Example output: "Volume: front-left: 32768 / 100% / 32768 / 100%"
+        parts = output.split('/')
+        if len(parts) < 2:
+            raise RuntimeError(f"[pactl] Unexpected pactl output: {output}")
+        actual = int(parts[1].strip().replace('%', ''))
+        if abs(actual - percent) > tolerance:
+            raise RuntimeError(f"[pactl] Expected {percent}%, but got {actual}%")
+        logging.info(f"[pactl] Volume set to {percent}%")
+        return  # Successfully set volume and verified
+    except subprocess.CalledProcessError as e:
+        logging.error(f"[pactl] Failed to set volume: {e}")
+        raise
 
 
 def open_playlist_in_VLC(playlist: str, no_start:  bool = False) -> None:
