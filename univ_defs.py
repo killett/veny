@@ -2721,23 +2721,24 @@ def check_if_command_exists(command: str) -> bool:
     return subprocess.run(['which', command], capture_output=True).returncode == 0
 
 
-def open_terminal_and_run_command(the_command: str,
-                                  close_after: bool = False) -> None:
-    """Open a terminal window and run the_command while sourcing the .bashrc to access aliases. If close_after is True, the terminal will close after the command finishes."""
+def open_terminal_and_run_command(the_command: str, close_after: bool = False,
+                                  maximize_window: bool = False) -> None:
+    """Open a GNOME terminal, source ~/.bashrc (via bash -i), run the_command,
+    and optionally close or keep the window open. Optionally, maximize it."""
     import subprocess
     fallback_logging_config()
-    logging.info(f"Opening terminal and running '{the_command}'...")
-    # Adjust the terminal emulator if not using GNOME Terminal
+    logging.info(f"Opening terminal and running '{the_command}'…")
+    terminal_args = ['gnome-terminal']
+    if maximize_window:
+        # either of these works; here we use both for clarity
+        terminal_args += ['--window', '--maximize']
+    # Now tell bash to run the command, then exit or hand off to an interactive shell
     if close_after:
-        terminal_command = ['gnome-terminal',
-                            '--', 'bash', '-ic',
-                            f'{the_command}; exit']
+        bash_cmd = f'{the_command}; exit'
     else:
-        terminal_command = ['gnome-terminal',
-                            '--', 'bash', '-ic',
-                            f'{the_command}; exec bash']
-    
-    subprocess.Popen(terminal_command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        bash_cmd = f'{the_command}; exec bash'
+    terminal_args += ['--', 'bash', '-ic', bash_cmd]
+    subprocess.Popen(terminal_args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def is_process_running(process_name: str) -> bool:
@@ -2998,6 +2999,7 @@ def open_dir_in_VLC(the_dir: str, sort_choice: str = "sort_by_name",
     start_flag = "--no-playlist-autostart" if no_start else False
     # List to store files with their modification times
     files_with_times = []
+    dirs_with_times  = []  # Only used if not recursive
     if recursive:
         # Recursively iterate over the files in the directory
         for root, dirs, files in os.walk(the_dir):
@@ -3014,14 +3016,20 @@ def open_dir_in_VLC(the_dir: str, sort_choice: str = "sort_by_name",
                 files_with_times.append((mod_time, item_path))
             elif os.path.isdir(item_path):
                 mod_time = os.path.getmtime(item_path)
-                files_with_times.append((mod_time, item_path))
+                dirs_with_times.append((mod_time, item_path))
 
     if sort_choice == "sort_by_name":
-        # Sort files by name
-        files_with_times.sort(key=lambda x: x[1])
+        # Sort files by name, case-insensitively
+        files_with_times.sort(key=lambda x: x[1].casefold())
+        if len(dirs_with_times) > 0:
+            dirs_with_times.sort(key=lambda x: x[1].casefold())
     elif sort_choice == "sort_by_time":
         # Sort files by modification time (earliest first)
         files_with_times.sort(key=lambda x: x[0])
+        if len(dirs_with_times) > 0:
+            dirs_with_times.sort(key=lambda x: x[0])
+    # If present, put directories at the top of the list
+    files_with_times = dirs_with_times + files_with_times
     # Create the .m3u playlist content
     playlist_content = "#EXTM3U\n"
     for _, file_path in files_with_times:

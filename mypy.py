@@ -2473,7 +2473,19 @@ def _safe_eval_node(node: ast.AST) -> Any:
     - Lists, tuples, dicts
     - os.getcwd()
     - os.path.(abspath|join|dirname|realpath)(<literal strings>)
+    - pathlib.Path(<literal strings>).(resolve|absolute)() and .joinpath(<literal strings>…)
+    - The "/" operator for joining pathlib Paths.
     """
+    # --- support "/" operator for path-like objects ---
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        left  = _safe_eval_node(node.left)
+        right = _safe_eval_node(node.right)
+        # accept strings or any PathLike (Path, PosixPath, etc.)
+        if isinstance(left, (str, os.PathLike)) and isinstance(right, (str, os.PathLike)):
+            # Path(left) / right → Path; str(...) to get the string path
+            return str(Path(left) / right)
+        raise ValueError(f"Unsupported path division: {ast.unparse(node)}")
+
     # --- literals ---
     if isinstance(node, ast.Constant):
         # Python 3.8+: Constant covers str, int, float, bool, None
@@ -2513,14 +2525,57 @@ def _safe_eval_node(node: ast.AST) -> Any:
             and func.value.value.id == "os"
         ):
             method = func.attr
-            # only support these path methods
             allowed = {"abspath", "join", "dirname", "realpath"}
             if method in allowed:
-                # evaluate all args
                 arg_vals = [_safe_eval_node(arg) for arg in node.args]
                 if all(isinstance(v, str) for v in arg_vals):
                     path_fn = getattr(os.path, method)
                     return path_fn(*arg_vals)
+
+        # pathlib.Path(...).resolve()/absolute()
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr in {"resolve", "absolute"}
+            and isinstance(func.value, ast.Call)
+        ):
+            inner = func.value
+            inner_fn = inner.func
+            # detect Path(...) or pathlib.Path(...) or pathlib.PosixPath(...)
+            if (
+                (isinstance(inner_fn, ast.Name) and inner_fn.id in {"Path", "PosixPath"})
+                or (
+                    isinstance(inner_fn, ast.Attribute)
+                    and isinstance(inner_fn.value, ast.Name)
+                    and inner_fn.value.id == "pathlib"
+                    and inner_fn.attr in {"Path", "PosixPath"}
+                )
+            ) and len(inner.args) == 1:
+                arg = _safe_eval_node(inner.args[0])
+                if isinstance(arg, str):
+                    return str(getattr(Path(arg), func.attr)())
+
+        # pathlib.Path(...).joinpath(...)
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == "joinpath"
+            and isinstance(func.value, ast.Call)
+        ):
+            inner = func.value
+            inner_fn = inner.func
+            if (
+                (isinstance(inner_fn, ast.Name) and inner_fn.id in {"Path", "PosixPath"})
+                or (
+                    isinstance(inner_fn, ast.Attribute)
+                    and isinstance(inner_fn.value, ast.Name)
+                    and inner_fn.value.id == "pathlib"
+                    and inner_fn.attr in {"Path", "PosixPath"}
+                )
+            ) and len(inner.args) == 1:
+                base = _safe_eval_node(inner.args[0])
+                parts = [_safe_eval_node(arg) for arg in node.args]
+                if isinstance(base, str) and all(isinstance(p, str) for p in parts):
+                    return str(Path(base).joinpath(*parts))
+
         # unsupported call
         raise ValueError(f"Unsupported call: {ast.unparse(node)}")
 
@@ -2535,6 +2590,8 @@ def safe_eval(expr: str) -> Any | None:
       - lists, tuples, dicts of the above
       - os.getcwd()
       - os.path.(abspath|join|dirname|realpath)(<literal strings>)
+      - pathlib.Path(<literal strings>).(resolve|absolute)() and 
+        .joinpath(<literal strings>…) and the "/" operator for joining paths.
     Returns the evaluated Python object, or None on unsupported syntax.
     """
     try:
@@ -2967,7 +3024,7 @@ def find_imports_in_script(options: Options, first_path: str) -> None:
             used_imports.update(
                 collect_used_imports(
                     called_module,  # Use the extracted module name
-                    called_name,   # Use the extracted function name
+                    called_name,    # Use the extracted function name
                     call_graph,
                     modules_info,
                     visited_funcs
@@ -3565,14 +3622,14 @@ def _literal_str(expr_node: ast.AST) -> str | None:
     return None
 
 
-def get_literal_arg(args: list[ast.AST], idx: int, default: str = "") -> str:
+def get_evaluated_arg(args: list[ast.AST], idx: int, default: str = "") -> str:
     """
-    Safely pull a literal string out of args[idx], or return default.
+    Safely pull a string out of args[idx] via safe_eval(), or return default.
     """
     if idx < len(args):
-        s = _literal_str(args[idx])
-        if s is not None:
-            return s
+        val = safe_eval(ast.unparse(args[idx]))
+        if isinstance(val, str):
+            return val
     return default
 
 
@@ -3688,14 +3745,15 @@ class FileOperationsVisitor(ast.NodeVisitor):
         # Only examine open(...)
         if (isinstance(node.func, ast.Name) and node.func.id == 'open'
             and node.args):  # protect against calls without arguments
-            # Extract filename from either positional or keyword 'file'
-            filename = _literal_str(node.args[0])
+            # Extract filename via safe_eval (never raises—returns None on unsupported)
+            filename = safe_eval(ast.unparse(node.args[0]))
             for kw in node.keywords:
                 if kw.arg == 'file':
-                    maybe = _literal_str(kw.value)
+                    maybe = safe_eval(ast.unparse(kw.value))
                     if maybe:
                         filename = maybe
-            if filename:
+            # only proceed if we got a real string
+            if isinstance(filename, str):
                 # Extract mode from positional arg[1] or keyword 'mode'
                 mode = _literal_str(node.args[1]) if len(node.args) > 1 else None
                 for kw in node.keywords:
@@ -3723,10 +3781,11 @@ class FileOperationsVisitor(ast.NodeVisitor):
                 and node.func.value.func.value.id == 'pathlib'
                 and node.func.value.func.attr == 'Path'):
             method = node.func.attr
-            # first arg to Path(...) is the filename
-            path_arg = node.func.value.args[0] if node.func.value.args else None
-            filename = _literal_str(path_arg) if path_arg else None
-            if not filename:
+            # first arg to Path(...) is the filename: evaluate it fully
+            if not node.func.value.args:
+                return False
+            filename = safe_eval(ast.unparse(node.func.value.args[0]))
+            if not isinstance(filename, str):
                 return False
             # classify
             if method in ('read_text','read_bytes'):
@@ -3745,12 +3804,12 @@ class FileOperationsVisitor(ast.NodeVisitor):
                 and node.func.value.id == 'shutil'
                 and node.func.attr in ('copy','copy2','move','copytree','rmtree')
                 and len(node.args) >= 2):
-            src = _literal_str(node.args[0])
-            dst = _literal_str(node.args[1])
-            if src:
-                _record_IO(self.options, self.file_content, 'read_files', src, node)
+            src = safe_eval(ast.unparse(node.args[0]))
+            dst = safe_eval(ast.unparse(node.args[1]))
+            if isinstance(src, str):
+                _record_IO(self.options, self.file_content,  'read_files', src, node)
                 return True
-            if dst:
+            if isinstance(dst, str):
                 _record_IO(self.options, self.file_content, 'write_files', dst, node)
                 return True
         return False
@@ -3767,8 +3826,8 @@ class FileOperationsVisitor(ast.NodeVisitor):
         ):
             return False
         # 2) Extract the filename literal
-        filename = _literal_str(node.args[0])
-        if not filename:
+        filename = safe_eval(ast.unparse(node.args[0]))
+        if not isinstance(filename, str):
             return False
         # 3) Parse the flags argument into (can_read, can_write)
 
@@ -3929,9 +3988,9 @@ class FileOperationsVisitor(ast.NodeVisitor):
             and not full_ctor.endswith("zipfile.ZipFile")):
             return False
 
-        filename = get_literal_arg(inner_call.args, 0)
-        mode     = get_literal_arg(inner_call.args, 1, default='r')
-        if not filename:
+        filename = get_evaluated_arg(inner_call.args, 0)
+        mode     = get_evaluated_arg(inner_call.args, 1, default='r')
+        if not isinstance(filename, str):
             return False
 
         if mode.startswith('r') and method in ("extract", "extractall", "open"):
@@ -4348,7 +4407,6 @@ def get_file_operations(options: Options, script_path: str) -> None:
     if not file_content:
         raise ValueError(f"Failed to open {script_path} for file operations analysis.")
     tree = ast.parse(file_content, script_path)
-
     FileOperationsVisitor(options, file_content).visit(tree)
 
 
@@ -4711,12 +4769,12 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
             return False
 
         # 4) extract the local filename argument
-        local = get_literal_arg(inner_call.args, 1 if method == "get" else 0)
+        local = get_evaluated_arg(inner_call.args, 1 if method == "get" else 0)
         if not local:
             return False
 
         # 5) record I/O
-        kind = "read_files" if method == "get" else "write_files"
+        kind = "download_urls" if method == "get" else "upload_urls"
         _record_IO(self.options, self.file_content, kind, local, node)
         return True
 
@@ -4890,7 +4948,6 @@ def get_network_operations(options: Options, script_path: str) -> None:
     if not file_content:
         raise ValueError(f"Failed to open {script_path} for network operations analysis.")
     tree = ast.parse(file_content, script_path)
-
     NetworkOperationsVisitor(options, file_content).visit(tree)
 
 
