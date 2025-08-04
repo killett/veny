@@ -2471,40 +2471,57 @@ def _safe_eval_node(node: ast.AST) -> Any:
     Recursively evaluate a restricted subset of AST nodes:
     - Constants (strings, numbers, booleans, None)
     - Lists, tuples, dicts
-    - os.path.abspath(<string>)
+    - os.getcwd()
+    - os.path.(abspath|join|dirname|realpath)(<literal strings>)
     """
+    # --- literals ---
     if isinstance(node, ast.Constant):
         # Python 3.8+: Constant covers str, int, float, bool, None
         return node.value
 
+    # --- composite literals ---
     if isinstance(node, ast.List):
         return [_safe_eval_node(elt) for elt in node.elts]
-
     if isinstance(node, ast.Tuple):
         return tuple(_safe_eval_node(elt) for elt in node.elts)
-
     if isinstance(node, ast.Dict):
         return {
             _safe_eval_node(k): _safe_eval_node(v)
             for k, v in zip(node.keys, node.values)
         }
 
+    # --- calls ---
     if isinstance(node, ast.Call):
-        # Check for os.path.abspath
         func = node.func
-        # attr.value.value.id == 'os' && attr.value.attr == 'path' && attr.attr == 'abspath'
-        if (isinstance(func, ast.Attribute)
-            and func.attr == "abspath"
+
+        # os.getcwd()
+        if (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "os"
+            and func.attr == "getcwd"
+            and len(node.args) == 0
+        ):
+            return os.getcwd()
+
+        # os.path.* calls
+        if (
+            isinstance(func, ast.Attribute)
             and isinstance(func.value, ast.Attribute)
             and func.value.attr == "path"
             and isinstance(func.value.value, ast.Name)
-            and func.value.value.id == "os"):
-            # exactly one argument?
-            if len(node.args) == 1:
-                arg_val = _safe_eval_node(node.args[0])
-                if isinstance(arg_val, str):
-                    return os.path.abspath(arg_val)
-        # If it's not exactly os.path.abspath(str), fall through:
+            and func.value.value.id == "os"
+        ):
+            method = func.attr
+            # only support these path methods
+            allowed = {"abspath", "join", "dirname", "realpath"}
+            if method in allowed:
+                # evaluate all args
+                arg_vals = [_safe_eval_node(arg) for arg in node.args]
+                if all(isinstance(v, str) for v in arg_vals):
+                    path_fn = getattr(os.path, method)
+                    return path_fn(*arg_vals)
+        # unsupported call
         raise ValueError(f"Unsupported call: {ast.unparse(node)}")
 
     # anything else is disallowed
@@ -2516,7 +2533,8 @@ def safe_eval(expr: str) -> Any | None:
     Safely evaluate a Python expression string containing only:
       - literals (str, int, float, bool, None)
       - lists, tuples, dicts of the above
-      - os.path.abspath(<literal string>)
+      - os.getcwd()
+      - os.path.(abspath|join|dirname|realpath)(<literal strings>)
     Returns the evaluated Python object, or None on unsupported syntax.
     """
     try:
