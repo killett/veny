@@ -2743,11 +2743,15 @@ def open_terminal_and_run_command(the_command: str,
 def is_process_running(process_name: str) -> bool:
     """Check if a process with the given name is running."""
     import subprocess
+    fallback_logging_config()
     try:
-        # Use pgrep to search for the process
-        subprocess.run(['pgrep', '-x', process_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        the_command = ['pgrep', '-f', process_name]
+        results = subprocess.run(the_command, capture_output=True, text=True)
+        if results.returncode != 0:
+            return False
         return True
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error occurred: {e}")
         return False
 
 
@@ -2783,50 +2787,64 @@ def open_filemanager_with_dirs(directories: list) -> None:
             logging.warning(f"Directory does not exist: {directory}")
 
 
-def detect_country() -> str | None:
+def detect_country(force_wtfismyip: bool = False) -> str | None:
     """
     Detect the country of the IP address using ipinfo.io service.
     If the request fails, it falls back to wtfismyip.com service.
+
+    Parameters:
+        force_wtfismyip: If True, always use wtfismyip.com
+    
+    Returns:
+        The country name as a string, or None if detection fails.
+    
+    Raises:
+        ValueError: If the IPINFO_API_TOKEN environment variable is not set.
     """
     import subprocess
     import requests
     import json
-    try:
-        if 'IPINFO_API_TOKEN' in os.environ:
-            ipinfo_access_token = os.environ['IPINFO_API_TOKEN']
-        else:
-            raise ValueError("IPINFO_API_TOKEN environment variable is not set. If you don't have one, you can sign up for a free account here: https://ipinfo.io/signup")
+    if not force_wtfismyip:
+        logging.debug(f"force_wtfismyip={force_wtfismyip}.")
+        try:
+            if 'IPINFO_API_TOKEN' in os.environ:
+                ipinfo_access_token = os.environ['IPINFO_API_TOKEN']
+            else:
+                raise ValueError("IPINFO_API_TOKEN environment variable is not set. If you don't have one, you can sign up for a free account here: https://ipinfo.io/signup")
 
-        logging.info("Attempting to detect country using IPinfo...")
-        # Uncomment the following lines if you want to use the ipinfo library instead of curl
-        # import ipinfo
-        # handler = ipinfo.getHandler(ipinfo_access_token,
-        #                             request_options={'timeout': ipinfo_timeout_seconds})
-        # details = handler.getDetails()
-        # logging.debug(f"IPinfo DETAILS:\n{details}")
-        # thecountryname = details.country
-        the_command = ["curl", f"https://api.ipinfo.io/lite/8.8.8.8?token={ipinfo_access_token}"]
-        logging.debug(f"Running command: {' '.join(the_command)}")
-        result = subprocess.run(the_command, capture_output=True,
-                                text=True, timeout=5)
-        if result.returncode != 0:
-            logging.error(f"curl command failed with return code {result.returncode}")
-            raise Exception("Curl command failed")
-        logging.debug(f"curl output: {result.stdout}")
-        dct = json.loads(result.stdout)
-        thecountryname = dct.get('country', '')
-        logging.debug(f"Detected country from curl: {thecountryname}")
-    except Exception as e:
-        logging.warning(f"IPinfo exception:\n{e}\nFalling back to using wtfismyip.com.")
-        public_json = requests.get("http://wtfismyip.com/json", verify=False).text
-        dct = json.loads(public_json)
-        thecountryname = dct['YourFuckingCountry']
-        logging.debug(f"Detailed results:\n{dct}")
+            logging.info("Attempting to detect country using IPinfo...")
+            # Uncomment the following lines if you want to use the ipinfo library instead of curl
+            # import ipinfo
+            # handler = ipinfo.getHandler(ipinfo_access_token,
+            #                             request_options={'timeout': ipinfo_timeout_seconds})
+            # details = handler.getDetails()
+            # logging.debug(f"IPinfo DETAILS:\n{details}")
+            # thecountryname = details.country
+            the_command = ["curl", f"https://api.ipinfo.io/lite/8.8.8.8?token={ipinfo_access_token}"]
+            logging.debug(f"Running command: {' '.join(the_command)}")
+            result = subprocess.run(the_command, capture_output=True,
+                                    text=True, timeout=5)
+            if result.returncode != 0:
+                logging.error(f"curl command failed with return code {result.returncode}")
+                raise Exception("Curl command failed")
+            logging.debug(f"curl output: {result.stdout}")
+            dct = json.loads(result.stdout)
+            thecountryname = dct.get('country', '')
+            logging.debug(f"Detected country from curl: {thecountryname}")
+        except Exception as e:
+            logging.warning(f"IPinfo exception:\n{e}\nFalling back to using wtfismyip.com.")
+
+    public_json = requests.get("http://wtfismyip.com/json", verify=False).text
+    dct = json.loads(public_json)
+    thecountryname = dct['YourFuckingCountry']
+    logging.debug(f"Detailed results:\n{dct}")
+
     return thecountryname.strip() if thecountryname else None
 
 
 def set_system_volume(percent: int, tolerance: int = 1,
-                      change_mute: Literal['mute', 'unmute'] | None = None) -> None:
+                      change_mute: Literal['mute', 'unmute'] | None = None,
+                      force_pactl: bool = False) -> None:
     """
     Set the system volume to a specific level.
     On Linux, this function will:
@@ -2839,6 +2857,7 @@ def set_system_volume(percent: int, tolerance: int = 1,
         change_mute : If set to "mute", the function will mute the audio instead of
                       setting a specific volume. If set to "unmute", it will unmute
                       the audio. If None, it will not change the mute state.
+        force_pactl : If True, always use pactl even if pulsectl is available (default: False).
 
     Returns:
         None
@@ -2850,7 +2869,7 @@ def set_system_volume(percent: int, tolerance: int = 1,
     import logging
     fallback_logging_config()
     if sys.platform != 'linux':
-        raise RuntimeError("This function is only intended to run on Linux systems.")
+        raise RuntimeError("This set_system_volume() function is only intended to run on Linux systems.")
     fraction = percent / 100.0
     mute_arg = None
     if change_mute is not None:
@@ -2861,90 +2880,94 @@ def set_system_volume(percent: int, tolerance: int = 1,
         else:
             raise ValueError("change_mute must be 'mute', 'unmute', or None")
     # First, try using pulsectl to set the volume.
-    try:
-        from pulsectl import Pulse, PulseError
-        logging.debug(f"[pulsectl] Attempting to set the volume to {percent}% using pulsectl...")
-        with Pulse('volume-setter') as pulse:
-            default_name = pulse.server_info().default_sink_name
-            sink = pulse.get_sink_by_name(default_name)
-            pulse.volume_set_all_chans(sink, fraction)
-            # Optionally set mute
-            if mute_arg is not None:
-                pulse.sink_mute(sink.index, mute_arg)
-                sink_after = pulse.get_sink_by_name(default_name)
-                # Verify mute state
-                if   mute_arg == 1 and not sink_after.mute:
-                    raise RuntimeError("[pulsectl] Volume is not muted even though the user requested it to be muted.")
-                elif mute_arg == 0 and     sink_after.mute:
-                    raise RuntimeError("[pulsectl] Volume is still muted even though the user requested it to be unmuted.")
-            else:
-                # Fetch volume again to verify
-                sink_after = pulse.get_sink_by_name(default_name)
-            vols = sink_after.volume.values  # list of channel floats 0.0–1.0
-            avg = sum(vols) / len(vols)
-            actual = int(round(avg * 100))
-            if abs(actual - percent) > tolerance:
-                raise RuntimeError(f"[pulsectl] Expected {percent}%, but got {actual}%")
-            if mute_arg is not None and sink_after.mute != mute_arg:
-                state = "muted" if sink_after.mute else "unmuted"
-                raise RuntimeError(f"[pulsectl] Mute verify failed: got {state}")
-            logging.info(f"[pulsectl] Volume set to {actual}%"
-                        + (f", {'muted' if mute_arg else 'unmuted'}" if mute_arg is not None else ""))
-            return  # Successfully set volume and verified
-    except (ImportError, ModuleNotFoundError):
-        logging.warning("[pulsectl] Not installed; falling back to pactl…")
-    except PulseError as e:
-        logging.error(f"[pulsectl] PulseError: {e}; falling back to pactl…")
-    except RuntimeError as e:
-        logging.error(f"{e}; falling back to pactl…")
-    except Exception as e:
-        logging.error(f"[pulsectl] Unexpected error: {e}; falling back to pactl…")
+    if not force_pactl:
+        logging.debug(f"force_pactl={force_pactl}.")
+        try:
+            from pulsectl import Pulse, PulseError
+            logging.debug(f"[pulsectl] Attempting to set the volume to {percent}% using pulsectl...")
+            with Pulse('volume-setter') as pulse:
+                default_name = pulse.server_info().default_sink_name
+                sink = pulse.get_sink_by_name(default_name)
+                pulse.sink_suspend(sink.index, False)  # <— wake it up if it’s suspended
+                pulse.volume_set_all_chans(sink, fraction)
+                # Optionally set mute
+                if mute_arg is not None:
+                    pulse.sink_mute(sink.index, mute_arg)
+                    sink_after = pulse.get_sink_by_name(default_name)
+                    # Verify mute state
+                    if   mute_arg == 1 and not sink_after.mute:
+                        raise RuntimeError("[pulsectl] Volume is not muted even though the user requested it to be muted.")
+                    elif mute_arg == 0 and     sink_after.mute:
+                        raise RuntimeError("[pulsectl] Volume is still muted even though the user requested it to be unmuted.")
+                else:
+                    # Fetch volume again to verify
+                    sink_after = pulse.get_sink_by_name(default_name)
+                vols = sink_after.volume.values  # list of channel floats 0.0–1.0
+                avg = sum(vols) / len(vols)
+                actual = int(round(avg * 100))
+                if abs(actual - percent) > tolerance:
+                    raise RuntimeError(f"[pulsectl] Expected {percent}%, but got {actual}%")
+                if mute_arg is not None and sink_after.mute != mute_arg:
+                    state = "muted" if sink_after.mute else "unmuted"
+                    raise RuntimeError(f"[pulsectl] Mute verify failed: got {state}")
+                logging.info(f"[pulsectl] Volume set to {actual}%"
+                            + (f", {'muted' if mute_arg else 'unmuted'}" if mute_arg is not None else ""))
+                return  # Successfully set volume and verified
+        except (ImportError, ModuleNotFoundError):
+            logging.warning("[pulsectl] Not installed; falling back to pactl…")
+        except PulseError as e:
+            logging.error(f"[pulsectl] PulseError: {e}; falling back to pactl…")
+        except RuntimeError as e:
+            logging.error(f"{e}; falling back to pactl…")
+        except Exception as e:
+            logging.error(f"[pulsectl] Unexpected error: {e}; falling back to pactl…")
+
     # Fallback to pactl if pulsectl is not available or fails
-    try:
-        logging.debug(f"[pactl] Attempting to set the volume to {percent}% using pactl...")
-        the_command = ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{percent}%"]
-        logging.debug(f"[pactl] Running command: {' '.join(the_command)}")
-        result = subprocess.run(the_command, check=True, capture_output=True, text=True)
-        if result.stderr:
-            raise RuntimeError(f"[pactl] Error setting volume: {result.stderr.strip()}")
-        # Set mute if requested
-        if mute_arg is not None:
-            cmd = ["pactl", "set-sink-mute", "@DEFAULT_SINK@", str(mute_arg)]
-            logging.debug(f"[pactl] {' '.join(cmd)}")
-            mute_result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-            if mute_result.stderr:
-                raise RuntimeError(f"[pactl] Error setting mute: {mute_result.stderr.strip()}")
-            # Verify mute state
-            mute_check_cmd = ["pactl", "get-sink-mute", "@DEFAULT_SINK@"]
-            logging.debug(f"[pactl] Running command: {' '.join(mute_check_cmd)}")
-            mute_result = subprocess.run(mute_check_cmd, check=True, capture_output=True, text=True)
-            if mute_result.stderr:
-                raise RuntimeError(f"[pactl] Error getting mute state: {mute_result.stderr.strip()}")
-            mute_output = mute_result.stdout.strip()
-            if   mute_arg == 1 and "yes" not in mute_output:
-                raise RuntimeError("[pactl] Volume is not muted even though the user requested it to be muted.")
-            elif mute_arg == 0 and "no"  not in mute_output:
-                raise RuntimeError("[pactl] Volume is still muted even though the user requested it to be unmuted.")
-            logging.info(f"[pactl] Audio {'muted' if mute_arg else 'unmuted'}")
-        # Verify volume setting with pactl
-        the_command = ["pactl", "get-sink-volume", "@DEFAULT_SINK@"]
-        logging.debug(f"[pactl] Running command: {' '.join(the_command)}")
-        result = subprocess.run(the_command, check=True, capture_output=True, text=True)
-        if result.stderr:
-            raise RuntimeError(f"[pactl] Error getting volume: {result.stderr.strip()}")
-        output = result.stdout.strip()
-        # Example output: "Volume: front-left: 32768 / 100% / 32768 / 100%"
-        parts = output.split('/')
-        if len(parts) < 2:
-            raise RuntimeError(f"[pactl] Unexpected pactl output: {output}")
-        actual = int(parts[1].strip().replace('%', ''))
-        if abs(actual - percent) > tolerance:
-            raise RuntimeError(f"[pactl] Expected {percent}%, but got {actual}%")
-        logging.info(f"[pactl] Volume set to {percent}%")
-        return  # Successfully set volume and verified
-    except subprocess.CalledProcessError as e:
-        logging.error(f"[pactl] Failed to set volume: {e}")
-        raise
+    logging.debug(f"[pactl] Attempting to set the volume to {percent}% using pactl...")
+    the_command = ["pactl", "suspend-sink", "@DEFAULT_SINK@", "0"]
+    logging.debug(f"[pactl] Running command: {' '.join(the_command)}")
+    result = subprocess.run(the_command, check=True, capture_output=True, text=True)
+    if result.stderr:
+        raise RuntimeError(f"[pactl] Error waking up sink from suspension: {result.stderr.strip()}")
+    the_command = ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{percent}%"]
+    logging.debug(f"[pactl] Running command: {' '.join(the_command)}")
+    result = subprocess.run(the_command, check=True, capture_output=True, text=True)
+    if result.stderr:
+        raise RuntimeError(f"[pactl] Error setting volume: {result.stderr.strip()}")
+    # Set mute if requested
+    if mute_arg is not None:
+        cmd = ["pactl", "set-sink-mute", "@DEFAULT_SINK@", str(mute_arg)]
+        logging.debug(f"[pactl] {' '.join(cmd)}")
+        mute_result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        if mute_result.stderr:
+            raise RuntimeError(f"[pactl] Error setting mute: {mute_result.stderr.strip()}")
+        # Verify mute state
+        mute_check_cmd = ["pactl", "get-sink-mute", "@DEFAULT_SINK@"]
+        logging.debug(f"[pactl] Running command: {' '.join(mute_check_cmd)}")
+        mute_result = subprocess.run(mute_check_cmd, check=True, capture_output=True, text=True)
+        if mute_result.stderr:
+            raise RuntimeError(f"[pactl] Error getting mute state: {mute_result.stderr.strip()}")
+        mute_output = mute_result.stdout.strip()
+        if   mute_arg == 1 and "yes" not in mute_output:
+            raise RuntimeError("[pactl] Volume is not muted even though the user requested it to be muted.")
+        elif mute_arg == 0 and "no"  not in mute_output:
+            raise RuntimeError("[pactl] Volume is still muted even though the user requested it to be unmuted.")
+        logging.info(f"[pactl] Audio {'muted' if mute_arg else 'unmuted'}")
+    # Verify volume setting with pactl
+    the_command = ["pactl", "get-sink-volume", "@DEFAULT_SINK@"]
+    logging.debug(f"[pactl] Running command: {' '.join(the_command)}")
+    result = subprocess.run(the_command, check=True, capture_output=True, text=True)
+    if result.stderr:
+        raise RuntimeError(f"[pactl] Error getting volume: {result.stderr.strip()}")
+    output = result.stdout.strip()
+    # Example output: "Volume: front-left: 32768 / 100% / 32768 / 100%"
+    parts = output.split('/')
+    if len(parts) < 2:
+        raise RuntimeError(f"[pactl] Unexpected pactl output: {output}")
+    actual = int(parts[1].strip().replace('%', ''))
+    if abs(actual - percent) > tolerance:
+        raise RuntimeError(f"[pactl] Expected {percent}%, but got {actual}%")
+    logging.info(f"[pactl] Volume set to {percent}%")
 
 
 def open_playlist_in_VLC(playlist: str, no_start:  bool = False) -> None:
@@ -3017,7 +3040,23 @@ def open_dir_in_VLC(the_dir: str, sort_choice: str = "sort_by_name",
 
 
 def remove_prefix_from_filename(filepath: str, prefix: str) -> bool:
-    """If the given filepath's base filename starts with the given prefix, remove the prefix, move the file (but only if that doesn't cause errors) and return True. Otherwise, return False."""
+    """
+    If the given filepath's base filename starts with the given prefix:
+      1. Remove the prefix (and any " _-" immediately following it).
+      2. Move the file (but only if that doesn't cause errors).
+    
+    Parameters:
+    - filepath: The path to the file whose name may need to be changed.
+    - prefix: The prefix to remove from the filename.
+
+    Returns:
+    True if the file was successfully renamed, or if it didn't need renaming.
+    False if the file was not renamed because it didn't start with the prefix,
+    or if the new filename already exists.
+
+    Raises:
+    OSError: If the rename operation fails due to an OS error (e.g., permission denied).
+    """
     file = os.path.basename(filepath)
     if file.startswith(prefix):
         new_file = file.replace(prefix, "", 1)  # Replace only the first occurrence
