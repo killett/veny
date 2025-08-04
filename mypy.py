@@ -2958,21 +2958,24 @@ def find_imports_in_script(options: Options, first_path: str) -> None:
             logging.debug(f"Used imports collected from '{called_name}' in '{called_module}': {used_imports}")
         logging.debug(f"Used imports after collecting from module {module_name}: {used_imports}")
     collect_imports_from_module(os.path.splitext(os.path.basename(first_path))[0])
-    options.all_imports.update(used_imports)
-    # Now process used imports and recursively process new local modules
+    # Now process used imports and recursively dive into any new local modules.
+    processed_used_imports: set[str] = set()
     new_modules_found = True
     while new_modules_found:
         new_modules_found = False
         for import_name in used_imports.copy():
-            if import_name in options.standard_modules or import_name in options.all_imports:
-                continue  # Skip standard modules and already processed imports
+            # Skip built-ins or any we've already handled this round
+            if import_name in options.standard_modules or import_name in processed_used_imports:
+                continue
+            processed_used_imports.add(import_name)
+            process_import(options, import_name, first_path)
             if import_name in options.custom_modules:
+                # It's a local module we previously discovered—enqueue it for parsing
                 module_file_path = options.custom_modules[import_name]
-                module_name = import_name
-                if module_name not in processed_modules:
+                if import_name not in processed_modules:
                     modules_to_process.append(module_file_path)
+                    processed_modules.add(import_name)
                     new_modules_found = True
-                    processed_modules.add(module_name)
                     # Process the new module
                     file_content = ud.my_fopen(module_file_path, rawlog=options.rawlog)
                     if not file_content:
@@ -2982,10 +2985,11 @@ def find_imports_in_script(options: Options, first_path: str) -> None:
                     if not tree:
                         logging.error(f"Failed to parse the file: {module_file_path}")
                         continue
-                    collector = ImportFunctionCollector(module_name, options, module_file_path)
+                    collector = ImportFunctionCollector(import_name, options, module_file_path)
                     collector.visit(tree)
                     module_info = collector.module_info
-                    modules_info[module_name] = module_info
+                    modules_info[import_name] = module_info
+                    used_imports.update(module_info.top_level_imports)
                     # Process top-level imports to find more local modules
                     for new_import in module_info.top_level_imports:
                         if new_import in options.standard_modules:
@@ -2995,12 +2999,7 @@ def find_imports_in_script(options: Options, first_path: str) -> None:
                             module_file_path = options.custom_modules.get(new_import)
                             if module_file_path and new_import not in processed_modules:
                                 modules_to_process.append(module_file_path)
-                    # Rebuild call graph and collect used imports again
                     call_graph = build_call_graph(modules_info)
-                    used_imports.clear()
-                    visited_funcs.clear()
-                    collect_imports_from_module(os.path.splitext(os.path.basename(first_path))[0])
-                    options.all_imports.update(used_imports)
             else:
                 # If not a local module, add to options.all_imports
                 options.all_imports.add(import_name)
