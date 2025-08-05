@@ -2466,1153 +2466,6 @@ def add_alias(options: Options) -> None:
                 add_alias_to_rc_file(options)
 
 
-def _safe_eval_node(node: ast.AST) -> Any:
-    """
-    Recursively evaluate a restricted subset of AST nodes:
-    - Constants (strings, numbers, booleans, None)
-    - Lists, tuples, dicts
-    - os.getcwd()
-    - os.path.(abspath|join|dirname|realpath)(<literal strings>)
-    - pathlib.Path(<literal strings>).(resolve|absolute)() and .joinpath(<literal strings>…)
-    - The "/" operator for joining pathlib Paths.
-    """
-    # --- support "/" operator for path-like objects ---
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-        left  = _safe_eval_node(node.left)
-        right = _safe_eval_node(node.right)
-        # accept strings or any PathLike (Path, PosixPath, etc.)
-        if isinstance(left, (str, os.PathLike)) and isinstance(right, (str, os.PathLike)):
-            # Path(left) / right → Path; str(...) to get the string path
-            return str(Path(left) / right)
-        raise ValueError(f"Unsupported path division: {ast.unparse(node)}")
-
-    # --- literals ---
-    if isinstance(node, ast.Constant):
-        # Python 3.8+: Constant covers str, int, float, bool, None
-        return node.value
-
-    # --- composite literals ---
-    if isinstance(node, ast.List):
-        return [_safe_eval_node(elt) for elt in node.elts]
-    if isinstance(node, ast.Tuple):
-        return tuple(_safe_eval_node(elt) for elt in node.elts)
-    if isinstance(node, ast.Dict):
-        return {
-            _safe_eval_node(k): _safe_eval_node(v)
-            for k, v in zip(node.keys, node.values)
-        }
-
-    # --- calls ---
-    if isinstance(node, ast.Call):
-        func = node.func
-
-        # os.getcwd()
-        if (
-            isinstance(func, ast.Attribute)
-            and isinstance(func.value, ast.Name)
-            and func.value.id == "os"
-            and func.attr == "getcwd"
-            and len(node.args) == 0
-        ):
-            return os.getcwd()
-
-        # os.path.* calls
-        if (
-            isinstance(func, ast.Attribute)
-            and isinstance(func.value, ast.Attribute)
-            and func.value.attr == "path"
-            and isinstance(func.value.value, ast.Name)
-            and func.value.value.id == "os"
-        ):
-            method = func.attr
-            allowed = {"abspath", "join", "dirname", "realpath"}
-            if method in allowed:
-                arg_vals = [_safe_eval_node(arg) for arg in node.args]
-                if all(isinstance(v, str) for v in arg_vals):
-                    path_fn = getattr(os.path, method)
-                    return path_fn(*arg_vals)
-
-        # pathlib.Path(...).resolve()/absolute()
-        if (
-            isinstance(func, ast.Attribute)
-            and func.attr in {"resolve", "absolute"}
-            and isinstance(func.value, ast.Call)
-        ):
-            inner = func.value
-            inner_fn = inner.func
-            # detect Path(...) or pathlib.Path(...) or pathlib.PosixPath(...)
-            if (
-                (isinstance(inner_fn, ast.Name) and inner_fn.id in {"Path", "PosixPath"})
-                or (
-                    isinstance(inner_fn, ast.Attribute)
-                    and isinstance(inner_fn.value, ast.Name)
-                    and inner_fn.value.id == "pathlib"
-                    and inner_fn.attr in {"Path", "PosixPath"}
-                )
-            ) and len(inner.args) == 1:
-                arg = _safe_eval_node(inner.args[0])
-                if isinstance(arg, str):
-                    return str(getattr(Path(arg), func.attr)())
-
-        # pathlib.Path(...).joinpath(...)
-        if (
-            isinstance(func, ast.Attribute)
-            and func.attr == "joinpath"
-            and isinstance(func.value, ast.Call)
-        ):
-            inner = func.value
-            inner_fn = inner.func
-            if (
-                (isinstance(inner_fn, ast.Name) and inner_fn.id in {"Path", "PosixPath"})
-                or (
-                    isinstance(inner_fn, ast.Attribute)
-                    and isinstance(inner_fn.value, ast.Name)
-                    and inner_fn.value.id == "pathlib"
-                    and inner_fn.attr in {"Path", "PosixPath"}
-                )
-            ) and len(inner.args) == 1:
-                base = _safe_eval_node(inner.args[0])
-                parts = [_safe_eval_node(arg) for arg in node.args]
-                if isinstance(base, str) and all(isinstance(p, str) for p in parts):
-                    return str(Path(base).joinpath(*parts))
-
-        # unsupported call
-        raise ValueError(f"Unsupported call: {ast.unparse(node)}")
-
-    # anything else is disallowed
-    raise ValueError(f"Unsupported expression: {ast.dump(node)}")
-
-
-def safe_eval(expr: str) -> Any | None:
-    """
-    Safely evaluate a Python expression string containing only:
-      - literals (str, int, float, bool, None)
-      - lists, tuples, dicts of the above
-      - os.getcwd()
-      - os.path.(abspath|join|dirname|realpath)(<literal strings>)
-      - pathlib.Path(<literal strings>).(resolve|absolute)() and 
-        .joinpath(<literal strings>…) and the "/" operator for joining paths.
-    Returns the evaluated Python object, or None on unsupported syntax.
-    """
-    try:
-        # Parse in 'eval' mode so we get an Expression node
-        tree = ast.parse(expr, mode="eval")
-        return _safe_eval_node(tree.body)  # tree.body is the root expr
-    except (SyntaxError, ValueError) as e:
-        logging.debug(f"safe_eval: Unsupported expression: {expr!r}: {e}")
-        return None
-
-
-class SysPathVisitor(ast.NodeVisitor):
-    """Visitor class to extract sys.path modifications."""
-    def __init__(self) -> None:
-        """Initialize the sys.path visitor."""
-        self.paths = set()
-
-    def visit_Assign(self, node: ast.Assign) -> None:
-        """Visit an assignment statement and check if it's modifying sys.path."""
-        if isinstance(node.targets[0], ast.Attribute) and \
-           isinstance(node.targets[0].value, ast.Name) and \
-           node.targets[0].value.id == 'sys' and \
-           node.targets[0].attr == 'path':
-            paths = safe_eval(ast.unparse(node.value))
-            if isinstance(paths, list):
-                for path in paths:
-                    self.paths.add(path)
-        self.generic_visit(node)
-
-    def visit_Call(self, node: ast.Call) -> None:
-        """Visit a function call and check if it's modifying sys.path."""
-        if isinstance(node.func, ast.Attribute) and \
-           isinstance(node.func.value, ast.Attribute) and \
-           isinstance(node.func.value.value, ast.Name) and \
-           node.func.value.value.id == 'sys' and \
-           node.func.value.attr == 'path' and \
-           node.func.attr in {'append', 'insert'}:
-            if node.args:
-                path = safe_eval(ast.unparse(node.args[-1]))
-                if path:
-                    self.paths.add(path)
-        self.generic_visit(node)
-
-
-def process_import(options: Options, module_name: str, file_path: str) -> bool:
-    """Process an import by checking if it's a local custom module or a standard import, and handle it accordingly."""
-    if module_name in options.standard_modules:
-        logging.debug(f"Skipping standard library import: {module_name}")
-        return False
-
-    logging.debug(f"Processing import: {module_name} from file {file_path}")
-
-    base_dir = os.path.dirname(os.path.abspath(file_path))
-    module_path = module_name.replace('.', os.sep)
-
-    # Avoid loopback to the same file
-    script_name = os.path.splitext(os.path.basename(file_path))[0]
-    if module_name == script_name:
-        logging.debug(f"Avoiding loopback to the same file: {module_name}")
-        return False
-    if module_name == 'pipreqs' and f'{options.my_name}.py' in file_path:
-        logging.debug(f"Avoiding loopback to pipreqs in {options.my_name}.py")
-        return False
-    logging.debug(f"Constructed module path: {module_path}")
-
-    # Check if the import is a .py file in the same directory
-    potential_file_path = os.path.abspath(os.path.join(base_dir, module_path + '.py'))
-    if os.path.isfile(potential_file_path) and potential_file_path not in options.samedir_files:
-        options.custom_modules[module_name] = potential_file_path
-        options.loaded_custom_modules.add(module_name)
-        options.samedir_files.append(potential_file_path)
-        logging.debug(f"Added same directory file: {potential_file_path}")
-        return True
-
-    # Check if the import is a package (directory with __init__.py)
-    potential_dir_path = os.path.abspath(os.path.join(base_dir, module_path))
-    logging.debug(f"Constructed potential directory path: {potential_dir_path}")
-    if os.path.isdir(potential_dir_path) and os.path.isfile(os.path.join(potential_dir_path, '__init__.py')) and module_path not in options.subfolders:
-        options.custom_modules[module_name] = potential_dir_path
-        options.loaded_custom_modules.add(module_name)
-        logging.debug(f"Resolved local package to: {potential_dir_path}")
-        options.subfolders.append(module_path)
-        logging.debug(f"Added subfolder: {module_path}")
-        return True
-
-    # Check if this module is in the custom_modules dictionary.
-    if module_name in options.custom_modules:
-        module_file = options.custom_modules[module_name]
-        if module_name not in options.loaded_custom_modules:
-            options.loaded_custom_modules.add(module_name)
-            logging.debug(f"Resolved via custom_modules: {module_name} → {module_file}")
-        return True
-
-    logging.debug(f"Could not resolve local import, treating as external: {module_name}")
-    return False
-
-
-class FunctionInfo:
-    """Class to hold information about a function."""
-    def __init__(self, function_name: str) -> None:
-        """Initialize the function information."""
-        self.function_name                 = function_name
-        self.imports_in_function: set[str] = set()
-        self.function_calls:      set[str] = set()
-
-
-class ModuleInfo:
-    """Class to hold information about a module."""
-    def __init__(self, module_name: str) -> None:
-        """Initialize the module information."""
-        self.module_name                                = module_name
-        self.top_level_imports: set[str]                = set()
-        self.functions:         dict[str, FunctionInfo] = {}
-        self.top_level_calls:   set[str]                = set()
-        self.aliases:           dict[str, str]          = {}
-        self.classes:           set[str]                = set()
-
-
-class ImportFunctionCollector(ast.NodeVisitor):
-    """Visitor class to collect function and import information from a module."""
-    def __init__(self, module_name: str, options: Options,
-                 file_path: str) -> None:
-        """Initialize the import function collector."""
-        self.module_info = ModuleInfo(module_name)
-        self.current_function = None
-        self.current_class    = None
-        self.aliases          = {}
-        self.options          = options
-        self.file_path        = file_path
-        self.base_classes     = {}
-
-    def visit_Import(self, node: ast.Import) -> None:
-        """Visit an import statement and add the imported module to the module's list of imports."""
-        for alias in node.names:
-            name = alias.asname or alias.name
-            full_name = alias.name
-            top_level_package = full_name.split('.')[0]
-            self.aliases[name] = full_name
-            if self.current_function:
-                self.module_info.functions[self.current_function].imports_in_function.add(top_level_package)
-            else:
-                self.module_info.top_level_imports.add(top_level_package)
-        self.generic_visit(node)
-
-    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        """Visit an import from statement and add the imported module to the module's list of imports."""
-        module = node.module or ''
-        # Extract the top-level package
-        top_level_package = module.split('.')[0] if module else ''
-        for alias in node.names:
-            full_name = f"{module}.{alias.name}" if module else alias.name
-            name = alias.asname or alias.name
-            self.aliases[name] = full_name
-            if self.current_function:
-                self.module_info.functions[self.current_function].imports_in_function.add(top_level_package)
-            else:
-                self.module_info.top_level_imports.add(top_level_package)
-        self.generic_visit(node)
-
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        """Visit a function definition and add it to the module's list of functions."""
-        func_name = node.name
-        if self.current_class:
-            func_name = f"{self.current_class}.{func_name}"
-        self.module_info.functions[func_name] = FunctionInfo(func_name)
-        logging.debug(f"Added function: {func_name} to module {self.module_info.module_name}")
-        prev_function = self.current_function
-        self.current_function = func_name
-        self.generic_visit(node)
-        self.current_function = prev_function
-
-    def visit_ClassDef(self, node: ast.ClassDef) -> None:
-        """Visit a class definition and set the current class."""
-        self.module_info.classes.add(node.name)
-        prev_class = self.current_class
-        self.current_class = node.name
-
-        # Record base classes before visiting the body
-        base_class_names = []
-        for base in node.bases:
-            base_name = self.get_full_name(base)
-            if base_name:
-                parts = base_name.split('.')
-                if parts and parts[0] in self.aliases:
-                    alias_target = self.aliases[parts[0]]
-                    base_name = alias_target + '.' + '.'.join(parts[1:])
-                base_class_names.append(base_name)
-        self.base_classes[node.name] = base_class_names
-        logging.debug(f"Recorded base classes for {node.name}: {self.base_classes[node.name]}")
-        # Now that base_classes is set, visit the class body
-        self.generic_visit(node)
-        self.current_class = prev_class
-
-    def extract_module_name_from_import(self, node: ast.Call) -> str | None:
-        """Extract the module name from a dynamic import using __import__."""
-        if node.args:
-            module_arg = node.args[0]
-            if isinstance(module_arg, ast.Constant) and isinstance(module_arg.value, str):
-                module_name = module_arg.value.split('.')[0]  # Get top-level package
-                return module_name
-            else:
-                # Handle cases where module name cannot be resolved
-                logging.error(f"Cannot resolve dynamic import with non-constant module name: {ast.unparse(node)}")
-                return None
-        else:
-            logging.error(f"No arguments provided to __import__(): {ast.unparse(node)}")
-            return None
-
-    def visit_Call(self, node: ast.Call) -> None:
-        """Visit a function call and add it to the function's list of calls."""
-        func_name = self.get_full_name(node.func)
-        original_func_name = func_name
-
-        if func_name:
-            parts = func_name.split('.')
-            if parts[0] in self.module_info.classes:
-                # It's a class from this module
-                if func_name in self.module_info.classes:
-                    # func_name is exactly the class name, treat as constructor
-                    logging.debug(f"{func_name} is identified as a class. Converting to __init__ call.")
-                    func_name = f"{self.module_info.module_name}.{func_name}.__init__"
-                else:
-                    # It's a method/attribute call on a class from this module
-                    logging.debug(f"{func_name} is a method/attribute on a class from the same module. Qualifying with module name.")
-                    func_name = f"{self.module_info.module_name}.{func_name}"
-            else:
-                logging.debug(f"{func_name} is not a class, leaving as-is.")
-
-            # If func_name corresponds to a class in this module, treat it as calling __init__
-            if func_name in self.module_info.classes:
-                func_name = f"{func_name}.__init__"
-
-            # Handle dynamic imports
-            if func_name == '__import__':
-                module_name = self.extract_module_name_from_import(node)
-                if module_name:
-                    if self.current_function:
-                        self.module_info.functions[self.current_function].imports_in_function.add(module_name)
-                    else:
-                        self.module_info.top_level_imports.add(module_name)
-                else:
-                    logging.warning(f"Cannot resolve dynamic import: {ast.unparse(node)}")
-            elif func_name.startswith('super.'):
-                # Handle super calls
-                _, method_name = func_name.split('.', 1)
-                if self.current_class and self.current_class in self.base_classes:
-                    base_classes = self.base_classes[self.current_class]
-                    if base_classes:
-                        base_class = base_classes[0]  # Assuming single inheritance
-                        func_name = f"{base_class}.{method_name}"
-                # Record super calls
-                if self.current_function:
-                    self.module_info.functions[self.current_function].function_calls.add(func_name)
-                    logging.debug(f"Adding to {self.current_function}.function_calls: {func_name}")
-                else:
-                    self.module_info.top_level_calls.add(func_name)
-                    logging.debug(f"Adding to top_level_calls: {func_name}")
-            else:
-                # Normal calls
-                if self.current_function:
-                    self.module_info.functions[self.current_function].function_calls.add(func_name)
-                else:
-                    self.module_info.top_level_calls.add(func_name)
-        self.generic_visit(node)
-        logging.debug(f"Call found: original func_name={original_func_name}, resolved func_name={func_name}")
-        if self.current_function:
-            logging.debug(f"Adding function call {func_name} to {self.current_function}")
-        else:
-            logging.debug(f"Adding top-level call: {func_name}")
-
-    def get_full_name(self, node: ast.AST) -> str | None:
-        """Get the full name of a node, including any aliases."""
-        if isinstance(node, ast.Name):  # Handle variable names
-            if node.id in ('self', 'cls'):  # Handle class methods
-                if self.current_class:
-                    return self.current_class
-                else:
-                    return node.id
-            elif node.id == 'super':  # Handle super() calls
-                return 'super'
-            else:
-                return self.aliases.get(node.id, node.id)
-        elif isinstance(node, ast.Attribute):  # Handle attribute access
-            value = self.get_full_name(node.value)
-            return f"{value}.{node.attr}" if value else node.attr
-        elif isinstance(node, ast.Call):  # Handle super() calls
-            func_name = self.get_full_name(node.func)
-            return func_name
-        return None
-
-
-def split_function_name(called_func: str, default_module: str) -> tuple[str, str]:
-    """Split a fully qualified function name into module and function parts. If there's no dot, the default_module is used as the module."""
-    parts = called_func.split('.')
-    if len(parts) > 1:
-        called_module = parts[0]
-        called_name = '.'.join(parts[1:])
-    else:
-        called_module = default_module
-        called_name = called_func
-    return called_module, called_name
-
-
-def build_call_graph(modules_info: dict[str, ModuleInfo]) -> dict[str, set[str]]:
-    """Build a call graph from the function calls in the modules."""
-    call_graph = {}
-    for module_name, module_info in modules_info.items():
-        for func_name, func_info in module_info.functions.items():
-            full_func_name = f"{module_name}.{func_name}"
-            call_graph[full_func_name] = set()
-            for called_func in func_info.function_calls:
-                called_module, called_name = split_function_name(called_func, module_name)
-                # Check if called_name is a class in the module
-                if called_module in modules_info and called_name in modules_info[called_module].classes:
-                    # Class instantiation, call __init__
-                    called_full_name = f"{called_module}.{called_name}.__init__"
-                else:
-                    called_full_name = f"{called_module}.{called_name}"
-                call_graph[full_func_name].add(called_full_name)
-    logging.debug("Call graph constructed:")
-    for func, calls in call_graph.items():
-        logging.debug(f"{func} calls: {calls}")
-    return call_graph
-
-
-def collect_used_imports(start_module: str, start_func: str,
-                         call_graph:   dict[str, set[str]],
-                         modules_info: dict[str, ModuleInfo],
-                         visited: set[str] = None) -> set[str]:
-    """Collect all imports used in a function and its callees."""
-    if visited is None:
-        visited = set()
-    full_func_name = f"{start_module}.{start_func}"
-    if full_func_name in visited:
-        logging.debug(f"Already visited {full_func_name}, skipping.")
-        return set()
-    logging.debug(f"Visiting function: {full_func_name}")
-    visited.add(full_func_name)
-    imports = set()
-    module_info = modules_info.get(start_module)
-    if module_info:
-        func_info = module_info.functions.get(start_func)
-        if func_info:
-            if func_info.imports_in_function:
-                logging.debug(f"Function {full_func_name} imports: {func_info.imports_in_function}")
-            else:
-                logging.debug(f"No direct imports found in {full_func_name}")
-            imports.update(func_info.imports_in_function)
-            for called_func in func_info.function_calls:
-                called_module, called_name = split_function_name(called_func, start_module)
-                logging.debug(f"From {full_func_name}, visiting called function {called_module}.{called_name}")
-                imports.update(collect_used_imports(called_module, called_name, call_graph, modules_info, visited))
-        else:
-            logging.debug(f"No function info found for {full_func_name}")
-    else:
-        logging.debug(f"No module info found for {start_module}")
-    return imports
-
-
-def find_imports_in_script(options: Options, first_path: str) -> None:
-    """Find all imports in the script and its dependencies."""
-    # is_python_script() has already been called to verify that the first_path file LOOKS like a Python script.
-    # However, it's still necessary to check if the file is a VALID Python script. If not, skip it.
-    if not ud.compile_code(first_path):
-        logging.error(f"Skipping invalid Python script: {first_path}")
-        return
-    processed_modules = set()
-    modules_info = {}
-    modules_to_process = [first_path]
-    while modules_to_process:
-        module_path = modules_to_process.pop()
-        if os.path.isdir(module_path):
-            pkg_dir = module_path
-            init_py = os.path.join(pkg_dir, "__init__.py")
-            if os.path.isfile(init_py):
-                # 1) Parse the package __init__.py
-                module_path = init_py
-                # 2) Also enqueue all other .py modules in that same folder
-                for fname in os.listdir(pkg_dir):
-                    if is_python_script(fname) and fname != "__init__.py":
-                        path = os.path.join(pkg_dir, fname)
-                        if path not in modules_to_process and path not in processed_modules:
-                            modules_to_process.append(path)
-            else:
-                logging.error(f"No __init__.py in package directory {pkg_dir}, skipping.")
-                continue
-        module_name = os.path.splitext(os.path.basename(module_path))[0]
-        if module_name in processed_modules:
-            continue
-        processed_modules.add(module_name)
-        file_content = ud.my_fopen(module_path, rawlog=options.rawlog)
-        if not file_content:
-            logging.error(f"Could not read file: {module_path}")
-            continue
-        tree = ast.parse(file_content, module_path)
-        if not tree:
-            logging.error(f"Failed to parse the file: {module_path}")
-            continue
-        collector = ImportFunctionCollector(module_name, options, module_path)
-        collector.visit(tree)
-        module_info = collector.module_info
-        modules_info[module_name] = module_info
-        # Process only top-level imports to find local modules
-        for import_name in module_info.top_level_imports:
-            if import_name in options.standard_modules:
-                continue  # Skip standard modules
-            resolved = process_import(options, import_name, module_path)
-            if resolved:
-                module_file_path = options.custom_modules.get(import_name)
-                if module_file_path and module_file_path not in processed_modules:
-                    modules_to_process.append(module_file_path)
-            else:
-                options.all_imports.add(import_name)
-    logging.debug("Modules processed so far:")
-    for m_name, m_info in modules_info.items():
-        logging.debug(f"Module: {m_name}, Classes: {m_info.classes}, Functions: {list(m_info.functions.keys())}")
-    # Now build the call graph
-    call_graph = build_call_graph(modules_info)
-    # Collect used imports starting from the first module
-    used_imports = set()
-    visited_funcs = set()
-
-    def collect_imports_from_module(module_name: str) -> None:
-        """Recursively collect used imports from a module."""
-        module_info = modules_info[module_name]
-        used_imports.update(module_info.top_level_imports)
-        for func_name in module_info.top_level_calls:
-            called_module, called_name = split_function_name(func_name, module_name)
-            logging.debug(f"Collecting used imports for module '{called_module}' and func_name '{called_name}'")
-            used_imports.update(
-                collect_used_imports(
-                    called_module,  # Use the extracted module name
-                    called_name,    # Use the extracted function name
-                    call_graph,
-                    modules_info,
-                    visited_funcs
-                )
-            )
-            logging.debug(f"Used imports collected from '{called_name}' in '{called_module}': {used_imports}")
-        logging.debug(f"Used imports after collecting from module {module_name}: {used_imports}")
-    collect_imports_from_module(os.path.splitext(os.path.basename(first_path))[0])
-    # Now process used imports and recursively dive into any new local modules.
-    processed_used_imports: set[str] = set()
-    new_modules_found = True
-    while new_modules_found:
-        new_modules_found = False
-        for import_name in used_imports.copy():
-            # Skip built-ins or any we've already handled this round
-            if import_name in options.standard_modules or import_name in processed_used_imports:
-                continue
-            processed_used_imports.add(import_name)
-            process_import(options, import_name, first_path)
-            if import_name in options.custom_modules:
-                # It's a local module we previously discovered—enqueue it for parsing
-                module_file_path = options.custom_modules[import_name]
-                if import_name not in processed_modules:
-                    modules_to_process.append(module_file_path)
-                    processed_modules.add(import_name)
-                    new_modules_found = True
-                    # Process the new module
-                    file_content = ud.my_fopen(module_file_path, rawlog=options.rawlog)
-                    if not file_content:
-                        logging.error(f"Could not read file: {module_file_path}")
-                        continue
-                    tree = ast.parse(file_content, module_file_path)
-                    if not tree:
-                        logging.error(f"Failed to parse the file: {module_file_path}")
-                        continue
-                    collector = ImportFunctionCollector(import_name, options, module_file_path)
-                    collector.visit(tree)
-                    module_info = collector.module_info
-                    modules_info[import_name] = module_info
-                    used_imports.update(module_info.top_level_imports)
-                    # Process top-level imports to find more local modules
-                    for new_import in module_info.top_level_imports:
-                        if new_import in options.standard_modules:
-                            continue
-                        resolved = process_import(options, new_import, module_file_path)
-                        if resolved:
-                            module_file_path = options.custom_modules.get(new_import)
-                            if module_file_path and new_import not in processed_modules:
-                                modules_to_process.append(module_file_path)
-                    call_graph = build_call_graph(modules_info)
-            else:
-                # If not a local module, add to options.all_imports
-                options.all_imports.add(import_name)
-
-
-def add_dependencies(options: Options) -> None:
-    """Add dependencies for uninstalled imports."""
-    # Create a copy to iterate over since we'll be modifying the set
-    initial_packages = options.uninstalled_imports.copy()
-
-    for package in initial_packages:
-        if package in options.also_needs:
-            dependencies = options.also_needs[package]
-            if not options.rawlog:
-                logging.info(f"Adding dependencies for {package}: {dependencies}")
-            options.uninstalled_imports.update(dependencies)
-
-    # Handle nested dependencies by repeating this process until no new dependencies are added.
-    added = True
-    while added:
-        added = False
-        current_packages = options.uninstalled_imports.copy()
-        for package in current_packages:
-            if package in options.also_needs:
-                dependencies = options.also_needs[package]
-                new_dependencies = set(dependencies) - options.uninstalled_imports
-                if new_dependencies:
-                    if not options.rawlog:
-                        logging.info(f"Adding nested dependencies for {package}: {new_dependencies}")
-                    options.uninstalled_imports.update(new_dependencies)
-                    added = True
-
-
-def split_imports(options: Options) -> None:
-    """Split imports into installed, uninstalled, and bad imports."""
-    options.bad_imports = options.known_bad_imports.intersection(options.all_imports)
-    options.bad_imports.update({imp for imp in options.all_imports if imp.startswith('_')})
-    if options.bad_imports:
-        logging.debug(f"Identified bad imports: {options.bad_imports}")  # New logging
-    options.all_imports = options.all_imports - options.bad_imports
-    options.installed_imports = set()
-    options.uninstalled_imports = set()
-    if getattr(options.args, 'reqs', False):
-        options.all_imports = options.all_imports.union(options.extra_requirements.keys())
-    options.total_imports = len(options.all_imports)
-    if not options.total_imports:
-        if not options.rawlog: logging.info("No imports found.")
-        return
-
-    max_length = max(len(imp) for imp in options.all_imports)  # Longest import name length, used for formatting
-    max_digits = len(str(len(options.all_imports)))  # Maximum number of digits in import count, also used for formatting
-
-    with tempfile.TemporaryDirectory() as venv_dir:
-        venv.create(venv_dir, with_pip=True)
-        for i, imp in enumerate(options.all_imports, 1):
-            package_name = options.module_aliases.get(imp, imp)
-            logging.debug(f"Checking if import {imp} is installed or uninstalled")  # New logging
-            if imp in options.custom_modules.keys():
-                logging.debug(f"Custom module {imp} has path {options.custom_modules[imp]}")
-                status_str = "YES - custom module"
-            elif check_packages_in_venv(options, package=package_name,
-                                        venv_dir=venv_dir):
-                logging.debug(f"Module {imp} can be imported in venv")
-                status_str = "YES -     installed"
-                options.installed_imports.add(imp)
-            else:
-                logging.debug(f"Import {imp} is not installed and not a custom module")  # New logging
-                status_str = " NO - NOT installed"
-                options.uninstalled_imports.add(package_name)
-            if not options.rawlog: logging.info(f"Checking import {imp:{max_length}} : {i:>{max_digits}}/{options.total_imports} - {status_str}")
-    if getattr(options.args, 'reqs', False):
-        options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
-    add_dependencies(options)
-    return
-
-
-def is_python_script(path: str) -> bool:
-    """
-    Return True if 'path' looks like a Python script:
-      1. It ends in .py or .pyw
-      2. Or it is executable AND its first line is a python shebang
-    """
-    # Common extensions
-    if any(path.endswith(ext) for ext in ud.python_extensions):
-        return True
-
-    # No-extension scripts: check for executable bit + python shebang
-    try:
-        st = os.stat(path)
-    except OSError:
-        return False
-
-    # Must be a regular file and executable by owner/group/other
-    if not stat.S_ISREG(st.st_mode) or not (st.st_mode & (stat.S_IXUSR|stat.S_IXGRP|stat.S_IXOTH)):
-        return False
-
-    # Try to read the first line and look for a python shebang
-    first_line = ud.my_fopen(path, suppress_errors=True, rawlog=False, numlines=1)
-    if not first_line:
-        return False
-    return bool(re.match(r'#!.*\bpython[0-9.]*\b', first_line))
-
-
-def list_packages(options: Options) -> None:
-    """Examine command line arguments to determine if we're looking at a directory, a single python script, or a list of python scripts. List all installed and uninstalled packages that are imported in that directory or python script(s). Return these sets inside the options object."""
-    if getattr(options.args, 'full', False):
-        if not options.rawlog: logging.info("Building a virtual environment that can run every python script in this directory.")
-        options.script_dir_or_file_or_list = options.script_dir
-    else:
-        # If there aren't any script arguments then we're looking at a single python script.
-        # If the python script is autolambda.py then ignore any script arguments. Autolambda will take care of them separately so there's no need to install them in the venv.
-        if not getattr(options.args, 'script_args', None) or "autolambda.py" in options.python_script:
-            options.script_dir_or_file_or_list = options.python_script
-        else:
-            # List all the script arguments that are local python scripts.
-            local_scripts = []
-            for arg in options.script_args:
-                full = arg if os.path.isabs(arg) else os.path.join(options.cwd, arg)
-                # only include if it really looks like a Python script
-                if is_python_script(full) and os.path.splitext(arg)[0] in options.custom_modules:
-                    local_scripts.append(arg)
-            # Local python scripts should be added to the list of scripts to examine for imports.
-            if local_scripts:
-                options.script_dir_or_file_or_list = [options.python_script] + local_scripts
-            else:
-                options.script_dir_or_file_or_list = options.python_script
-    logging.debug(f"{options.script_dir_or_file_or_list = }")
-
-    if isinstance(options.script_dir_or_file_or_list, str):
-        options.script_dir_or_file_or_list = os.path.expanduser(options.script_dir_or_file_or_list)
-        options.loaded_custom_modules = set()
-        if os.path.isfile(options.script_dir_or_file_or_list):
-            if is_python_script(options.script_dir_or_file_or_list):
-                if not options.rawlog: logging.info(f"Processing a single Python script: {options.script_dir_or_file_or_list}.")
-                python_file = options.script_dir_or_file_or_list
-                options.all_imports = set()
-                find_imports_in_script(options, python_file)
-            else:
-                ud.my_critical_error(f"'{options.script_dir_or_file_or_list}' is not a valid Python script.")
-        elif os.path.isdir(options.script_dir_or_file_or_list):
-            if not options.rawlog: logging.info(f"Processing an entire folder of Python scripts: {options.script_dir_or_file_or_list}.")
-            python_dir = options.script_dir_or_file_or_list
-            if options.pipreqs_available:
-                if not options.rawlog: logging.info("Using pipreqs to generate requirements.")
-                generate_requirements(options.script_dir_or_file_or_list)
-                with open(os.path.join(python_dir, 'requirements.txt'), 'r') as f:
-                    options.all_imports = set(line.strip() for line in f)
-            else:
-                if not options.rawlog: logging.info("Using custom script to find imports.")
-                get_all_imports(options, options.script_dir_or_file_or_list)
-        else:
-            ud.my_critical_error(f"The file or directory {options.script_dir_or_file_or_list} does not exist.")
-    else:
-        if not options.rawlog: logging.info(f"Processing a list of Python scripts: {options.script_dir_or_file_or_list}")
-        options.all_imports = set()
-        # Filter out non‐Python files
-        valid = []
-        for sf in options.script_dir_or_file_or_list:
-            full = sf if os.path.isabs(sf) else os.path.join(options.cwd, sf)
-            if is_python_script(full):
-                valid.append(sf)
-            else:
-                logging.info(f"Skipping non‐Python file in list: {full}")
-        if not valid:
-            ud.my_critical_error("No valid Python scripts found in the list of files.")
-        options.script_dir_or_file_or_list = valid
-        # Process only the ones left
-        for python_file in options.script_dir_or_file_or_list:
-            full = python_file if os.path.isabs(python_file) else os.path.join(options.cwd, python_file)
-            find_imports_in_script(options, full)
-
-    # Filter out invalid imports before splitting
-    options.all_imports = {imp for imp in options.all_imports if re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', imp)}
-
-    split_imports(options)
-
-
-def get_all_imports(options: Options, directory: str) -> None:
-    """Get all imports from all Python scripts in a directory."""
-    options.all_imports = set()
-    total_files = sum(len(files) for _, _, files in os.walk(directory) if 'myenv' not in _)
-    processed_files = 0
-
-    for root, _, files in os.walk(directory):
-        if any(substring in root for substring in options.stay_out_list):
-            continue
-        for file in files:
-            file_path = os.path.join(root, file)
-            if is_python_script(file_path):
-                find_imports_in_script(options, file_path)
-                processed_files += 1
-                if not options.rawlog: logging.info(f"Processing {file_path} ({processed_files}/{total_files})")
-
-    if not options.rawlog: logging.info(f"\nFinished processing files in {directory}.")
-
-
-def generate_requirements(directory: str) -> None:
-    """Generate a requirements file using pipreqs."""
-    try:
-        pipreqs.generate_requirements(directory)
-    except (pipreqs.PipreqsError, pipreqs.PipreqsWarning) as e:
-        raise ValueError(f"Error generating requirements file in {directory}: {e}") from e
-
-
-def download_packages(options: Options) -> bool:
-    """Install packages in a virtual environment."""
-    download_script = f"""#!/bin/bash
-    source {options.venv_dir}/bin/activate
-
-    # Upgrade pip
-    echo "Upgrading pip..."
-    pip install --upgrade pip
-
-    # Ensure setuptools and wheel are available locally
-    if ls {options.packages_dir}/setuptools-*.whl 1> /dev/null 2>&1; then
-        echo "Local setuptools files found."
-    else
-        echo "Downloading setuptools..."
-        {options.venv_pip} download --only-binary=:all: setuptools -d {options.packages_dir}
-    fi
-
-    if ls {options.packages_dir}/wheel-*.whl 1> /dev/null 2>&1; then
-        echo "Local wheel files found."
-    else
-        echo "Downloading wheel..."
-        {options.venv_pip} download --only-binary=:all: wheel -d {options.packages_dir}
-    fi
-
-    # Download required packages
-    echo "Downloading packages..."
-    {options.venv_pip} download -r {options.requirements_file} -d {options.packages_dir}"""
-
-    try:
-        if not options.rawlog: logging.info(f"Writing download script to {options.download_script_path}")
-        with open(options.download_script_path, 'w') as f:
-            f.write(download_script)
-        os.chmod(options.download_script_path, 0o755)
-        # Run the initial download script and capture the output
-        result = ud.my_popen([options.download_script_path])
-        return result.returncode == 0
-    except (IOError, OSError) as e:
-        logging.error(f"Error writing or executing download script: {e}\nException type: ", exc_info=True)
-        return False
-
-
-def install_packages_simultaneously(options: Options) -> bool:
-    """Install all packages simultaneously in the virtual environment."""
-    # Construct the install command
-    install_command = [
-        options.venv_python, "-m", "pip", "install",
-        "--no-index", "--find-links", options.packages_dir,
-        "-r", options.requirements_file
-    ]
-    if not options.rawlog: logging.info("Installing all packages simultaneously...")
-    # Run the command and capture the output line by line using ud.my_popen
-    result = ud.my_popen(install_command)
-    if result.returncode == 0:
-        if not options.rawlog: logging.info("All packages installed successfully.")
-        return True
-    else:
-        logging.error("Failed to install some packages.")
-        return False
-
-
-def install_packages_individually(options: Options) -> bool:
-    """Install packages individually in the virtual environment."""
-    failed_packages = []
-    for package in options.uninstalled_imports:
-        if not install_package(package, options):
-            failed_packages.append(package)
-
-    if failed_packages:
-        logging.error(f"Failed to install the following packages: {', '.join(failed_packages)}")
-    else:
-        if not options.rawlog: logging.info("All packages installed successfully.")
-
-
-def install_package(package_name: str, options: Options) -> bool:
-    """Install a single package and return the success status (True if successful, False otherwise)."""
-    result = subprocess.run(
-        [options.venv_python, "-m", "pip", "install", package_name, "--no-index", "--find-links", options.packages_dir],
-        capture_output=True, text=True)
-    if not options.rawlog: logging.info(result.stdout)
-    if result.stderr:
-        logging.error(result.stderr)
-    if result.returncode != 0:
-        # Use pip to download files for package_name to options.packages_dir
-        download_command = [options.venv_python, "-m", "pip", "download", "--dest", options.packages_dir, package_name]
-        download_result = subprocess.run(download_command, capture_output=True, text=True)
-        if download_result.returncode != 0:
-            ud.my_critical_error(f"Failed to download {package_name}. Error: {download_result.stderr}")
-        # Use pip to install package_name from the file that was just downloaded to options.packages_dir
-        install_command = [options.venv_python, "-m", "pip", "install", "--no-index",
-                            "--find-links", options.packages_dir, package_name]
-        install_result = subprocess.run(install_command, capture_output=True, text=True)
-        if install_result.returncode != 0:
-            logging.error(f"Failed to install {package_name}. Error: {install_result.stderr}")
-        else:
-            if not options.rawlog: logging.info(f"Successfully installed {package_name}")
-        return result.returncode == 0
-    return result.returncode == 0
-
-
-def check_packages_in_venv(options: Options, package: str | None = None,
-                           venv_dir: str | None = None) -> bool:
-    """Check if packages can be imported in the specified virtual environment."""
-    if not venv_dir:
-        venv_dir = options.venv_dir
-    if sys.platform == "win32":
-        venv_python = os.path.join(venv_dir, "Scripts", "python.exe")
-    else:
-        venv_python = os.path.join(venv_dir, "bin", "python")
-    if package:
-        packages = [options.reversed_module_aliases.get(package, package)]
-    else:
-        use_pip_list(options)
-        packages = [options.reversed_module_aliases.get(pkg, pkg) for pkg in options.uninstalled_imports]
-    python_code = f"""
-import sys
-from importlib import import_module
-successes = []
-failures = []
-counter = 0
-for package in {packages!r}:
-    counter += 1
-    try:
-        import_module(package)
-        successes.append(package)
-    except ImportError:
-        failures.append(package)
-if failures:
-    print("Failed packages: " + ", ".join(failures))
-    sys.exit(1)
-elif len(successes) != counter:
-    print(f"Warning: No failures, but only recorded {{len(successes)}} successes out of {{counter}}.")
-    sys.exit(2)
-else:
-    print(f"All {{len(successes)}} (out of {{counter}}) packages imported successfully.")
-    sys.exit(0)
-"""
-    result = subprocess.run([venv_python, "-c", python_code],
-                            capture_output=True, text=True, check=False)
-    logging.debug("check_packages_in_venv stdout:\n%s", result.stdout)
-    logging.debug("check_packages_in_venv stderr:\n%s", result.stderr)
-    return "packages imported successfully" in result.stdout
-
-
-def recover_pip_versions(output: str, options: Options) -> None:
-    """Parse the output to recover the current and new pip versions."""
-    if hasattr(output, 'read'):
-        output = output.read()
-    current_version_pattern = re.compile(r"Current pip version: (.+)")
-    new_version_pattern = re.compile(r"New pip version: (.+)")
-
-    current_version_match = current_version_pattern.search(output)
-    new_version_match = new_version_pattern.search(output)
-
-    if current_version_match:
-        options.current_pip_version = current_version_match.group(1)
-        if not options.rawlog: logging.info(f"Recovered current pip version: {options.current_pip_version}")
-    else:
-        logging.warning("Failed to recover current pip version from output.")
-
-    if new_version_match:
-        options.new_pip_version = new_version_match.group(1)
-        if not options.rawlog: logging.info(f"Recovered new pip version: {options.new_pip_version}")
-    else:
-        logging.warning("Failed to recover new pip version from output.")
-
-
-def pretty_packages_list(options: Options) -> str:
-    """Create a pretty string of the first five package names and the number of remaining packages."""
-    maxnum = 5
-    packages_list = sorted(list(options.uninstalled_imports))
-    if len(packages_list) > maxnum:
-        first_five = '-'.join(packages_list[:maxnum])
-        suffix = f'-and-{len(packages_list) - maxnum}-more'
-    else:
-        first_five = '-'.join(packages_list)
-        suffix = ''
-
-    return first_five + suffix
-
-
-def use_pip_list(options: Options) -> None:
-    """Use the pip list command to find all installed packages and use that pip list to modify the uninstalled and installed imports. Add packages from the options.extra_requirements dictionary if '-reqs' is specified as a runtime argument."""
-    # Add packages from the options.extra_requirements dictionary if '-reqs' is specified as a runtime argument.
-    if getattr(options.args, 'reqs', False):
-        options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
-    if len(options.pip_list) == 0:
-        # Create virtual environment
-        venv.create(options.test_dir, with_pip=True)
-        python_executable = os.path.join(options.test_dir, 'bin', 'python')
-
-        # Run custom list command using the Python executable from the virtual environment
-        list_command_script = """
-import importlib.metadata
-import pkgutil
-import sys
-
-def list_installed_packages():
-    installed_packages = [dist.metadata['Name'] for dist in importlib.metadata.distributions()]
-    return installed_packages
-
-def list_available_modules():
-    available_modules = [module.name for module in pkgutil.iter_modules()]
-    return available_modules
-
-def list_builtin_modules():
-    builtin_modules = sys.builtin_module_names
-    return builtin_modules
-
-installed_packages = list_installed_packages()
-available_modules = list_available_modules()
-builtin_modules = list_builtin_modules()
-
-print("\\n".join(installed_packages + available_modules + list(builtin_modules)))
-"""
-
-        list_command = [python_executable, "-c", list_command_script]
-
-        try:
-            result = subprocess.run(list_command, check=True, capture_output=True, text=True)
-            logging.debug(f"Output:\n{result.stdout}")
-        except subprocess.CalledProcessError as e:
-            logging.error(f"{e}\nException type: ", exc_info=True)
-
-        # Use regular expressions to find all package names
-        options.pip_list = re.findall(r'^[^\s]+', result.stdout, re.MULTILINE)
-        options.pip_list = [pkg for pkg in options.pip_list if pkg != 'Package' and not all(c == '-' for c in pkg)]
-        logging.debug(f"\n{options.pip_list = }")
-
-        pip_list_filename = os.path.join(options.my_dir, f"pip_list_{options.timestamp}.txt")
-        with open(pip_list_filename, 'w') as f:
-            f.write('\n'.join(options.pip_list))
-
-    new_uninstalled_imports = options.installed_imports - set(options.pip_list)
-    options.uninstalled_imports = options.uninstalled_imports.union(new_uninstalled_imports)
-    if options.uninstalled_imports:
-        logging.debug(f"{new_uninstalled_imports = }")
-    options.installed_imports = options.installed_imports - new_uninstalled_imports
-    # Once again, add packages from the options.extra_requirements dictionary if '-reqs' is specified as a runtime argument. (Do this again, just in case they got removed from the uninstalled_imports set above.)
-    if getattr(options.args, 'reqs', False):
-        options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
-
-
-def parse_extra_requirements(options: Options) -> dict[str, str | None]:
-    """Parse an extra requirements file and return a dictionary of package names (and version specifiers, if present)."""
-    options.extra_requirements = {}
-    file_content = ud.my_fopen(options.extra_requirements_file, suppress_errors=True, rawlog=options.rawlog)
-    if not file_content:
-        return
-    # Regular expression to capture package name and version specifier
-    pattern = re.compile(r'^\s*([A-Za-z0-9_\-\.]+)\s*(.*)$')
-    for line in file_content.splitlines():
-        line = line.strip()
-        if line and not line.startswith('#'):
-            match = pattern.match(line)
-            if match:
-                package = match.group(1)
-                version_spec = match.group(2).strip() if match.group(2) else ''
-                options.extra_requirements[package] = version_spec
-
-
-def write_requirements_file_with_extras(options: Options) -> None:
-    """Write the requirements file with the extra requirements added and generate a 'pretty' requirements string."""
-    logging.debug(f"Writing packages to {options.requirements_file}")
-    options.pretty_requirements = ''
-    # Define the symbol replacements
-    replacements = [('>=', '_ge'),
-                    ('<=', '_le'),
-                    ('==', '_eq'),
-                    ('~=', '_approx'),
-                    ('>', '_gt'),
-                    ('<', '_lt'),
-                    (',', '_and')]
-    with open(options.requirements_file, 'w') as f:
-        # Write the packages in alphabetical order so the requirements file is deterministic.
-        for idx, package in enumerate(sorted(options.uninstalled_imports)):
-            if package in options.extra_requirements:
-                version_spec = options.extra_requirements[package]
-                if version_spec:
-                    f.write(f"{package}{version_spec}\n")
-                    # Replace symbols in version_spec for the pretty_requirements string
-                    pretty_version_spec = version_spec
-                    for old, new in replacements:
-                        pretty_version_spec = pretty_version_spec.replace(old, new)
-                    pretty_package = f"{package}{pretty_version_spec}"
-                else:
-                    f.write(f"{package}\n")
-                    pretty_package = package
-            else:
-                f.write(f"{package}\n")
-                pretty_package = package
-            # Append to the pretty_requirements string with underscores
-            if idx > 0:
-                options.pretty_requirements += '_'
-            options.pretty_requirements += pretty_package
-
-
-def setup_virtualenv(options: Options) -> bool:
-    """Setup a virtual environment and install packages."""
-    use_pip_list(options)
-    options.pretty_list = pretty_packages_list(options)
-    # Create a virtual environment directory that starts with 'failed' in case the process fails. Only remove the 'failed' part if this process completes successfully.
-    options.set_venv_dir(os.path.join(options.my_dir, f"failed-{options.venv_name}-versionless-{options.timestamp}-{options.pretty_list}"))
-    os.makedirs(options.venv_dir, exist_ok=True)
-
-    write_requirements_file_with_extras(options)
-
-    if not options.rawlog: logging.info("Creating virtual environment...")
-    subprocess.check_call([sys.executable, '-m', 'venv', options.venv_dir])
-    if not options.rawlog: logging.info("Virtual environment created.")
-
-    # Activate virtual environment and install wheel
-    install_command = [options.venv_pip, "install", "wheel"]
-    logging.info("Running pip install: %s", ' '.join(shlex.quote(arg) for arg in install_command))
-    subprocess.run(install_command, check=True)
-    if not options.rawlog: logging.info("Wheel installed in the virtual environment.")
-
-    download_packages(options)
-    if install_packages_simultaneously(options):
-        options.simultaneous_success = True
-    else:
-        options.simultaneous_success = False  # This is redundant, but it's here for clarity. The 'failed' part of the venv_dir will not be removed if this is False.
-        logging.error("Failed to install packages simultaneously. Trying to install packages individually to see which fail, but this venv folder will still have 'failed-' in its name...")
-        if not install_packages_individually(options):
-            logging.error("Failed to install packages individually.")
-
-    # Check that all packages can be imported in the venv.
-    return check_packages_in_venv(options)
-
-
-def is_virtualenv() -> bool:
-    """Check if currently running in a virtual environment."""
-    return sys.prefix != sys.base_prefix
-
-
 def _literal_str(expr_node: ast.AST) -> str | None:
     """Extract a string from an AST node if it is a literal string."""
     if isinstance(expr_node, ast.Constant) and isinstance(expr_node.value, str):
@@ -3680,8 +2533,7 @@ def unpack_method_call(node: ast.Call) -> tuple[ast.Call, str] | None:
 
 def record_method_name(instance: object, options: Options) -> None:
     """
-    Logs a debug message of the form:
-      Entering ClassName.method_name
+    Sets options.current_method_name to ClassName.method_name
     when called from within an instance method.
 
     Parameters:
@@ -3689,7 +2541,7 @@ def record_method_name(instance: object, options: Options) -> None:
     - options  : Options object to store the current method name.
 
     Returns:
-    None - modifies options to include the current method name and logs it.
+    None - modifies options to include the current method name.
     """
     import inspect
     # grab the caller’s frame (one level up)
@@ -3697,7 +2549,7 @@ def record_method_name(instance: object, options: Options) -> None:
     method_name = caller_frame.f_code.co_name
     class_name = instance.__class__.__name__
     options.current_method_name = f"{class_name}.{method_name}"
-    logging.debug(f"Entering {options.current_method_name}")
+    # logging.debug(f"Entering {options.current_method_name}")
 
 
 class FileOperationsVisitor(ast.NodeVisitor):
@@ -4381,11 +3233,32 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
         if fn and any(verb in fn for verb in ('open','read','write','load','save')):
             # If we see “read” or “load” in the name, treat it as read:
-            mode = 'read' if any(fn.startswith(v) for v in ('read','load')) else 'write'
-            attr = 'read_files' if mode == 'read' else 'write_files'
+            mode = 'read'       if any(fn.startswith(v) for v in ('read','load')) else 'write'
+            attr = 'read_files' if mode == 'read'                                 else 'write_files'
             _record_IO(self.options, self.file_content, attr, candidate, node)
             return True
         return False
+
+
+class TopLevelFileOperationsVisitor(FileOperationsVisitor):
+    """
+    Only look at calls at module scope — never descend into function defs.
+    For classes, only inspect statements in the class body that are not defs or sub-classes.
+    This is to avoid collecting file operations from within function bodies or class methods.
+    """
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        # drop into nothing: stops recursion into function bodies
+        return
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        return
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        # Inspect any statements in the class body except defs or sub-classes:
+        for stmt in node.body:
+            if not isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                self.visit(stmt)
 
 
 def get_file_operations(options: Options, script_path: str) -> None:
@@ -4615,7 +3488,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
                 and node.func.attr in ('create_connection','connect','send','recv')
                 and node.args):
             # for connect/create_connection, the first arg is (host, port)
-            snippet = ast.get_source_segment(file_content, node) or ''
+            snippet = ast.get_source_segment(self.file_content, node) or ''
             _record_IO(self.options, self.file_content, 'download_urls'
                         if node.func.attr in ('recv',) else 'upload_urls',
                         snippet.strip(), node)
@@ -4692,7 +3565,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
         if method != "sendmail" or len(inner_call.args) < 3:
             return False
 
-        to_addrs = ast.get_source_segment(file_content, inner_call.args[1]) or ""
+        to_addrs = ast.get_source_segment(self.file_content, inner_call.args[1]) or ""
         _record_IO(self.options, self.file_content, "upload_urls", to_addrs, node)
         return True
 
@@ -4715,7 +3588,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
         if method not in ("fetch", "login", "select") or not inner_call.args:
             return False
 
-        snippet = ast.get_source_segment(file_content, inner_call.args[0]) or ""
+        snippet = ast.get_source_segment(self.file_content, inner_call.args[0]) or ""
         _record_IO(self.options, self.file_content, "download_urls", snippet, node)
         return True
 
@@ -4929,6 +3802,27 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
         return False
 
 
+class TopLevelNetworkOperationsVisitor(NetworkOperationsVisitor):
+    """
+    Only look at calls at module scope — never descend into function defs.
+    For classes, only inspect statements in the class body that are not defs or sub-classes.
+    This is to avoid collecting network operations from within function bodies or class methods.
+    """
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        # drop into nothing: stops recursion into function bodies
+        return
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        return
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        # Inspect any statements in the class body except defs or sub-classes:
+        for stmt in node.body:
+            if not isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                self.visit(stmt)
+
+
 def get_network_operations(options: Options, script_path: str) -> None:
     """
     Find URLs that are downloaded and uploaded, store in options.
@@ -4951,47 +3845,669 @@ def get_network_operations(options: Options, script_path: str) -> None:
     NetworkOperationsVisitor(options, file_content).visit(tree)
 
 
-def guard_examines_one_script(options: Options, script_path: str) -> bool:
+def _safe_eval_node(node: ast.AST) -> Any:
     """
-    Examine a single Python script for validity, ability to compile, and file and network operations.
-
-    Parameters:
-    - options : Options object containing paths to the python script and custom modules.
-    - script_path : Path to the Python script to examine.
-
-    Returns:
-    bool : True if all examinations pass, False otherwise.
+    Recursively evaluate a restricted subset of AST nodes:
+    - Constants (strings, numbers, booleans, None)
+    - Lists, tuples, dicts
+    - os.getcwd()
+    - os.path.(abspath|join|dirname|realpath)(<literal strings>)
+    - pathlib.Path(<literal strings>).(resolve|absolute)() and .joinpath(<literal strings>…)
+    - The "/" operator for joining pathlib Paths.
     """
-    if is_python_script(script_path) and ud.compile_code(script_path):
-        get_file_operations(options,    script_path)
-        get_network_operations(options, script_path)
-    else:
-        logging.warning(f"Skipping file and network operations analysis for {script_path} because it doesn't look like a valid Python script.")
+    # --- support "/" operator for path-like objects ---
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        left  = _safe_eval_node(node.left)
+        right = _safe_eval_node(node.right)
+        # accept strings or any PathLike (Path, PosixPath, etc.)
+        if isinstance(left, (str, os.PathLike)) and isinstance(right, (str, os.PathLike)):
+            # Path(left) / right → Path; str(...) to get the string path
+            return str(Path(left) / right)
+        raise ValueError(f"Unsupported path division: {ast.unparse(node)}")
+
+    # --- literals ---
+    if isinstance(node, ast.Constant):
+        # Python 3.8+: Constant covers str, int, float, bool, None
+        return node.value
+
+    # --- composite literals ---
+    if isinstance(node, ast.List):
+        return [_safe_eval_node(elt) for elt in node.elts]
+    if isinstance(node, ast.Tuple):
+        return tuple(_safe_eval_node(elt) for elt in node.elts)
+    if isinstance(node, ast.Dict):
+        return {
+            _safe_eval_node(k): _safe_eval_node(v)
+            for k, v in zip(node.keys, node.values)
+        }
+
+    # --- calls ---
+    if isinstance(node, ast.Call):
+        func = node.func
+
+        # os.getcwd()
+        if (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "os"
+            and func.attr == "getcwd"
+            and len(node.args) == 0
+        ):
+            return os.getcwd()
+
+        # os.path.* calls
+        if (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Attribute)
+            and func.value.attr == "path"
+            and isinstance(func.value.value, ast.Name)
+            and func.value.value.id == "os"
+        ):
+            method = func.attr
+            allowed = {"abspath", "join", "dirname", "realpath"}
+            if method in allowed:
+                arg_vals = [_safe_eval_node(arg) for arg in node.args]
+                if all(isinstance(v, str) for v in arg_vals):
+                    path_fn = getattr(os.path, method)
+                    return path_fn(*arg_vals)
+
+        # pathlib.Path(...).resolve()/absolute()
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr in {"resolve", "absolute"}
+            and isinstance(func.value, ast.Call)
+        ):
+            inner = func.value
+            inner_fn = inner.func
+            # detect Path(...) or pathlib.Path(...) or pathlib.PosixPath(...)
+            if (
+                (isinstance(inner_fn, ast.Name) and inner_fn.id in {"Path", "PosixPath"})
+                or (
+                    isinstance(inner_fn, ast.Attribute)
+                    and isinstance(inner_fn.value, ast.Name)
+                    and inner_fn.value.id == "pathlib"
+                    and inner_fn.attr in {"Path", "PosixPath"}
+                )
+            ) and len(inner.args) == 1:
+                arg = _safe_eval_node(inner.args[0])
+                if isinstance(arg, str):
+                    return str(getattr(Path(arg), func.attr)())
+
+        # pathlib.Path(...).joinpath(...)
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == "joinpath"
+            and isinstance(func.value, ast.Call)
+        ):
+            inner = func.value
+            inner_fn = inner.func
+            if (
+                (isinstance(inner_fn, ast.Name) and inner_fn.id in {"Path", "PosixPath"})
+                or (
+                    isinstance(inner_fn, ast.Attribute)
+                    and isinstance(inner_fn.value, ast.Name)
+                    and inner_fn.value.id == "pathlib"
+                    and inner_fn.attr in {"Path", "PosixPath"}
+                )
+            ) and len(inner.args) == 1:
+                base = _safe_eval_node(inner.args[0])
+                parts = [_safe_eval_node(arg) for arg in node.args]
+                if isinstance(base, str) and all(isinstance(p, str) for p in parts):
+                    return str(Path(base).joinpath(*parts))
+
+        # unsupported call
+        raise ValueError(f"Unsupported call: {ast.unparse(node)}")
+
+    # anything else is disallowed
+    raise ValueError(f"Unsupported expression: {ast.dump(node)}")
+
+
+def safe_eval(expr: str) -> Any | None:
+    """
+    Safely evaluate a Python expression string containing only:
+      - literals (str, int, float, bool, None)
+      - lists, tuples, dicts of the above
+      - os.getcwd()
+      - os.path.(abspath|join|dirname|realpath)(<literal strings>)
+      - pathlib.Path(<literal strings>).(resolve|absolute)() and 
+        .joinpath(<literal strings>…) and the "/" operator for joining paths.
+    Returns the evaluated Python object, or None on unsupported syntax.
+    """
+    try:
+        # Parse in 'eval' mode so we get an Expression node
+        tree = ast.parse(expr, mode="eval")
+        return _safe_eval_node(tree.body)  # tree.body is the root expr
+    except (SyntaxError, ValueError) as e:
+        logging.debug(f"safe_eval: Unsupported expression: {expr!r}: {e}")
+        return None
+
+
+class SysPathVisitor(ast.NodeVisitor):
+    """Visitor class to extract sys.path modifications."""
+
+    def __init__(self) -> None:
+        """Initialize the sys.path visitor."""
+        self.paths = set()
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        """Visit an assignment statement and check if it's modifying sys.path."""
+        if isinstance(node.targets[0], ast.Attribute) and \
+           isinstance(node.targets[0].value, ast.Name) and \
+           node.targets[0].value.id == 'sys' and \
+           node.targets[0].attr == 'path':
+            paths = safe_eval(ast.unparse(node.value))
+            if isinstance(paths, list):
+                for path in paths:
+                    self.paths.add(path)
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        """Visit a function call and check if it's modifying sys.path."""
+        if isinstance(node.func, ast.Attribute) and \
+           isinstance(node.func.value, ast.Attribute) and \
+           isinstance(node.func.value.value, ast.Name) and \
+           node.func.value.value.id == 'sys' and \
+           node.func.value.attr == 'path' and \
+           node.func.attr in {'append', 'insert'}:
+            if node.args:
+                path = safe_eval(ast.unparse(node.args[-1]))
+                if path:
+                    self.paths.add(path)
+        self.generic_visit(node)
+
+
+def process_import(options: Options, module_name: str, file_path: str) -> bool:
+    """Process an import by checking if it's a local custom module or a standard import, and handle it accordingly."""
+    if module_name in options.standard_modules:
+        logging.debug(f"Skipping standard library import: {module_name}")
         return False
-    return True
+
+    logging.debug(f"Processing import: {module_name} from file {file_path}")
+
+    base_dir = os.path.dirname(os.path.abspath(file_path))
+    module_path = module_name.replace('.', os.sep)
+
+    # Avoid loopback to the same file
+    script_name = os.path.splitext(os.path.basename(file_path))[0]
+    if module_name == script_name:
+        logging.debug(f"Avoiding loopback to the same file: {module_name}")
+        return False
+    if module_name == 'pipreqs' and f'{options.my_name}.py' in file_path:
+        logging.debug(f"Avoiding loopback to pipreqs in {options.my_name}.py")
+        return False
+    logging.debug(f"Constructed module path: {module_path}")
+
+    # Check if the import is a .py file in the same directory
+    potential_file_path = os.path.abspath(os.path.join(base_dir, module_path + '.py'))
+    if os.path.isfile(potential_file_path) and potential_file_path not in options.samedir_files:
+        options.custom_modules[module_name] = potential_file_path
+        options.loaded_custom_modules.add(module_name)
+        options.samedir_files.append(potential_file_path)
+        logging.debug(f"Added same directory file: {potential_file_path}")
+        return True
+
+    # Check if the import is a package (directory with __init__.py)
+    potential_dir_path = os.path.abspath(os.path.join(base_dir, module_path))
+    logging.debug(f"Constructed potential directory path: {potential_dir_path}")
+    if os.path.isdir(potential_dir_path) and os.path.isfile(os.path.join(potential_dir_path, '__init__.py')) and module_path not in options.subfolders:
+        options.custom_modules[module_name] = potential_dir_path
+        options.loaded_custom_modules.add(module_name)
+        logging.debug(f"Resolved local package to: {potential_dir_path}")
+        options.subfolders.append(module_path)
+        logging.debug(f"Added subfolder: {module_path}")
+        return True
+
+    # Check if this module is in the custom_modules dictionary.
+    if module_name in options.custom_modules:
+        module_file = options.custom_modules[module_name]
+        if module_name not in options.loaded_custom_modules:
+            options.loaded_custom_modules.add(module_name)
+            logging.debug(f"Resolved via custom_modules: {module_name} → {module_file}")
+        return True
+
+    logging.debug(f"Could not resolve local import, treating as external: {module_name}")
+    return False
 
 
-def guard_examines_everything(options: Options) -> bool:
+class FunctionInfo:
+    """Class to hold information about a function."""
+
+    def __init__(self, function_name: str, node: ast.FunctionDef) -> None:
+        """Initialize the function information, storing its AST node too."""
+        self.function_name: str            = function_name
+        self.ast_node: ast.FunctionDef     = node
+        self.imports_in_function: set[str] = set()
+        self.function_calls:      set[str] = set()
+
+
+class ModuleInfo:
+    """Class to hold information about a module."""
+
+    def __init__(self, module_name: str) -> None:
+        """Initialize the module information."""
+        self.module_name                                = module_name
+        self.top_level_imports: set[str]                = set()
+        self.functions:         dict[str, FunctionInfo] = {}
+        self.top_level_calls:   set[str]                = set()
+        self.aliases:           dict[str, str]          = {}
+        self.classes:           set[str]                = set()
+
+
+class ImportFunctionCollector(ast.NodeVisitor):
+    """Visitor class to collect function and import information from a module."""
+
+    def __init__(self, module_name: str, options: Options,
+                 file_path: str) -> None:
+        """Initialize the import function collector."""
+        self.module_info = ModuleInfo(module_name)
+        self.current_function = None
+        self.current_class    = None
+        self.aliases          = {}
+        self.options          = options
+        self.file_path        = file_path
+        self.base_classes     = {}
+
+    def visit_Import(self, node: ast.Import) -> None:
+        """Visit an import statement and add the imported module to the module's list of imports."""
+        for alias in node.names:
+            name = alias.asname or alias.name
+            full_name = alias.name
+            top_level_package = full_name.split('.')[0]
+            self.aliases[name] = full_name
+            if self.current_function:
+                self.module_info.functions[self.current_function].imports_in_function.add(top_level_package)
+            else:
+                self.module_info.top_level_imports.add(top_level_package)
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        """Visit an import from statement and add the imported module to the module's list of imports."""
+        module = node.module or ''
+        # Extract the top-level package
+        top_level_package = module.split('.')[0] if module else ''
+        for alias in node.names:
+            full_name = f"{module}.{alias.name}" if module else alias.name
+            name = alias.asname or alias.name
+            self.aliases[name] = full_name
+            if self.current_function:
+                self.module_info.functions[self.current_function].imports_in_function.add(top_level_package)
+            else:
+                self.module_info.top_level_imports.add(top_level_package)
+        self.generic_visit(node)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        """Visit a function definition and add it to the module's list of functions."""
+        func_name = node.name
+        if self.current_class:
+            func_name = f"{self.current_class}.{func_name}"
+        self.module_info.functions[func_name] = FunctionInfo(func_name, node)
+        logging.debug(f"Added function: {func_name} to module {self.module_info.module_name}")
+        prev_function = self.current_function
+        self.current_function = func_name
+        self.generic_visit(node)
+        self.current_function = prev_function
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        """Visit a class definition and set the current class."""
+        self.module_info.classes.add(node.name)
+        prev_class = self.current_class
+        self.current_class = node.name
+
+        # Record base classes before visiting the body
+        base_class_names = []
+        for base in node.bases:
+            base_name = self.get_full_name(base)
+            if base_name:
+                parts = base_name.split('.')
+                if parts and parts[0] in self.aliases:
+                    alias_target = self.aliases[parts[0]]
+                    base_name = alias_target + '.' + '.'.join(parts[1:])
+                base_class_names.append(base_name)
+        self.base_classes[node.name] = base_class_names
+        logging.debug(f"Recorded base classes for {node.name}: {self.base_classes[node.name]}")
+        # Now that base_classes is set, visit the class body
+        self.generic_visit(node)
+        self.current_class = prev_class
+
+    def extract_module_name_from_import(self, node: ast.Call) -> str | None:
+        """Extract the module name from a dynamic import using __import__."""
+        if node.args:
+            module_arg = node.args[0]
+            if isinstance(module_arg, ast.Constant) and isinstance(module_arg.value, str):
+                module_name = module_arg.value.split('.')[0]  # Get top-level package
+                return module_name
+            else:
+                # Handle cases where module name cannot be resolved
+                logging.error(f"Cannot resolve dynamic import with non-constant module name: {ast.unparse(node)}")
+                return None
+        else:
+            logging.error(f"No arguments provided to __import__(): {ast.unparse(node)}")
+            return None
+
+    def visit_Call(self, node: ast.Call) -> None:
+        """Visit a function call and add it to the function's list of calls."""
+        func_name = self.get_full_name(node.func)
+        original_func_name = func_name
+
+        if func_name:
+            parts = func_name.split('.')
+            if parts[0] in self.module_info.classes:
+                # It's a class from this module
+                if func_name in self.module_info.classes:
+                    # func_name is exactly the class name, treat as constructor
+                    logging.debug(f"{func_name} is identified as a class. Converting to __init__ call.")
+                    func_name = f"{self.module_info.module_name}.{func_name}.__init__"
+                else:
+                    # It's a method/attribute call on a class from this module
+                    logging.debug(f"{func_name} is a method/attribute on a class from the same module. Qualifying with module name.")
+                    func_name = f"{self.module_info.module_name}.{func_name}"
+            else:
+                logging.debug(f"{func_name} is not a class, leaving as-is.")
+
+            # If func_name corresponds to a class in this module, treat it as calling __init__
+            if func_name in self.module_info.classes:
+                func_name = f"{func_name}.__init__"
+
+            # Handle dynamic imports
+            if func_name == '__import__':
+                module_name = self.extract_module_name_from_import(node)
+                if module_name:
+                    if self.current_function:
+                        self.module_info.functions[self.current_function].imports_in_function.add(module_name)
+                    else:
+                        self.module_info.top_level_imports.add(module_name)
+                else:
+                    logging.warning(f"Cannot resolve dynamic import: {ast.unparse(node)}")
+            elif func_name.startswith('super.'):
+                # Handle super calls
+                _, method_name = func_name.split('.', 1)
+                if self.current_class and self.current_class in self.base_classes:
+                    base_classes = self.base_classes[self.current_class]
+                    if base_classes:
+                        base_class = base_classes[0]  # Assuming single inheritance
+                        func_name = f"{base_class}.{method_name}"
+                # Record super calls
+                if self.current_function:
+                    self.module_info.functions[self.current_function].function_calls.add(func_name)
+                    logging.debug(f"Adding to {self.current_function}.function_calls: {func_name}")
+                else:
+                    self.module_info.top_level_calls.add(func_name)
+                    logging.debug(f"Adding to top_level_calls: {func_name}")
+            else:
+                # Normal calls
+                if self.current_function:
+                    self.module_info.functions[self.current_function].function_calls.add(func_name)
+                else:
+                    self.module_info.top_level_calls.add(func_name)
+        self.generic_visit(node)
+        logging.debug(f"Call found: original func_name={original_func_name}, resolved func_name={func_name}")
+        if self.current_function:
+            logging.debug(f"Adding function call {func_name} to {self.current_function}")
+        else:
+            logging.debug(f"Adding top-level call: {func_name}")
+
+    def get_full_name(self, node: ast.AST) -> str | None:
+        """Get the full name of a node, including any aliases."""
+        if isinstance(node, ast.Name):  # Handle variable names
+            if node.id in ('self', 'cls'):  # Handle class methods
+                if self.current_class:
+                    return self.current_class
+                else:
+                    return node.id
+            elif node.id == 'super':  # Handle super() calls
+                return 'super'
+            else:
+                return self.aliases.get(node.id, node.id)
+        elif isinstance(node, ast.Attribute):  # Handle attribute access
+            value = self.get_full_name(node.value)
+            return f"{value}.{node.attr}" if value else node.attr
+        elif isinstance(node, ast.Call):  # Handle super() calls
+            func_name = self.get_full_name(node.func)
+            return func_name
+        return None
+
+
+def split_function_name(called_func: str, default_module: str) -> tuple[str, str]:
+    """Split a fully qualified function name into module and function parts. If there's no dot, the default_module is used as the module."""
+    parts = called_func.split('.')
+    if len(parts) > 1:
+        called_module = parts[0]
+        called_name = '.'.join(parts[1:])
+    else:
+        called_module = default_module
+        called_name = called_func
+    return called_module, called_name
+
+
+def build_call_graph(modules_info: dict[str, ModuleInfo]) -> dict[str, set[str]]:
+    """Build a call graph from the function calls in the modules."""
+    call_graph = {}
+    for module_name, module_info in modules_info.items():
+        for func_name, func_info in module_info.functions.items():
+            full_func_name = f"{module_name}.{func_name}"
+            call_graph[full_func_name] = set()
+            for called_func in func_info.function_calls:
+                called_module, called_name = split_function_name(called_func, module_name)
+                # Check if called_name is a class in the module
+                if called_module in modules_info and called_name in modules_info[called_module].classes:
+                    # Class instantiation, call __init__
+                    called_full_name = f"{called_module}.{called_name}.__init__"
+                else:
+                    called_full_name = f"{called_module}.{called_name}"
+                call_graph[full_func_name].add(called_full_name)
+    logging.debug("Call graph constructed:")
+    for func, calls in call_graph.items():
+        logging.debug(f"{func} calls: {calls}")
+    return call_graph
+
+
+def collect_used_imports(start_module: str, start_func: str,
+                         call_graph:   dict[str, set[str]],
+                         modules_info: dict[str, ModuleInfo],
+                         visited: set[str] = None) -> set[str]:
+    """Collect all imports used in a function and its callees."""
+    if visited is None:
+        visited = set()
+    full_func_name = f"{start_module}.{start_func}"
+    if full_func_name in visited:
+        logging.debug(f"Already visited {full_func_name}, skipping.")
+        return set()
+    logging.debug(f"Visiting function: {full_func_name}")
+    visited.add(full_func_name)
+    imports = set()
+    module_info = modules_info.get(start_module)
+    if module_info:
+        func_info = module_info.functions.get(start_func)
+        if func_info:
+            if func_info.imports_in_function:
+                logging.debug(f"Function {full_func_name} imports: {func_info.imports_in_function}")
+            else:
+                logging.debug(f"No direct imports found in {full_func_name}")
+            imports.update(func_info.imports_in_function)
+            for called_func in func_info.function_calls:
+                called_module, called_name = split_function_name(called_func, start_module)
+                logging.debug(f"From {full_func_name}, visiting called function {called_module}.{called_name}")
+                imports.update(collect_used_imports(called_module, called_name, call_graph, modules_info, visited))
+        else:
+            logging.debug(f"No function info found for {full_func_name}")
+    else:
+        logging.debug(f"No module info found for {start_module}")
+    return imports
+
+
+def find_imports_and_IO_in_script(options: Options, first_path: str) -> None:
     """
-    Examine options.python_script and all custom modules for validity, ability to compile, and file and network operations.
+    Find all imports and I/O in the script (including functions and classes
+    that it imports from its dependencies.)
 
     Parameters:
-    options : Options object containing paths to the python script and custom modules.
+    - options     : Options object containing paths to the python script and custom modules.
+    - first_path  : Path to the Python script to analyze for imports and I/O.
 
     Returns:
-    bool : True if all examinations pass, False otherwise.
+    None - modifies options to include all imports and I/O operations found in the script.
     """
+    if not is_python_script(first_path) or not ud.compile_code(first_path):
+        logging.error(f"Skipping invalid Python script: {first_path}")
+        return
     options.read_files    = []
     options.write_files   = []
     options.download_urls = []
     options.upload_urls   = []
-    if not guard_examines_one_script(options, options.python_script):
-        return False
-    # Examine each custom module
-    for custom_load in options.loaded_custom_modules:
-        module_path = options.custom_modules[custom_load]
-        if not guard_examines_one_script(options, module_path):
-            return False
+    processed_modules:  set[str]              = set()
+    modules_info:       dict[str, ModuleInfo] = {}
+    modules_to_process: list[str]             = [first_path]
+    module_contents:    dict[str, str]        = {}
+    module_trees:       dict[str, ast.AST]    = {}
+    while modules_to_process:
+        module_path = modules_to_process.pop()
+        if os.path.isdir(module_path):
+            pkg_dir = module_path
+            init_py = os.path.join(pkg_dir, "__init__.py")
+            if os.path.isfile(init_py):
+                # 1) Parse the package __init__.py
+                module_path = init_py
+                # 2) Also enqueue all other .py modules in that same folder
+                for fname in os.listdir(pkg_dir):
+                    if is_python_script(fname) and fname != "__init__.py":
+                        path = os.path.join(pkg_dir, fname)
+                        if path not in modules_to_process and path not in processed_modules:
+                            modules_to_process.append(path)
+            else:
+                logging.error(f"No __init__.py in package directory {pkg_dir}, skipping.")
+                continue
+        module_name = os.path.splitext(os.path.basename(module_path))[0]
+        if module_name in processed_modules:
+            continue
+        processed_modules.add(module_name)
+        file_content = ud.my_fopen(module_path, rawlog=options.rawlog)
+        if not file_content:
+            logging.error(f"Could not read file: {module_path}")
+            continue
+        tree = ast.parse(file_content, module_path)
+        if not tree:
+            logging.error(f"Failed to parse the file: {module_path}")
+            continue
+        module_contents[module_name] = file_content
+        module_trees[module_name]    = tree
+        collector = ImportFunctionCollector(module_name, options, module_path)
+        collector.visit(tree)
+        module_info = collector.module_info
+        modules_info[module_name] = module_info
+        # Process only top-level imports to find local modules
+        for import_name in module_info.top_level_imports:
+            if import_name in options.standard_modules:
+                continue  # Skip standard modules
+            resolved = process_import(options, import_name, module_path)
+            if resolved:
+                module_file_path = options.custom_modules.get(import_name)
+                if module_file_path and module_file_path not in processed_modules:
+                    modules_to_process.append(module_file_path)
+            else:
+                options.all_imports.add(import_name)
+    logging.debug("Modules processed so far:")
+    for m_name, m_info in modules_info.items():
+        logging.debug(f"Module: {m_name}, Classes: {m_info.classes}, Functions: {list(m_info.functions.keys())}")
+    # Now build the call graph
+    call_graph = build_call_graph(modules_info)
+    # Collect used imports starting from the first module
+    used_imports:  set[str] = set()
+    visited_funcs: set[str] = set()
+    def collect_imports_from_module(module_name: str) -> None:
+        """Recursively collect used imports from a module."""
+        module_info = modules_info[module_name]
+        used_imports.update(module_info.top_level_imports)
+        for func_name in module_info.top_level_calls:
+            called_module, called_name = split_function_name(func_name, module_name)
+            logging.debug(f"Collecting used imports for module '{called_module}' and func_name '{called_name}'")
+            used_imports.update(
+                collect_used_imports(
+                    called_module,  # Use the extracted module name
+                    called_name,    # Use the extracted function name
+                    call_graph,
+                    modules_info,
+                    visited_funcs
+                )
+            )
+            logging.debug(f"Used imports collected from '{called_name}' in '{called_module}': {used_imports}")
+        logging.debug(f"Used imports after collecting from module {module_name}: {used_imports}")
+    collect_imports_from_module(os.path.splitext(os.path.basename(first_path))[0])
+    # Scan the *initial* script (first_path) everywhere:
+    first_module = os.path.splitext(os.path.basename(first_path))[0]
+    init_src  = module_contents[first_module]
+    init_tree = module_trees[   first_module]
+    FileOperationsVisitor(options,    init_src).visit(init_tree)
+    NetworkOperationsVisitor(options, init_src).visit(init_tree)
+
+    # Now process used imports and recursively dive into any new local modules.
+    processed_used_imports: set[str] = set()
+    new_modules_found = True
+    while new_modules_found:
+        new_modules_found = False
+        for import_name in used_imports.copy():
+            # Skip built-ins or any we've already handled this round
+            if import_name in options.standard_modules or import_name in processed_used_imports:
+                continue
+            processed_used_imports.add(import_name)
+            process_import(options, import_name, first_path)
+            if import_name in options.custom_modules:
+                # It's a local module we previously discovered—enqueue it for parsing
+                module_file_path = options.custom_modules[import_name]
+                if import_name not in processed_modules:
+                    modules_to_process.append(module_file_path)
+                    processed_modules.add(import_name)
+                    new_modules_found = True
+                    # Process the new module
+                    file_content = ud.my_fopen(module_file_path, rawlog=options.rawlog)
+                    if not file_content:
+                        logging.error(f"Could not read file: {module_file_path}")
+                        continue
+                    tree = ast.parse(file_content, module_file_path)
+                    if not tree:
+                        logging.error(f"Failed to parse the file: {module_file_path}")
+                        continue
+                    module_contents[import_name] = file_content
+                    module_trees[import_name]    = tree
+                    collector = ImportFunctionCollector(import_name, options, module_file_path)
+                    collector.visit(tree)
+                    module_info = collector.module_info
+                    modules_info[import_name] = module_info
+                    used_imports.update(module_info.top_level_imports)
+                    # Process top-level imports to find more local modules
+                    for new_import in module_info.top_level_imports:
+                        if new_import in options.standard_modules:
+                            continue
+                        resolved = process_import(options, new_import, module_file_path)
+                        if resolved:
+                            module_file_path = options.custom_modules.get(new_import)
+                            if module_file_path and new_import not in processed_modules:
+                                modules_to_process.append(module_file_path)
+                    call_graph = build_call_graph(modules_info)
+            else:
+                # If not a local module, add to options.all_imports
+                options.all_imports.add(import_name)
+    # For every *other* local module, do:
+    #   (1) top-level only, plus
+    #   (2) only in the function bodies that actually got visited
+    for module_name, src in module_contents.items():
+        if module_name == first_module:
+            continue
+        # Record any I/O at module scope
+        TopLevelFileOperationsVisitor(options,    src).visit(module_trees[module_name])
+        TopLevelNetworkOperationsVisitor(options, src).visit(module_trees[module_name])
+        # Record any I/O in each reachable function or class method
+        for full in visited_funcs:
+            mod, func = full.split('.', 1)
+            if mod != module_name:
+                continue
+            func_info = modules_info[mod].functions.get(func)
+            if not func_info:
+                continue
+            func_src = src
+            func_node = func_info.ast_node
+            # run your original visitor on that one FunctionDef
+            FileOperationsVisitor(options,    func_src).visit(func_node)
+            NetworkOperationsVisitor(options, func_src).visit(func_node)
     if not options.rawlog:
         discovered_operations = []
         if any([options.read_files, options.write_files]):
@@ -4999,7 +4515,7 @@ def guard_examines_everything(options: Options) -> bool:
         if any([options.download_urls, options.upload_urls]):
             discovered_operations.append("network")
         if discovered_operations:
-            logging.info(f"Guard found {' and '.join(discovered_operations)} operations:")
+            logging.info(f"Found {' and '.join(discovered_operations)} operations:")
             if options.read_files:
                 logging.info("Files read:\n" + "\n".join(options.read_files))
             if options.write_files:
@@ -5009,8 +4525,541 @@ def guard_examines_everything(options: Options) -> bool:
             if options.upload_urls:
                 logging.info("Upload URLs:\n" + "\n".join(options.upload_urls))
         else:
-            logging.info(f"Guard found no file or network operations in the python script ({options.python_script}) or custom modules ({', '.join(options.loaded_custom_modules)}).")
-    return True
+            logging.info(f"Found no file or network operations in the python script ({options.python_script}) or custom modules ({', '.join(options.loaded_custom_modules)}).")
+
+
+def add_dependencies(options: Options) -> None:
+    """Add dependencies for uninstalled imports."""
+    # Create a copy to iterate over since we'll be modifying the set
+    initial_packages = options.uninstalled_imports.copy()
+
+    for package in initial_packages:
+        if package in options.also_needs:
+            dependencies = options.also_needs[package]
+            if not options.rawlog:
+                logging.info(f"Adding dependencies for {package}: {dependencies}")
+            options.uninstalled_imports.update(dependencies)
+
+    # Handle nested dependencies by repeating this process until no new dependencies are added.
+    added = True
+    while added:
+        added = False
+        current_packages = options.uninstalled_imports.copy()
+        for package in current_packages:
+            if package in options.also_needs:
+                dependencies = options.also_needs[package]
+                new_dependencies = set(dependencies) - options.uninstalled_imports
+                if new_dependencies:
+                    if not options.rawlog:
+                        logging.info(f"Adding nested dependencies for {package}: {new_dependencies}")
+                    options.uninstalled_imports.update(new_dependencies)
+                    added = True
+
+
+def split_imports(options: Options) -> None:
+    """Split imports into installed, uninstalled, and bad imports."""
+    options.bad_imports = options.known_bad_imports.intersection(options.all_imports)
+    options.bad_imports.update({imp for imp in options.all_imports if imp.startswith('_')})
+    if options.bad_imports:
+        logging.debug(f"Identified bad imports: {options.bad_imports}")  # New logging
+    options.all_imports = options.all_imports - options.bad_imports
+    options.installed_imports = set()
+    options.uninstalled_imports = set()
+    if getattr(options.args, 'reqs', False):
+        options.all_imports = options.all_imports.union(options.extra_requirements.keys())
+    options.total_imports = len(options.all_imports)
+    if not options.total_imports:
+        if not options.rawlog: logging.info("No imports found.")
+        return
+
+    max_length = max(len(imp) for imp in options.all_imports)  # Longest import name length, used for formatting
+    max_digits = len(str(len(options.all_imports)))  # Maximum number of digits in import count, also used for formatting
+
+    with tempfile.TemporaryDirectory() as venv_dir:
+        venv.create(venv_dir, with_pip=True)
+        for i, imp in enumerate(options.all_imports, 1):
+            package_name = options.module_aliases.get(imp, imp)
+            logging.debug(f"Checking if import {imp} is installed or uninstalled")  # New logging
+            if imp in options.custom_modules.keys():
+                logging.debug(f"Custom module {imp} has path {options.custom_modules[imp]}")
+                status_str = "YES - custom module"
+            elif check_packages_in_venv(options, package=package_name,
+                                        venv_dir=venv_dir):
+                logging.debug(f"Module {imp} can be imported in venv")
+                status_str = "YES -     installed"
+                options.installed_imports.add(imp)
+            else:
+                logging.debug(f"Import {imp} is not installed and not a custom module")  # New logging
+                status_str = " NO - NOT installed"
+                options.uninstalled_imports.add(package_name)
+            if not options.rawlog: logging.info(f"Checking import {imp:{max_length}} : {i:>{max_digits}}/{options.total_imports} - {status_str}")
+    if getattr(options.args, 'reqs', False):
+        options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
+    add_dependencies(options)
+    return
+
+
+def is_python_script(path: str) -> bool:
+    """
+    Return True if 'path' looks like a Python script:
+      1. It ends in .py or .pyw
+      2. Or it is executable AND its first line is a python shebang
+    """
+    # Common extensions
+    if any(path.endswith(ext) for ext in ud.python_extensions):
+        return True
+
+    # No-extension scripts: check for executable bit + python shebang
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False
+
+    # Must be a regular file and executable by owner/group/other
+    if not stat.S_ISREG(st.st_mode) or not (st.st_mode & (stat.S_IXUSR|stat.S_IXGRP|stat.S_IXOTH)):
+        return False
+
+    # Try to read the first line and look for a python shebang
+    first_line = ud.my_fopen(path, suppress_errors=True, rawlog=False, numlines=1)
+    if not first_line:
+        return False
+    return bool(re.match(r'#!.*\bpython[0-9.]*\b', first_line))
+
+
+def list_packages(options: Options) -> None:
+    """Examine command line arguments to determine if we're looking at a directory, a single python script, or a list of python scripts. List all installed and uninstalled packages that are imported in that directory or python script(s). Return these sets inside the options object."""
+    if getattr(options.args, 'full', False):
+        if not options.rawlog: logging.info("Building a virtual environment that can run every python script in this directory.")
+        options.script_dir_or_file_or_list = options.script_dir
+    else:
+        # If there aren't any script arguments then we're looking at a single python script.
+        # If the python script is autolambda.py then ignore any script arguments. Autolambda will take care of them separately so there's no need to install them in the venv.
+        if not getattr(options.args, 'script_args', None) or "autolambda.py" in options.python_script:
+            options.script_dir_or_file_or_list = options.python_script
+        else:
+            # List all the script arguments that are local python scripts.
+            local_scripts = []
+            for arg in options.script_args:
+                full = arg if os.path.isabs(arg) else os.path.join(options.cwd, arg)
+                # only include if it really looks like a Python script
+                if is_python_script(full) and os.path.splitext(arg)[0] in options.custom_modules:
+                    local_scripts.append(arg)
+            # Local python scripts should be added to the list of scripts to examine for imports.
+            if local_scripts:
+                options.script_dir_or_file_or_list = [options.python_script] + local_scripts
+            else:
+                options.script_dir_or_file_or_list = options.python_script
+    logging.debug(f"{options.script_dir_or_file_or_list = }")
+
+    if isinstance(options.script_dir_or_file_or_list, str):
+        options.script_dir_or_file_or_list = os.path.expanduser(options.script_dir_or_file_or_list)
+        options.loaded_custom_modules = set()
+        if os.path.isfile(options.script_dir_or_file_or_list):
+            if is_python_script(options.script_dir_or_file_or_list):
+                if not options.rawlog: logging.info(f"Processing a single Python script: {options.script_dir_or_file_or_list}.")
+                python_file = options.script_dir_or_file_or_list
+                options.all_imports = set()
+                find_imports_and_IO_in_script(options, python_file)
+            else:
+                ud.my_critical_error(f"'{options.script_dir_or_file_or_list}' is not a valid Python script.")
+        elif os.path.isdir(options.script_dir_or_file_or_list):
+            if not options.rawlog: logging.info(f"Processing an entire folder of Python scripts: {options.script_dir_or_file_or_list}.")
+            python_dir = options.script_dir_or_file_or_list
+            if options.pipreqs_available:
+                if not options.rawlog: logging.info("Using pipreqs to generate requirements.")
+                generate_requirements(options.script_dir_or_file_or_list)
+                with open(os.path.join(python_dir, 'requirements.txt'), 'r') as f:
+                    options.all_imports = set(line.strip() for line in f)
+            else:
+                if not options.rawlog: logging.info("Using custom script to find imports.")
+                get_all_imports(options, options.script_dir_or_file_or_list)
+        else:
+            ud.my_critical_error(f"The file or directory {options.script_dir_or_file_or_list} does not exist.")
+    else:
+        if not options.rawlog: logging.info(f"Processing a list of Python scripts: {options.script_dir_or_file_or_list}")
+        options.all_imports = set()
+        # Filter out non‐Python files
+        valid = []
+        for sf in options.script_dir_or_file_or_list:
+            full = sf if os.path.isabs(sf) else os.path.join(options.cwd, sf)
+            if is_python_script(full):
+                valid.append(sf)
+            else:
+                logging.info(f"Skipping non‐Python file in list: {full}")
+        if not valid:
+            ud.my_critical_error("No valid Python scripts found in the list of files.")
+        options.script_dir_or_file_or_list = valid
+        # Process only the ones left
+        for python_file in options.script_dir_or_file_or_list:
+            full = python_file if   os.path.isabs(python_file) \
+                               else os.path.join(options.cwd, python_file)
+            find_imports_and_IO_in_script(options, full)
+
+    # Filter out invalid imports before splitting
+    options.all_imports = {imp for imp in options.all_imports if re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', imp)}
+
+    split_imports(options)
+
+
+def get_all_imports(options: Options, directory: str) -> None:
+    """Get all imports from all Python scripts in a directory."""
+    options.all_imports = set()
+    total_files = sum(len(files) for _, _, files in os.walk(directory) if 'myenv' not in _)
+    processed_files = 0
+
+    for root, _, files in os.walk(directory):
+        if any(substring in root for substring in options.stay_out_list):
+            continue
+        for file in files:
+            file_path = os.path.join(root, file)
+            if is_python_script(file_path):
+                find_imports_and_IO_in_script(options, file_path)
+                processed_files += 1
+                if not options.rawlog: logging.info(f"Processing {file_path} ({processed_files}/{total_files})")
+
+    if not options.rawlog: logging.info(f"\nFinished processing files in {directory}.")
+
+
+def generate_requirements(directory: str) -> None:
+    """Generate a requirements file using pipreqs."""
+    try:
+        pipreqs.generate_requirements(directory)
+    except (pipreqs.PipreqsError, pipreqs.PipreqsWarning) as e:
+        raise ValueError(f"Error generating requirements file in {directory}: {e}") from e
+
+
+def download_packages(options: Options) -> bool:
+    """Install packages in a virtual environment."""
+    download_script = f"""#!/bin/bash
+    source {options.venv_dir}/bin/activate
+
+    # Upgrade pip
+    echo "Upgrading pip..."
+    pip install --upgrade pip
+
+    # Ensure setuptools and wheel are available locally
+    if ls {options.packages_dir}/setuptools-*.whl 1> /dev/null 2>&1; then
+        echo "Local setuptools files found."
+    else
+        echo "Downloading setuptools..."
+        {options.venv_pip} download --only-binary=:all: setuptools -d {options.packages_dir}
+    fi
+
+    if ls {options.packages_dir}/wheel-*.whl 1> /dev/null 2>&1; then
+        echo "Local wheel files found."
+    else
+        echo "Downloading wheel..."
+        {options.venv_pip} download --only-binary=:all: wheel -d {options.packages_dir}
+    fi
+
+    # Download required packages
+    echo "Downloading packages..."
+    {options.venv_pip} download -r {options.requirements_file} -d {options.packages_dir}"""
+
+    try:
+        if not options.rawlog: logging.info(f"Writing download script to {options.download_script_path}")
+        with open(options.download_script_path, 'w') as f:
+            f.write(download_script)
+        os.chmod(options.download_script_path, 0o755)
+        # Run the initial download script and capture the output
+        result = ud.my_popen([options.download_script_path])
+        return result.returncode == 0
+    except (IOError, OSError) as e:
+        logging.error(f"Error writing or executing download script: {e}\nException type: ", exc_info=True)
+        return False
+
+
+def install_packages_simultaneously(options: Options) -> bool:
+    """Install all packages simultaneously in the virtual environment."""
+    # Construct the install command
+    install_command = [
+        options.venv_python, "-m", "pip", "install",
+        "--no-index", "--find-links", options.packages_dir,
+        "-r", options.requirements_file
+    ]
+    if not options.rawlog: logging.info("Installing all packages simultaneously...")
+    # Run the command and capture the output line by line using ud.my_popen
+    result = ud.my_popen(install_command)
+    if result.returncode == 0:
+        if not options.rawlog: logging.info("All packages installed successfully.")
+        return True
+    else:
+        logging.error("Failed to install some packages.")
+        return False
+
+
+def install_packages_individually(options: Options) -> bool:
+    """Install packages individually in the virtual environment."""
+    failed_packages = []
+    for package in options.uninstalled_imports:
+        if not install_package(package, options):
+            failed_packages.append(package)
+
+    if failed_packages:
+        logging.error(f"Failed to install the following packages: {', '.join(failed_packages)}")
+    else:
+        if not options.rawlog: logging.info("All packages installed successfully.")
+
+
+def install_package(package_name: str, options: Options) -> bool:
+    """Install a single package and return the success status (True if successful, False otherwise)."""
+    result = subprocess.run(
+        [options.venv_python, "-m", "pip", "install", package_name, "--no-index", "--find-links", options.packages_dir],
+        capture_output=True, text=True)
+    if not options.rawlog: logging.info(result.stdout)
+    if result.stderr:
+        logging.error(result.stderr)
+    if result.returncode != 0:
+        # Use pip to download files for package_name to options.packages_dir
+        download_command = [options.venv_python, "-m", "pip", "download", "--dest", options.packages_dir, package_name]
+        download_result = subprocess.run(download_command, capture_output=True, text=True)
+        if download_result.returncode != 0:
+            ud.my_critical_error(f"Failed to download {package_name}. Error: {download_result.stderr}")
+        # Use pip to install package_name from the file that was just downloaded to options.packages_dir
+        install_command = [options.venv_python, "-m", "pip", "install", "--no-index",
+                            "--find-links", options.packages_dir, package_name]
+        install_result = subprocess.run(install_command, capture_output=True, text=True)
+        if install_result.returncode != 0:
+            logging.error(f"Failed to install {package_name}. Error: {install_result.stderr}")
+        else:
+            if not options.rawlog: logging.info(f"Successfully installed {package_name}")
+        return result.returncode == 0
+    return result.returncode == 0
+
+
+def check_packages_in_venv(options: Options, package: str | None = None,
+                           venv_dir: str | None = None) -> bool:
+    """Check if packages can be imported in the specified virtual environment."""
+    if not venv_dir:
+        venv_dir = options.venv_dir
+    if sys.platform == "win32":
+        venv_python = os.path.join(venv_dir, "Scripts", "python.exe")
+    else:
+        venv_python = os.path.join(venv_dir, "bin", "python")
+    if package:
+        packages = [options.reversed_module_aliases.get(package, package)]
+    else:
+        use_pip_list(options)
+        packages = [options.reversed_module_aliases.get(pkg, pkg) for pkg in options.uninstalled_imports]
+    python_code = f"""
+import sys
+from importlib import import_module
+successes = []
+failures = []
+counter = 0
+for package in {packages!r}:
+    counter += 1
+    try:
+        import_module(package)
+        successes.append(package)
+    except ImportError:
+        failures.append(package)
+if failures:
+    print("Failed packages: " + ", ".join(failures))
+    sys.exit(1)
+elif len(successes) != counter:
+    print(f"Warning: No failures, but only recorded {{len(successes)}} successes out of {{counter}}.")
+    sys.exit(2)
+else:
+    print(f"All {{len(successes)}} (out of {{counter}}) packages imported successfully.")
+    sys.exit(0)
+"""
+    result = subprocess.run([venv_python, "-c", python_code],
+                            capture_output=True, text=True, check=False)
+    logging.debug("check_packages_in_venv stdout:\n%s", result.stdout)
+    logging.debug("check_packages_in_venv stderr:\n%s", result.stderr)
+    return "packages imported successfully" in result.stdout
+
+
+def recover_pip_versions(output: str, options: Options) -> None:
+    """Parse the output to recover the current and new pip versions."""
+    if hasattr(output, 'read'):
+        output = output.read()
+    current_version_pattern = re.compile(r"Current pip version: (.+)")
+    new_version_pattern = re.compile(r"New pip version: (.+)")
+
+    current_version_match = current_version_pattern.search(output)
+    new_version_match = new_version_pattern.search(output)
+
+    if current_version_match:
+        options.current_pip_version = current_version_match.group(1)
+        if not options.rawlog: logging.info(f"Recovered current pip version: {options.current_pip_version}")
+    else:
+        logging.warning("Failed to recover current pip version from output.")
+
+    if new_version_match:
+        options.new_pip_version = new_version_match.group(1)
+        if not options.rawlog: logging.info(f"Recovered new pip version: {options.new_pip_version}")
+    else:
+        logging.warning("Failed to recover new pip version from output.")
+
+
+def pretty_packages_list(options: Options) -> str:
+    """Create a pretty string of the first five package names and the number of remaining packages."""
+    maxnum = 5
+    packages_list = sorted(list(options.uninstalled_imports))
+    if len(packages_list) > maxnum:
+        first_five = '-'.join(packages_list[:maxnum])
+        suffix = f'-and-{len(packages_list) - maxnum}-more'
+    else:
+        first_five = '-'.join(packages_list)
+        suffix = ''
+
+    return first_five + suffix
+
+
+def use_pip_list(options: Options) -> None:
+    """Use the pip list command to find all installed packages and use that pip list to modify the uninstalled and installed imports. Add packages from the options.extra_requirements dictionary if '-reqs' is specified as a runtime argument."""
+    # Add packages from the options.extra_requirements dictionary if '-reqs' is specified as a runtime argument.
+    if getattr(options.args, 'reqs', False):
+        options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
+    if len(options.pip_list) == 0:
+        # Create virtual environment
+        venv.create(options.test_dir, with_pip=True)
+        python_executable = os.path.join(options.test_dir, 'bin', 'python')
+
+        # Run custom list command using the Python executable from the virtual environment
+        list_command_script = """
+import importlib.metadata
+import pkgutil
+import sys
+
+def list_installed_packages():
+    installed_packages = [dist.metadata['Name'] for dist in importlib.metadata.distributions()]
+    return installed_packages
+
+def list_available_modules():
+    available_modules = [module.name for module in pkgutil.iter_modules()]
+    return available_modules
+
+def list_builtin_modules():
+    builtin_modules = sys.builtin_module_names
+    return builtin_modules
+
+installed_packages = list_installed_packages()
+available_modules = list_available_modules()
+builtin_modules = list_builtin_modules()
+
+print("\\n".join(installed_packages + available_modules + list(builtin_modules)))
+"""
+
+        list_command = [python_executable, "-c", list_command_script]
+
+        try:
+            result = subprocess.run(list_command, check=True, capture_output=True, text=True)
+            logging.debug(f"Output:\n{result.stdout}")
+        except subprocess.CalledProcessError as e:
+            logging.error(f"{e}\nException type: ", exc_info=True)
+
+        # Use regular expressions to find all package names
+        options.pip_list = re.findall(r'^[^\s]+', result.stdout, re.MULTILINE)
+        options.pip_list = [pkg for pkg in options.pip_list if pkg != 'Package' and not all(c == '-' for c in pkg)]
+        logging.debug(f"\n{options.pip_list = }")
+
+        pip_list_filename = os.path.join(options.my_dir, f"pip_list_{options.timestamp}.txt")
+        with open(pip_list_filename, 'w') as f:
+            f.write('\n'.join(options.pip_list))
+
+    new_uninstalled_imports = options.installed_imports - set(options.pip_list)
+    options.uninstalled_imports = options.uninstalled_imports.union(new_uninstalled_imports)
+    if options.uninstalled_imports:
+        logging.debug(f"{new_uninstalled_imports = }")
+    options.installed_imports = options.installed_imports - new_uninstalled_imports
+    # Once again, add packages from the options.extra_requirements dictionary if '-reqs' is specified as a runtime argument. (Do this again, just in case they got removed from the uninstalled_imports set above.)
+    if getattr(options.args, 'reqs', False):
+        options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
+
+
+def parse_extra_requirements(options: Options) -> dict[str, str | None]:
+    """Parse an extra requirements file and return a dictionary of package names (and version specifiers, if present)."""
+    options.extra_requirements = {}
+    file_content = ud.my_fopen(options.extra_requirements_file, suppress_errors=True, rawlog=options.rawlog)
+    if not file_content:
+        return
+    # Regular expression to capture package name and version specifier
+    pattern = re.compile(r'^\s*([A-Za-z0-9_\-\.]+)\s*(.*)$')
+    for line in file_content.splitlines():
+        line = line.strip()
+        if line and not line.startswith('#'):
+            match = pattern.match(line)
+            if match:
+                package = match.group(1)
+                version_spec = match.group(2).strip() if match.group(2) else ''
+                options.extra_requirements[package] = version_spec
+
+
+def write_requirements_file_with_extras(options: Options) -> None:
+    """Write the requirements file with the extra requirements added and generate a 'pretty' requirements string."""
+    logging.debug(f"Writing packages to {options.requirements_file}")
+    options.pretty_requirements = ''
+    # Define the symbol replacements
+    replacements = [('>=', '_ge'),
+                    ('<=', '_le'),
+                    ('==', '_eq'),
+                    ('~=', '_approx'),
+                    ('>', '_gt'),
+                    ('<', '_lt'),
+                    (',', '_and')]
+    with open(options.requirements_file, 'w') as f:
+        # Write the packages in alphabetical order so the requirements file is deterministic.
+        for idx, package in enumerate(sorted(options.uninstalled_imports)):
+            if package in options.extra_requirements:
+                version_spec = options.extra_requirements[package]
+                if version_spec:
+                    f.write(f"{package}{version_spec}\n")
+                    # Replace symbols in version_spec for the pretty_requirements string
+                    pretty_version_spec = version_spec
+                    for old, new in replacements:
+                        pretty_version_spec = pretty_version_spec.replace(old, new)
+                    pretty_package = f"{package}{pretty_version_spec}"
+                else:
+                    f.write(f"{package}\n")
+                    pretty_package = package
+            else:
+                f.write(f"{package}\n")
+                pretty_package = package
+            # Append to the pretty_requirements string with underscores
+            if idx > 0:
+                options.pretty_requirements += '_'
+            options.pretty_requirements += pretty_package
+
+
+def setup_virtualenv(options: Options) -> bool:
+    """Setup a virtual environment and install packages."""
+    use_pip_list(options)
+    options.pretty_list = pretty_packages_list(options)
+    # Create a virtual environment directory that starts with 'failed' in case the process fails. Only remove the 'failed' part if this process completes successfully.
+    options.set_venv_dir(os.path.join(options.my_dir, f"failed-{options.venv_name}-versionless-{options.timestamp}-{options.pretty_list}"))
+    os.makedirs(options.venv_dir, exist_ok=True)
+
+    write_requirements_file_with_extras(options)
+
+    if not options.rawlog: logging.info("Creating virtual environment...")
+    subprocess.check_call([sys.executable, '-m', 'venv', options.venv_dir])
+    if not options.rawlog: logging.info("Virtual environment created.")
+
+    # Activate virtual environment and install wheel
+    install_command = [options.venv_pip, "install", "wheel"]
+    logging.info("Running pip install: %s", ' '.join(shlex.quote(arg) for arg in install_command))
+    subprocess.run(install_command, check=True)
+    if not options.rawlog: logging.info("Wheel installed in the virtual environment.")
+
+    download_packages(options)
+    if install_packages_simultaneously(options):
+        options.simultaneous_success = True
+    else:
+        options.simultaneous_success = False  # This is redundant, but it's here for clarity. The 'failed' part of the venv_dir will not be removed if this is False.
+        logging.error("Failed to install packages simultaneously. Trying to install packages individually to see which fail, but this venv folder will still have 'failed-' in its name...")
+        if not install_packages_individually(options):
+            logging.error("Failed to install packages individually.")
+
+    # Check that all packages can be imported in the venv.
+    return check_packages_in_venv(options)
+
+
+def is_virtualenv() -> bool:
+    """Check if currently running in a virtual environment."""
+    return sys.prefix != sys.base_prefix
 
 
 def save_options_to_json(options: Options) -> None:
@@ -5556,19 +5605,17 @@ def main() -> None:
 
     if not options.uninstalled_imports:
         if not options.rawlog: logging.info("All required packages are already installed.")
-        if guard_examines_everything(options):
+        start_raw_time = dt.datetime.now()
+        subprocess.run([sys.executable, options.python_script] + options.script_args)
+        elapsed_raw_time = dt.datetime.now() - start_raw_time
+        if not options.rawlog: logging.info(f"Runtime: {elapsed_raw_time}")
+    elif is_virtualenv():
+        if not options.rawlog: logging.info("Already in a virtual environment.")
+        if check_packages_in_venv(options):
             start_raw_time = dt.datetime.now()
             subprocess.run([sys.executable, options.python_script] + options.script_args)
             elapsed_raw_time = dt.datetime.now() - start_raw_time
             if not options.rawlog: logging.info(f"Runtime: {elapsed_raw_time}")
-    elif is_virtualenv():
-        if not options.rawlog: logging.info("Already in a virtual environment.")
-        if check_packages_in_venv(options):
-            if guard_examines_everything(options):
-                start_raw_time = dt.datetime.now()
-                subprocess.run([sys.executable, options.python_script] + options.script_args)
-                elapsed_raw_time = dt.datetime.now() - start_raw_time
-                if not options.rawlog: logging.info(f"Runtime: {elapsed_raw_time}")
         else:
             logging.error("The current virtual environment does not have all the required packages.")
             if not options.rawlog: logging.info("Please deactivate the current virtual environment and run the script again.")
@@ -5592,15 +5639,14 @@ def main() -> None:
             start_venv_time = dt.datetime.now()
             elapsed_time = start_venv_time - start_time
             if not options.rawlog: logging.info(f"Elapsed time: {elapsed_time}")
-            if guard_examines_everything(options):
-                command_list = [options.venv_python, options.python_script] + options.script_args
-                if not options.rawlog: logging.info("Running command: %s", ' '.join(shlex.quote(arg) for arg in command_list))
-                result = subprocess.run(command_list)
-                end_time = dt.datetime.now()
-                elapsed_time = end_time - start_venv_time
-                if not options.rawlog: logging.info(f"Elapsed time since activating virtual environment: {elapsed_time}")
-                if result.returncode != 0 and not options.rawlog:
-                    logging.error(f"Error running script: {result.stderr}")
+            command_list = [options.venv_python, options.python_script] + options.script_args
+            if not options.rawlog: logging.info("Running command: %s", ' '.join(shlex.quote(arg) for arg in command_list))
+            result = subprocess.run(command_list)
+            end_time = dt.datetime.now()
+            elapsed_time = end_time - start_venv_time
+            if not options.rawlog: logging.info(f"Elapsed time since activating virtual environment: {elapsed_time}")
+            if result.returncode != 0 and not options.rawlog:
+                logging.error(f"Error running script: {result.stderr}")
             if os.path.basename(options.venv_dir).startswith('failed-') and options.simultaneous_success:
                 # If the program has made it to this point, it has run successfully, so the venv directory can be renamed because it DIDN'T fail.
                 os.rename(options.venv_dir, options.venv_dir.replace('failed-', ''))

@@ -2805,6 +2805,7 @@ def detect_country(force_wtfismyip: bool = False) -> str | None:
     import subprocess
     import requests
     import json
+    thecountryname = None
     if not force_wtfismyip:
         logging.debug(f"force_wtfismyip={force_wtfismyip}.")
         try:
@@ -2835,10 +2836,11 @@ def detect_country(force_wtfismyip: bool = False) -> str | None:
         except Exception as e:
             logging.warning(f"IPinfo exception:\n{e}\nFalling back to using wtfismyip.com.")
 
-    public_json = requests.get("http://wtfismyip.com/json", verify=False).text
-    dct = json.loads(public_json)
-    thecountryname = dct['YourFuckingCountry']
-    logging.debug(f"Detailed results:\n{dct}")
+    if not thecountryname:
+        public_json = requests.get("http://wtfismyip.com/json", verify=False).text
+        dct = json.loads(public_json)
+        thecountryname = dct['YourFuckingCountry']
+        logging.debug(f"Detailed results:\n{dct}")
 
     return thecountryname.strip() if thecountryname else None
 
