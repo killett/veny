@@ -28,10 +28,12 @@ import univ_defs as ud
 __version__ = '0.1.7'
 
 print("REPLACE ALL WRITE AND APPEND STATEMENTS WITH ud.my_atomic_write()!")
-
+print("ALSO CATCH mask_ds_aligned.to_netcdf(output_mask_filename)")
+print("safe_eval() always(?) accepts an ast.unparse() node, then performs this: tree = ast.parse(expr, mode='eval'). IS THIS REDUNDANT, OR DOES THE 'eval' PART MATTER SO MUCH THAT THIS COMPUTATIONAL OVERHEAD IS REALLY JUSTIFIED???")
 
 class Options():
     """Class that has all global options in one place."""
+
     def __init__(self) -> None:
         """Initialize the Options class with default values."""
         self.log_mode = "INFO"  # Use the -debug command line argument to change to DEBUG.
@@ -2245,7 +2247,6 @@ If you're using the bash shell, follow these steps to add the alias manually:
 
 def parse_arguments(options: Options) -> None:
     """Parse command-line arguments."""
-
     parser = argparse.ArgumentParser(description="Run a python script with optional flags.")
     parser.add_argument('-version',       action='store_true',      help="Print the version of this program.")
     parser.add_argument('-manual',        action='store_true',      help="Print instructions for manually adding the alias to the shell configuration file.")
@@ -2470,24 +2471,21 @@ def _literal_str(expr_node: ast.AST) -> str | None:
     """Extract a string from an AST node if it is a literal string."""
     if isinstance(expr_node, ast.Constant) and isinstance(expr_node.value, str):
         return expr_node.value
-    if isinstance(expr_node, ast.Str):
-        return expr_node.s
     return None
 
 
-def get_evaluated_arg(args: list[ast.AST], idx: int, default: str = "") -> str:
+def get_evaluated_arg(expr_node: ast.AST, default: str = "") -> str:
     """
-    Safely pull a string out of args[idx] via safe_eval(), or return default.
+    Safely pull a string out of an AST node via safe_eval(), or return default.
     """
-    if idx < len(args):
-        val = safe_eval(ast.unparse(args[idx]))
-        if isinstance(val, str):
-            return val
+    val = safe_eval(ast.unparse(expr_node))
+    if isinstance(val, str):
+        return val
     return default
 
 
-def _record_IO(options: Options, file_content: str, attr: str,
-               target: str, node: ast.Call) -> None:
+def _record_IO(options: Options, file_content: str,
+               attr: str, target: str, node: ast.Call) -> None:
     """
     Record an IO operation by appending a target to an options attribute
     and logging the operation.
@@ -2840,8 +2838,8 @@ class FileOperationsVisitor(ast.NodeVisitor):
             and not full_ctor.endswith("zipfile.ZipFile")):
             return False
 
-        filename = get_evaluated_arg(inner_call.args, 0)
-        mode     = get_evaluated_arg(inner_call.args, 1, default='r')
+        filename = get_evaluated_arg(inner_call.args[0])
+        mode     = get_evaluated_arg(inner_call.args[1], default='r')
         if not isinstance(filename, str):
             return False
 
@@ -2862,7 +2860,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
                 and node.func.attr == 'open'
                 and node.args):
             filename = _literal_str(node.args[0])
-            mode = _literal_str(node.args[1]) if len(node.args) > 1 else 'r'
+            mode     = _literal_str(node.args[1]) if len(node.args) > 1 else 'r'
             method = node.func.attr
             if filename:
                 if mode.startswith('r'):
@@ -3642,7 +3640,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
             return False
 
         # 4) extract the local filename argument
-        local = get_evaluated_arg(inner_call.args, 1 if method == "get" else 0)
+        local = get_evaluated_arg(inner_call.args[1] if method == "get" else inner_call.args[0])
         if not local:
             return False
 
@@ -4473,26 +4471,21 @@ def find_imports_and_IO_in_script(options: Options, first_path: str) -> None:
     for module_name, src in module_contents.items():
         if module_name == first_module:
             continue
-
         # (1) only top-level calls
         TopLevelFileOperationsVisitor(options, src)   \
             .visit(module_trees[module_name])
         TopLevelNetworkOperationsVisitor(options, src) \
             .visit(module_trees[module_name])
-
         # (2) only bodies of actually-reached functions
         for full in visited_funcs:
             m, func = full.split('.', 1)
             if m != module_name:
                 continue
-
             func_info = modules_info[m].functions.get(func)
             if func_info is None:
                 continue
-
             # now safely grab the AST node
             func_node = func_info.ast_node
-
             FileOperationsVisitor(options,    src).visit(func_node)
             NetworkOperationsVisitor(options, src).visit(func_node)
     # ─── Phase 5: summarize I/O operations ──────────────────────────
