@@ -4335,307 +4335,167 @@ def collect_used_imports(start_module: str, start_func: str,
     return imports
 
 
-# def find_imports_and_IO_in_script(options: Options, first_path: str) -> None:
-#     """
-#     Find all imports and I/O in the script (including functions and classes
-#     that it imports from its dependencies.)
-
-#     Parameters:
-#     - options     : Options object containing paths to the python script and custom modules.
-#     - first_path  : Path to the Python script to analyze for imports and I/O.
-
-#     Returns:
-#     None - modifies options to include all imports and I/O operations found in the script.
-#     """
-#     if not is_python_script(first_path) or not ud.compile_code(first_path):
-#         logging.error(f"Skipping invalid Python script: {first_path}")
-#         return
-#     options.read_files    = []
-#     options.write_files   = []
-#     options.download_urls = []
-#     options.upload_urls   = []
-#     processed_modules:  set[str]              = set()
-#     modules_info:       dict[str, ModuleInfo] = {}
-#     modules_to_process: list[str]             = [first_path]
-#     module_contents:    dict[str, str]        = {}
-#     module_trees:       dict[str, ast.AST]    = {}
-#     while modules_to_process:
-#         module_path = modules_to_process.pop()
-#         if os.path.isdir(module_path):
-#             pkg_dir = module_path
-#             init_py = os.path.join(pkg_dir, "__init__.py")
-#             if os.path.isfile(init_py):
-#                 # 1) Parse the package __init__.py
-#                 module_path = init_py
-#                 # 2) Also enqueue all other .py modules in that same folder
-#                 for fname in os.listdir(pkg_dir):
-#                     if is_python_script(fname) and fname != "__init__.py":
-#                         path = os.path.join(pkg_dir, fname)
-#                         if path not in modules_to_process and path not in processed_modules:
-#                             modules_to_process.append(path)
-#             else:
-#                 logging.error(f"No __init__.py in package directory {pkg_dir}, skipping.")
-#                 continue
-#         module_name = os.path.splitext(os.path.basename(module_path))[0]
-#         if module_name in processed_modules:
-#             continue
-#         processed_modules.add(module_name)
-#         file_content = ud.my_fopen(module_path, rawlog=options.rawlog)
-#         if not file_content:
-#             logging.error(f"Could not read file: {module_path}")
-#             continue
-#         tree = ast.parse(file_content, module_path)
-#         if not tree:
-#             logging.error(f"Failed to parse the file: {module_path}")
-#             continue
-#         module_contents[module_name] = file_content
-#         module_trees[module_name]    = tree
-#         collector = ImportFunctionCollector(module_name, options, module_path)
-#         collector.visit(tree)
-#         module_info = collector.module_info
-#         modules_info[module_name] = module_info
-#         # Process only top-level imports to find local modules
-#         for import_name in module_info.top_level_imports:
-#             if import_name in options.standard_modules:
-#                 continue  # Skip standard modules
-#             resolved = process_import(options, import_name, module_path)
-#             if resolved:
-#                 module_file_path = options.custom_modules.get(import_name)
-#                 if module_file_path and module_file_path not in processed_modules:
-#                     modules_to_process.append(module_file_path)
-#             else:
-#                 options.all_imports.add(import_name)
-#     logging.debug("Modules processed so far:")
-#     for m_name, m_info in modules_info.items():
-#         logging.debug(f"Module: {m_name}, Classes: {m_info.classes}, Functions: {list(m_info.functions.keys())}")
-#     # Now process used imports and recursively dive into any new local modules.
-#     processed_used_imports: set[str] = set()
-#     new_modules_found = True
-#     while new_modules_found:
-#         new_modules_found = False
-#         for import_name in used_imports.copy():
-#             # Skip built-ins or any we've already handled this round
-#             if import_name in options.standard_modules or import_name in processed_used_imports:
-#                 continue
-#             processed_used_imports.add(import_name)
-#             process_import(options, import_name, first_path)
-#             if import_name in options.custom_modules:
-#                 # It's a local module we previously discovered—enqueue it for parsing
-#                 module_file_path = options.custom_modules[import_name]
-#                 if import_name not in processed_modules:
-#                     modules_to_process.append(module_file_path)
-#                     processed_modules.add(import_name)
-#                     new_modules_found = True
-#                     # Process the new module
-#                     file_content = ud.my_fopen(module_file_path, rawlog=options.rawlog)
-#                     if not file_content:
-#                         logging.error(f"Could not read file: {module_file_path}")
-#                         continue
-#                     tree = ast.parse(file_content, module_file_path)
-#                     if not tree:
-#                         logging.error(f"Failed to parse the file: {module_file_path}")
-#                         continue
-#                     module_contents[import_name] = file_content
-#                     module_trees[import_name]    = tree
-#                     collector = ImportFunctionCollector(import_name, options, module_file_path)
-#                     collector.visit(tree)
-#                     module_info = collector.module_info
-#                     modules_info[import_name] = module_info
-#                     used_imports.update(module_info.top_level_imports)
-#                     # Process top-level imports to find more local modules
-#                     for new_import in module_info.top_level_imports:
-#                         if new_import in options.standard_modules:
-#                             continue
-#                         resolved = process_import(options, new_import, module_file_path)
-#                         if resolved:
-#                             module_file_path = options.custom_modules.get(new_import)
-#                             if module_file_path and new_import not in processed_modules:
-#                                 modules_to_process.append(module_file_path)
-#             else:
-#                 # If not a local module, add to options.all_imports
-#                 options.all_imports.add(import_name)
-#     # Now build the call graph to collect reachable functions and classes.
-#     call_graph = build_call_graph(modules_info)
-#     # Collect used imports starting from the first module
-#     used_imports:  set[str] = set()
-#     visited_funcs: set[str] = set()
-#     def collect_imports_from_module(module_name: str) -> None:
-#         """Recursively collect used imports from a module."""
-#         module_info = modules_info[module_name]
-#         used_imports.update(module_info.top_level_imports)
-#         for func_name in module_info.top_level_calls:
-#             called_module, called_name = split_function_name(func_name, module_name)
-#             logging.debug(f"Collecting used imports for module '{called_module}' and func_name '{called_name}'")
-#             used_imports.update(
-#                 collect_used_imports(
-#                     called_module,  # Use the extracted module name
-#                     called_name,    # Use the extracted function name
-#                     call_graph,
-#                     modules_info,
-#                     visited_funcs
-#                 )
-#             )
-#             logging.debug(f"Used imports collected from '{called_name}' in '{called_module}': {used_imports}")
-#         logging.debug(f"Used imports after collecting from module {module_name}: {used_imports}")
-#     collect_imports_from_module(os.path.splitext(os.path.basename(first_path))[0])
-#     # Scan the *initial* script (first_path) everywhere for I/O operations:
-#     first_module = os.path.splitext(os.path.basename(first_path))[0]
-#     init_src  = module_contents[first_module]
-#     init_tree = module_trees[   first_module]
-#     FileOperationsVisitor(options,    init_src).visit(init_tree)
-#     NetworkOperationsVisitor(options, init_src).visit(init_tree)
-#     # For every *other* local module, scan for I/O operations:
-#     #   (1) in the top-level only, plus
-#     #   (2) in the function bodies that actually got visited
-#     for module_name, src in module_contents.items():
-#         if module_name == first_module:
-#             continue
-#         # Record any I/O at module scope
-#         TopLevelFileOperationsVisitor(options,    src).visit(module_trees[module_name])
-#         TopLevelNetworkOperationsVisitor(options, src).visit(module_trees[module_name])
-#         # Record any I/O in each reachable function or class method
-#         for full in visited_funcs:
-#             mod, func = full.split('.', 1)
-#             if mod != module_name:
-#                 continue
-#             func_info = modules_info[mod].functions.get(func)
-#             if not func_info:
-#                 continue
-#             func_src = src
-#             func_node = func_info.ast_node
-#             # run your original visitor on that one FunctionDef
-#             FileOperationsVisitor(options,    func_src).visit(func_node)
-#             NetworkOperationsVisitor(options, func_src).visit(func_node)
-
-# emmy@mini002b:/media/emmy/G/Documents/Programming/python$ mypy test_main.py 
-# REPLACE ALL WRITE AND APPEND STATEMENTS WITH ud.my_atomic_write()!
-# REPLACE ALL WRITE AND APPEND STATEMENTS WITH ud.my_atomic_write()!
-# 2025-08-05 00:43:49,154 - INFO - Logging to /media/emmy/G/Documents/Programming/python/.mypy-log-20250805-004349.out and /media/emmy/G/Documents/Programming/python/.mypy-log-20250805-004349.err with level INFO
-# 2025-08-05 00:43:49,189 - INFO - Loading custom modules from .mypy_custom_modules_mini002b_20250726-005926.pkl
-# 2025-08-05 00:43:49,195 - INFO - dict_of_custom_modules() took 0:00:00.010478
-# 2025-08-05 00:43:49,198 - INFO - Elapsed time: 0:00:00.063198
-# 2025-08-05 00:43:49,205 - INFO - Processing a single Python script: test_main.py.
-# 2025-08-05 00:43:49,221 - INFO - Found no file or network operations in the python script (test_main.py) or custom modules ().
-# 2025-08-05 00:43:49,224 - INFO - No imports found.
-# 2025-08-05 00:43:49,225 - INFO - Uninstalled imports: set()
-# 2025-08-05 00:43:49,225 - INFO - All required packages are already installed.
-# Sending a request to google.com...
-# Response from google.com: 429
-# 2025-08-05 00:43:50,007 - INFO - Runtime: 0:00:00.782723
-
 def find_imports_and_IO_in_script(options: Options, first_path: str) -> None:
     """
     Find all imports and I/O in the script (including functions and classes
-    that it imports from its dependencies).
-
-    Parameters:
-    - options     : Options object containing paths to the python script and custom modules.
-    - first_path  : Path to the Python script to analyze for imports and I/O.
-
-    Returns:
-    None - modifies options to include all imports and I/O operations found in the script.
+    that it imports from its dependencies.)
     """
     if not is_python_script(first_path) or not ud.compile_code(first_path):
         logging.error(f"Skipping invalid Python script: {first_path}")
         return
 
-    # reset I/O collections
+    # reset I/O and import collections
     options.read_files    = []
     options.write_files   = []
     options.download_urls = []
     options.upload_urls   = []
+    options.all_imports   = set()
 
-    # storage for every module we’ll parse
-    modules_info    : dict[str, ModuleInfo] = {}
-    module_contents : dict[str, str]        = {}
-    module_trees    : dict[str, ast.AST]    = {}
-
-    # ─── Step A: parse the first script ─────────────────────────────
+    # ─── Phase 1: parse first script + its top-level imports ────────
     first_module = os.path.splitext(os.path.basename(first_path))[0]
-    content      = ud.my_fopen(first_path, rawlog=options.rawlog)
-    tree         = ast.parse(content, first_path)
+    module_contents = {}
+    module_trees    = {}
+    modules_info    = {}
+    processed_modules = set()
 
-    module_contents[first_module] = content
-    module_trees   [first_module] = tree
-
-    collector = ImportFunctionCollector(first_module, options, first_path)
-    collector.visit(tree)
-    modules_info[first_module] = collector.module_info
-
-    # seed our dependency set with its top-level imports
-    dep_imports     : set[str] = set(modules_info[first_module].top_level_imports)
-    processed_deps  : set[str] = set()
-
-    # ─── Step B: resolve all local modules via dep_imports ───────────
-    while True:
-        found_new = False
-        for pkg in list(dep_imports):
-            if pkg in processed_deps or pkg in options.standard_modules:
-                continue
-            processed_deps.add(pkg)
-
-            # try to resolve this import
-            resolved = process_import(options, pkg, first_path)
-            if resolved and pkg in options.custom_modules:
-                module_path = options.custom_modules[pkg]
-                src = ud.my_fopen(module_path, rawlog=options.rawlog)
-                tree = ast.parse(src, module_path)
-
-                module_contents[pkg] = src
-                module_trees   [pkg] = tree
-
-                coll = ImportFunctionCollector(pkg, options, module_path)
-                coll.visit(tree)
-                modules_info[pkg] = coll.module_info
-
-                # add *its* top-level imports to our to-do set
-                dep_imports.update(coll.module_info.top_level_imports)
-                found_new = True
+    # initial queue for top-level imports
+    modules_to_process = [first_path]
+    while modules_to_process:
+        module_path = modules_to_process.pop()
+        if os.path.isdir(module_path):
+            # handle packages
+            pkg_dir = module_path
+            init_py = os.path.join(pkg_dir, "__init__.py")
+            if os.path.isfile(init_py):
+                module_path = init_py
+                for fn in os.listdir(pkg_dir):
+                    if is_python_script(fn) and fn != "__init__.py":
+                        p = os.path.join(pkg_dir, fn)
+                        if p not in modules_to_process and os.path.splitext(fn)[0] not in processed_modules:
+                            modules_to_process.append(p)
             else:
-                # external import
+                logging.error(f"No __init__.py in package {pkg_dir}, skipping.")
+                continue
+
+        mod_name = os.path.splitext(os.path.basename(module_path))[0]
+        if mod_name in processed_modules:
+            continue
+        processed_modules.add(mod_name)
+
+        src  = ud.my_fopen(module_path, rawlog=options.rawlog)
+        tree = ast.parse(src, module_path)
+        module_contents[mod_name] = src
+        module_trees   [mod_name] = tree
+
+        coll = ImportFunctionCollector(mod_name, options, module_path)
+        coll.visit(tree)
+        modules_info[mod_name] = coll.module_info
+
+        # enqueue any *top-level* imports
+        for pkg in coll.module_info.top_level_imports:
+            if pkg in options.standard_modules:
+                continue
+            if process_import(options, pkg, module_path) and pkg in options.custom_modules:
+                modules_to_process.append(options.custom_modules[pkg])
+            else:
                 options.all_imports.add(pkg)
-        if not found_new:
-            break
 
-    # ─── Step C: build call-graph & mark reachable functions ─────────
+    logging.debug(f"Parsed modules: {list(modules_info)}")
+
+    # ─── Phase 2: build call-graph & collect *called* imports ──────
     call_graph    = build_call_graph(modules_info)
-    used_imports  : set[str] = set()
-    visited_funcs : set[str] = set()
+    used_imports  = set()
+    visited_funcs = set()
 
-    def collect_from(mod_name: str) -> None:
-        info = modules_info[mod_name]
+    def collect_from(mod: str):
+        info = modules_info[mod]
+        # any imports at module level count
         used_imports.update(info.top_level_imports)
+        # now walk out along each top-level call
         for call in info.top_level_calls:
-            cm, fn = split_function_name(call, mod_name)
+            cm, fn = split_function_name(call, mod)
             used_imports.update(
                 collect_used_imports(cm, fn, call_graph, modules_info, visited_funcs)
             )
 
     collect_from(first_module)
 
-    # ─── Step D: full I/O scan of the first script ────────────────
+    # ─── Phase 3: pull in modules imported *inside* called functions ─
+    processed_used = set()
+    while True:
+        added = False
+        for pkg in list(used_imports):
+            if pkg in processed_used or pkg in options.standard_modules:
+                continue
+            processed_used.add(pkg)
+
+            # only expand local modules
+            if process_import(options, pkg, first_path) and pkg in options.custom_modules:
+                path = options.custom_modules[pkg]
+                name = pkg
+                if name not in processed_modules:
+                    # parse that new module
+                    processed_modules.add(name)
+                    src  = ud.my_fopen(path, rawlog=options.rawlog)
+                    tree = ast.parse(src, path)
+                    module_contents[name] = src
+                    module_trees   [name] = tree
+                    coll = ImportFunctionCollector(name, options, path)
+                    coll.visit(tree)
+                    modules_info[name] = coll.module_info
+                    added = True
+
+                # make sure to queue *its* top-level imports, too
+                used_imports.update(modules_info[name].top_level_imports)
+            else:
+                options.all_imports.add(pkg)
+
+        if not added:
+            break
+
+        # rebuild graph now that we have new modules
+        call_graph = build_call_graph(modules_info)
+        # re-collect reachable imports / functions from scratch
+        used_imports.clear()
+        visited_funcs.clear()
+        collect_from(first_module)
+
+    # ─── Phase 4: actual I/O scanning ───────────────────────────────
+    # (a) full scan of the first (primary) script
     FileOperationsVisitor(options,    module_contents[first_module])\
         .visit(module_trees[first_module])
     NetworkOperationsVisitor(options, module_contents[first_module])\
         .visit(module_trees[first_module])
 
-    # ─── Step E: module-level + reachable-function I/O in dependencies ─
-    for mod, src in module_contents.items():
-        if mod == first_module:
+    # (b) for every dependency module:
+    #     1. top-level only, plus
+    #     2. bodies of any *called* functions
+    for module_name, src in module_contents.items():
+        if module_name == first_module:
             continue
 
         # (1) only top-level calls
-        TopLevelFileOperationsVisitor(options,    src).visit(module_trees[mod])
-        TopLevelNetworkOperationsVisitor(options, src).visit(module_trees[mod])
+        TopLevelFileOperationsVisitor(options, src)   \
+            .visit(module_trees[module_name])
+        TopLevelNetworkOperationsVisitor(options, src) \
+            .visit(module_trees[module_name])
 
-        # (2) only calls inside actually-reached functions
+        # (2) only bodies of actually-reached functions
         for full in visited_funcs:
-            m, fn = full.split('.', 1)
-            if m != mod:
+            m, func = full.split('.', 1)
+            if m != module_name:
                 continue
-            node = modules_info[m].functions[fn].ast_node
-            FileOperationsVisitor(options,    src).visit(node)
-            NetworkOperationsVisitor(options, src).visit(node)
+
+            func_info = modules_info[m].functions.get(func)
+            if func_info is None:
+                continue
+
+            # now safely grab the AST node
+            func_node = func_info.ast_node
+
+            FileOperationsVisitor(options,    src).visit(func_node)
+            NetworkOperationsVisitor(options, src).visit(func_node)
+    # ─── Phase 5: summarize I/O operations ──────────────────────────
     if not options.rawlog:
         discovered_operations = []
         if any([options.read_files, options.write_files]):
