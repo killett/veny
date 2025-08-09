@@ -20,7 +20,6 @@ from typing import Any
 from collections.abc import Iterable
 import logging
 import tempfile
-import stat
 import shlex  # For safely quoting shell commands
 
 import univ_defs as ud
@@ -28,7 +27,7 @@ import univ_defs as ud
 __version__ = '0.1.7'
 
 print("REPLACE ALL WRITE AND APPEND STATEMENTS WITH ud.my_atomic_write()!")
-print("ALSO CATCH mask_ds_aligned.to_netcdf(output_mask_filename)")
+print("FILE I/O SHOULD ALSO CATCH mask_ds_aligned.to_netcdf(output_mask_filename)")
 print("safe_eval() always(?) accepts an ast.unparse() node, then performs this: tree = ast.parse(expr, mode='eval'). IS THIS REDUNDANT, OR DOES THE 'eval' PART MATTER SO MUCH THAT THIS COMPUTATIONAL OVERHEAD IS REALLY JUSTIFIED???")
 
 class Options():
@@ -36,10 +35,10 @@ class Options():
 
     def __init__(self) -> None:
         """Initialize the Options class with default values."""
-        self.log_mode = "INFO"  # Use the -debug command line argument to change to DEBUG.
-        self.search_above_this_dir = True
+        self.log_mode: str = "INFO"  # Use the -debug command line argument to change to DEBUG.
+        self.search_above_this_dir: bool = True
         self.my_filepath: str = os.path.abspath(__file__)  # This file's full path and filename
-        self.my_name = os.path.splitext(os.path.basename(self.my_filepath))[0]  # The base name of this script without the .py extension
+        self.my_name: str = os.path.splitext(os.path.basename(self.my_filepath))[0]  # The base name of this script without the .py extension
         self.my_dir: str = os.path.expanduser(os.path.join('~', self.my_name))
         self.manual_instructions: str = f"""
 This program acts as a wrapper around Python to automate the creation of virtual environments and the installation of any required packages. Instead of typing "python3 script.py", you can type "{self.my_name} script.py" to run script.py in a virtual environment which has all the required packages.
@@ -118,6 +117,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.download_urls: list[str] = []  # List of  URLs downloaded by the Python script.
         self.upload_urls:   list[str] = []  # List of  URLs uploaded   by the Python script.
         self.current_method_name: str = ''  # Name of the current method being executed.
+        self.args: argparse.Namespace | None = None
         # Some packages also need other packages to be installed.
         self.also_needs: dict[str, list[str]] = {
             'xarray': ['dask', 'netcdf4', 'h5netcdf'],
@@ -2248,25 +2248,44 @@ If you're using the bash shell, follow these steps to add the alias manually:
 def parse_arguments(options: Options) -> None:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Run a python script with optional flags.")
-    parser.add_argument('-version',       action='store_true',      help="Print the version of this program.")
-    parser.add_argument('-manual',        action='store_true',      help="Print instructions for manually adding the alias to the shell configuration file.")
-    parser.add_argument('-feeling-lucky', action='store_true',    help="NOT FINISHED!!! Run the script with the -feeling-lucky flag, which will try to run the script with the last used virtual environment, or if that fails, try the latest virtual environment which has all the packages needed now.")
-    parser.add_argument('-debug',         action='store_true',      help="Run this program in debug mode, which prints additional debug messages."    )
-    parser.add_argument('-blank-slate',   action='store_true',      help=f"Delete ~/{options.my_name}/ and all {options.my_name} .out and .err and .json and .pkl files in the current directory.")
-    parser.add_argument('-full',          action='store_true',      help="Build a virtual environment (venv) that can run every python script in the specified directory (defaults to the current working directory).")
-    parser.add_argument('-y',             action='store_true',      help="Automatically say yes to any prompts to allow this program to run without the need for user interaction.")
-    parser.add_argument('-no-cache',      action='store_true',      help="Don't search the cache. Instead, create a new virtual environment. Also, refresh the custom modules cache and the pip list.")
-    parser.add_argument('-latest',        action='store_true',      help="Load the latest venv in the cache which has all the packages needed now.")
-    parser.add_argument('-oldest',        action='store_true',      help="Load the oldest venv in the cache which has all the packages needed now.")
-    parser.add_argument('-last-used',     action='store_true',      help="Load the last used venv in the cache, but if that fails try the latest venv which has all the packages needed now.")
-    parser.add_argument('-smallest',      action='store_true',      help="Load the smallest venv in the cache (with the fewest packages) which has all the packages needed now.")
-    parser.add_argument('-rc',            action='store_true',      help="Refresh the custom modules cache and the pip list.")
-    parser.add_argument('-reqs',          action='store_true',      help="Read the extra_requirements.txt file in the current directory and install the packages listed there (with specific versions if present in the file) into the venv (along with the other packages needed to run the script as determined elsewhere in this program).")
-    parser.add_argument('-alias',         type=str,                 help="Add an alias to the shell configuration file so that typing ALIAS anywhere runs this program.")
-    parser.add_argument('-rawlog',        action='store_true',      help=f"Do not add timestamps or INFO level to log messages, and do not add extra INFO level log statements. Just produce the same output that would be seen when running the program without {options.my_name}.")
-    parser.add_argument('-justprint',     action='store_true',      help="Don't run the script, just print its package requirements.")
-    parser.add_argument('script',         nargs='?',                help="The script to run.")
-    parser.add_argument('script_args',    nargs=argparse.REMAINDER, help="Optional arguments for the python script.")
+    parser.add_argument('-version', action='store_true',
+                        help="Print the version of this program.")
+    parser.add_argument('-manual', action='store_true',
+                        help="Print instructions for manually adding the alias to the shell configuration file.")
+    parser.add_argument('-feeling-lucky', action='store_true',
+                        help="NOT FINISHED!!! Run the script with the -feeling-lucky flag, which will try to run the script with the last used virtual environment, or if that fails, try the latest virtual environment which has all the packages needed now.")
+    parser.add_argument('-debug', action='store_true',
+                        help="Run this program in debug mode, which prints additional debug messages.")
+    parser.add_argument('-blank-slate', action='store_true',
+                        help=f"Delete ~/{options.my_name}/ and all {options.my_name} .out and .err and .json and .pkl files in the current directory.")
+    parser.add_argument('-full', action='store_true',
+                        help="Build a virtual environment (venv) that can run every python script in the specified directory (defaults to the current working directory).")
+    parser.add_argument('-y', action='store_true',
+                        help="Automatically say yes to any prompts to allow this program to run without the need for user interaction.")
+    parser.add_argument('-no-cache', action='store_true',
+                        help="Don't search the cache. Instead, create a new virtual environment. Also, refresh the custom modules cache and the pip list.")
+    parser.add_argument('-latest', action='store_true',
+                        help="Load the latest venv in the cache which has all the packages needed now.")
+    parser.add_argument('-oldest', action='store_true',
+                        help="Load the oldest venv in the cache which has all the packages needed now.")
+    parser.add_argument('-last-used', action='store_true',
+                        help="Load the last used venv in the cache, but if that fails try the latest venv which has all the packages needed now.")
+    parser.add_argument('-smallest', action='store_true',
+                        help="Load the smallest venv in the cache (with the fewest packages) which has all the packages needed now.")
+    parser.add_argument('-rc', action='store_true',
+                        help="Refresh the custom modules cache and the pip list.")
+    parser.add_argument('-reqs', action='store_true',
+                        help="Read the extra_requirements.txt file in the current directory and install the packages listed there (with specific versions if present in the file) into the venv (along with the other packages needed to run the script as determined elsewhere in this program).")
+    parser.add_argument('-alias', type=str,
+                        help="Add an alias to the shell configuration file so that typing ALIAS anywhere runs this program.")
+    parser.add_argument('-rawlog', action='store_true',
+                        help=f"Do not add timestamps or INFO level to log messages, and do not add extra INFO level log statements. Just produce the same output that would be seen when running the program without {options.my_name}.")
+    parser.add_argument('-justprint', action='store_true',
+                        help="Don't run the script, just print its package requirements.")
+    parser.add_argument('script', nargs='?',
+                        help="The script to run.")
+    parser.add_argument('script_args', nargs=argparse.REMAINDER,
+                        help="Optional arguments for the python script.")
 
     # If no arguments are provided, print a short guide
     if len(sys.argv) == 1:
@@ -2275,6 +2294,17 @@ def parse_arguments(options: Options) -> None:
 
     # Otherwise, parse the arguments and store them in options.args for later use.
     options.args = parser.parse_args()
+
+    if getattr(options.args, 'version', False):
+        print(__version__)
+        sys.exit(0)
+    # Print instructions for manually adding the alias to the shell configuration file, etc.
+    if getattr(options.args, 'manual', False):
+        print(options.manual_instructions)
+        sys.exit(0)
+
+    if getattr(options.args, 'debug', False):
+        options.log_mode = 'DEBUG'
 
 
 def detect_shell(options: Options) -> None:
@@ -2587,7 +2617,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
         if self._process_bz2(         node): return
         if self._process_unknown_open(node): return
         if self._process_generic_file(node): return
-        self.generic_visit(        node)  # Keep digging into the AST
+        self.generic_visit(           node)  # Keep digging into the AST
 
     def _process_open(self, node: ast.Call) -> bool:
         """Process open(...) calls."""
@@ -3259,28 +3289,6 @@ class TopLevelFileOperationsVisitor(FileOperationsVisitor):
                 self.visit(stmt)
 
 
-def get_file_operations(options: Options, script_path: str) -> None:
-    """
-    Find files that are read or written, store in options.
-
-    Parameters:
-    - options     : Options object containing paths to the python script and custom modules.
-    - script_path : Path to the Python script to analyze for file operations.
-
-    Returns:
-    None - modifies options to include read and written file paths.
-
-    Raises:
-    ValueError - if the script cannot be opened.
-    """
-    logging.debug(f"Analyzing file operations in {script_path}")
-    file_content = ud.my_fopen(script_path, rawlog=options.rawlog)
-    if not file_content:
-        raise ValueError(f"Failed to open {script_path} for file operations analysis.")
-    tree = ast.parse(file_content, script_path)
-    FileOperationsVisitor(options, file_content).visit(tree)
-
-
 class NetworkOperationsVisitor(ast.NodeVisitor):
     """Visitor to find network operations in the AST."""
 
@@ -3313,7 +3321,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
         if self._process_psycopg2(       node): return
         if self._process_redis(          node): return
         # if self._process_generic_network(node): return  # Too many false positives!
-        self.generic_visit(           node)  # Keep digging into the AST
+        self.generic_visit(              node)  # Keep digging into the AST
 
     def _process_requests(self, node: ast.Call) -> bool:
         """Process requests.get/post/put/...(...) calls."""
@@ -3821,28 +3829,6 @@ class TopLevelNetworkOperationsVisitor(NetworkOperationsVisitor):
                 self.visit(stmt)
 
 
-def get_network_operations(options: Options, script_path: str) -> None:
-    """
-    Find URLs that are downloaded and uploaded, store in options.
-
-    Parameters:
-    - options     : Options object containing paths to the python script and custom modules.
-    - script_path : Path to the Python script to analyze for network operations.
-
-    Returns:
-    None - modifies options to include download and upload URLs.
-
-    Raises:
-    ValueError - if the script cannot be opened.
-    """
-    logging.debug(f"Analyzing network operations in {script_path}")
-    file_content = ud.my_fopen(script_path, rawlog=options.rawlog)
-    if not file_content:
-        raise ValueError(f"Failed to open {script_path} for network operations analysis.")
-    tree = ast.parse(file_content, script_path)
-    NetworkOperationsVisitor(options, file_content).visit(tree)
-
-
 def _safe_eval_node(node: ast.AST) -> Any:
     """
     Recursively evaluate a restricted subset of AST nodes:
@@ -4333,162 +4319,355 @@ def collect_used_imports(start_module: str, start_func: str,
     return imports
 
 
+# def find_imports_and_IO_in_script(options: Options, first_path: str) -> None:
+#     """
+#     Find all imports and I/O in the script (including functions and classes
+#     that it imports from its dependencies.)
+#     """
+#     if not ud.is_python_script(first_path) or not ud.compile_code(first_path):
+#         logging.error(f"Skipping invalid Python script: {first_path}")
+#         return
+
+#     # reset I/O and import collections
+#     options.read_files    = []
+#     options.write_files   = []
+#     options.download_urls = []
+#     options.upload_urls   = []
+#     options.all_imports   = set()
+
+#     # ─── Phase 1: parse first script + its top-level imports ────────
+#     first_module = os.path.splitext(os.path.basename(first_path))[0]
+#     module_contents = {}
+#     module_trees    = {}
+#     modules_info    = {}
+#     processed_modules = set()
+
+#     # initial queue for top-level imports
+#     modules_to_process = [first_path]
+#     while modules_to_process:
+#         module_path = modules_to_process.pop()
+#         if os.path.isdir(module_path):
+#             # handle packages
+#             pkg_dir = module_path
+#             init_py = os.path.join(pkg_dir, "__init__.py")
+#             if os.path.isfile(init_py):
+#                 module_path = init_py
+#                 for fn in os.listdir(pkg_dir):
+#                     if ud.is_python_script(fn) and fn != "__init__.py":
+#                         p = os.path.join(pkg_dir, fn)
+#                         if p not in modules_to_process and os.path.splitext(fn)[0] not in processed_modules:
+#                             modules_to_process.append(p)
+#             else:
+#                 logging.error(f"No __init__.py in package {pkg_dir}, skipping.")
+#                 continue
+
+#         mod_name = os.path.splitext(os.path.basename(module_path))[0]
+#         if mod_name in processed_modules:
+#             continue
+#         processed_modules.add(mod_name)
+
+#         src  = ud.my_fopen(module_path, rawlog=options.rawlog)
+#         tree = ast.parse(src, module_path)
+#         module_contents[mod_name] = src
+#         module_trees   [mod_name] = tree
+
+#         coll = ImportFunctionCollector(mod_name, options, module_path)
+#         coll.visit(tree)
+#         modules_info[mod_name] = coll.module_info
+
+#         # enqueue any *top-level* imports
+#         for pkg in coll.module_info.top_level_imports:
+#             if pkg in options.standard_modules:
+#                 continue
+#             if process_import(options, pkg, module_path) and pkg in options.custom_modules:
+#                 modules_to_process.append(options.custom_modules[pkg])
+#             else:
+#                 options.all_imports.add(pkg)
+
+#     logging.debug(f"Parsed modules: {list(modules_info)}")
+
+#     # ─── Phase 2: build call-graph & collect *called* imports ──────
+#     call_graph    = build_call_graph(modules_info)
+#     used_imports  = set()
+#     visited_funcs = set()
+
+#     def collect_from(mod: str):
+#         info = modules_info[mod]
+#         # any imports at module level count
+#         used_imports.update(info.top_level_imports)
+#         # now walk out along each top-level call
+#         for call in info.top_level_calls:
+#             cm, fn = split_function_name(call, mod)
+#             used_imports.update(
+#                 collect_used_imports(cm, fn, call_graph, modules_info, visited_funcs)
+#             )
+
+#     collect_from(first_module)
+
+#     # ─── Phase 3: pull in modules imported *inside* called functions ─
+#     processed_used = set()
+#     while True:
+#         added = False
+#         for pkg in list(used_imports):
+#             if pkg in processed_used or pkg in options.standard_modules:
+#                 continue
+#             processed_used.add(pkg)
+
+#             # only expand local modules
+#             if process_import(options, pkg, first_path) and pkg in options.custom_modules:
+#                 path = options.custom_modules[pkg]
+#                 name = pkg
+#                 if name not in processed_modules:
+#                     # parse that new module
+#                     processed_modules.add(name)
+#                     src  = ud.my_fopen(path, rawlog=options.rawlog)
+#                     tree = ast.parse(src, path)
+#                     module_contents[name] = src
+#                     module_trees   [name] = tree
+#                     coll = ImportFunctionCollector(name, options, path)
+#                     coll.visit(tree)
+#                     modules_info[name] = coll.module_info
+#                     added = True
+
+#                 # make sure to queue *its* top-level imports, too
+#                 used_imports.update(modules_info[name].top_level_imports)
+#             else:
+#                 options.all_imports.add(pkg)
+
+#         if not added:
+#             break
+
+#         # rebuild graph now that we have new modules
+#         call_graph = build_call_graph(modules_info)
+#         # re-collect reachable imports / functions from scratch
+#         used_imports.clear()
+#         visited_funcs.clear()
+#         collect_from(first_module)
+
+#     # ─── Phase 4: actual I/O scanning ───────────────────────────────
+#     # (a) full scan of the first (primary) script
+#     FileOperationsVisitor(options,    module_contents[first_module])\
+#         .visit(module_trees[first_module])
+#     NetworkOperationsVisitor(options, module_contents[first_module])\
+#         .visit(module_trees[first_module])
+
+#     # (b) for every dependency module:
+#     #     1. top-level only, plus
+#     #     2. bodies of any *called* functions
+#     for module_name, src in module_contents.items():
+#         if module_name == first_module:
+#             continue
+#         # (1) only top-level calls
+#         TopLevelFileOperationsVisitor(options, src)   \
+#             .visit(module_trees[module_name])
+#         TopLevelNetworkOperationsVisitor(options, src) \
+#             .visit(module_trees[module_name])
+#         # (2) only bodies of actually-reached functions
+#         for full in visited_funcs:
+#             m, func = full.split('.', 1)
+#             if m != module_name:
+#                 continue
+#             func_info = modules_info[m].functions.get(func)
+#             if func_info is None:
+#                 continue
+#             # now safely grab the AST node
+#             func_node = func_info.ast_node
+#             FileOperationsVisitor(options,    src).visit(func_node)
+#             NetworkOperationsVisitor(options, src).visit(func_node)
+#     # ─── Phase 5: summarize I/O operations ──────────────────────────
+#     if not options.rawlog:
+#         discovered_operations = []
+#         if any([options.read_files, options.write_files]):
+#             discovered_operations.append("file")
+#         if any([options.download_urls, options.upload_urls]):
+#             discovered_operations.append("network")
+#         if discovered_operations:
+#             logging.info(f"Found {' and '.join(discovered_operations)} operations:")
+#             if options.read_files:
+#                 logging.info("Files read:\n" + "\n".join(options.read_files))
+#             if options.write_files:
+#                 logging.info("Files written:\n" + "\n".join(options.write_files))
+#             if options.download_urls:
+#                 logging.info("Download URLs:\n" + "\n".join(options.download_urls))
+#             if options.upload_urls:
+#                 logging.info("Upload URLs:\n" + "\n".join(options.upload_urls))
+#         else:
+#             logging.info(f"Found no file or network operations in the python script ({options.python_script}) or custom modules ({', '.join(options.loaded_custom_modules)}).")
+
+
 def find_imports_and_IO_in_script(options: Options, first_path: str) -> None:
     """
     Find all imports and I/O in the script (including functions and classes
     that it imports from its dependencies.)
+
+    Parameters:
+    - options     : Options object containing paths to the python script and custom modules.
+    - first_path  : Path to the Python script to analyze for imports and I/O.
+
+    Returns:
+    None - modifies options to include all imports and I/O operations found in the script.
     """
-    if not is_python_script(first_path) or not ud.compile_code(first_path):
+    if not ud.is_python_script(first_path) or not ud.compile_code(first_path):
         logging.error(f"Skipping invalid Python script: {first_path}")
         return
-
-    # reset I/O and import collections
     options.read_files    = []
     options.write_files   = []
     options.download_urls = []
     options.upload_urls   = []
-    options.all_imports   = set()
-
-    # ─── Phase 1: parse first script + its top-level imports ────────
-    first_module = os.path.splitext(os.path.basename(first_path))[0]
-    module_contents = {}
-    module_trees    = {}
-    modules_info    = {}
-    processed_modules = set()
-
-    # initial queue for top-level imports
-    modules_to_process = [first_path]
+    processed_modules:  set[str]              = set()
+    modules_info:       dict[str, ModuleInfo] = {}
+    modules_to_process: list[str]             = [first_path]
+    module_contents:    dict[str, str]        = {}
+    module_trees:       dict[str, ast.AST]    = {}
     while modules_to_process:
         module_path = modules_to_process.pop()
         if os.path.isdir(module_path):
-            # handle packages
             pkg_dir = module_path
             init_py = os.path.join(pkg_dir, "__init__.py")
             if os.path.isfile(init_py):
+                # 1) Parse the package __init__.py
                 module_path = init_py
-                for fn in os.listdir(pkg_dir):
-                    if is_python_script(fn) and fn != "__init__.py":
-                        p = os.path.join(pkg_dir, fn)
-                        if p not in modules_to_process and os.path.splitext(fn)[0] not in processed_modules:
-                            modules_to_process.append(p)
+                # 2) Also enqueue all other .py modules in that same folder
+                for fname in os.listdir(pkg_dir):
+                    if ud.is_python_script(fname) and fname != "__init__.py":
+                        path = os.path.join(pkg_dir, fname)
+                        if path not in modules_to_process and path not in processed_modules:
+                            modules_to_process.append(path)
             else:
-                logging.error(f"No __init__.py in package {pkg_dir}, skipping.")
+                logging.error(f"No __init__.py in package directory {pkg_dir}, skipping.")
                 continue
-
-        mod_name = os.path.splitext(os.path.basename(module_path))[0]
-        if mod_name in processed_modules:
+        module_name = os.path.splitext(os.path.basename(module_path))[0]
+        if module_name in processed_modules:
             continue
-        processed_modules.add(mod_name)
-
-        src  = ud.my_fopen(module_path, rawlog=options.rawlog)
-        tree = ast.parse(src, module_path)
-        module_contents[mod_name] = src
-        module_trees   [mod_name] = tree
-
-        coll = ImportFunctionCollector(mod_name, options, module_path)
-        coll.visit(tree)
-        modules_info[mod_name] = coll.module_info
-
-        # enqueue any *top-level* imports
-        for pkg in coll.module_info.top_level_imports:
-            if pkg in options.standard_modules:
-                continue
-            if process_import(options, pkg, module_path) and pkg in options.custom_modules:
-                modules_to_process.append(options.custom_modules[pkg])
+        processed_modules.add(module_name)
+        file_content = ud.my_fopen(module_path, rawlog=options.rawlog)
+        if not file_content:
+            logging.error(f"Could not read file: {module_path}")
+            continue
+        tree = ast.parse(file_content, module_path)
+        if not tree:
+            logging.error(f"Failed to parse the file: {module_path}")
+            continue
+        module_contents[module_name] = file_content
+        module_trees[module_name]    = tree
+        collector = ImportFunctionCollector(module_name, options, module_path)
+        collector.visit(tree)
+        module_info = collector.module_info
+        modules_info[module_name] = module_info
+        # Process only top-level imports to find local modules
+        for import_name in module_info.top_level_imports:
+            if import_name in options.standard_modules:
+                continue  # Skip standard modules
+            resolved = process_import(options, import_name, module_path)
+            if resolved:
+                module_file_path = options.custom_modules.get(import_name)
+                if module_file_path and module_file_path not in processed_modules:
+                    modules_to_process.append(module_file_path)
             else:
-                options.all_imports.add(pkg)
-
-    logging.debug(f"Parsed modules: {list(modules_info)}")
-
-    # ─── Phase 2: build call-graph & collect *called* imports ──────
-    call_graph    = build_call_graph(modules_info)
-    used_imports  = set()
-    visited_funcs = set()
-
-    def collect_from(mod: str):
-        info = modules_info[mod]
-        # any imports at module level count
-        used_imports.update(info.top_level_imports)
-        # now walk out along each top-level call
-        for call in info.top_level_calls:
-            cm, fn = split_function_name(call, mod)
+                options.all_imports.add(import_name)
+    logging.debug("Modules processed so far:")
+    for m_name, m_info in modules_info.items():
+        logging.debug(f"Module: {m_name}, Classes: {m_info.classes}, Functions: {list(m_info.functions.keys())}")
+    # Now build the call graph
+    call_graph = build_call_graph(modules_info)
+    # Collect used imports starting from the first module
+    used_imports:  set[str] = set()
+    visited_funcs: set[str] = set()
+    def collect_imports_from_module(module_name: str) -> None:
+        """Recursively collect used imports from a module."""
+        module_info = modules_info[module_name]
+        used_imports.update(module_info.top_level_imports)
+        for func_name in module_info.top_level_calls:
+            called_module, called_name = split_function_name(func_name, module_name)
+            logging.debug(f"Collecting used imports for module '{called_module}' and func_name '{called_name}'")
             used_imports.update(
-                collect_used_imports(cm, fn, call_graph, modules_info, visited_funcs)
+                collect_used_imports(
+                    called_module,  # Use the extracted module name
+                    called_name,    # Use the extracted function name
+                    call_graph,
+                    modules_info,
+                    visited_funcs
+                )
             )
+            logging.debug(f"Used imports collected from '{called_name}' in '{called_module}': {used_imports}")
+        logging.debug(f"Used imports after collecting from module {module_name}: {used_imports}")
+    collect_imports_from_module(os.path.splitext(os.path.basename(first_path))[0])
+    # Scan the *initial* script (first_path) everywhere:
+    first_module = os.path.splitext(os.path.basename(first_path))[0]
+    init_src  = module_contents[first_module]
+    init_tree = module_trees[   first_module]
+    FileOperationsVisitor(options,    init_src).visit(init_tree)
+    NetworkOperationsVisitor(options, init_src).visit(init_tree)
 
-    collect_from(first_module)
-
-    # ─── Phase 3: pull in modules imported *inside* called functions ─
-    processed_used = set()
-    while True:
-        added = False
-        for pkg in list(used_imports):
-            if pkg in processed_used or pkg in options.standard_modules:
+    # Now process used imports and recursively dive into any new local modules.
+    processed_used_imports: set[str] = set()
+    new_modules_found = True
+    while new_modules_found:
+        new_modules_found = False
+        for import_name in used_imports.copy():
+            # Skip built-ins or any we've already handled this round
+            if import_name in options.standard_modules or import_name in processed_used_imports:
                 continue
-            processed_used.add(pkg)
-
-            # only expand local modules
-            if process_import(options, pkg, first_path) and pkg in options.custom_modules:
-                path = options.custom_modules[pkg]
-                name = pkg
-                if name not in processed_modules:
-                    # parse that new module
-                    processed_modules.add(name)
-                    src  = ud.my_fopen(path, rawlog=options.rawlog)
-                    tree = ast.parse(src, path)
-                    module_contents[name] = src
-                    module_trees   [name] = tree
-                    coll = ImportFunctionCollector(name, options, path)
-                    coll.visit(tree)
-                    modules_info[name] = coll.module_info
-                    added = True
-
-                # make sure to queue *its* top-level imports, too
-                used_imports.update(modules_info[name].top_level_imports)
+            processed_used_imports.add(import_name)
+            process_import(options, import_name, first_path)
+            if import_name in options.custom_modules:
+                # It's a local module we previously discovered—enqueue it for parsing
+                module_file_path = options.custom_modules[import_name]
+                if import_name not in processed_modules:
+                    modules_to_process.append(module_file_path)
+                    processed_modules.add(import_name)
+                    new_modules_found = True
+                    # Process the new module
+                    file_content = ud.my_fopen(module_file_path, rawlog=options.rawlog)
+                    if not file_content:
+                        logging.error(f"Could not read file: {module_file_path}")
+                        continue
+                    tree = ast.parse(file_content, module_file_path)
+                    if not tree:
+                        logging.error(f"Failed to parse the file: {module_file_path}")
+                        continue
+                    module_contents[import_name] = file_content
+                    module_trees[import_name]    = tree
+                    collector = ImportFunctionCollector(import_name, options, module_file_path)
+                    collector.visit(tree)
+                    module_info = collector.module_info
+                    modules_info[import_name] = module_info
+                    used_imports.update(module_info.top_level_imports)
+                    # Process top-level imports to find more local modules
+                    for new_import in module_info.top_level_imports:
+                        if new_import in options.standard_modules:
+                            continue
+                        resolved = process_import(options, new_import, module_file_path)
+                        if resolved:
+                            module_file_path = options.custom_modules.get(new_import)
+                            if module_file_path and new_import not in processed_modules:
+                                modules_to_process.append(module_file_path)
+                    call_graph = build_call_graph(modules_info)
             else:
-                options.all_imports.add(pkg)
-
-        if not added:
-            break
-
-        # rebuild graph now that we have new modules
-        call_graph = build_call_graph(modules_info)
-        # re-collect reachable imports / functions from scratch
-        used_imports.clear()
-        visited_funcs.clear()
-        collect_from(first_module)
-
-    # ─── Phase 4: actual I/O scanning ───────────────────────────────
-    # (a) full scan of the first (primary) script
-    FileOperationsVisitor(options,    module_contents[first_module])\
-        .visit(module_trees[first_module])
-    NetworkOperationsVisitor(options, module_contents[first_module])\
-        .visit(module_trees[first_module])
-
-    # (b) for every dependency module:
-    #     1. top-level only, plus
-    #     2. bodies of any *called* functions
+                # If not a local module, add to options.all_imports
+                options.all_imports.add(import_name)
+    # For every *other* local module, do:
+    #   (1) top-level only, plus
+    #   (2) only in the function bodies that actually got visited
     for module_name, src in module_contents.items():
         if module_name == first_module:
             continue
-        # (1) only top-level calls
-        TopLevelFileOperationsVisitor(options, src)   \
-            .visit(module_trees[module_name])
-        TopLevelNetworkOperationsVisitor(options, src) \
-            .visit(module_trees[module_name])
-        # (2) only bodies of actually-reached functions
+        # Record any I/O at module scope
+        TopLevelFileOperationsVisitor(options,    src).visit(module_trees[module_name])
+        TopLevelNetworkOperationsVisitor(options, src).visit(module_trees[module_name])
+        # Record any I/O in each reachable function or class method
         for full in visited_funcs:
-            m, func = full.split('.', 1)
-            if m != module_name:
+            mod, func = full.split('.', 1)
+            if mod != module_name:
                 continue
-            func_info = modules_info[m].functions.get(func)
-            if func_info is None:
+            func_info = modules_info[mod].functions.get(func)
+            if not func_info:
                 continue
-            # now safely grab the AST node
+            func_src = src
             func_node = func_info.ast_node
-            FileOperationsVisitor(options,    src).visit(func_node)
-            NetworkOperationsVisitor(options, src).visit(func_node)
-    # ─── Phase 5: summarize I/O operations ──────────────────────────
+            # run your original visitor on that one FunctionDef
+            FileOperationsVisitor(options,    func_src).visit(func_node)
+            NetworkOperationsVisitor(options, func_src).visit(func_node)
     if not options.rawlog:
         discovered_operations = []
         if any([options.read_files, options.write_files]):
@@ -4580,33 +4759,6 @@ def split_imports(options: Options) -> None:
     return
 
 
-def is_python_script(path: str) -> bool:
-    """
-    Return True if 'path' looks like a Python script:
-      1. It ends in .py or .pyw
-      2. Or it is executable AND its first line is a python shebang
-    """
-    # Common extensions
-    if any(path.endswith(ext) for ext in ud.python_extensions):
-        return True
-
-    # No-extension scripts: check for executable bit + python shebang
-    try:
-        st = os.stat(path)
-    except OSError:
-        return False
-
-    # Must be a regular file and executable by owner/group/other
-    if not stat.S_ISREG(st.st_mode) or not (st.st_mode & (stat.S_IXUSR|stat.S_IXGRP|stat.S_IXOTH)):
-        return False
-
-    # Try to read the first line and look for a python shebang
-    first_line = ud.my_fopen(path, suppress_errors=True, rawlog=False, numlines=1)
-    if not first_line:
-        return False
-    return bool(re.match(r'#!.*\bpython[0-9.]*\b', first_line))
-
-
 def list_packages(options: Options) -> None:
     """Examine command line arguments to determine if we're looking at a directory, a single python script, or a list of python scripts. List all installed and uninstalled packages that are imported in that directory or python script(s). Return these sets inside the options object."""
     if getattr(options.args, 'full', False):
@@ -4623,7 +4775,7 @@ def list_packages(options: Options) -> None:
             for arg in options.script_args:
                 full = arg if os.path.isabs(arg) else os.path.join(options.cwd, arg)
                 # only include if it really looks like a Python script
-                if is_python_script(full) and os.path.splitext(arg)[0] in options.custom_modules:
+                if ud.is_python_script(full) and os.path.splitext(arg)[0] in options.custom_modules:
                     local_scripts.append(arg)
             # Local python scripts should be added to the list of scripts to examine for imports.
             if local_scripts:
@@ -4636,7 +4788,7 @@ def list_packages(options: Options) -> None:
         options.script_dir_or_file_or_list = os.path.expanduser(options.script_dir_or_file_or_list)
         options.loaded_custom_modules = set()
         if os.path.isfile(options.script_dir_or_file_or_list):
-            if is_python_script(options.script_dir_or_file_or_list):
+            if ud.is_python_script(options.script_dir_or_file_or_list):
                 if not options.rawlog: logging.info(f"Processing a single Python script: {options.script_dir_or_file_or_list}.")
                 python_file = options.script_dir_or_file_or_list
                 options.all_imports = set()
@@ -4663,7 +4815,7 @@ def list_packages(options: Options) -> None:
         valid = []
         for sf in options.script_dir_or_file_or_list:
             full = sf if os.path.isabs(sf) else os.path.join(options.cwd, sf)
-            if is_python_script(full):
+            if ud.is_python_script(full):
                 valid.append(sf)
             else:
                 logging.info(f"Skipping non‐Python file in list: {full}")
@@ -4693,12 +4845,12 @@ def get_all_imports(options: Options, directory: str) -> None:
             continue
         for file in files:
             file_path = os.path.join(root, file)
-            if is_python_script(file_path):
+            if ud.is_python_script(file_path):
                 find_imports_and_IO_in_script(options, file_path)
                 processed_files += 1
                 if not options.rawlog: logging.info(f"Processing {file_path} ({processed_files}/{total_files})")
 
-    if not options.rawlog: logging.info(f"\nFinished processing files in {directory}.")
+    if not options.rawlog: logging.info(f"\nFinished processing files in {directory}")  # No period at the end because sometimes directory = '.'
 
 
 def generate_requirements(directory: str) -> None:
@@ -5470,17 +5622,6 @@ def main() -> None:
         else:
             print("No luck: no last used virtual environment found. Running the script as normal.")
 
-    if getattr(options.args, 'version', False):
-        print(__version__)
-        sys.exit(0)
-    if getattr(options.args, 'manual', False):  # Print instructions for manually adding the alias to the shell configuration file, etc.
-        print(options.manual_instructions)
-        sys.exit(0)
-
-    # Debug mode can be enabled using the debug argument, or manually at the top of this program at the beginning of Options().
-    if getattr(options.args, 'debug', False):
-        options.log_mode = 'DEBUG'
-
     memory_handler = ud.configure_logging(options.my_name, log_level=options.log_mode,
                                           rawlog=options.rawlog)
 
@@ -5500,7 +5641,7 @@ def main() -> None:
     elif getattr(options.args, 'blank_slate', False):
         if not getattr(options.args, 'y', False):
             if not ud.prompt_then_confirm(f"Are you sure you want to delete everything in ~/{options.my_name}/"
-                                      f" and all {options.my_name} .json files in the current directory? (y/n) "):
+                                          f" and all {options.my_name} .json files in the current directory? (y/n) "):
                 logging.info("Exiting without deleting anything.")
                 sys.exit(0)
         logging.info(f"Deleting everything in ~/{options.my_name}/ and all {options.my_name} .out and .err and .json and .pkl files in the current directory.")
