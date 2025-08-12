@@ -70,6 +70,8 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.python_command: str = ''
         self.shell: str = ''
         self.rc_file: Path | None = None
+        # Before 2025-08-10 at 22:49:00, paths were stored as strings. After that date, they were stored as pathlib.Path objects. Any .pkl files created before that date have their paths converted to pathlib.Path objects when loaded. Any .json files created before that date are ignored when loading last-used options.
+        self.pathlibcutoff: str = "20250810-224900"
         self.alias: str = ''  # The alias to use for this script, if any.
         self.additional_alias_files:   list[Path] = []
         self.alias_command:                   str = ''  # The command to run when the alias is used.
@@ -4409,6 +4411,7 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
     init_name = "__init__.py"
     while modules_to_process:
         module_path = modules_to_process.pop()
+        logging.info(f"Processing module: {module_path} where {type(module_path) = }")
         if module_path.is_dir():
             pkg_dir = module_path
             init_py = pkg_dir / init_name
@@ -4796,9 +4799,9 @@ def install_packages_simultaneously(options: Options) -> bool:
     """Install all packages simultaneously in the virtual environment."""
     # Construct the install command
     install_command = [
-        str(options.venv_python), "-m", "pip", "install",
-        "--no-index", "--find-links", str(options.packages_dir),
-        "-r", str(options.requirements_file)
+        options.venv_python, "-m", "pip", "install",
+        "--no-index", "--find-links", options.packages_dir,
+        "-r", options.requirements_file
     ]
     if not options.rawlog: logging.info("Installing all packages simultaneously...")
     # Run the command and capture the output line by line using ud.my_popen
@@ -5148,15 +5151,14 @@ def load_options_from_json(options: Options, json_file: str | os.PathLike[str]) 
 def load_last_used_options(options: Options) -> Options | None:
     """Look for the most recent JSON file in the script directory that matches the script name and load it into a new Options object."""
     # json_files = [f for f in options.script_dir.iterdir() if f.name.startswith("."+options.python_script.name) and f.name.endswith('.json')]
-    cutoff = "20250810-224900"
     pattern = re.compile(r"last-used-on-(\d{8}-\d{6})")
     json_files = [
         f
         for f in options.script_dir.iterdir()
         if f.name.startswith("." + options.python_script.name)
         and f.name.endswith(".json")
-        and (m := pattern.search(f.name))  # extract timestamp
-        and m.group(1) >= cutoff           # compare as strings
+        and (m := pattern.search(f.name))        # extract timestamp
+        and m.group(1) >= options.pathlibcutoff  # compare as strings
     ]
     if not json_files:
         if not options.rawlog: logging.info("No previous JSON files found in the script directory.")
@@ -5441,6 +5443,10 @@ def dict_of_custom_modules(options: Options) -> dict[str, str]:
                 if not options.rawlog: logging.info(f"Loading custom modules from {file}")
                 with open(file, 'rb') as f:
                     custom_modules = pickle.load(f)
+                pattern = re.compile(r"(\d{8}-\d{6}).pkl$")
+                if (m := pattern.search(file.name)) and m.group(1) < options.pathlibcutoff:
+                    if not options.rawlog: logging.info(f"Custom modules file {file} is from date {m.group(1)} which is older than the point when paths were stored as Paths (which happened on {options.pathlibcutoff}). Converting all paths to pathlib.Path objects.")
+                    custom_modules = {k: Path(v) for k, v in custom_modules.items()}
                 return custom_modules
 
     custom_modules = {}
@@ -5460,7 +5466,7 @@ def dict_of_custom_modules(options: Options) -> dict[str, str]:
                         package_path = Path(root) / dir
                         if (package_path / init_name).is_file():
                             if dir not in custom_modules and not is_standard_path(options, package_path):
-                                custom_modules[dir] = package_path + os.sep
+                                custom_modules[dir] = package_path
                             # Remove any individual module entries within the package directory
                             for file in package_path.iterdir():
                                 module_name = file.stem

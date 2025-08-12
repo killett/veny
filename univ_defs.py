@@ -246,7 +246,6 @@ def fallback_logging_config(log_level: int | str = 'INFO', rawlog: bool = False)
             logging.basicConfig(level=log_level, format="%(message)s")
 
 
-# IMPROVE THIS FUNCTION: https://chatgpt.com/share/6898eb7f-efe0-8006-afa8-b24a6fca7265
 def configure_logging(basename: str, log_level: int | str = 'INFO',
                       rawlog: bool = False, logdir: str = '') -> MemoryHandler:
     """Configure logging to write to files and stdout/stderr, and return a MemoryHandler to capture ERROR logs for later (duplicate) printing."""
@@ -262,13 +261,15 @@ def configure_logging(basename: str, log_level: int | str = 'INFO',
 
     # Proceed with configuring logging if no MemoryHandler was found
     if not logdir:  # Default to the current working directory if no logdir is provided.
-        logdir = os.getcwd()
-    os.makedirs(logdir, exist_ok=True)
+        logdir = Path.cwd() / "logs"
+    else:
+        logdir = Path(logdir).expanduser().resolve()
+    logdir.mkdir(parents=True, exist_ok=True)
 
     now = dt.datetime.now()
     log_base = f".{basename}-log-{now.strftime('%Y%m%d-%H%M%S')}"
-    log_info = os.path.join(logdir, log_base + ".out")
-    log_errors = os.path.join(logdir, log_base + ".err")
+    log_info = logdir / (log_base + ".out")
+    log_errors = logdir / (log_base + ".err")
 
     root_logger.handlers = []  # Reset any existing handlers
 
@@ -430,18 +431,18 @@ def my_popen(command_list: list, suppress_info: bool = False,
         return MyPopenResult(stdout="", stderr=str(e), returncode=-1)
 
 
-def my_fopen(file_path: str, suppress_errors: bool = False,
+def my_fopen(file_path: str | os.PathLike[str], suppress_errors: bool = False,
              rawlog: bool = False, numlines: int | None = None) -> TextIO | bool | str:
     """Attempt to read the file with various encodings and return the file content if successful. Optionally, specify numlines to limit the number of lines read and return a string instead of a file object."""
     fallback_logging_config(log_level='INFO' if not suppress_errors else 'CRITICAL')
-
-    if not os.path.isfile(file_path):
+    file_path = Path(file_path).resolve()  # Ensure the file path is absolute and normalized
+    if not file_path.is_file():
         this_message = f"File does not exist: {file_path}"
         if not rawlog:
             if not suppress_errors: logging.error(this_message)
             else:                   logging.info(this_message)
         return False
-    if os.path.getsize(file_path) == 0:
+    if file_path.stat().st_size == 0:
         this_message = f"File is empty: {file_path}"
         if not rawlog:
             if not suppress_errors: logging.error(this_message)
@@ -449,19 +450,19 @@ def my_fopen(file_path: str, suppress_errors: bool = False,
         return False
     # Does the file end with any of these (non-text) extensions?
     for ext in video_extensions:
-        if file_path.endswith(ext):
+        if file_path.name.endswith(ext):
             if not rawlog:
                 if not suppress_errors: logging.error(f"Skipping video file {file_path}")
                 else:                   logging.info( f"Skipping video file {file_path}")
             return False
     for ext in audio_extensions:
-        if file_path.endswith(ext):
+        if file_path.name.endswith(ext):
             if not rawlog:
                 if not suppress_errors: logging.error(f"Skipping audio file {file_path}")
                 else:                   logging.info( f"Skipping audio file {file_path}")
             return False
     for ext in image_extensions:
-        if file_path.endswith(ext):
+        if file_path.name.endswith(ext):
             if not rawlog:
                 if not suppress_errors: logging.error(f"Skipping image file {file_path}")
                 else:                   logging.info( f"Skipping image file {file_path}")
@@ -1446,8 +1447,8 @@ def if_filepath_then_read(input_string_or_filepath: str,
     fallback_logging_config()
     # Is "input_string" a file path, and is "force_string" False?
     # If so, read the file contents.
-    if os.path.isfile(input_string_or_filepath) and not force_string:
-        file_path = input_string_or_filepath
+    if not force_string and Path(input_string_or_filepath).is_file():
+        file_path = Path(input_string_or_filepath)
         try:
             contents = my_fopen(file_path, suppress_errors=True)
             if not contents:
@@ -2140,20 +2141,21 @@ def my_diff(orig_text: str, changed_text: str, orig_path: str,
         logging.error(f"Unsupported diff_choice = {diff_choice}. Must be a non-negative integer.")
 
 
-def is_python_script(path: str) -> bool:
+def is_python_script(path: str | os.PathLike[str]) -> bool:
     """
     Return True if 'path' looks like a Python script:
       1. It ends in .py or .pyw
       2. Or it is executable AND its first line is a python shebang
     """
     import stat
+    path = Path(path)
     # Common extensions
-    if any(path.endswith(ext) for ext in python_extensions):
+    if any(path.name.endswith(ext) for ext in python_extensions):
         return True
 
     # No-extension scripts: check for executable bit + python shebang
     try:
-        st = os.stat(path)
+        st = path.stat()
     except OSError:
         return False
 
@@ -2194,7 +2196,6 @@ def diff_and_confirm(orig_text: str, changed_text: str, path: str, label: str = 
         
     Returns False if the user chose to quit; True otherwise.
     """
-    from pathlib import Path
     fallback_logging_config()
     logging.debug(f"At the top of the function {sys._getframe(1).f_code.co_name}(), {diff_choice=}")
     my_diff(orig_text, changed_text, path, diff_choice=diff_choice,
@@ -2426,7 +2427,7 @@ if __name__ == "__main__":
 '''
 
 
-def verify_script(thepath: str, thescript: str) -> None:
+def verify_script(thepath: str | os.PathLike[str], thescript: str) -> None:
     """
     Ensure that `thepath` exists and contains exactly `thescript`.
     - If `thepath` does not exist or is not a file, it will be created and populated.
@@ -2434,8 +2435,9 @@ def verify_script(thepath: str, thescript: str) -> None:
     - Otherwise, nothing happens.
     """
     # Check if it exists and is a file
-    if not os.path.isfile(thepath):
-        if os.path.isdir(thepath):
+    thepath = Path(thepath)
+    if not thepath.is_file():
+        if thepath.is_dir():
             logging.error(f"Expected a file at {thepath}, but it is a directory.")
             return
         with open(thepath, 'w', encoding=DEFAULT_ENCODING) as f:
@@ -2568,7 +2570,7 @@ def ensure_utf8_meta(html: str) -> str:
                   html, count=1, flags=re.IGNORECASE)
 
 
-def my_atomic_write(filepath: str | Path | os.PathLike, data: str | bytes | bytearray,
+def my_atomic_write(filepath: str | Path | os.PathLike[str], data: str | bytes | bytearray,
                     write_mode: Literal['w', 'a'], encoding: str = DEFAULT_ENCODING,
                     lock_timeout: float = None,  # seconds to wait for lock (None = forever)
                    ) -> None:
@@ -2578,6 +2580,19 @@ def my_atomic_write(filepath: str | Path | os.PathLike, data: str | bytes | byte
     - If write_mode='a' and file exists, data is appended.
     - If write_mode='a' and file does *not* exist, file is created.
     - A `.lock` file beside `filepath` prevents concurrent writers.
+
+    Parameters:
+        filepath:     Path to the file to write.
+        data:         Data to write (str or bytes).
+        write_mode:   'w' for overwrite, 'a' for append.
+        encoding:     Encoding to use for text data (default: DEFAULT_ENCODING).
+        lock_timeout: Maximum time to wait for the lock (default: None, meaning wait indefinitely).
+    
+    Raises:
+        RuntimeError: If the lock cannot be acquired within the specified timeout.
+    
+    Returns:
+        None: The file is written atomically.
     """
     from atomicwrites import atomic_write
     from filelock import FileLock, Timeout
@@ -2601,7 +2616,7 @@ def my_atomic_write(filepath: str | Path | os.PathLike, data: str | bytes | byte
         raise RuntimeError(f"Could not acquire lock on {lock_path!r} within {lock_timeout} seconds")
 
 
-def fix_mojibake(filepath: str, make_backup: bool = True,
+def fix_mojibake(filepath: str | os.PathLike[str], make_backup: bool = True,
                  dry_run: bool = False) -> None:
     """
     Fix mojibake in a text file, recoding from CP1252 to UTF-8 if necessary.
@@ -2609,7 +2624,8 @@ def fix_mojibake(filepath: str, make_backup: bool = True,
     """
     import datetime as dt
     fallback_logging_config()
-    if not os.path.isfile(filepath):
+    filepath = Path(filepath)
+    if not filepath.is_file():
         logging.error(f"{filepath} is not a file")
         return
 
@@ -2647,7 +2663,7 @@ def fix_mojibake(filepath: str, make_backup: bool = True,
                 current_datetime = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
                 backup_path = f"{filepath}_{current_datetime}.bak"
                 try:
-                    os.rename(filepath, backup_path)
+                    filepath.rename(backup_path)
                     logging.info(f"Backup created: {backup_path}")
                 except OSError:
                     logging.exception(f"Failed to create backup for {filepath}.")
@@ -2909,7 +2925,7 @@ def start_only_one_instance(process_name: str) -> None:
         logging.info(f"{process_name} is already running.")
 
 
-def open_filemanager_with_dirs(directories: list) -> None:
+def open_filemanager_with_dirs(directories: list[str | os.PathLike[str]]) -> None:
     """
     Open the file manager with the specified directories.
     Note: Most file managers don't support multiple tabs via command line, so open separate windows.
@@ -2919,12 +2935,19 @@ def open_filemanager_with_dirs(directories: list) -> None:
     fallback_logging_config()
     logging.info("Opening file manager with specified directories...")
     for directory in directories:
-        if os.path.isdir(directory):
-            subprocess.Popen(['nemo', directory], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            # Optional: Wait briefly between opening directories
-            time.sleep(0.5)
-        else:
-            logging.warning(f"Directory does not exist: {directory}")
+        directory = Path(directory)
+        if not directory.is_absolute():
+            logging.error(f"Directory {directory} is not an absolute path. Skipping.")
+            continue
+        if not directory.is_dir():
+            logging.error(f"Directory {directory} is not a valid directory. Skipping.")
+            continue
+        if not directory.exists():
+            logging.error(f"Directory {directory} does not exist. Skipping.")
+            continue
+        subprocess.Popen(['nemo', directory], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Optional: Wait briefly between opening directories
+        time.sleep(0.5)
 
 
 def detect_country(force_wtfismyip: bool = False) -> str | None:
@@ -3112,61 +3135,59 @@ def set_system_volume(percent: int, tolerance: int = 1,
     logging.info(f"[pactl] Volume set to {percent}%")
 
 
-def open_playlist_in_VLC(playlist: str, no_start:  bool = False) -> None:
+def open_playlist_in_VLC(playlist: str | os.PathLike[str], no_start:  bool = False) -> None:
     """Open a playlist in VLC. If no_start is True, don't start playback in VLC."""
     import subprocess
     if playlist is None:
         raise ValueError("The directory path cannot be None.")
-    elif not isinstance(playlist, str):
-        raise TypeError(f"Expected 'playlist' to be a string, got {type(playlist).__name__!r}")
-    elif not os.path.isfile(playlist):
+    playlist = Path(playlist)
+    if not playlist.is_file():
         raise ValueError(f"The specified path '{playlist}' is not a valid file.")
     if no_start: command_list = ["vlc", "--no-playlist-autostart", playlist]
     else:        command_list = ["vlc",                            playlist]
     subprocess.Popen(command_list, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def open_dir_in_VLC(the_dir: str, sort_choice: str = "sort_by_name",
+def open_dir_in_VLC(the_dir: str | os.PathLike[str], sort_choice: str = "sort_by_name",
                     recursive: bool = False, no_start:  bool = False) -> None:
     """Create a playlist of the files in the specified directory, then play that playlist in VLC. By default, don't search the directory recursively and sort the files by name. Optional arguments allow recursive loading or sorting by modification time. If no_start is True, don't start playback in VLC."""
     import subprocess
     if the_dir is None:
         raise ValueError("The directory path cannot be None.")
-    elif not isinstance(the_dir, str):
-        raise TypeError(f"Expected 'the_dir' to be a string, got {type(the_dir).__name__!r}")
-    elif not os.path.isdir(the_dir):
+    the_dir = Path(the_dir)
+    if not the_dir.is_dir():
         raise ValueError(f"The specified path '{the_dir}' is not a valid directory.")
     # start_flag = "--start-paused" if no_start else False # The "--start-paused" flag forces you to press play in VLC EACH TIME YOU GO TO A NEW PLAYLIST ENTRY!
     start_flag = "--no-playlist-autostart" if no_start else False
     # List to store files with their modification times
-    files_with_times = []
-    dirs_with_times  = []  # Only used if not recursive
+    files_with_times: list[tuple[float, Path]] = []
+    dirs_with_times:  list[tuple[float, Path]] = []  # Only used if not recursive
     if recursive:
         # Recursively iterate over the files in the directory
         for root, dirs, files in os.walk(the_dir):
             for filename in files:
-                file_path = os.path.join(root, filename)
-                if os.path.isfile(file_path) and not filename.endswith('.m3u'):
-                    mod_time = os.path.getmtime(file_path)
+                file_path = Path(root) / filename
+                if file_path.is_file() and not filename.endswith('.m3u'):
+                    mod_time = file_path.stat().st_mtime
                     files_with_times.append((mod_time, file_path))
     else:
-        for item in os.listdir(the_dir):
-            item_path = os.path.join(the_dir, item)
-            if os.path.isfile(item_path) and not item.endswith('.m3u'):
-                mod_time = os.path.getmtime(item_path)
+        for item in the_dir.iterdir():
+            item_path = the_dir / item
+            if item_path.is_file() and not item.name.endswith('.m3u'):
+                mod_time = item_path.stat().st_mtime
                 files_with_times.append((mod_time, item_path))
-            elif os.path.isdir(item_path):
-                mod_time = os.path.getmtime(item_path)
+            elif item_path.is_dir():
+                mod_time = item_path.stat().st_mtime
                 dirs_with_times.append((mod_time, item_path))
 
     if sort_choice == "sort_by_name":
         # Sort files by name, case-insensitively
-        files_with_times.sort(key=lambda x: x[1].casefold())
+        files_with_times.sort(   key=lambda x: x[1].name.casefold())
         if len(dirs_with_times) > 0:
-            dirs_with_times.sort(key=lambda x: x[1].casefold())
+            dirs_with_times.sort(key=lambda x: x[1].name.casefold())
     elif sort_choice == "sort_by_time":
         # Sort files by modification time (earliest first)
-        files_with_times.sort(key=lambda x: x[0])
+        files_with_times.sort(   key=lambda x: x[0])
         if len(dirs_with_times) > 0:
             dirs_with_times.sort(key=lambda x: x[0])
     # If present, put directories at the top of the list
@@ -3174,12 +3195,10 @@ def open_dir_in_VLC(the_dir: str, sort_choice: str = "sort_by_name",
     # Create the .m3u playlist content
     playlist_content = "#EXTM3U\n"
     for _, file_path in files_with_times:
-        base_name = os.path.basename(file_path)
-        playlist_content += f"#EXTINF:-1,{base_name.replace(',', '').replace('-', '')}\n{file_path}\n"
-    # Get the base directory name for the playlist filename
-    base_dir = os.path.basename(os.path.normpath(the_dir))
-    # Write the playlist to disk in the parent directory
-    playlist_path = os.path.join(the_dir, f"{filename_format(base_dir)}_playlist.m3u")
+        playlist_content += f"#EXTINF:-1,{file_path.name.replace(',', '').replace('-', '')}" \
+                            f"\n{file_path}\n"
+    # Write the playlist to disk in the directory
+    playlist_path = the_dir / f"{filename_format(the_dir.name)}_playlist.m3u"
     with open(playlist_path, 'w') as playlist_file:
         playlist_file.write(playlist_content)
     # Open the playlist in VLC
@@ -3188,7 +3207,7 @@ def open_dir_in_VLC(the_dir: str, sort_choice: str = "sort_by_name",
     subprocess.Popen(command_list, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def remove_prefix_from_filename(filepath: str, prefix: str) -> bool:
+def remove_prefix_from_filename(filepath: str | os.PathLike[str], prefix: str) -> bool:
     """
     If the given filepath's base filename starts with the given prefix:
       1. Remove the prefix (and any " _-" immediately following it).
@@ -3206,38 +3225,47 @@ def remove_prefix_from_filename(filepath: str, prefix: str) -> bool:
     Raises:
     OSError: If the rename operation fails due to an OS error (e.g., permission denied).
     """
-    file = os.path.basename(filepath)
+    fallback_logging_config()
+    filepath = Path(filepath)
+    if not filepath.is_file():
+        logging.warning(f"File '{filepath}' does not exist or is not a file.")
+        return False
+    file = filepath.name
     if file.startswith(prefix):
         new_file = file.replace(prefix, "", 1)  # Replace only the first occurrence
         # If the first character is now in " _-", remove it:
         while new_file[0] in " _-":
             new_file = new_file[1:]
-        new_filepath = os.path.join(os.path.dirname(filepath), new_file)
-        if not os.path.exists(new_filepath):
+        new_filepath = filepath.parent / new_file
+        if not new_filepath.exists():
             try:
-                os.rename(filepath, new_filepath)
-                print(f"Renamed '{filepath}' to '{new_filepath}'.")
+                filepath.rename(new_filepath)
+                logging.info(f"Renamed '{filepath}' to '{new_filepath}'.")
                 return True
             except OSError as e:
                 raise OSError(f"Failed to rename '{filepath}' to '{new_filepath}': {e}") from e
         else:
-            print(f"Cannot rename '{filepath}' to '{new_filepath}': New path already exists.")
+            logging.warning(f"Cannot rename '{filepath}' to '{new_filepath}': New path already exists.")
             return False
     else:
         return False
 
 
-def remove_prefix_from_html_title(filepath: str, prefix: str) -> bool:
+def remove_prefix_from_html_title(filepath: str | os.PathLike[str], prefix: str) -> bool:
     """If the given filepath is an HTML file and its title starts with the given prefix, remove the prefix from the title and save the file, then return True. Otherwise, return False."""
+    fallback_logging_config()
+    filepath = Path(filepath)
+    if not filepath.is_file():
+        logging.warning(f"File '{filepath}' does not exist or is not a file.")
+        return False
     if not filepath.endswith('.html') and not filepath.endswith('.htm'):
-        print(f"File '{filepath}' is not an HTML or HTM file.")
-        breakpoint()
+        logging.warning(f"File '{filepath}' is not an HTML or HTM file.")
         return False
     html = my_fopen(filepath)
     title_start = html.find('<title>') + len('<title>')
-    title_end = html.find('</title>', title_start)
+    title_end   = html.find('</title>', title_start)
     if title_start == -1 or title_end == -1:
-        print(f"Could not find the title in the HTML file '{filepath}'.")
+        logging.warning(f"Could not find the title in the HTML file '{filepath}'.")
         return False
     title = html[title_start:title_end]
     if title.startswith(prefix):
@@ -3251,15 +3279,26 @@ def remove_prefix_from_html_title(filepath: str, prefix: str) -> bool:
         return False
 
 
-def combine_html_files(file_paths: list[str],
-                       output_file_path: str) -> None:
+def combine_html_files(file_paths: list[str | os.PathLike[str]],
+                       output_file_path: str | os.PathLike[str]) -> None:
     """
     Combine multiple HTML files into a single HTML file.
     The first file's <head> is preserved, and all <body> contents are concatenated.
 
     Parameters:
-    - file_paths: List of (presorted) file paths to the HTML files to combine.
-    - output_file_path: Path to save the combined HTML file.
+    - file_paths       : List of (presorted) file paths to the HTML files to combine.
+    - output_file_path : Path to save the combined HTML file.
+
+    Raises:
+    - Exception: If there is an error reading any of the HTML files or writing the output file.
+    - FileNotFoundError: If any of the input files do not exist.
+    - ValueError: If the output file path is not valid.
+    - ImportError: If BeautifulSoup is not installed.
+    - RuntimeError: If the output file cannot be written.
+    - OSError: If there is an error during file operations.
+
+    Returns:
+    - None - the combined HTML is saved to the specified output file path.
     """
     from bs4 import BeautifulSoup
     fallback_logging_config()
@@ -3267,6 +3306,7 @@ def combine_html_files(file_paths: list[str],
     head_content = ''
     first_file_processed = False
     for file_path in file_paths:
+        file_path = Path(file_path)
         file = my_fopen(file_path)
         try:
             soup = BeautifulSoup(file, 'html.parser')
