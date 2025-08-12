@@ -4399,7 +4399,7 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
     init_name = "__init__.py"
     while modules_to_process:
         module_path = modules_to_process.pop()
-        logging.info(f"Processing module: {module_path} where {type(module_path) = }")
+        if not options.rawlog: logging.info(f"Processing module: {module_path} where {type(module_path) = }")
         if module_path.is_dir():
             pkg_dir = module_path
             init_py = pkg_dir / init_name
@@ -5100,13 +5100,13 @@ def load_options_from_json(options: Options, json_file: str | os.PathLike[str]) 
 
 def load_last_used_options(options: Options) -> Options | None:
     """Look for the most recent JSON file in the script directory that matches the script name and load it into a new Options object."""
-    # json_files = [f for f in options.script_dir.iterdir() if f.name.startswith("."+options.python_script.name) and f.name.endswith('.json')]
+    # json_files = [f for f in options.script_dir.iterdir() if f.name.startswith("."+options.python_script.name) and f.name.casefold().endswith('.json')]
     pattern = re.compile(r"last-used-on-(\d{8}-\d{6})")
     json_files = [
         f
         for f in options.script_dir.iterdir()
         if f.name.startswith("." + options.python_script.name)
-        and f.name.endswith(".json")
+        and f.name.casefold().endswith(".json")
         and (m := pattern.search(f.name))        # extract timestamp
         and m.group(1) >= options.pathlibcutoff  # compare as strings
     ]
@@ -5388,7 +5388,7 @@ def dict_of_custom_modules(options: Options) -> dict[str, str]:
        not getattr(options.args, 'no_cache', False):
         for file in options.cwd.iterdir():
             if file.name.startswith(f'.{options.my_name}_custom_modules_') and \
-               file.name.endswith('.pkl') and options.computer_name in file.name and \
+               file.name.casefold().endswith('.pkl') and options.computer_name in file.name and \
                search_constraint_filename_boolean(file.name, search_above_text_to_match):
                 if not options.rawlog: logging.info(f"Loading custom modules from {file}")
                 with open(file, 'rb') as f:
@@ -5405,7 +5405,8 @@ def dict_of_custom_modules(options: Options) -> dict[str, str]:
         if not is_standard_path(options, path) and path.is_dir() and search_constraint_path_boolean(options, path):
             for root, dirs, files in os.walk(path):
                 for file in files:
-                    if file.endswith('.py') and file != init_name:  # Exclude __init__.py files
+                    if any(file.casefold().endswith(ext) for ext in ud.python_extensions) \
+                       and file != init_name:  # Exclude __init__.py files
                         module_name = os.path.splitext(file)[0]  # Get the module name without the .py extension
                         if module_name not in custom_modules.keys():
                             full_path = Path(root) / file
@@ -5488,7 +5489,7 @@ def main() -> None:
                 print(f"Error running script: {result.stderr}")
             sys.exit(result.returncode)
         else:
-            print("No luck: no last used virtual environment found. Running the script as normal.")
+            if not options.rawlog: print("No luck: no last used virtual environment found. Running the script as normal.")
 
     memory_handler = ud.configure_logging(options.my_name, log_level=options.log_mode,
                                           rawlog=options.rawlog)
@@ -5517,10 +5518,10 @@ def main() -> None:
         for file in options.cwd.iterdir():
             logging.debug(f"Checking {file}")
             if file.is_file():
-                if (file.name.startswith(f'.{options.my_name}-')                 and file.name.endswith('.out') ) or \
-                   (file.name.startswith(f'.{options.my_name}-')                 and file.name.endswith('.err') ) or \
-                   (file.name.startswith(f'.{options.my_name}_custom_modules_')  and file.name.endswith('.pkl') ) or \
-                   (file.name.startswith('.') and f'-{options.my_name}-' in file.name and file.name.endswith('.json')):
+                if (file.name.startswith(f'.{options.my_name}-')                 and file.name.casefold().endswith('.out') ) or \
+                   (file.name.startswith(f'.{options.my_name}-')                 and file.name.casefold().endswith('.err') ) or \
+                   (file.name.startswith(f'.{options.my_name}_custom_modules_')  and file.name.casefold().endswith('.pkl') ) or \
+                   (file.name.startswith('.') and f'-{options.my_name}-' in file.name and file.name.casefold().endswith('.json')):
                     try:
                         logging.info(f"Deleting {file}")
                         file.unlink()
