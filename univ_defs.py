@@ -61,6 +61,14 @@ def unused_function() -> None:
     import numpy as np
 
 
+class Options:
+    """Class that has all global options in one place."""
+
+    def __init__(self) -> None:
+        """Initialize the options with default values."""
+        self.log_mode: str = "INFO"
+
+
 class PlotOptions:
     """Global figure options."""
 
@@ -97,6 +105,69 @@ class UnivClass:
     def import_test(self) -> None:
         """ Test the import of this module by printing a message and the version of Python being used."""
         import openai
+
+
+def return_function_name() -> str:
+    """Return the name of the calling function."""
+    fallback_logging_config()
+    # Fast path: sys._getframe
+    try:
+        return sys._getframe(1).f_code.co_name
+    except (AttributeError, ValueError) as e1:
+        logging.warning("return_function_name(): sys._getframe(1) failed. Falling back to inspect...", exc_info=e1)
+    # Fallback: inspect
+    import inspect
+    frame = inspect.currentframe()
+    try:
+        if frame is not None and frame.f_back is not None:
+            return frame.f_back.f_code.co_name
+        else:
+            logging.warning("return_function_name(): inspect fallback had no frame.")
+    except Exception as e2:
+        logging.warning("return_function_name(): inspect fallback failed", exc_info=e2)
+    finally:  # Avoid reference cycles
+        del frame
+    return "<unknown>"
+
+
+def record_method_name(instance: object, options: Options) -> None:
+    """
+    Sets options.current_method_name to ClassName.method_name
+    when called from within an instance method.
+
+    Parameters:
+    - instance : The instance of the class from which this method is called.
+    - options  : Options object to store the current method name.
+
+    Returns:
+    None - modifies options to include the current method name.
+    """
+    fallback_logging_config()
+    method_name = "<unknown>"
+    # Try sys._getframe first
+    try:
+        method_name = sys._getframe(1).f_code.co_name
+    except (AttributeError, ValueError) as e1:
+        logging.warning("record_method_name(): sys._getframe(1) failed. Falling back to inspect...",
+                        exc_info=e1)
+        # Fallback: inspect
+        import inspect
+        frame = inspect.currentframe()
+        try:
+            if frame is not None and frame.f_back is not None:
+                method_name = frame.f_back.f_code.co_name
+            else:
+                logging.warning("record_method_name(): inspect fallback had no frame.")
+        except Exception as e2:
+            logging.warning("record_method_name(): inspect fallback failed", exc_info=e2)
+        finally:
+            del frame
+
+    class_name = type(instance).__name__
+    options.current_method_name = (
+        f"{class_name}.{method_name}" if method_name != "<unknown>" else "<unknown>"
+    )
+    # logging.debug(f"Entering {options.current_method_name}")
 
 
 class LLMs:
@@ -433,7 +504,22 @@ def my_popen(command_list: list, suppress_info: bool = False,
 
 def my_fopen(file_path: str | os.PathLike[str], suppress_errors: bool = False,
              rawlog: bool = False, numlines: int | None = None) -> TextIO | bool | str:
-    """Attempt to read the file with various encodings and return the file content if successful. Optionally, specify numlines to limit the number of lines read and return a string instead of a file object."""
+    """
+    Attempt to read a text file with various encodings and return the file content if successful. Optionally, specify numlines to limit the number of lines read and return a string instead of a TextIO object.
+
+    Parameters:
+        file_path      : Path to the file to read.
+        suppress_errors: If True, suppress error messages and return False instead of logging errors.
+        rawlog         : If True, use a simple log format without timestamps or levels.
+        numlines       : If specified, read only this many lines from the file and return them as a string.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        UnicodeDecodeError: If the file cannot be read with any of the specified encodings.
+
+    Returns:
+        str | bool | TextIO: The content of the file as a string if numlines is specified, otherwise a TextIO object. Returns False if the file does not exist, is empty, or is a non-text file (video, audio, or image).
+    """
     fallback_logging_config(log_level='INFO' if not suppress_errors else 'CRITICAL')
     file_path = Path(file_path).resolve()  # Ensure the file path is absolute and normalized
     if not file_path.is_file():
@@ -1374,15 +1460,19 @@ def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
     """
     Turn arbitrary text into an ASCII-only, filesystem‐safe base filename.
     WARNING: Do not include an extension in the text, because this function
-    will remove the dot which separates the filename from the extension.
+    might remove the dot which separates the filename from the extension.
+    It attempts to recognize and remove extensions listed in all_extensions
+    but, despite the name, this list is not exhaustive.
 
     Steps:
       1. Unicode → ASCII
-      2. Treat dots, underscores & whitespace as word separators
-      3. Remove any character that isn't A-z, a–z, 0–9, dashes, or the separator
-      4. Collapse runs of separators into a single one
-      5. Trim separators from ends
-      6. Optionally truncate to max_length (preserving word boundaries)
+      2. Recognize & remove common extensions (e.g. .txt, .fits, .tar.gz)
+      3. Treat dots, underscores & whitespace as word separators
+      4. Remove any character that isn't A-z, a–z, 0–9, dashes, or the separator
+      5. Collapse runs of separators into a single one
+      6. Trim separators from ends
+      7. Optionally truncate to max_length (preserving word boundaries)
+      8. If an extension was removed, append it back as the last step.
 
     Args:
         text:        Original filename or title
@@ -1393,7 +1483,7 @@ def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
         A clean, filename-safe string.
     """
     fallback_logging_config()  # Ensure logging is configured
-    # 1. Normalize to ASCII
+    # Normalize to ASCII
     try:
         import unidecode
         text = unidecode.unidecode(text)
@@ -1402,22 +1492,30 @@ def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
         # Fallback: encode to ASCII, ignore errors
         text = text.encode('ascii', 'ignore').decode('ascii')
 
-    # 2. Replace common "word boundaries" with sep
+    # List of common extensions to recognize and (temporarily) remove
+    removed_ext = ""
+    for ext in all_extensions:
+        if text.casefold().endswith(ext):
+            text = text[:-len(ext)]
+            removed_ext = ext
+            break
+
+    # Replace common "word boundaries" with sep
     #    (dots, underscores, whitespace) but keep dashes
     #    e.g. "hello.world--foo_bar" → "hello world--foo bar"
     text = re.sub(r"[._\s]+", sep, text)
 
-    # 3. Remove anything but dashes, a–z, 0–9, or our sep
+    # Remove anything but dashes, a–z, 0–9, or our sep
     allowed = f"-A-Za-z0-9{re.escape(sep)}"
     text = re.sub(fr"[^{allowed}]+", "", text)
 
-    # 4. Collapse runs of sep (e.g. "__" → "_")
+    # Collapse runs of sep (e.g. "__" → "_")
     text = re.sub(fr"{re.escape(sep)}{{2,}}", sep, text)
 
-    # 5. Strip leading/trailing seps
+    # Strip leading/trailing seps
     text = text.strip(sep)
 
-    # 6. Optionally truncate (try not to cut in middle of a word)
+    # Optionally truncate (try not to cut in middle of a word)
     if max_length is not None and len(text) > max_length:
         # cut at max_length, then drop a partial trailing token if any
         truncated = text[:max_length]
@@ -1425,6 +1523,9 @@ def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
         if (len(text) > max_length and not truncated.endswith(sep) and sep in truncated):
             truncated = truncated.rsplit(sep, 1)[0]
         text = truncated
+
+    # If an extension was removed, append it back
+    text += removed_ext
 
     return text
 
@@ -2000,7 +2101,7 @@ def highlight_changes(orig: str, new: str, unchanged_color: str,
     return ''.join(old_out), ''.join(new_out)
 
 
-def my_diff(orig_text: str, changed_text: str, orig_path: str,
+def my_diff(orig_text: str, changed_text: str, orig_path: str | os.PathLike[str],
             changed_path: str | None = None,
             diff_choice: int = 1, changed_color: str = ANSI_CYAN,
             deleted_color: str = ANSI_RED, added_color: str = ANSI_YELLOW) -> None:
@@ -2022,9 +2123,10 @@ def my_diff(orig_text: str, changed_text: str, orig_path: str,
     """
     import difflib
     fallback_logging_config(rawlog=True)
+    orig_path = Path(orig_path).resolve()
     if not changed_path:
         changed_path = orig_path
-    logging.debug(f"At the top of the function {sys._getframe(1).f_code.co_name}(), {diff_choice=}")
+    logging.debug(f"At the top of the function {return_function_name()}(), {diff_choice=}")
     orig_lines    =    orig_text.splitlines(keepends=True)
     changed_lines = changed_text.splitlines(keepends=True)
     the_digits = max(len(str(len(orig_lines))), len(str(len(changed_lines))))
@@ -2050,7 +2152,7 @@ def my_diff(orig_text: str, changed_text: str, orig_path: str,
                     new_vis = _vis_trailing_ws(inserts[di][1])
                     old_hl, new_hl = highlight_changes(
                         old_vis, new_vis,
-                        unchanged_color=changed_color,
+                        unchanged_color=changed_color,  # this is confusing but correct. "The unchanged parts in the changed line"
                         added_color=added_color,
                         deleted_color=deleted_color
                     )
@@ -2106,7 +2208,7 @@ def my_diff(orig_text: str, changed_text: str, orig_path: str,
         ctx  = max(diff_choice - 1, 0)
         diff = difflib.unified_diff(
             orig_lines, changed_lines,
-            fromfile=orig_path, tofile=changed_path,
+            fromfile=os.fspath(orig_path), tofile=os.fspath(changed_path),
             n=ctx, lineterm=""
         )
         header_re = re.compile(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
@@ -2197,7 +2299,7 @@ def diff_and_confirm(orig_text: str, changed_text: str, path: str, label: str = 
     Returns False if the user chose to quit; True otherwise.
     """
     fallback_logging_config()
-    logging.debug(f"At the top of the function {sys._getframe(1).f_code.co_name}(), {diff_choice=}")
+    logging.debug(f"At the top of the function {return_function_name()}(), {diff_choice=}")
     my_diff(orig_text, changed_text, path, diff_choice=diff_choice,
             changed_color=changed_color, deleted_color=deleted_color, added_color=added_color)
     label_str = f"{ANSI_RED}{label}{ANSI_RESET}" if label     else ""
@@ -2249,7 +2351,7 @@ def ask_and_autopep8(path: str, code: str, description: str = "", diff_choice: i
     """
     import autopep8
     fallback_logging_config()
-    logging.debug(f"At the top of the function {sys._getframe(1).f_code.co_name}(), {diff_choice=}")
+    logging.debug(f"At the top of the function {return_function_name()}(), {diff_choice=}")
     # The number of blank lines expected in various contexts.
     blank_line_overrides = {
         'E301': 1,  # expected 1 blank line, found 0
@@ -2340,7 +2442,7 @@ def interactive_flake8(path: str, diff_choice: int = 1, ignore_codes: list[str] 
         added_color:     Color for added characters in changed lines (default: ANSI_YELLOW).
     """
     fallback_logging_config()
-    logging.debug(f"At the top of the function {sys._getframe(1).f_code.co_name}(), {diff_choice=}")
+    logging.debug(f"At the top of the function {return_function_name()}(), {diff_choice=}")
     if not run_flake8(path, ignore_codes=ignore_codes, max_line_length=max_line_length):
         logging.info("No flake8 errors—nothing to do.")
         return
@@ -2359,8 +2461,23 @@ def interactive_flake8(path: str, diff_choice: int = 1, ignore_codes: list[str] 
     run_flake8(path, ignore_codes=ignore_codes, max_line_length=max_line_length)
 
 
-MYDIFF_SCRIPT = '''import argparse
+# - Use {str(univ_defs_dir)!r} so Windows backslashes are safely escaped in the string literal.
+# - Double the braces around `univ_defs_dir` in the f-string to keep them literal in the written file.
+UNIV_DEFS_SYS_PATH_SCRIPT = f'''# Auto-generated helper: ensure the univ_defs directory is on sys.path
+import sys
+from pathlib import Path
 
+univ_defs_dir = Path({str(Path(__file__).parent.resolve())!r}).resolve()
+if not univ_defs_dir.is_dir():
+    raise FileNotFoundError(f"Expected univ_defs_dir to be a directory: {{univ_defs_dir}}")
+if str(univ_defs_dir) not in sys.path:
+    sys.path.append(str(univ_defs_dir))
+'''
+
+MYDIFF_SCRIPT = '''import argparse
+import logging
+
+import univ_defs_sys_path_script  # Appends sys.path with the location of univ_defs.py
 import univ_defs as ud
 
 
@@ -2368,8 +2485,8 @@ def main() -> None:
     """Main entry point for the script."""
     ud.configure_logging("mydiff", log_level="INFO", rawlog=True)
     parser = argparse.ArgumentParser(description="Diff two files using ud.my_diff().")
-    parser.add_argument("orig_path",     type=str, help="Path to original file.")
-    parser.add_argument("changed_path",  type=str, help="Path to changed file.")
+    parser.add_argument("orig_path", type=str, help="Path to original file.")
+    parser.add_argument("changed_path", type=str, help="Path to changed file.")
     parser.add_argument("--diff_choice", type=int, default=1,
                         help="0 = old-style diff, 1 = unified diff with 0 context lines, "
                              "2+ = unified diff with 'diff_choice - 1' context lines")
@@ -2377,14 +2494,20 @@ def main() -> None:
                         help="Color for unchanged characters in changed lines (default: ANSI_CYAN)")
     parser.add_argument("--deleted_color", type=str, default=ud.ANSI_RED,
                         help="Color for deleted characters in original lines (default: ANSI_RED)")
-    parser.add_argument("--added_color",   type=str, default=ud.ANSI_GREEN,
+    parser.add_argument("--added_color", type=str, default=ud.ANSI_GREEN,
                         help="Color for added characters in changed lines (default: ANSI_GREEN)")
     args = parser.parse_args()
 
     orig_text    = ud.my_fopen(args.orig_path)
     changed_text = ud.my_fopen(args.changed_path)
-    if orig_text is False or changed_text is False:
+    if orig_text is False:
+        logging.error(f"Failed to read original file: {args.orig_path}")
         return
+    if changed_text is False:
+        logging.error(f"Failed to read changed file: {args.changed_path}")
+        return
+    if orig_text == changed_text:
+        return  # Standard diff would show no changes
     ud.my_diff(orig_text, changed_text, args.orig_path,
                changed_path=args.changed_path, diff_choice=args.diff_choice,
                changed_color=args.changed_color, deleted_color=args.deleted_color,
@@ -2397,6 +2520,7 @@ if __name__ == "__main__":
 
 MYAUDIT_SCRIPT = '''import argparse
 
+import univ_defs_sys_path_script  # Appends sys.path with the location of univ_defs.py
 import univ_defs as ud
 
 
@@ -2421,6 +2545,225 @@ def main() -> None:
 
     ud.interactive_flake8(args.filepath, diff_choice=args.diff_choice, ignore_codes=ud.IGNORED_CODES, max_line_length=1000,
                           changed_color=args.changed_color, deleted_color=args.deleted_color, added_color=args.added_color)
+
+if __name__ == "__main__":
+    main()
+'''
+
+MULTIREPLACE_SCRIPT = '''#!/usr/bin/env python3
+from __future__ import annotations
+
+import sys
+import argparse
+import logging
+from pathlib import Path
+from collections.abc import Iterable
+
+import univ_defs_sys_path_script  # Appends sys.path with the location of univ_defs.py
+import univ_defs as ud
+
+__version__ = "0.0.1"
+
+
+class Options:
+    """Class that has all global options in one place."""
+
+    def __init__(self) -> None:
+        """Initialize the Options class with default values."""
+        self.my_name: str = Path(__file__).stem  # The base name of this script without the .py extension
+        self.log_mode: str = "INFO"  # Use the -debug command line argument to change to DEBUG.
+        self.args: argparse.Namespace | None = None
+
+        self.default_glob_pattern: str = "*"
+        self.default_dir: Path = Path.cwd()  # Default to current working directory
+
+
+def parse_arguments(options: Options) -> None:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Find files by glob and call ud.ask_and_replace() on each until it returns False.",
+    )
+    parser.add_argument("old_str",
+                        help="The text to be replaced in the files.")
+    parser.add_argument("new_str",
+                        help="The text to replace the old_str.")
+    parser.add_argument("glob_pattern", nargs="?",
+                        default=options.default_glob_pattern,
+                        help=f'Glob pattern of files to edit (default: "{options.default_glob_pattern}"). Example: "*.py"')
+    parser.add_argument("-dir", "-d", default=options.default_dir,
+                        help=f"Directory to search in (defaults to current working directory: {options.default_dir}).")
+    parser.add_argument("-recursive", "-r", action="store_true",
+                        help="Search recursively in subdirectories.")
+    parser.add_argument("-version", action="store_true",
+                        help="Print the version of this program and exit.")
+    parser.add_argument("-debug", action="store_true",
+                        help="Enable DEBUG logging.")
+    options.args = parser.parse_args()
+
+    if options.args.version:
+        print(f"{options.my_name} {__version__}")
+        sys.exit(0)
+
+    if options.args.debug:
+        options.log_mode = "DEBUG"
+
+
+def _validate_glob_pattern(pattern: str) -> None:
+    """Basic validation for glob pattern (non-empty string)."""
+    if not isinstance(pattern, str) or not pattern.strip():
+        raise ValueError("glob_pattern must be a non-empty string.")
+
+
+def _resolve_dir(dir_arg: str | None) -> Path:
+    """Resolve the directory from the command line argument."""
+    if dir_arg:
+        p = Path(dir_arg).expanduser().resolve()
+    else:
+        p = Path.cwd()
+    if not p.exists():
+        raise FileNotFoundError(f"Directory does not exist: {p}")
+    if not p.is_dir():
+        raise NotADirectoryError(f"Path is not a directory: {p}")
+    return p
+
+
+def _collect_files(root: Path, pattern: str, recursive: bool) -> list[Path]:
+    """Collect files matching the glob pattern from root."""
+    search_iter: Iterable[Path]
+    if recursive:
+        search_iter = root.rglob(pattern)
+    else:
+        search_iter = root.glob(pattern)
+
+    files = [p for p in search_iter if p.is_file()]
+    return files
+
+
+def main() -> None:
+    """Main function."""
+    options = Options()
+    memory_handler = ud.configure_logging(options.my_name, log_level=options.log_mode,
+                                          rawlog=True)
+
+    parse_arguments(options)
+
+    assert options.args is not None  # for type-checkers
+
+    try:
+        _validate_glob_pattern(options.args.glob_pattern)
+    except Exception as e:
+        logging.error(f"Invalid glob pattern: {e}")
+        sys.exit(2)
+
+    try:
+        dir = _resolve_dir(options.args.dir)
+    except Exception as e:
+        logging.error(str(e))
+        sys.exit(2)
+
+    logging.debug(f"Directory: {dir}")
+    logging.debug(f"Glob pattern: {options.args.glob_pattern}")
+    logging.debug(f"Recursive: {options.args.recursive}")
+
+    files = _collect_files(dir, options.args.glob_pattern, options.args.recursive)
+
+    if not files:
+        logging.warning("No files matched the given pattern.")
+        return
+
+    logging.info(f"Found {len(files)} file(s) to process:")
+    num_files = len(files)
+    max_digits = len(str(num_files))
+    for i, f in enumerate(files, start=1):
+        logging.info(f"{i:>{max_digits}}/{num_files}: {f}")
+
+    logging.info("==========================================")
+    for f in files:
+        logging.info(f"Processing: {f}")
+        try:
+            if not ud.ask_and_replace(old_str=options.args.old_str, new_str=options.args.new_str,
+                                      path=str(f)):
+                break
+        except KeyboardInterrupt:
+            logging.warning("Interrupted by user.")
+            sys.exit(130)
+        except Exception as e:
+            logging.error(f"Error processing {f}: {e}")
+
+    logging.info("Done.")
+    ud.print_all_errors(memory_handler)
+    logging.shutdown()
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+TREEVIEW_SCRIPT = '''#!/usr/bin/env python3
+from __future__ import annotations
+
+import sys
+import argparse
+import logging
+from pathlib import Path
+from collections.abc import Iterable
+
+import univ_defs_sys_path_script  # Appends sys.path with the location of univ_defs.py
+import univ_defs as ud
+
+__version__ = "0.0.1"
+
+
+class Options:
+    """Class that has all global options in one place."""
+
+    def __init__(self) -> None:
+        """Initialize the Options class with default values."""
+        self.my_name: str = Path(__file__).stem  # The base name of this script without the .py extension
+        self.log_mode: str = "INFO"  # Use the -debug command line argument to change to DEBUG.
+        self.args: argparse.Namespace | None = None
+
+        self.default_dir: Path = Path.cwd()  # Default to current working directory
+
+
+def parse_arguments(options: Options) -> None:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Print a tree view of the specified directory.",
+    )
+    parser.add_argument("dir", default=options.default_dir, nargs="?",
+                        help=f"Directory to search in (defaults to current working directory: {options.default_dir}).")
+    parser.add_argument("-no_colors", action="store_true",
+                        help="Do not use colors in the output.")
+    parser.add_argument("-version", action="store_true",
+                        help="Print the version of this program and exit.")
+    parser.add_argument("-debug", action="store_true",
+                        help="Enable DEBUG logging.")
+    options.args = parser.parse_args()
+
+    if options.args.version:
+        print(f"{options.my_name} {__version__}")
+        sys.exit(0)
+
+    if options.args.debug:
+        options.log_mode = "DEBUG"
+
+
+def main() -> None:
+    """Main function."""
+    options = Options()
+    memory_handler = ud.configure_logging(options.my_name, log_level=options.log_mode,
+                                          rawlog=True)
+
+    parse_arguments(options)
+
+    logging.debug(f"Directory: {options.args.dir}")
+
+    ud.treeview_new_files(options.args.dir, use_colors=not options.args.no_colors)
+
+    ud.print_all_errors(memory_handler)
+    logging.shutdown()
+
 
 if __name__ == "__main__":
     main()
@@ -2675,6 +3018,7 @@ def fix_mojibake(filepath: str | os.PathLike[str], make_backup: bool = True,
 def treeview_new_files(directory:      str | os.PathLike[str],
                        last_file_path: str | os.PathLike[str] | None = None,
                        last_mtime: float | None = None, maxlines: int = 0,
+                       use_colors: bool = True, print_root: bool = True,
                        prefix: str = '', is_last: bool = True, level: int = 0,
                        state: dict = None, probe_only: bool = False) -> bool:
     """
@@ -2685,6 +3029,8 @@ def treeview_new_files(directory:      str | os.PathLike[str],
         last_file_path: The optional path to a chosen file. Only files newer than this will be printed.
         last_mtime:     The modification time of the last_file_path. If None, all files will be considered.
         maxlines:       The maximum number of lines to read from each file. 0 means don't read at all, -1 means read all lines, otherwise read up to maxlines (default 0).
+        use_colors:     Whether to use ANSI color codes in the output (default True).
+        print_root:     If True, print the root directory name (default True).
         prefix:         The prefix to use for logging output (default '').
         is_last:        Whether this is the last item in the current level (default True).
         level:          The current recursion level (default 0).
@@ -2695,12 +3041,12 @@ def treeview_new_files(directory:      str | os.PathLike[str],
         ValueError: If the directory is not a valid directory or does not exist.
     
     Returns:
-        bool: True if any relevant files are found, False otherwise.
+        bool: True if any relevant files are found or the directory itself is newer than last_mtime, False otherwise.
     """
     import datetime as dt
     fallback_logging_config(rawlog=True)
 
-    directory = Path(directory)
+    directory = Path(directory).resolve()
     if not directory.exists():
         logging.error(f"{prefix}└── [Directory does not exist: {directory}]")
         return False
@@ -2722,6 +3068,17 @@ def treeview_new_files(directory:      str | os.PathLike[str],
         last_mtime = last_file_path.stat().st_mtime
         last_mtime_readable = dt.datetime.fromtimestamp(last_mtime).strftime('%Y-%m-%d %H:%M:%S')
         logging.debug(f"{prefix}Last file path: {last_file_path} (mtime: {last_mtime_readable})")
+
+    if use_colors:
+        reset_color = ANSI_RESET
+        dir_color   = ANSI_CYAN
+    else:
+        reset_color = ''
+        dir_color   = ''    
+
+    # Get the modification time of the directory itself
+    dir_mtime = directory.stat().st_mtime
+    current_is_new = dir_mtime > (last_mtime or 0)
 
     if state is None:
         state = {'excluded_dirs'   : {'__pycache__'},
@@ -2752,9 +3109,12 @@ def treeview_new_files(directory:      str | os.PathLike[str],
                 entry.name.startswith('.')
             )) or
             (entry.is_dir() and entry.name in excluded_dirs) or
-            (entry.is_dir() and entry in already_printed)
+            (entry.is_dir() and entry.resolve() in already_printed)
         )
     ]
+
+    # Sort entries: directories first, then files, case-insensitive
+    entries = sorted(entries, key=lambda e: (not e.is_dir(), e.name.casefold()))
 
     # Collect relevant entries
     relevant_entries = []
@@ -2772,36 +3132,56 @@ def treeview_new_files(directory:      str | os.PathLike[str],
                 last_file_path=last_file_path,
                 last_mtime=last_mtime,
                 maxlines=maxlines,
+                use_colors=use_colors,      # use_colors doesn't matter in probe mode
                 prefix=prefix,              # prefix doesn’t matter in probe mode
                 is_last=False,              # ignored in probe mode
                 level=level + 1,
                 state=state,
                 probe_only=True             # probe mode: do not print contents
             )
-            if sub_has_relevant:
+            # Consider the subdirectory’s own mtime
+            sub_is_new = entry.stat().st_mtime > last_mtime
+            if sub_has_relevant or sub_is_new:
                 subdirectories.append(entry)
+            if sub_has_relevant:
                 has_relevant_files = True
 
-    if has_relevant_files:
+    # Sort subdirectories and relevant entries by name, case-insensitive
+    subdirectories.sort(  key=lambda p: p.name.casefold())
+    relevant_entries.sort(key=lambda p: p.name.casefold())
+
+    should_show = has_relevant_files or current_is_new
+    if probe_only:
+        return should_show
+
+    if should_show:
         if level > 0:
-            # Print the directory name only if it's not the root directory
+            # Print the directory name with a connector only if it's not the root directory
             connector = '└── ' if is_last else '├── '
-            if not probe_only: logging.info(f"{prefix}{connector}{directory.name}/")
+            logging.info(f"{prefix}{connector}{dir_color}{directory.name}/{reset_color}")
 
             # Update the prefix for child entries
             child_prefix = prefix + ('    ' if is_last else '│   ')
         else:
-            # For root level, do not print the directory name
+            # For root level, do not print the directory name unless print_root is True
             child_prefix = prefix
+            if print_root:
+                # Print the root directory name with a connector
+                logging.info(f"{dir_color}{directory.name}/{reset_color}")
+
 
         # Print subdirectories first
-        for i, subdir in enumerate(subdirectories):
-            is_sub_last = (i == len(subdirectories) - 1) and (len(relevant_entries) == 0)
+        printable_subdirs = [
+            d for d in subdirectories
+            if d.name not in excluded_dirs and d.resolve() not in already_printed
+        ]
+        for i, subdir in enumerate(printable_subdirs):
+            is_sub_last = (i == len(printable_subdirs) - 1) and (len(relevant_entries) == 0)
             # Only scan the subdirectory if it isn't excluded
-            if subdir.name not in excluded_dirs and subdir not in already_printed:
+            if subdir.name not in excluded_dirs and subdir.resolve() not in already_printed:
                 treeview_new_files(subdir, last_file_path=last_file_path, last_mtime=last_mtime,
-                                   maxlines=maxlines, prefix=child_prefix, is_last=is_sub_last,
-                                   level=level + 1)
+                                   maxlines=maxlines, use_colors=use_colors, prefix=child_prefix,
+                                   is_last=is_sub_last, level=level + 1)
 
         # Print relevant files next
         for i, file_entry in enumerate(relevant_entries):
@@ -2809,7 +3189,7 @@ def treeview_new_files(directory:      str | os.PathLike[str],
             is_file_last = (i == len(relevant_entries) - 1)
             file_connector = '└── ' if is_file_last else '├── '
             contents_str = f"{file_entry.name} contents:" if maxlines != 0 else f"{file_entry.name}"
-            if not probe_only: logging.info(f"{child_prefix}{file_connector}{contents_str}")
+            logging.info(f"{child_prefix}{file_connector}{contents_str}")
             try:
                 if maxlines != 0:  # Only open if not disabled
                     with open(file_entry, 'r', encoding=DEFAULT_ENCODING) as f:
@@ -2824,13 +3204,13 @@ def treeview_new_files(directory:      str | os.PathLike[str],
                             lines = [line.rstrip("\n") for line in f]
                     # Indent file contents for better readability
                     indented_contents = '\n'.join(f"{child_prefix}    {line}" for line in lines)
-                    if not probe_only: logging.info(indented_contents)
+                    logging.info(indented_contents)
             except Exception:  # Catch any unexpected errors from reading the file without crashing.
-                if not probe_only: logging.exception(f"{child_prefix}    Error reading '{file_entry}'.")
+                logging.exception(f"{child_prefix}    Error reading '{file_entry}'.")
             if maxlines != 0:  # Add an empty line for separation, but only if printing contents
-                if not probe_only: logging.info("")
+                logging.info("")
 
-    return has_relevant_files
+    return should_show
 
 
 def check_if_command_exists(command: str) -> bool:
@@ -2933,6 +3313,9 @@ def open_filemanager_with_dirs(directories: list[str | os.PathLike[str]]) -> Non
     import subprocess
     import time
     fallback_logging_config()
+    if not sys.platform.startswith('linux'):
+        logging.error(f"The function {return_function_name()} is only implemented for Linux systems.")
+        return
     logging.info("Opening file manager with specified directories...")
     for directory in directories:
         directory = Path(directory)
@@ -3033,7 +3416,7 @@ def set_system_volume(percent: int, tolerance: int = 1,
     import subprocess
     import logging
     fallback_logging_config()
-    if sys.platform != 'linux':
+    if not sys.platform.startswith('linux'):
         raise RuntimeError("This set_system_volume() function is only intended to run on Linux systems.")
     fraction = percent / 100.0
     mute_arg = None
@@ -3419,8 +3802,8 @@ subtitle_extensions = [
     '.ttml',  '.dfxp',   '.smi',   '.smil',  '.usf',   '.psb',
     '.mks',   '.lrc',    '.stl',   '.pjs',   '.rt',    '.aqt',
     '.gsub',  '.jss',    '.dks',   '.mpl2',  '.tmp',   '.vsf',
-    '.zeg',   '.webvtt', '.scc',   '.cap',   '.asc',   '.txt',
-    '.sbv',   '.ebu',    '.sami',  '.xml',   '.itt',   '.qt.txt',
+    '.zeg',   '.webvtt', '.scc',   '.cap',   '.asc',   '.qt.txt',  # match .qt.txt before .txt
+    '.sbv',   '.ebu',    '.sami',  '.xml',   '.itt',   '.txt',
 ]
 # check_list_for_duplicates(subtitle_extensions) # Run this after adding new extensions to ensure there are no duplicates.
 
@@ -3441,3 +3824,21 @@ image_extensions = [
     '.djv',   '.lbm',   '.iff',
 ]
 # check_list_for_duplicates(image_extensions) # Run this after adding new extensions to ensure there are no duplicates.
+
+# A comprehensive list of archive file extensions.
+archive_extensions = [
+    '.zip',     '.rar',    '.7z',    '.tar.gz', '.tar.bz2', '.tar.xz',  # match .tar.(gz,bz2,xz) before (.gz,.bz2,.xz)
+    '.tar.zst', '.tar',    '.gz',    '.tgz',    '.bz2',     '.xz',
+    '.tbz2',    '.tz2',    '.lzma',  '.lz',     '.xpi',     '.crx',
+    '.zst',     '.cab',    '.arj',   '.ace',    '.uue',     '.zoo',
+    '.jar',     '.war',    '.ear',   '.iso',    '.img',     '.dmg',
+    '.lzh',     '.lha',    '.cpio',  '.deb',    '.rpm',     '.apk',
+    '.pak',     '.arc',    '.a',     '.mar',    '.b1',      '.wim',
+    '.shar',    '.run',    '.shk',   '.sit',    '.sitx',    '.zpaq',
+    '.br', 
+]
+# check_list_for_duplicates(archive_extensions) # Run this after adding new extensions to ensure there are no duplicates.
+
+all_extensions = python_extensions + subtitle_extensions + video_extensions + audio_extensions + \
+                 text_extensions + image_extensions + archive_extensions  # put subtitle_ext before text_ext so .qt.txt matches before .txt
+# check_list_for_duplicates(all_extensions) # Run this after adding new extensions to ensure there are no duplicates.

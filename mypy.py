@@ -94,7 +94,6 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.script_name: str = ''  # python_script without the .py extension
         self.script_dir: Path | None = None
         self.options_json_filepath: Path | None = None
-        self.script_dir_or_file: str | os.PathLike[str] = ''
         self.current_pip_version:                   str = ''
         self.new_pip_version:                       str = ''
         self.venv_dir:                      Path | None = None
@@ -4643,37 +4642,33 @@ def list_packages(options: Options) -> None:
     """Examine command line arguments to determine if we're looking at a directory or a single python script. List all installed and uninstalled packages that are imported in that directory or python script. Return these sets inside the options object."""
     if getattr(options.args, 'full', False):
         if not options.rawlog: logging.info(f"Building a virtual environment that can run every python script in {options.script_dir}.")
-        options.script_dir_or_file = options.script_dir
-    else:
-        options.script_dir_or_file = options.python_script
-    logging.debug(f"{options.script_dir_or_file = }")
 
-    if isinstance(options.script_dir_or_file, (str, Path)):
-        options.script_dir_or_file = Path(options.script_dir_or_file).expanduser().resolve()
+    if isinstance(options.python_script, (str, Path)):
+        options.python_script = Path(options.python_script).expanduser().resolve()
         options.loaded_custom_modules = set()
-        if options.script_dir_or_file.is_file():
-            if ud.is_python_script(options.script_dir_or_file):
-                if not options.rawlog: logging.info(f"Processing a single Python script: {options.script_dir_or_file}.")
-                python_file = options.script_dir_or_file
+        if options.python_script.is_file():
+            if ud.is_python_script(options.python_script):
+                if not options.rawlog: logging.info(f"Processing a single Python script: {options.python_script}.")
+                python_file = options.python_script
                 options.all_imports = set()
                 find_imports_and_IO_in_script(options, python_file)
             else:
-                ud.my_critical_error(f"'{options.script_dir_or_file}' is not a valid Python script.")
-        elif options.script_dir_or_file.is_dir():
-            if not options.rawlog: logging.info(f"Processing an entire folder of Python scripts: {options.script_dir_or_file}.")
-            python_dir = options.script_dir_or_file
+                ud.my_critical_error(f"'{options.python_script}' is not a valid Python script.")
+        elif options.python_script.is_dir():
+            if not options.rawlog: logging.info(f"Processing an entire folder of Python scripts: {options.python_script}.")
+            python_dir = options.python_script
             if options.pipreqs_available:
                 if not options.rawlog: logging.info("Using pipreqs to generate requirements.")
-                generate_requirements(options.script_dir_or_file)
+                generate_requirements(options.python_script)
                 with open(python_dir / "requirements.txt", 'r') as f:
                     options.all_imports = set(line.strip() for line in f)
             else:
                 if not options.rawlog: logging.info("Using custom script to find imports.")
-                get_all_imports(options, options.script_dir_or_file)
+                get_all_imports(options, options.python_script)
         else:
-            ud.my_critical_error(f"The file or directory {options.script_dir_or_file} does not exist.")
+            ud.my_critical_error(f"The file or directory {options.python_script} does not exist.")
     else:
-        raise(ValueError(f"Unexpected type for script_dir_or_file: {type(options.script_dir_or_file)}"))
+        raise(ValueError(f"Unexpected type for options.python_script: {type(options.python_script)}"))
 
     # Filter out invalid imports before splitting
     options.all_imports = {imp for imp in options.all_imports if re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', imp)}
@@ -5468,7 +5463,7 @@ def main() -> None:
     start_time = dt.datetime.now()
     options = Options()
     parse_arguments(options)
-    script_string         = getattr(options.args, "script", None)
+    script_string         = getattr(options.args, 'script', None)
     options.script_args   = getattr(options.args, 'script_args', [])
     options.rawlog        = getattr(options.args, 'rawlog',      False)
     if script_string is None:
@@ -5483,7 +5478,7 @@ def main() -> None:
             raise ValueError(f"Script does not exist: {p} (obtained from {script_string})")
         options.python_script = p
 
-    if getattr(options.args, 'feeling_lucky', False):
+    if getattr(options.args, 'feeling_lucky', False) and options.python_script:
         options.script_dir = options.python_script.parent.absolute()
         last_used_venv_python = load_last_used_venv_python(options)
         if last_used_venv_python:
@@ -5533,7 +5528,6 @@ def main() -> None:
                         logging.error(f"Error deleting {file}")
         sys.exit(0)
     elif getattr(options.args, 'full', False):  # implied by now: and not options.python_script:
-        options.args.script   = options.cwd
         options.python_script = options.cwd
     else:
         logging.info("You must specify either a script to run or one of these arguments: alias, manual, blank-slate (be careful using blank-slate because it deletes all cached virtual environments, among other things!).")
