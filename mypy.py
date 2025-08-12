@@ -38,7 +38,6 @@ class Options():
         self.log_mode: str = "INFO"  # Use the -debug command line argument to change to DEBUG.
         self.search_above_this_dir: bool = True
         self.my_filepath:   Path = Path(__file__).resolve()            # Full path to this script
-        self.univ_defs_dir: Path = Path(ud.__file__).resolve().parent  # Full path to univ_defs.py
         self.home:   Path = Path.home()  # User's home directory
         # The base name of this script without the .py extension:
         self.my_name: str = self.my_filepath.stem
@@ -96,15 +95,15 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.script_dir: Path | None = None
         self.options_json_filepath: Path | None = None
         self.script_dir_or_file: str | os.PathLike[str] = ''
-        self.current_pip_version:          str = ''
-        self.new_pip_version:              str = ''
-        self.venv_dir:             Path | None = None
-        self.venv_python:          Path | None = None
-        self.venv_pip:             Path | None = None
-        self.requirements_file:    Path | None = None
-        self.extra_requirements:   Path | None = None
-        self.extra_requirements_file:      str = "extra_requirements.txt"
-        self.download_script_path: Path | None = None
+        self.current_pip_version:                   str = ''
+        self.new_pip_version:                       str = ''
+        self.venv_dir:                      Path | None = None
+        self.venv_python:                   Path | None = None
+        self.venv_pip:                      Path | None = None
+        self.requirements_file:             Path | None = None
+        self.extra_requirements:         dict[str, str] = {}
+        self.extra_requirements_file:               str = "extra_requirements.txt"
+        self.download_script_path:          Path | None = None
         self.simultaneous_success: bool = False
         self.max_checks: int = 10  # Maximum number of times to check any repeated process.
         self.check_interval: int = 5  # Number of seconds to wait between checks.
@@ -116,8 +115,17 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.total_imports: int = 0
         self.rawlog: bool = False
         self.pipreqs_available: bool = False
-        self.mydiff_path:  Path = self.my_dir / "mydiff.py"
-        self.myaudit_path: Path = self.my_dir / "myaudit.py"
+        self.univ_defs_path:            Path = Path(ud.__file__).resolve() # Full path to univ_defs.py
+        self.univ_defs_sys_path_script: Path = self.my_dir / "univ_defs_sys_path_script.py"
+        self.mydiff_path:               Path = self.my_dir / "mydiff.py"
+        self.myaudit_path:              Path = self.my_dir / "myaudit.py"
+        self.multireplace_path:         Path = self.my_dir / "multireplace.py"
+        self.treeview_path:             Path = self.my_dir / "treeview.py"
+        ud.verify_script(self.univ_defs_sys_path_script, ud.UNIV_DEFS_SYS_PATH_SCRIPT)
+        ud.verify_script(self.mydiff_path,               ud.MYDIFF_SCRIPT)
+        ud.verify_script(self.myaudit_path,              ud.MYAUDIT_SCRIPT)
+        ud.verify_script(self.multireplace_path,         ud.MULTIREPLACE_SCRIPT)
+        ud.verify_script(self.treeview_path,             ud.TREEVIEW_SCRIPT)
         self.read_files:    list[Path] = []  # List of files read       by the Python script.
         self.write_files:   list[Path] = []  # List of files written    by the Python script.
         self.download_urls: list[Path] = []  # List of  URLs downloaded by the Python script.
@@ -4632,28 +4640,12 @@ def split_imports(options: Options) -> None:
 
 
 def list_packages(options: Options) -> None:
-    """Examine command line arguments to determine if we're looking at a directory, a single python script, or a list of python scripts. List all installed and uninstalled packages that are imported in that directory or python script(s). Return these sets inside the options object."""
+    """Examine command line arguments to determine if we're looking at a directory or a single python script. List all installed and uninstalled packages that are imported in that directory or python script. Return these sets inside the options object."""
     if getattr(options.args, 'full', False):
-        if not options.rawlog: logging.info("Building a virtual environment that can run every python script in this directory.")
+        if not options.rawlog: logging.info(f"Building a virtual environment that can run every python script in {options.script_dir}.")
         options.script_dir_or_file = options.script_dir
     else:
-        # If there aren't any script arguments then we're looking at a single python script.
-        # If the python script is autolambda.py then ignore any script arguments. Autolambda will take care of them separately so there's no need to install them in the venv.
-        if not getattr(options.args, 'script_args', None) or options.python_script.name == "autolambda.py":
-            options.script_dir_or_file = options.python_script
-        else:
-            # List all the script arguments that are local python scripts.
-            local_scripts: list[Path] = []
-            for arg in options.script_args:
-                full = Path(arg) if os.path.isabs(arg) else options.cwd / arg
-                # Only include if it really looks like a Python script
-                if ud.is_python_script(full) and full.stem in options.custom_modules:
-                    local_scripts.append(full)
-            # Local python scripts should be added to the list of scripts to examine for imports.
-            if local_scripts:
-                options.script_dir_or_file = [options.python_script] + local_scripts
-            else:
-                options.script_dir_or_file = options.python_script
+        options.script_dir_or_file = options.python_script
     logging.debug(f"{options.script_dir_or_file = }")
 
     if isinstance(options.script_dir_or_file, (str, Path)):
@@ -4689,8 +4681,9 @@ def list_packages(options: Options) -> None:
     split_imports(options)
 
 
-def get_all_imports(options: Options, directory: str) -> None:
+def get_all_imports(options: Options, directory: str | os.PathLike[str]) -> None:
     """Get all imports from all Python scripts in a directory."""
+    directory = Path(directory).expanduser().resolve()
     options.all_imports = set()
     total_files = sum(len(files) for _, _, files in os.walk(directory) if 'myenv' not in _)
     processed_files = 0
@@ -5418,7 +5411,7 @@ def dict_of_custom_modules(options: Options) -> dict[str, str]:
             for root, dirs, files in os.walk(path):
                 for file in files:
                     if file.endswith('.py') and file != init_name:  # Exclude __init__.py files
-                        module_name = file.stem  # Get the module name without the .py extension
+                        module_name = os.path.splitext(file)[0]  # Get the module name without the .py extension
                         if module_name not in custom_modules.keys():
                             full_path = Path(root) / file
                             if not is_standard_path(options, full_path):
@@ -5489,11 +5482,6 @@ def main() -> None:
         if not p.exists():
             raise ValueError(f"Script does not exist: {p} (obtained from {script_string})")
         options.python_script = p
-
-    if options.python_script == options.mydiff_path:
-        ud.verify_script(options.mydiff_path,  ud.MYDIFF_SCRIPT)
-    elif options.python_script == options.myaudit_path:
-        ud.verify_script(options.myaudit_path, ud.MYAUDIT_SCRIPT)
 
     if getattr(options.args, 'feeling_lucky', False):
         options.script_dir = options.python_script.parent.absolute()
@@ -5646,14 +5634,15 @@ def main() -> None:
             start_venv_time = dt.datetime.now()
             elapsed_time = start_venv_time - start_time
             if not options.rawlog: logging.info(f"Elapsed time: {elapsed_time}")
-            command_list = [options.venv_python, options.python_script] + [arg for arg in options.script_args]
-            if not options.rawlog: logging.info("Running command: %s", ' '.join(shlex.quote(os.fspath(arg)) for arg in command_list))
-            result = subprocess.run(command_list)
-            end_time = dt.datetime.now()
-            elapsed_time = end_time - start_venv_time
-            if not options.rawlog: logging.info(f"Elapsed time since activating virtual environment: {elapsed_time}")
-            if result.returncode != 0 and not options.rawlog:
-                logging.error(f"Error running script: {result.stderr}")
+            if not getattr(options.args, 'full', False):
+                command_list = [options.venv_python, options.python_script] + [arg for arg in options.script_args]
+                if not options.rawlog: logging.info("Running command: %s", ' '.join(shlex.quote(os.fspath(arg)) for arg in command_list))
+                result = subprocess.run(command_list)
+                end_time = dt.datetime.now()
+                elapsed_time = end_time - start_venv_time
+                if not options.rawlog: logging.info(f"Elapsed time since activating virtual environment: {elapsed_time}")
+                if result.returncode != 0 and not options.rawlog:
+                    logging.error(f"Error running script: {result.stderr}")
             if options.venv_dir.name.startswith('failed-') and options.simultaneous_success:
                 # If the program has made it to this point, it has run successfully, so the venv directory can be renamed because it DIDN'T fail.
                 options.venv_dir.rename(options.venv_dir.replace('failed-', ''))
@@ -5678,6 +5667,9 @@ def main() -> None:
                     file.writelines(modified_lines)
 
             save_options_to_json(options)
+
+            if getattr(options.args, 'full', False):
+                logging.info(f"Successfully used 'full' mode to build/find a virtual environment that can run all python scripts in {options.script_dir}. Use this virtual environment directory:\n{options.venv_dir}")
 
     ud.print_all_errors(memory_handler, options.rawlog)
     logging.shutdown()
