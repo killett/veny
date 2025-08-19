@@ -7,29 +7,28 @@ from pathlib import Path  # Preferred over os.path for path manipulations.
 import sys
 import logging
 from typing import TextIO, Any, TypeAlias, Type, Literal
+from collections.abc import Iterator
 import re  # Used to precompile regexes for performance
 
-print("REPLACE ALL WRITE AND APPEND STATEMENTS WITH ud.my_atomic_write()!")
+print("REPLACE ALL WRITE AND APPEND STATEMENTS WITH ud.my_atomic_write()! THIS INCLUDES 'path.write_text(changed_text, encoding=DEFAULT_ENCODING)'")
 
 # This is the version of univ_defs.py
-__version__ = '0.1.7'
+__version__: str = '0.1.7'
 
 # This is the version of python which should be used in scripts that import this module.
-PY_VERSION = 3.11
+PY_VERSION: int = 3.11
 
-DEFAULT_ENCODING = 'utf-8'  # This is the default encoding used for reading and writing text files.
-
-valid_basins = ["California", "Sacramento", "San Joaquin", "Tulare-Buena Vista Lakes"]
+DEFAULT_ENCODING: str = 'utf-8'  # This is the default encoding used for reading and writing text files.
 
 # ANSI escape codes
-ANSI_RED    = "\033[91m"
-ANSI_GREEN  = "\033[92m"  # this is bold/bright green on Linux but orange on my Mac
-ANSI_YELLOW = "\033[93m"
-ANSI_CYAN   = "\033[94m"  # this is blue on Linux but cyan on my Mac
-ANSI_RESET  = "\033[0m"
+ANSI_RED: str    = "\033[91m"
+ANSI_GREEN: str  = "\033[92m"  # this is bold/bright green on Linux but orange on my Mac
+ANSI_YELLOW: str = "\033[93m"
+ANSI_CYAN: str   = "\033[94m"  # this is blue on Linux but cyan on my Mac
+ANSI_RESET: str  = "\033[0m"
 
 # All the formatting rules to ignore when running flake8 to check Python formatting.
-IGNORED_CODES = [
+IGNORED_CODES: list[str] = [
     'W503',  # line break before binary operator (W503 and W504 are mutually exclusive, so ignore both)
     'W504',  # line break  after binary operator (W503 and W504 are mutually exclusive, so ignore both)
     'E128',  # continuation line under-indented for visual indent
@@ -85,14 +84,14 @@ class PlotOptions:
         self.lightcolors: list[str] = ['grey',  'pink',   'lightblue', 'lightgreen', 'lightpurple']
         self.linestyles:  list[str] = ['solid', 'dashed', 'dashdot',   'dotted']
         self.dark_mode:         int = 0  # 1 = dark mode, 0 = light mode
-        if self.dark_mode:
-            self.background_color:  str = '#000000'
-            self.text_color:        str = '#FFFFFF'
+        if self.dark_mode:  # Define colors as hexadecimal mainly because VS Code has a nifty color picker for hex colors.
+            self.background_color:  str = '#000000'  # black background for dark mode
+            self.text_color:        str = '#FFFFFF'  # white text for dark mode
             self.colors:      list[str] = [c.replace('black', 'darkgrey') for c in self.colors]
             self.lightcolors: list[str] = [c.replace('grey', 'lightgrey') for c in self.lightcolors]
         else:
-            self.background_color:  str = '#FFFFFF'
-            self.text_color:        str = '#000000'
+            self.background_color:  str = '#FFFFFF'  # white background for light mode
+            self.text_color:        str = '#000000'  # black text for light mode
 
 
 class UnivClass:
@@ -107,67 +106,76 @@ class UnivClass:
         import openai
 
 
-def return_function_name() -> str:
-    """Return the name of the calling function."""
-    fallback_logging_config()
-    # Fast path: sys._getframe
-    try:
-        return sys._getframe(1).f_code.co_name
-    except (AttributeError, ValueError) as e1:
-        logging.warning("return_function_name(): sys._getframe(1) failed. Falling back to inspect...", exc_info=e1)
-    # Fallback: inspect
-    import inspect
-    frame = inspect.currentframe()
-    try:
-        if frame is not None and frame.f_back is not None:
-            return frame.f_back.f_code.co_name
-        else:
-            logging.warning("return_function_name(): inspect fallback had no frame.")
-    except Exception as e2:
-        logging.warning("return_function_name(): inspect fallback failed", exc_info=e2)
-    finally:  # Avoid reference cycles
-        del frame
-    return "<unknown>"
-
-
-def record_method_name(instance: object, options: Options) -> None:
+def return_method_name(options: Options | None = None) -> str:
     """
-    Sets options.current_method_name to ClassName.method_name
-    when called from within an instance method.
+    Return (and optionally, record in options) the caller's qualified method/function name.
 
-    Parameters:
-    - instance : The instance of the class from which this method is called.
-    - options  : Options object to store the current method name.
+    - For instance methods: ClassName.method
+    - For classmethods:     ClassName.method
+    - For staticmethods:    ClassName.method on Python >= 3.11 (via co_qualname),
+                            otherwise just 'method' (class is not recoverable without heuristics)
+    - For functions:        function
 
+    If `options` is provided and is an Options instance, sets
+    `options.current_method_name` to the same string.
+
+    Args:
+        options: An instance of Options to store the current method name (optional).
+    
     Returns:
-    None - modifies options to include the current method name.
+        The current method name as a string, formatted as 'ClassName.method' or 'function'.
+    
+    Raises:
+        None: This function does not raise exceptions, but it may log warnings
+              if sys._getframe or inspect fails.
     """
     fallback_logging_config()
-    method_name = "<unknown>"
+    name = "<unknown>"
+    fr = None
     # Try sys._getframe first
     try:
-        method_name = sys._getframe(1).f_code.co_name
-    except (AttributeError, ValueError) as e1:
-        logging.warning("record_method_name(): sys._getframe(1) failed. Falling back to inspect...",
+        fr = sys._getframe(1)
+    except Exception as e1:
+        logging.warning("return_method_name(): sys._getframe(1) failed. Falling back to inspect...",
                         exc_info=e1)
-        # Fallback: inspect
-        import inspect
-        frame = inspect.currentframe()
         try:
-            if frame is not None and frame.f_back is not None:
-                method_name = frame.f_back.f_code.co_name
-            else:
-                logging.warning("record_method_name(): inspect fallback had no frame.")
+            import inspect
+            frame = inspect.currentframe()
+            try:
+                fr = frame.f_back if frame is not None else None
+            finally:
+                del frame
         except Exception as e2:
-            logging.warning("record_method_name(): inspect fallback failed", exc_info=e2)
-        finally:
-            del frame
-
-    class_name = type(instance).__name__
-    options.current_method_name = (
-        f"{class_name}.{method_name}" if method_name != "<unknown>" else "<unknown>"
-    )
-    # logging.debug(f"Entering {options.current_method_name}")
+            logging.warning("return_method_name(): inspect fallback failed", exc_info=e2)
+            fr = None
+    try:
+        if fr is not None:
+            # Python 3.11+: co_qualname gives 'Class.method' (or 'outer.<locals>.inner')
+            qual = getattr(fr.f_code, "co_qualname", None)
+            if isinstance(qual, str) and qual:
+                # Remove inner function noise like '.<locals>.' from the qualified name.
+                name = qual.replace(".<locals>.", ".")
+            else:
+                func = fr.f_code.co_name
+                self_obj = fr.f_locals.get("self")
+                cls_obj  = fr.f_locals.get("cls")
+                if self_obj is not None:
+                    name = f"{type(self_obj).__name__}.{func}"
+                elif cls_obj is not None:
+                    name = f"{cls_obj.__name__}.{func}"
+                else:  # staticmethod on <3.11 or plain function
+                    name = func
+        else:
+            logging.warning("return_method_name(): no frame available.")
+    finally:
+        # Avoid reference cycles
+        try:
+            del fr
+        except NameError:
+            pass
+    if options is not None and isinstance(options, Options):
+        options.current_method_name = name
+    return name
 
 
 class LLMs:
@@ -183,14 +191,15 @@ class LLMs:
         2. Check if the necessary environment variables are set.
         3. Create clients for all successfully imported LLMs.
         """
+        from types import ModuleType
         # 1. Import the LLM APIs into the self.llm_modules dictionary.
         # ADD NEW COMPANY LLMs HERE.
-        self.llms = [
-            {"name": "OpenAI", "module": "openai", "env_var": "OPENAI_API_KEY"},
+        self.llms: list[dict[str, str]] = [
+            {"name": "OpenAI",    "module": "openai",    "env_var": "OPENAI_API_KEY"},
             {"name": "Anthropic", "module": "anthropic", "env_var": "ANTHROPIC_API_KEY"},
         ]
-        self.found_llms = {}
-        self.llm_modules = {}
+        self.found_llms:  dict[str,       bool] = {}
+        self.llm_modules: dict[str, ModuleType] = {}
         for llm in self.llms:
             this_llm = llm["name"]
             this_key = llm["env_var"]
@@ -224,7 +233,7 @@ class LLMs:
             my_critical_error(f"Could not find any large language model APIs. Choices are: {', '.join(self.found_llms.keys())}\nExiting.")
 
         # 3. Create clients for all successfully imported LLMs.
-        self.clients = {}
+        self.clients: dict[str, Any] = {}
         for llm in self.found_llms:
             if self.found_llms[llm]:
                 # ADD NEW COMPANY LLMs HERE.
@@ -246,7 +255,7 @@ class LLMs:
                 model=model,
                 temperature=temperature,
                 messages=[{"role": "system", "content": system_message},
-                            {"role": "user",   "content": prompt}]
+                          {"role": "user",   "content": prompt}]
             )
             return response_obj.choices[0].message.content
         elif company == "Anthropic":
@@ -304,7 +313,7 @@ def fallback_logging_config(log_level: int | str = 'INFO', rawlog: bool = False)
     Configure the root logger with a basic configuration if no handlers are set.
     Run this at the start of functions which might be run without first configuring logging.
 
-    Parameters:
+    Args:
         level  : The logging level to set. Defaults to 'INFO'.
         rawlog : If True, use a simple log format without timestamps or levels.
     """
@@ -318,7 +327,7 @@ def fallback_logging_config(log_level: int | str = 'INFO', rawlog: bool = False)
 
 
 def configure_logging(basename: str, log_level: int | str = 'INFO',
-                      rawlog: bool = False, logdir: str = '') -> MemoryHandler:
+                      rawlog: bool = False, logdir: str | os.PathLike[str] = '') -> MemoryHandler:
     """Configure logging to write to files and stdout/stderr, and return a MemoryHandler to capture ERROR logs for later (duplicate) printing."""
     import datetime as dt
 
@@ -346,7 +355,7 @@ def configure_logging(basename: str, log_level: int | str = 'INFO',
 
     # File handlers for logging to files
     try:
-        debug_info_handler = logging.FileHandler(log_info)
+        debug_info_handler    = logging.FileHandler(log_info)
         debug_info_handler.setLevel(logging.DEBUG)
         warning_error_handler = logging.FileHandler(log_errors)
         warning_error_handler.setLevel(logging.WARNING)
@@ -371,11 +380,11 @@ def configure_logging(basename: str, log_level: int | str = 'INFO',
     else:
         log_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 
-    debug_info_handler.setFormatter(log_format)
-    warning_error_handler.setFormatter(log_format)
+    debug_info_handler.setFormatter(    log_format)
+    warning_error_handler.setFormatter( log_format)
     console_handler_stdout.setFormatter(log_format)
     console_handler_stderr.setFormatter(log_format)
-    memory_handler.setFormatter(log_format)
+    memory_handler.setFormatter(        log_format)
 
     root_logger.setLevel(log_level)
     root_logger.addHandler(debug_info_handler)
@@ -507,23 +516,29 @@ def my_fopen(file_path: str | os.PathLike[str], suppress_errors: bool = False,
     """
     Attempt to read a text file with various encodings and return the file content if successful. Optionally, specify numlines to limit the number of lines read and return a string instead of a TextIO object.
 
-    Parameters:
-        file_path      : Path to the file to read.
+    Args:
+        file_path:       Path to the file to read.
         suppress_errors: If True, suppress error messages and return False instead of logging errors.
-        rawlog         : If True, use a simple log format without timestamps or levels.
-        numlines       : If specified, read only this many lines from the file and return them as a string.
-
-    Raises:
-        FileNotFoundError: If the file does not exist.
-        UnicodeDecodeError: If the file cannot be read with any of the specified encodings.
+        rawlog:          If True, use a simple log format without timestamps or levels.
+        numlines:        If specified, read only this many lines from the file and return them as a string.
 
     Returns:
-        str | bool | TextIO: The content of the file as a string if numlines is specified, otherwise a TextIO object. Returns False if the file does not exist, is empty, or is a non-text file (video, audio, or image).
+        The content of the file as a string if numlines is specified, otherwise a TextIO object. Returns False if the file does not exist, is empty, or is a non-text file (video, audio, or image).
+
+    Raises:
+        FileNotFoundError:  If the file does not exist.
+        UnicodeDecodeError: If the file cannot be read with any of the specified encodings.
     """
     fallback_logging_config(log_level='INFO' if not suppress_errors else 'CRITICAL')
-    file_path = Path(file_path).resolve()  # Ensure the file path is absolute and normalized
-    if not file_path.is_file():
+    file_path = Path(file_path).expanduser().resolve()
+    if not file_path.exists():
         this_message = f"File does not exist: {file_path}"
+        if not rawlog:
+            if not suppress_errors: logging.error(this_message)
+            else:                   logging.info(this_message)
+        return False
+    if not file_path.is_file():
+        this_message = f"Path is a directory, not a file: {file_path}"
         if not rawlog:
             if not suppress_errors: logging.error(this_message)
             else:                   logging.info(this_message)
@@ -535,24 +550,27 @@ def my_fopen(file_path: str | os.PathLike[str], suppress_errors: bool = False,
             else:                   logging.info(this_message)
         return False
     # Does the file end with any of these (non-text) extensions?
-    for ext in video_extensions:
-        if file_path.name.endswith(ext):
-            if not rawlog:
-                if not suppress_errors: logging.error(f"Skipping video file {file_path}")
-                else:                   logging.info( f"Skipping video file {file_path}")
-            return False
-    for ext in audio_extensions:
-        if file_path.name.endswith(ext):
-            if not rawlog:
-                if not suppress_errors: logging.error(f"Skipping audio file {file_path}")
-                else:                   logging.info( f"Skipping audio file {file_path}")
-            return False
-    for ext in image_extensions:
-        if file_path.name.endswith(ext):
-            if not rawlog:
-                if not suppress_errors: logging.error(f"Skipping image file {file_path}")
-                else:                   logging.info( f"Skipping image file {file_path}")
-            return False
+    # Join all suffixes because some listed extensions look like ".tar.gz"
+    if "".join(file_path.suffixes).casefold() in video_extensions:
+        if not rawlog:
+            if not suppress_errors: logging.error(f"Skipping video file {file_path}")
+            else:                   logging.info( f"Skipping video file {file_path}")
+        return False
+    if "".join(file_path.suffixes).casefold() in audio_extensions:
+        if not rawlog:
+            if not suppress_errors: logging.error(f"Skipping audio file {file_path}")
+            else:                   logging.info( f"Skipping audio file {file_path}")
+        return False
+    if "".join(file_path.suffixes).casefold() in image_extensions:
+        if not rawlog:
+            if not suppress_errors: logging.error(f"Skipping image file {file_path}")
+            else:                   logging.info( f"Skipping image file {file_path}")
+        return False
+    if "".join(file_path.suffixes).casefold() in archive_extensions:
+        if not rawlog:
+            if not suppress_errors: logging.error(f"Skipping archive file {file_path}")
+            else:                   logging.info( f"Skipping archive file {file_path}")
+        return False
     for encoding in text_encodings:
         try:
             with open(file_path, 'r', encoding=encoding) as file:
@@ -576,17 +594,22 @@ def my_fopen(file_path: str | os.PathLike[str], suppress_errors: bool = False,
     return False
 
 
-def load_ast_var(var_name: str, script_path: str, rawlog: bool = False) -> Any:
+def load_ast_var(var_name: str, script_path: str | os.PathLike[str], rawlog: bool = False) -> Any:
     """
     Load a top-level literal Python variable from a module without executing it.
 
-    :param options: Command line options and various sundries.
-    :param var_name: Name of the global variable to extract.
-    :param script_path: Path to the .py file.
-    :returns: The Python object assigned to var_name, if it's a literal; else raises.
-    :raises FileNotFoundError: if script_path doesn't exist.
-    :raises AttributeError: if var_name isn't found at top level.
-    :raises ValueError: if the value isn't a literal expression.
+    Args:
+        var_name:    The name of the global variable to extract from the script.
+        script_path: The path to the Python script file from which to extract the variable.
+        rawlog:      If True, use a simple log format without timestamps or levels.
+
+    Returns:
+        The value of the variable if found.
+
+    Raises:
+        FileNotFoundError: If the script file does not exist.
+        AttributeError:    If the variable is not found at the top level of the script.
+        ValueError:        If the value of the variable cannot be evaluated as a literal expression.
     """
     import ast
     file_content = my_fopen(script_path, rawlog=rawlog)
@@ -617,7 +640,7 @@ def load_ast_var(var_name: str, script_path: str, rawlog: bool = False) -> Any:
     raise AttributeError(f"Top-level variable {var_name!r} not found in {script_path}")
 
 
-def normalize_to_dict(value: Any, var_name: str, script_path: str) -> dict:
+def normalize_to_dict(value: Any, var_name: str, script_path: str | os.PathLike[str]) -> dict:
     """Ensure that 'value' is a dict. If it's a JSON-style string, try to parse it. Otherwise, log a warning and return an empty dict."""
     import json
     fallback_logging_config()
@@ -638,39 +661,60 @@ def normalize_to_dict(value: Any, var_name: str, script_path: str) -> dict:
     return {}
 
 
-def get_hostname_socket() -> str:
+def get_hostname_socket(rawlog: bool = False) -> str:
     """Retrieves the hostname using socket.gethostname()."""
     import socket
     return socket.gethostname()
 
 
-def get_hostname_platform() -> str:
+def get_hostname_platform(rawlog: bool = False) -> str:
     """Retrieves the hostname using platform.node()."""
     import platform
     return platform.node()
 
 
-def get_hostname_os_uname() -> str:
+def get_hostname_os_uname(rawlog: bool = False) -> str:
     """Retrieves the hostname using os.uname().nodename."""
     return os.uname().nodename
 
 
-def get_hostname_subprocess_hostname() -> str:
+def get_hostname_subprocess_hostname(rawlog: bool = False) -> str:
     """Retrieves the hostname using the 'hostname' system command via subprocess."""
     import subprocess
-    result = subprocess.run(['hostname'], capture_output=True, text=True, check=True)
-    return result.stdout.strip()
+    try:
+        result = subprocess.run(['hostname'], capture_output=True, text=True)
+        return result.stdout.strip()
+    except Exception as e:
+        if not rawlog: logging.warning(f"Failed to retrieve hostname using {return_method_name()}: {e}")
+        return "ERROR-NO-NAME"
 
 
-def get_hostname_subprocess_scutil() -> str:
+def get_hostname_subprocess_scutil(rawlog: bool = False) -> str:
     """Retrieves the hostname using the 'scutil --get ComputerName' command on macOS via subprocess."""
     import subprocess
-    result = subprocess.run(['scutil', '--get', 'ComputerName'], capture_output=True, text=True, check=True)
-    return result.stdout.strip()
+    try:
+        result = subprocess.run(['scutil', '--get', 'ComputerName'], capture_output=True, text=True)
+        return result.stdout.strip()
+    except Exception as e:
+        if not rawlog: logging.warning(f"Failed to retrieve hostname using {return_method_name()}: {e}")
+        return "ERROR-NO-NAME"
 
 
-def get_computer_name() -> str:
-    """Attempts multiple methods to retrieve the computer's name and returns the most common one."""
+def get_computer_name(rawlog: bool = False) -> str:
+    """
+    Attempts multiple methods to retrieve the computer's name and returns the most common one.
+
+    Args:
+        rawlog: If True, print statements are disabled.
+    
+    Returns:
+        A string representing the most common computer name obtained from the methods.
+        If no names were retrieved, returns "ERROR-NO-NAME".
+    
+    Raises:
+        None: This function does not raise exceptions, but it may log warnings if no names are retrieved.
+    """
+    fallback_logging_config(rawlog=rawlog)
     methods = {
         'socket_gethostname': get_hostname_socket,
         'platform_node': get_hostname_platform,
@@ -683,30 +727,38 @@ def get_computer_name() -> str:
 
     for method_name, method_func in methods.items():
         try:
-            name = method_func()
+            name = method_func(rawlog=rawlog)
             results[method_name] = name
         except Exception:  # Ignore all exceptions for individual methods
-            # logging.exception(f"Method {method_name} failed.")
+            if not rawlog: logging.exception(f"Method {method_name} failed.")
             pass  # Skip methods that fail
 
-    computer_name = analyze_results(results)
+    computer_name = analyze_results(results, rawlog=rawlog)
 
     return computer_name
 
 
-def analyze_results(results: dict[str, str]) -> str:
+def analyze_results(results: dict[str, str], rawlog: bool = False) -> str:
     """
     Analyzes the retrieved computer names.
 
     Args:
-        results (dict): Dictionary with method names as keys and computer names as values.
+        results: Dictionary with method names as keys and computer names as values.
+        rawlog:  If True, print statements are disabled.
+
     Returns:
-        computer_name (str): The most common computer name.
+        A string representing the most common computer name obtained from the methods.
+        If no names were retrieved, returns "ERROR-NO-NAME".
+    
+    Raises:
+        None: This function does not raise exceptions, but it may log errors or warnings if
+              no names (or differing names) are retrieved.
     """
     from collections import Counter
+    fallback_logging_config(rawlog=rawlog)
 
     if not results:
-        print("No methods succeeded in retrieving the computer name.")
+        if not rawlog: logging.error("No methods succeeded in retrieving the computer name.")
         return "ERROR-NO-NAME"
 
     name_values = list(results.values())
@@ -715,31 +767,31 @@ def analyze_results(results: dict[str, str]) -> str:
 
     if len(name_counts) == 1:
         # All names are identical
-        # print(f"Computer Name: {most_common[0][0]}")
+        if not rawlog: logging.info(f"Computer name: {most_common[0][0]}")
         return most_common[0][0]
     else:
         # Names are not identical
         primary_name, primary_count = most_common[0]
         differing = {name: count for name, count in most_common if name != primary_name}
 
-        print(f"Most Common Computer Name: {primary_name} (appeared {primary_count} times)")
-
-        print("Other Names:")
-        for name, count in differing.items():
-            print(f" - {name} (appeared {count} times)")
-
-        # Optionally, list which methods returned which names
-        print("\nDetailed Method Outputs:")
-        for method, name in results.items():
-            print(f" - {method}: {name}")
+        if not rawlog:
+            the_string = f"Multiple computer names detected:\n"
+            the_string += f" - Most common name: {primary_name} (appeared {primary_count} times)\n"
+            the_string += f" - Other names: {', '.join(f'{name} ({count} times)' for name, count in differing.items())}\n"
+            detailed_results_str = '\n'.join(f'     - {method}: {name}' for method, name in results.items())
+            the_string += f" - Detailed method outputs:\n{detailed_results_str}"
+            logging.warning(the_string)
 
         return primary_name
 
 
-def ensure_even_dimensions(image_path: str) -> None:
+def ensure_even_dimensions(image_path: str | os.PathLike[str]) -> None:
     """Ensure the image at 'image_path' has dimensions divisible by 2, by resizing if necessary."""
     from PIL import Image
     fallback_logging_config()
+    image_path = Path(image_path).expanduser().resolve(strict=True)
+    if not image_path.is_file():
+        raise IsADirectoryError(f"File does not exist: {image_path}")
     with Image.open(image_path) as img:
         width, height = img.size
         new_width = width if width % 2 == 0 else width - 1
@@ -756,74 +808,137 @@ def ensure_even_dimensions(image_path: str) -> None:
             logging.info(f"Image already has even dimensions: width = {width}, height = {height}")
 
 
-def human_bytesize(num: int, suffix: str = 'B') -> str:
-    """Convert a file size in bytes to a human-readable string with units like KB, MB, GB, etc."""
-    for unit in ['', 'K', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y']:
-        if abs(num) < 1024.0:
-            return "%3.1f%s%s" % (num, unit, suffix)
-        num /= 1024.0
-    return "%.1f%s%s" % (num, 'Y', suffix)
+def human_bytesize(num: float | int, *, suffix: str = "B", si: bool = False, precision: int = 1,
+                   space: bool = False, trim_trailing_zeros: bool = False, long_units: bool = False) -> str:
+    """
+    Formats a byte count into a human-readable string.
 
+    Args:
+        num:                 Size in bytes. Negative values are preserved with a leading minus.
+        suffix:              Unit suffix appended after the prefix (defaults to "B"). If long_units is True and
+                             suffix is "B", "bytes" is appended in the output. Otherwise, the suffix is appended to the long name.
+        si:                  If True, use powers of 1000 with SI prefixes (k, M, G, … up to R, Q).
+                             If False, use powers of 1024 with IEC prefixes (Ki, Mi, Gi, … up to Ri, Qi).
+        precision:           Digits to show after the decimal point.
+        space:               If True, inserts a space between the number and the unit (ignored when long_units is True).
+        trim_trailing_zeros: If True, removes trailing zeros and any dangling decimal point.
+        long_units:          If True, spell out unit names ("bytes", "kibibytes", … "quebibytes"/"quettabytes").
 
-def human_timespan(timespan: float) -> str:
-    """Input: A timespan specified by a floating point number of seconds.
-    Returns: a string describing that timespan in years, weeks, days, hours, and seconds."""
-    # Constants for time conversions
-    SECONDS_PER_MINUTE =       60
-    SECONDS_PER_HOUR   =     3600
-    SECONDS_PER_DAY    =    86400
-    SECONDS_PER_WEEK   =   604800
-    SECONDS_PER_YEAR   = 31557600  # Average year accounting for leap years
+    Returns:
+        A concise string such as "1.5KiB", "1.5 kB", or "1.5 megabytes" depending on options.
+        Handles negative values with a leading minus sign and units up to "quebibytes" (2^100 = 1024^10 bytes) for IEC,
+        or "quettabytes" (10^30 bytes) for SI.
 
-    # Calculating years, weeks, days, hours
-    years = int(timespan // SECONDS_PER_YEAR)
-    remaining = timespan % SECONDS_PER_YEAR
+    Raises:
+        None.
+    """
+    step = 1000.0 if si else 1024.0
+    symbols = (["", "k", "M", "G", "T", "P", "E", "Z", "Y", "R", "Q"]
+               if si else ["", "Ki", "Mi", "Gi", "Ti", "Pi", "Ei", "Zi", "Yi", "Ri", "Qi"])
+    long_prefixes = (["", "kilo", "mega", "giga", "tera", "peta",
+                      "exa", "zetta", "yotta", "ronna", "quetta"]
+                     if si else ["", "kibi", "mebi", "gibi", "tebi",
+                                 "pebi", "exbi", "zebi", "yobi", "robi", "quebi"])
 
-    weeks = int(remaining // SECONDS_PER_WEEK)
-    remaining = remaining % SECONDS_PER_WEEK
+    sign = "-" if num < 0 else ""
+    n = abs(float(num))
+    i = 0
+    while n >= step and i < len(symbols) - 1:
+        n /= step
+        i += 1
 
-    days = int(remaining // SECONDS_PER_DAY)
-    remaining = remaining % SECONDS_PER_DAY
+    s = f"{n:.{precision}f}"
+    if trim_trailing_zeros:
+        s = s.rstrip("0").rstrip(".")
 
-    hours = int(remaining // SECONDS_PER_HOUR)
-    remaining = remaining % SECONDS_PER_HOUR
-
-    minutes = int(remaining // SECONDS_PER_MINUTE)
-    remaining = remaining % SECONDS_PER_MINUTE
-
-    # Creating a list of time components
-    components = []
-    if years > 0:
-        components.append(f"{years} year" if years == 1 else f"{years} years")
-    if weeks > 0:
-        components.append(f"{weeks} week" if weeks == 1 else f"{weeks} weeks")
-    if days > 0:
-        components.append(f"{days} day" if days == 1 else f"{days} days")
-    if hours > 0:
-        components.append(f"{hours} hour" if hours == 1 else f"{hours} hours")
-    if minutes > 0:
-        components.append(f"{minutes} minute" if minutes == 1 else f"{minutes} minutes")
+    if long_units:
+        long_name = long_prefixes[i]
+        if suffix == "B":
+            long_name += "bytes"
+        else:
+            long_name += suffix
+        return f"{sign}{s} {long_name}"
     else:
-        components.append(f"{remaining:.3f} second" if round(remaining, 3) == 1.0 else f"{remaining:.3f} seconds")
+        sep = " " if space else ""
+        return f"{sign}{s}{sep}{symbols[i]}{suffix}"
 
-    # Joining the components with commas, and "and" for the last component
-    if len(components) > 1:
-        time_str = ", ".join(components[:-1]) + " and " + components[-1]
-    elif components:
-        time_str = components[0]
-    else:
-        time_str = "0 seconds"
 
-    return time_str
+def my_plural(n: int, word: str) -> str:
+    """Return a pluralized word based on the count."""
+    return f"{n} {word}" + ("" if n == 1 else "s")
+
+
+def human_timespan(timespan: int | float) -> str:
+    """
+    Format a time span in seconds into a human-readable string.
+    Negative values are treated as absolute.
+
+    Args:
+        timespan: A float or int representing the time span in seconds.
+    
+    Returns:
+        A human-readable string describing the time span, such as
+        "1 year, 2 weeks, 3 days, 4 hours, 5 minutes and 6.789 seconds".
+        If the timespan is zero, returns "0 seconds".
+    
+    Raises:
+        None.
+    """
+    # Work in integer milliseconds to avoid float modulo issues
+    total_ms = int(round(abs(float(timespan)) * 1000))
+    if total_ms == 0:
+        return "0 seconds"
+
+    MS_PER_MINUTE =         60_000
+    MS_PER_HOUR   =      3_600_000
+    MS_PER_DAY    =     86_400_000
+    MS_PER_WEEK   =    604_800_000
+    MS_PER_YEAR   = 31_557_600_000  # 365.25 days
+
+    components: list[str] = []
+
+    years, rem   = divmod(total_ms, MS_PER_YEAR)
+    weeks, rem   = divmod(rem,      MS_PER_WEEK)
+    days,  rem   = divmod(rem,      MS_PER_DAY)
+    hours, rem   = divmod(rem,      MS_PER_HOUR)
+    minutes, rem = divmod(rem,      MS_PER_MINUTE)
+    seconds = rem / 1000.0  # in [0, 60)
+
+    if years:   components.append(my_plural(years,     "year"))
+    if weeks:   components.append(my_plural(weeks,     "week"))
+    if days:    components.append(my_plural(days,       "day"))
+    if hours:   components.append(my_plural(hours,     "hour"))
+    if minutes: components.append(my_plural(minutes, "minute"))
+    if seconds:
+        s = f"{seconds:.3f}".rstrip("0").rstrip(".")
+        components.append(f"{s} second" + ("" if seconds == 1.0 else "s"))
+
+    if len(components) == 1:
+        return components[0]
+    return ", ".join(components[:-1]) + " and " + components[-1]
 
 
 def format_date_range(date1: dt.datetime, date2: dt.datetime | None = None) -> str:
-    """Process a pair of datetime.datetime dates and produce a formatted date range string where each date looks like 'Jan  7, 2025'. If date2 is not provided, it is set to date1."""
+    """
+    Process a pair of datetime.datetime dates and produce a formatted date range string
+    where each date looks like 'Jan  7, 2025'. If date2 is not provided, it is set to date1.
+
+    Args:
+        date1: The first date as a datetime.datetime object.
+        date2: The second date as a datetime.datetime object. If None, defaults to date1.
+
+    Returns:
+        A formatted string representing the date range, such as 'Jan  7, 2025' or 'Jan  7 - Feb  3, 2025'.
+        If both dates are the same, it returns just one date like 'Jan  7, 2025'.
+
+    Raises:
+        ValueError: If either date1 or date2 is not a datetime.datetime object.
+    """
     import datetime as dt
 
     month_names = {
-        1: 'Jan', 2: 'Feb', 3: 'Mar', 4: 'Apr',
-        5: 'May', 6: 'Jun', 7: 'Jul', 8: 'Aug',
+        1: 'Jan',  2: 'Feb',  3: 'Mar',  4: 'Apr',
+        5: 'May',  6: 'Jun',  7: 'Jul',  8: 'Aug',
         9: 'Sep', 10: 'Oct', 11: 'Nov', 12: 'Dec'
     }
 
@@ -836,7 +951,8 @@ def format_date_range(date1: dt.datetime, date2: dt.datetime | None = None) -> s
         raise ValueError(f"Both dates must be datetime.datetime objects, but date1 is {date1} with type {type(date1)} and date2 {date2} with type {type(date2)}.")
 
     # Ensure that the first date is earlier than the second.
-    if date1 > date2: date1, date2 = date2, date1
+    if date1 > date2:
+        date1, date2 = date2, date1
 
     day1, day2     = date1.day, date2.day
     month1, month2 = month_names[date1.month], month_names[date2.month]
@@ -850,7 +966,20 @@ def format_date_range(date1: dt.datetime, date2: dt.datetime | None = None) -> s
     else: return f"{month1} {day1:2d}, {year1} - {month2} {day2:2d}, {year2}"
 
 
-# Mapping of unit aliases to their equivalent in seconds
+_TIMESTAMP_PATTERN_RE: re.Pattern = re.compile(r"(\d{8}-\d{6}).pkl$")
+
+
+def extract_timestamp(the_string: str) -> str | None:
+    """Extract timestamp string (in format YYYYMMDD-HHMMSS) from the_string, or None if not found."""
+    if (m := _TIMESTAMP_PATTERN_RE.search(the_string)):
+        try:
+            return m.group(1)
+        except ValueError:
+            return None
+    return None
+
+
+# Mapping of unit aliases (all in lowercase) to their equivalent in seconds
 _UNIT_SECONDS = {
     **dict.fromkeys(['year', 'years', 'yr', 'yrs', 'calendar year', 'calendar years'],    31_556_952),  # Average calender year = 365.2425 days (accounting for leap years)
     **dict.fromkeys(['solar year', 'solar years', 'tropical year', 'tropical years'],     31_556_925.216),  # Average solar/tropical year = 365.24219 solar days = time for Earth to orbit the Sun once relative to the Sun/equinoxes
@@ -860,27 +989,27 @@ _UNIT_SECONDS = {
     **dict.fromkeys(['week', 'weeks', 'wk', 'wks'],                                          604_800.0),  # 7 solar days
     **dict.fromkeys(['day', 'days', 'd', 'solar day', 'solar days', 'ephemeris day', 'ephemeris days'], 86_400),  # 24 hours = time for Earth to rotate once relative to the Sun
     **dict.fromkeys(['sidereal day', 'sidereal days'],                                                  86_164.0905),  # 23 hours, 56 minutes, 4.1 seconds = time for Earth to rotate once relative to the "fixed" stars
-    **dict.fromkeys(['hour',   'hours',   'hr',  'hrs'],          3600),
-    **dict.fromkeys(['minute', 'minutes', 'min', 'mins'],           60),
-    **dict.fromkeys(['second', 'seconds', 'sec', 'secs', 's'],    1.00),
-    **dict.fromkeys(['decisecond',  'deciseconds',  'ds'],       1E-01),
-    **dict.fromkeys(['centisecond', 'centiseconds', 'cs'],       1E-02),
-    **dict.fromkeys(['millisecond', 'milliseconds', 'ms'],       1E-03),
-    **dict.fromkeys(['microsecond', 'microseconds', 'us', 'μs'], 1E-06),
-    **dict.fromkeys(['nanosecond',  'nanoseconds',  'ns'],       1E-09),
-    **dict.fromkeys(['picosecond',  'picoseconds',  'ps'],       1E-12),
-    **dict.fromkeys(['femtosecond', 'femtoseconds', 'fs'],       1E-15),
-    **dict.fromkeys(['attosecond',  'attoseconds',  'as'],       1E-18),
-    **dict.fromkeys(['zeptosecond', 'zeptoseconds', 'zs'],       1E-21),
-    **dict.fromkeys(['yoctosecond', 'yoctoseconds', 'ys'],       1E-24),
-    **dict.fromkeys(['planck time', 'planck times', 'planck', 'plancks', 'pt'], 5.391_247E-44),  # Planck time
-    **dict.fromkeys(['decade', 'decades'],                                  315_569_252.16),  #   10 solar years
-    **dict.fromkeys(['century', 'centuries'],                             3_155_692_521.60),  #  100 solar years
-    **dict.fromkeys(['millennium', 'millennia'],                         31_556_925_216.00),  # 1000 solar years
-    **dict.fromkeys(['megayear', 'megayears', 'mya', 'myr'],         31_556_925_216_000.00),  # 1E06 solar years
-    **dict.fromkeys(['gigayear', 'gigayears', 'gya', 'gyr'],     31_556_925_216_000_000.00),  # 1E09 solar years
-    **dict.fromkeys(['terayear', 'terayears', 'tya', 'tyr'], 31_556_925_216_000_000_000.00),  # 1E12 solar years
-    **dict.fromkeys(['fortnight',    'fortnights'],                           1_209_600.00),  # 2 weeks = 604_800 * 2 seconds
+    **dict.fromkeys(['hour',         'hours',   'hr',  'hrs'],          3600),
+    **dict.fromkeys(['minute',       'minutes', 'min', 'mins'],           60),
+    **dict.fromkeys(['second',       'seconds', 'sec', 'secs', 's'],    1.00),
+    **dict.fromkeys(['decisecond',   'deciseconds',  'ds'],            1E-01),
+    **dict.fromkeys(['centisecond',  'centiseconds', 'cs'],            1E-02),
+    **dict.fromkeys(['millisecond',  'milliseconds', 'ms'],            1E-03),
+    **dict.fromkeys(['microsecond',  'microseconds', 'us', 'μs'],      1E-06),
+    **dict.fromkeys(['nanosecond',   'nanoseconds',  'ns'],            1E-09),
+    **dict.fromkeys(['picosecond',   'picoseconds',  'ps'],            1E-12),
+    **dict.fromkeys(['femtosecond',  'femtoseconds', 'fs'],            1E-15),
+    **dict.fromkeys(['attosecond',   'attoseconds',  'as'],            1E-18),
+    **dict.fromkeys(['zeptosecond',  'zeptoseconds', 'zs'],            1E-21),
+    **dict.fromkeys(['yoctosecond',  'yoctoseconds', 'ys'],            1E-24),
+    **dict.fromkeys(['planck time',  'planck times', 'planck', 'plancks', 'pt'], 5.391_247E-44),  # Planck time
+    **dict.fromkeys(['decade',       'decades'],                                315_569_252.16),  #   10 solar years
+    **dict.fromkeys(['century',      'centuries'],                            3_155_692_521.60),  #  100 solar years
+    **dict.fromkeys(['millennium',   'millennia'],                           31_556_925_216.00),  # 1000 solar years
+    **dict.fromkeys(['megayear',     'megayears', 'mya', 'myr'],         31_556_925_216_000.00),  # 1E06 solar years
+    **dict.fromkeys(['gigayear',     'gigayears', 'gya', 'gyr'],     31_556_925_216_000_000.00),  # 1E09 solar years
+    **dict.fromkeys(['terayear',     'terayears', 'tya', 'tyr'], 31_556_925_216_000_000_000.00),  # 1E12 solar years
+    **dict.fromkeys(['fortnight',    'fortnights'],                               1_209_600.00),  # 2 weeks = 604_800 * 2 seconds
     **dict.fromkeys(['decasecond',   'decaseconds',   'das'], 1E01),
     **dict.fromkeys(['hectosecond',  'hectoseconds',  'hs'],  1E02),
     **dict.fromkeys(['kilosecond',   'kiloseconds',   'ks'],  1E03),
@@ -906,49 +1035,49 @@ def seconds_in_unit(unit: str) -> float:
 
 # Common US & UTC/GMT abbreviations → IANA zone names
 _TZ_ABBREV_TO_ZONE: dict[str, str] = {
-    "UTC" : "UTC",
-    "GMT" : "Etc/GMT",
-    "EST" : "America/New_York",
-    "EDT" : "America/New_York",
-    "CST" : "America/Chicago",  # WARNING! "CST" can also mean China Standard Time (Asia/Shanghai, UTC+8), so use with caution!
-    "CDT" : "America/Chicago",
-    "MST" : "America/Denver",
-    "MDT" : "America/Denver",
-    "PST" : "America/Los_Angeles",
-    "PDT" : "America/Los_Angeles",
-    "HST" : "Pacific/Honolulu",
-    "AKST": "America/Anchorage",
-    "AKDT": "America/Anchorage",
-    "AST" : "America/Puerto_Rico",  # Atlantic Standard Time
-    "ADT" : "America/Puerto_Rico",  # Atlantic Daylight Time
-    "NST" : "America/St_Johns",     # Newfoundland Standard Time
-    "NDT" : "America/St_Johns",     # Newfoundland Daylight Time
-    "BST" : "Europe/London",        # British Summer Time
-    "CET" : "Europe/Berlin",        # Central European Time
-    "CEST": "Europe/Berlin",        # Central European Summer Time
-    "EET" : "Europe/Athens",        # Eastern European Time
-    "EEST": "Europe/Athens",        # Eastern European Summer Time
-    "IST" : "Asia/Kolkata",         # Indian Standard Time - WARNING! "IST" can also mean Irish Standard Time (Europe/Dublin, UTC+1), so use with caution!
-    "JST" : "Asia/Tokyo",           # Japan Standard Time
-    "KST" : "Asia/Seoul",           # Korea Standard Time
-    "HKT" : "Asia/Hong_Kong",       # Hong Kong Time
-    "SGT" : "Asia/Singapore",       # Singapore Time
-    "AEST": "Australia/Sydney",     # Australian Eastern Standard Time
-    "AEDT": "Australia/Sydney",     # Australian Eastern Daylight Time
-    "ACST": "Australia/Adelaide",   # Australian Central Standard Time
-    "ACDT": "Australia/Adelaide",   # Australian Central Daylight Time
-    "AWST": "Australia/Perth",      # Australian Western Standard Time
-    "AWDT": "Australia/Perth",      # Australian Western Daylight Time
-    "NZT" : "Pacific/Auckland",     # New Zealand Time
-    "NZST": "Pacific/Auckland",     # New Zealand Standard Time
-    "NZDT": "Pacific/Auckland",     # New Zealand Daylight Time
-    "WET" : "Europe/Lisbon",        # Western European Time
-    "WEST": "Europe/Lisbon",        # Western European Summer Time
+    "UTC"  : "UTC",
+    "GMT"  : "Etc/GMT",
+    "EST"  : "America/New_York",
+    "EDT"  : "America/New_York",
+    "CST"  : "America/Chicago",  # WARNING! "CST" can also mean China Standard Time (Asia/Shanghai, UTC+8), so use with caution!
+    "CDT"  : "America/Chicago",
+    "MST"  : "America/Denver",
+    "MDT"  : "America/Denver",
+    "PST"  : "America/Los_Angeles",
+    "PDT"  : "America/Los_Angeles",
+    "HST"  : "Pacific/Honolulu",
+    "AKST" : "America/Anchorage",
+    "AKDT" : "America/Anchorage",
+    "AST"  : "America/Puerto_Rico",  # Atlantic Standard Time
+    "ADT"  : "America/Puerto_Rico",  # Atlantic Daylight Time
+    "NST"  : "America/St_Johns",     # Newfoundland Standard Time
+    "NDT"  : "America/St_Johns",     # Newfoundland Daylight Time
+    "BST"  : "Europe/London",        # British Summer Time
+    "CET"  : "Europe/Berlin",        # Central European Time
+    "CEST" : "Europe/Berlin",        # Central European Summer Time
+    "EET"  : "Europe/Athens",        # Eastern European Time
+    "EEST" : "Europe/Athens",        # Eastern European Summer Time
+    "IST"  : "Asia/Kolkata",         # Indian Standard Time - WARNING! "IST" can also mean Irish Standard Time (Europe/Dublin, UTC+1), so use with caution!
+    "JST"  : "Asia/Tokyo",           # Japan Standard Time
+    "KST"  : "Asia/Seoul",           # Korea Standard Time
+    "HKT"  : "Asia/Hong_Kong",       # Hong Kong Time
+    "SGT"  : "Asia/Singapore",       # Singapore Time
+    "AEST" : "Australia/Sydney",     # Australian Eastern Standard Time
+    "AEDT" : "Australia/Sydney",     # Australian Eastern Daylight Time
+    "ACST" : "Australia/Adelaide",   # Australian Central Standard Time
+    "ACDT" : "Australia/Adelaide",   # Australian Central Daylight Time
+    "AWST" : "Australia/Perth",      # Australian Western Standard Time
+    "AWDT" : "Australia/Perth",      # Australian Western Daylight Time
+    "NZT"  : "Pacific/Auckland",     # New Zealand Time
+    "NZST" : "Pacific/Auckland",     # New Zealand Standard Time
+    "NZDT" : "Pacific/Auckland",     # New Zealand Daylight Time
+    "WET"  : "Europe/Lisbon",        # Western European Time
+    "WEST" : "Europe/Lisbon",        # Western European Summer Time
     # …add any others you need
 }
 
 # Pre‐compile once for all calls.
-_TZ_OFFSET_RE = re.compile(r'''
+_TZ_OFFSET_RE: re.Pattern = re.compile(r'''
     ^(?P<sign>[+-])
     (?:
         (?P<hours1>\d{1,2})[hH](?P<mins1>\d{1,2})(?:[mM])?  # +5h30m
@@ -974,8 +1103,15 @@ def parse_timezone(tz_arg: str | dt.tzinfo | None = None) -> dt.tzinfo | str:
       - A string "Naive" to represent a naive datetime (no timezone).
     If tz_arg is already a tzinfo object, return it as is.
 
+    Args:
+        tz_arg : A timezone string, a datetime.tzinfo object, or None.
+    
+    Returns:
+        A datetime.tzinfo object representing the parsed timezone, or a string "Naive"
+        if the input was "Naive".
+
     Raises:
-      ValueError if the string cannot be converted to a valid timezone.
+        ValueError if the string cannot be converted to a valid timezone.
     """
 
     import datetime as dt
@@ -1099,11 +1235,11 @@ def is_float(s: str) -> bool:
 
 # Precompile Julian/MJD regex
 # This regex is just used to check if a string looks like a JD or MJD:
-_JD_MJD_SIMPLE  = re.compile(r"\s*(JD|MJD)?\s*[+-]?\d+(\.\d+)?\s*", re.IGNORECASE)
+_JD_MJD_SIMPLE_RE: re.Pattern  = re.compile(r"\s*(JD|MJD)?\s*[+-]?\d+(\.\d+)?\s*", re.IGNORECASE)
 # This regex is used to capture the prefix (JD or MJD) and the value from a string that looks like a JD or MJD:
-_JD_MJD_CAPTURE = re.compile(r"\s*(?P<prefix>JD|MJD)?\s*(?P<value>[+-]?\d+(?:\.\d+)?)\s*", re.IGNORECASE)
+_JD_MJD_CAPTURE_RE: re.Pattern = re.compile(r"\s*(?P<prefix>JD|MJD)?\s*(?P<value>[+-]?\d+(?:\.\d+)?)\s*", re.IGNORECASE)
 # This regex is used to check if a string has an explicit offset or Z at the end (indicating that the date should be converted by shifting the clock):
-_OFFSET_IN_STR  = re.compile(r"(Z|[+-]\d{2}:\d{2}|[+-]\d{4})$")
+_OFFSET_IN_STR_RE: re.Pattern  = re.compile(r"(Z|[+-]\d{2}:\d{2}|[+-]\d{4})$")
 
 # Enclose the type alias annotation in quotes because not all of these types have been imported yet.
 AnyDateTimeType: TypeAlias = "str | float | int | np.datetime64 | pd.Timestamp | dt.datetime"
@@ -1125,11 +1261,11 @@ def _should_convert(given_date: AnyDateTimeType, format_str: str | None = None) 
         if format_str and format_str.upper() in ('JD', 'MJD'):
             logging.debug(f"Given date has a format_str: {format_str}, so it will be converted by shifting the clock")
             return True
-        if _JD_MJD_SIMPLE.fullmatch(given_date):
+        if _JD_MJD_SIMPLE_RE.fullmatch(given_date):
             logging.debug(f"Given date is a JD/MJD: {given_date}, so it will be converted by shifting the clock")
             return True
         # explicit offset or Z
-        if _OFFSET_IN_STR.search(given_date):
+        if _OFFSET_IN_STR_RE.search(given_date):
             logging.debug(f"Given date has an explicit offset or Z: {given_date}, so it will be converted by shifting the clock")
             return True
     # 2) Any datetime/timestamp already aware
@@ -1145,7 +1281,27 @@ def _should_convert(given_date: AnyDateTimeType, format_str: str | None = None) 
 def _finalize_datetime(parsed_dt: dt.datetime, original_input: AnyDateTimeType,
                        format_str: str | None, tz_arg: str | dt.tzinfo | None,
                        should_convert: bool | None = None) -> dt.datetime:
-    """Finalize the datetime object by either converting it to the target timezone or just attaching the timezone without shifting the clock. The boolean argument 'should_convert' can override the default behavior, which is determined by the function _should_convert()."""
+    """
+    Finalize the datetime object by either converting it to the target timezone or just attaching the timezone without shifting the clock. The boolean argument 'should_convert' can override the default behavior, which is determined by the function _should_convert().
+
+    Args:
+        parsed_dt:      The datetime object that has been parsed from the original input.
+        original_input: The original input that was used to parse the datetime.
+        format_str:     The format string used to parse the datetime, if any.
+        tz_arg:         The timezone argument, which can be a string or a datetime.tzinfo object.
+        should_convert: A boolean indicating whether to convert the datetime to the specified timezone by shifting the clock (True) or just attaching the timezone without shifting (False). If None, the function will determine this based on the type of original_input and format_str.
+
+    Returns:
+        A datetime.datetime object in the specified timezone.
+        If tz_arg is "Naive", the datetime will be returned without any timezone info.
+        If should_convert is True, the datetime will be converted to the specified timezone by shifting the clock.
+        If should_convert is False, the timezone will be attached to the datetime without shifting the clock.
+        If should_convert is None, the function will determine whether to convert or not based on the type of original_input and format_str.
+
+    Raises:
+        ValueError: If the tz_arg is not a valid timezone string or tzinfo object.
+        TypeError:  If the parsed_dt is not a datetime.datetime object.
+    """
     if isinstance(tz_arg, str) and tz_arg.strip().upper() == 'NAIVE':
         logging.debug(f"Naive timezone requested, returning datetime {parsed_dt} without any timezone info")
         return parsed_dt.replace(tzinfo=None)
@@ -1181,22 +1337,39 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
     The timezone can also be a fixed‐offset like "+05:30" or "-04:00", or the string "Naive" to indicate that the datetime should be treated as a naive datetime (i.e. without any timezone information).
 
     Accepts:
-      - 'NOW' (case-insensitive) → current datetime
-      - strings in YYYY, YYYY-MM, YYYY-MM-DD, YYYY-MM-DDTHH:MM:SS, or other ISO8601 formats (e.g. '2002-10-18T07:00:00Z', '2002-10-18 07:00:00+00:00').
-      - If YYYY is provided, it will default to January 1st of that year at midnight.
-      - If YYYY-MM is provided, it will default to the first day of that month at midnight.
-      - If YYYY-MM-DD is provided, it will default to midnight on that day.
-      - fallback to dateutil.parser.parse for free-form strings ("18 Oct 2002", "March 5th, 2020", etc.)
-      - floats (e.g. 2002.29178082191777) or integer (e.g. 2002) → decimal year
-      - numpy.datetime64 objects (e.g. np.datetime64('2002-10-18T07:00:00'))
-      - pandas.Timestamp objects (e.g. pd.Timestamp('2002-10-18 07:00:00'))
-      - datetime.datetime objects (e.g. datetime.datetime(2002, 10, 18, 7, 0, 0))
+        'NOW' (case-insensitive) → current datetime
+        strings in YYYY, YYYY-MM, YYYY-MM-DD, YYYY-MM-DDTHH:MM:SS, or other ISO8601 formats (e.g. '2002-10-18T07:00:00Z', '2002-10-18 07:00:00+00:00').
+        If YYYY is provided, it will default to January 1st of that year at midnight.
+        If YYYY-MM is provided, it will default to the first day of that month at midnight.
+        If YYYY-MM-DD is provided, it will default to midnight on that day.
+        fallback to dateutil.parser.parse for free-form strings ("18 Oct 2002", "March 5th, 2020", etc.)
+        floats (e.g. 2002.29178082191777) or integer (e.g. 2002) → decimal year
+        numpy.datetime64 objects (e.g. np.datetime64('2002-10-18T07:00:00'))
+        pandas.Timestamp objects (e.g. pd.Timestamp('2002-10-18 07:00:00'))
+        datetime.datetime objects (e.g. datetime.datetime(2002, 10, 18, 7, 0, 0))
 
+    Args:
+        given_date:     The date to parse, which can be a string, float, int, numpy.datetime64,
+                        pandas.Timestamp, or datetime.datetime object.
+        timezone:       A string or datetime.tzinfo object representing the timezone to convert
+                        the datetime to. If None, defaults to UTC.
+        format_str:     A string indicating the format of the date. If None, the function will
+                        try to infer the format from the given_date.
+        should_convert: A boolean indicating whether to convert the datetime to the specified
+                        timezone by shifting the clock (True) or just attaching the timezone
+                        without shifting (False). If None, the function will determine this
+                        based on the type of given_date and format_str.
+    
     Returns:
-      datetime.datetime object in the specified timezone.
-      Note that datetime.datetime objects cannot represent dates before 1 January 1, 0001 or after 31 December 9999.
-      So dates outside this range will raise a ValueError. Future versions of this code may support a wider range of dates (like 44 BC, 44 BCE, etc.) using libraries like 'astropy.time': https://chatgpt.com/share/685c5157-5cac-8006-b68c-4a0731927a50
-      However, this will require the function to return an 'astropy.time.Time' object instead of a 'datetime.datetime' object.
+        datetime.datetime object in the specified timezone.
+        Note that datetime.datetime objects cannot represent dates before 1 January 1, 0001 or after 31 December 9999.
+        So dates outside this range will raise a ValueError. Future versions of this code may support a wider range of dates (like 44 BC, 44 BCE, etc.) using libraries like 'astropy.time': https://chatgpt.com/share/685c5157-5cac-8006-b68c-4a0731927a50
+        However, this will require the function to return an 'astropy.time.Time' object instead of a 'datetime.datetime' object.
+
+    Raises:
+        ValueError:  If the given_date cannot be parsed into a datetime object, or if the timezone is invalid.
+        TypeError:   If the given_date is not a string, float, int, numpy.datetime64, pandas.Timestamp, or datetime.datetime object.
+        ImportError: If the 'jdcal' library is not installed and the given_date is a Julian Date or Modified Julian Date.
     """
     import datetime as dt
     fallback_logging_config()  # Ensure logging is configured
@@ -1220,7 +1393,7 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
     m = None
     prefix = None
     if parsed_dt is None and isinstance(given_date, str):
-        m = _JD_MJD_CAPTURE.fullmatch(given_date)
+        m = _JD_MJD_CAPTURE_RE.fullmatch(given_date)
         if m:
             prefix = m.group('prefix')
 
@@ -1369,11 +1542,19 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
     raise ValueError(error_message + "\n".join(errors) + "\nPlease check the input format and try again.")
 
 
-def sci_exp(float_input: float | int, max_digits: int = 15) -> int:
-    """Return the scientific exponent of an integer or floating point number. An optional max_digits parameter can be specified to determine the maximum number of digits to consider for very small numbers; if the number is smaller than 10^(-max_digits), just say it has max_digits. By default, max_digits is 15."""
+def sci_exp(x: float | int, max_digits: int = 15) -> int:
+    """Return floor(log10(|x|)), clamped to -max_digits for very small |x|.
+    For x == 0, returns -max_digits.
+    """
     import math
-    if abs(float_input) < 10**(-max_digits): return -max_digits
-    return int(math.floor(math.log10(abs(float_input))))
+    if not isinstance(x, (int, float)) or isinstance(x, bool):
+        raise TypeError("x must be an int or float (not bool)")
+    if not math.isfinite(x):
+        raise ValueError("x must be finite")
+    if x == 0:
+        return -max_digits
+    exp = int(math.floor(math.log10(abs(x))))
+    return max(exp, -max_digits)
 
 
 def round_out(x: float, round_digits: int = 3, max_digits: int = 15) -> float:
@@ -1383,13 +1564,13 @@ def round_out(x: float, round_digits: int = 3, max_digits: int = 15) -> float:
     If the number is smaller than 10^(-max_digits), it will be returned as is.
     The max_digits parameter defaults to 15, but can be changed to a different value if needed.
 
-    Parameters:
-        x            : The number to round.
-        round_digits : The number of significant figures to round to (default is 3).
-        max_digits   : The maximum number of digits to consider for very small numbers (default is 15).
+    Args:
+        x:             The number to round.
+        round_digits:  The number of significant figures to round to (default is 3).
+        max_digits:    The maximum number of digits to consider for very small numbers (default is 15).
 
     Returns:
-        float : The rounded number, or the original number if it is smaller than 10^(-max_digits).
+        float: The rounded number, or the original number if it is smaller than 10^(-max_digits).
     """
     import numpy as np
     if np.abs(x) < 10**(-max_digits): return x
@@ -1411,13 +1592,16 @@ def prompt_then_choose(prompt: str, choices: list[str], default: str = None) -> 
     """
     Show a numbered list of choices and prompt the user to select one.
 
-    Parameters:
-        prompt : The message to display before the choices.
-        choices : A list of choices to present to the user.
-        default : The default choice to return if the user presses Enter without inputting a choice.
+    Args:
+        prompt:  The message to display before the choices.
+        choices: A list of choices to present to the user.
+        default: The default choice to return if the user presses Enter without inputting a choice.
 
     Returns:
         str : The selected choice from the list (or the default if provided).
+    
+    Raises:
+        None: If the user input is invalid, it will keep prompting until a valid choice is made.
     """
     fallback_logging_config()
 
@@ -1461,8 +1645,8 @@ def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
     Turn arbitrary text into an ASCII-only, filesystem‐safe base filename.
     WARNING: Do not include an extension in the text, because this function
     might remove the dot which separates the filename from the extension.
-    It attempts to recognize and remove extensions listed in all_extensions
-    but, despite the name, this list is not exhaustive.
+    It attempts to recognize and remove extensions listed in all_known_extensions
+    but this list is not exhaustive.
 
     Steps:
       1. Unicode → ASCII
@@ -1475,14 +1659,19 @@ def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
       8. If an extension was removed, append it back as the last step.
 
     Args:
-        text:        Original filename or title
-        sep:         Single-character separator (default: "_")
-        max_length:  If set, strongest‐effort truncate to this many chars
+        text:       Original filename or title
+        sep:        Single-character separator (default: "_")
+        max_length: If set, strongest‐effort truncate to this many chars
 
     Returns:
         A clean, filename-safe string.
+    
+    Raises:
+        None: If the input text is None, it will return an empty string.
     """
     fallback_logging_config()  # Ensure logging is configured
+    if not text:
+        return ""
     # Normalize to ASCII
     try:
         import unidecode
@@ -1494,7 +1683,7 @@ def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
 
     # List of common extensions to recognize and (temporarily) remove
     removed_ext = ""
-    for ext in all_extensions:
+    for ext in all_known_extensions:
         if text.casefold().endswith(ext):
             text = text[:-len(ext)]
             removed_ext = ext
@@ -1530,24 +1719,27 @@ def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
     return text
 
 
-def if_filepath_then_read(input_string_or_filepath: str,
+def if_filepath_then_read(input_string_or_filepath: str | os.PathLike[str],
                           force_string: bool = False) -> str:
     """
     If 'input_string_or_filepath' is a file path, read its contents and return as a string. If not, return the input_string as is.
 
-    Parameters:
-        input_string_or_filepath : The source can be a file path or a string.
-        force_string : If True, treat 'input_string_or_filepath' as a string even if it looks like a file path.
+    Args:
+        input_string_or_filepath: The source can be a file path or a string.
+        force_string:             If True, treat 'input_string_or_filepath' as a string even if it looks like a file path.
 
     Returns:
-        str : The contents of the file if input_string is a file path, or the input_string itself if it is not a file path.
+        str : The contents of the file if input_string_or_filepath is a file path,
+              or the input_string_or_filepath itself if it is not a file path.
 
     Raises:
-        TypeError : If input_string is not a string or a file path.
+        TypeError : If input_string is not a string or a file path, or if force_string is True but input_string_or_filepath is os.PathLike.
     """
     fallback_logging_config()
     # Is "input_string" a file path, and is "force_string" False?
     # If so, read the file contents.
+    if force_string and isinstance(input_string_or_filepath, os.PathLike):
+        raise TypeError(f"'input_string_or_filepath' was given as a file path ({input_string_or_filepath!r}) but 'force_string' is True, so it cannot be treated as a file path.")
     if not force_string and Path(input_string_or_filepath).is_file():
         file_path = Path(input_string_or_filepath)
         try:
@@ -1568,24 +1760,28 @@ def if_filepath_then_read(input_string_or_filepath: str,
         return input_string_or_filepath  # Just return the input string as is.
 
 
-def compile_code(source_or_filepath: str,
+def compile_code(source_or_filepath: str | os.PathLike[str],
                  force_source: bool = False) -> bool:
     """
     Attempt to compile the given source code in 'exec' mode.
     If 'source_or_filepath' is a file path, read its contents first.
 
-    Parameters:
-        source_or_filepath : The source code string or file path to compile.
-        force_source : If True, treat 'source_or_filepath' as a source code string even if it looks like a file path.
+    Args:
+        source_or_filepath: The source code string or file path to compile.
+        force_source:       If True, treat 'source_or_filepath' as a source code string even if it looks like a file path.
 
     Returns:
-        bool : True if compilation succeeds, False if it fails with a SyntaxError or other exception
+        bool: True if compilation succeeds, False if it fails with a SyntaxError or other exception
+
+    Raises:
+        SyntaxError: If the source code has a syntax error, it will be logged and False is returned.
+        TypeError:   If 'source_or_filepath' is not a string or a file path.
     """
     fallback_logging_config()
     # Read from file if source is a file path
     source = if_filepath_then_read(source_or_filepath, force_string=force_source)
     if source != source_or_filepath:
-        file_path = source_or_filepath
+        file_path = Path(source_or_filepath).expanduser().resolve()
     else:
         # If it's a string, we need to provide a dummy file path for the compiler.
         # This is just to satisfy the compiler, it won't be used.
@@ -1626,7 +1822,7 @@ def compile_code(source_or_filepath: str,
 # --------------------------------------------------------------------------------
 
 
-def _make_format_checker() -> Type[FormatChecker]:
+def _make_format_checker() -> Type[Any]:
     """Factory function to create the FormatChecker class with the necessary imports."""
     import ast
 
@@ -1805,18 +2001,27 @@ def _make_format_checker() -> Type[FormatChecker]:
 FormatChecker = _make_format_checker()
 
 
-def check_python_formatting(path: str, diff_choice: int = 1) -> bool:
+def check_python_formatting(path: str | os.PathLike[str], diff_choice: int = 1) -> bool:
     """
     Reads a .py file at 'path' via my_fopen, makes sure it compiles, parses it with AST,
     prints any custom formatting violations to stdout,
     and asks the user to fix any backticks or curly quotes in the file. If the user quits, it returns False.
 
-    Parameters:
+    Args:
         path:        The path to the Python file to check.
         diff_choice: How many context lines to show in the diff (0 = old-style diff, 1 = unified diff with 0 context lines, 2+ = unified diff with 'diff_choice - 1' context lines).
+    
+    Returns:
+        bool: False if the user chose to quit during any replacement prompts, True otherwise.
+    
+    Raises:
+        FileNotFoundError: If the specified file does not exist.
     """
     import ast
     fallback_logging_config()
+    path = Path(path).expanduser().resolve(strict=True)
+    if not path.is_file():
+        raise IsADirectoryError(f"Not a file: {path}")
     src = my_fopen(path)
     if src is False:
         logging.error(f"❌ Failed to open file: {path}")
@@ -1887,19 +2092,30 @@ def check_python_formatting(path: str, diff_choice: int = 1) -> bool:
     return True
 
 
-def run_flake8(path: str, ignore_codes: list[str] = [], max_line_length: int = 100) -> flake8.Report:
+def run_flake8(path: str | os.PathLike[str], ignore_codes: list[str] = [], max_line_length: int = 100) -> flake8.Report:
     """
     Run Flake8 on 'path', but:
       - only flag E501 if a line exceeds 'max_line_length',
       - ignore whatever codes are in 'ignore_codes'.
 
-    :param path:       File or directory to lint.
-    :param max_line_length:  The line‑length threshold for E501 (default 100).
-    :return:           A Flake8 Report object with all violations.
+    Args:
+        path:            The path to the Python file to check.
+        ignore_codes:    A list of Flake8 error/warning codes to ignore.
+        max_line_length: The (custom) maximum allowed line length for E501 checks.
+    
+    Returns:
+        flake8.Report : The Flake8 report object containing the results.
+    
+    Raises:
+        FileNotFoundError: If the specified file does not exist.
     """
     import io
     from collections import defaultdict
     from flake8.api import legacy as flake8
+    fallback_logging_config()
+    path = Path(path).expanduser().resolve(strict=True)
+    if not path.is_file():
+        raise IsADirectoryError(f"Not a file: {path}")
     style_guide = flake8.get_style_guide(max_line_length=max_line_length, ignore=ignore_codes)
     report = style_guide.check_files([path])
     if report.total_errors == 0:
@@ -1947,7 +2163,7 @@ def run_flake8(path: str, ignore_codes: list[str] = [], max_line_length: int = 1
     return report
 
 
-def _gather_flake8_issues( path: str, ignore_codes: list[str] = [], max_line_length: int = 100) -> dict[str, str]:
+def _gather_flake8_issues(path: str | os.PathLike[str], ignore_codes: list[str] = [], max_line_length: int = 100) -> dict[str, str]:
     """
     Returns a dict mapping each Flake8 error code to its first-seen description
     in the file at 'path'.
@@ -1960,9 +2176,12 @@ def _gather_flake8_issues( path: str, ignore_codes: list[str] = [], max_line_len
         return _gather_via_app(path, max_line_length, ignore_codes)
 
 
-def _gather_via_cli(path: str, max_line_length: int, ignore_codes: list[str]) -> dict[str, str]:
+def _gather_via_cli(path: str | os.PathLike[str], max_line_length: int, ignore_codes: list[str]) -> dict[str, str]:
     """Use the flake8 CLI to gather codes and descriptions."""
     import subprocess
+    path = Path(path).expanduser().resolve(strict=True)
+    if not path.is_file():
+        raise IsADirectoryError(f"Not a file: {path}")
     fmt = "%(row)d:%(col)d: %(code)s %(text)s"
     args = [
         "flake8",
@@ -1984,11 +2203,14 @@ def _gather_via_cli(path: str, max_line_length: int, ignore_codes: list[str]) ->
     return codes
 
 
-def _gather_via_app(path: str, max_line_length: int, ignore_codes: list[str]) -> dict[str, str]:
+def _gather_via_app(path: str | os.PathLike[str], max_line_length: int, ignore_codes: list[str]) -> dict[str, str]:
     """Use the flake8 Application API to gather codes and descriptions."""
     from flake8.main.application import Application
     from flake8.formatting.base import BaseFormatter
     from flake8.violation import Violation
+    path = Path(path).expanduser().resolve(strict=True)
+    if not path.is_file():
+        raise IsADirectoryError(f"Not a file: {path}")
 
     class CodeDictFormatter(BaseFormatter):
         """Custom formatter that collects codes and their first descriptions."""
@@ -2102,31 +2324,35 @@ def highlight_changes(orig: str, new: str, unchanged_color: str,
 
 
 def my_diff(orig_text: str, changed_text: str, orig_path: str | os.PathLike[str],
-            changed_path: str | None = None,
+            changed_path: str | os.PathLike[str] | None = None,
             diff_choice: int = 1, changed_color: str = ANSI_CYAN,
             deleted_color: str = ANSI_RED, added_color: str = ANSI_YELLOW) -> None:
     """
-    Show a unified diff of orig_text → changed_text with 'context' lines
-    around each hunk, log using 'label' and 'description', then prompt.
-    If the user confirms, overwrite 'path' with changed_text and return True.
-    If the user chooses to quit, log a message and return False.
+    Show a diff between 'orig_text' and 'changed_text' in the console,
+    highlighting character-level changes within changed lines.
 
-    Parameters:
+    Args:
         orig_text:      Original text to compare against.
         changed_text:   Proposed changes to the original text.
         orig_path:      Path to the original file.
         changed_path:   Optional path to the changed file (if different).
-        label:          A short label for the issue being fixed.
         diff_choice:    How many context lines to show in the diff (0 = old-style diff, 1 = unified diff with 0 context lines, 2+ = unified diff with 'diff_choice - 1' context lines).
         changed_color:  Color to use for unchanged characters in the changed lines in the diff (default ANSI_CYAN).
         deleted_color:  Color to use for the deleted characters in orig lines (default ANSI_YELLOW).
+        added_color:    Color to use for the added characters in changed lines (default ANSI_RED).
+    
+    Returns:
+        None: Prints the diff to the console.
+    
+    Raises:
+        None.
     """
     import difflib
     fallback_logging_config(rawlog=True)
-    orig_path = Path(orig_path).resolve()
+    orig_path = Path(orig_path).expanduser().resolve()
     if not changed_path:
         changed_path = orig_path
-    logging.debug(f"At the top of the function {return_function_name()}(), {diff_choice=}")
+    logging.debug(f"At the top of the function {return_method_name()}(), {diff_choice=}")
     orig_lines    =    orig_text.splitlines(keepends=True)
     changed_lines = changed_text.splitlines(keepends=True)
     the_digits = max(len(str(len(orig_lines))), len(str(len(changed_lines))))
@@ -2251,8 +2477,11 @@ def is_python_script(path: str | os.PathLike[str]) -> bool:
     """
     import stat
     path = Path(path)
+    if not path.is_file():
+        return False
+
     # Common extensions
-    if any(path.name.endswith(ext) for ext in python_extensions):
+    if path.suffix.casefold() in python_extensions:
         return True
 
     # No-extension scripts: check for executable bit + python shebang
@@ -2272,7 +2501,7 @@ def is_python_script(path: str | os.PathLike[str]) -> bool:
     return bool(re.match(r'#!.*\bpython[0-9.]*\b', first_line))
 
 
-def diff_and_confirm(orig_text: str, changed_text: str, path: str, label: str = "",
+def diff_and_confirm(orig_text: str, changed_text: str, path: str | os.PathLike[str], label: str = "",
                      skip_compile: bool = False, diff_choice: int = 1,
                      changed_color: str = ANSI_CYAN, deleted_color: str = ANSI_RED,
                      added_color: str = ANSI_YELLOW, the_fix: str = "", description: str = "") -> bool:
@@ -2282,7 +2511,7 @@ def diff_and_confirm(orig_text: str, changed_text: str, path: str, label: str = 
     If the user confirms, overwrite 'path' with changed_text and return True.
     If the user chooses to quit, log a message and return False.
 
-    Parameters:
+    Args:
         orig_text:     Original text to compare against.
         changed_text:  Proposed changes to the original text.
         path:          Path to the file being modified.
@@ -2295,11 +2524,19 @@ def diff_and_confirm(orig_text: str, changed_text: str, path: str, label: str = 
         the_fix:       A string describing the fix being applied (e.g. "autopep8", "manual edit") (default "").
         description:   A longer description of the issue being fixed (default "").
 
-        
-    Returns False if the user chose to quit; True otherwise.
+
+    Returns:
+        bool: False if the user chose to quit; True otherwise.
+    
+    Raises:
+        FileNotFoundError: If the specified file does not exist.
+        ValueError: If the specified path is not a file. The function which raises this exception is my_fopen().
     """
     fallback_logging_config()
-    logging.debug(f"At the top of the function {return_function_name()}(), {diff_choice=}")
+    logging.debug(f"At the top of the function {return_method_name()}(), {diff_choice=}")
+    path = Path(path).expanduser().resolve(strict=True)
+    if not path.is_file():
+        raise IsADirectoryError(f"Not a file: {path}")
     my_diff(orig_text, changed_text, path, diff_choice=diff_choice,
             changed_color=changed_color, deleted_color=deleted_color, added_color=added_color)
     label_str = f"{ANSI_RED}{label}{ANSI_RESET}" if label     else ""
@@ -2316,7 +2553,7 @@ def diff_and_confirm(orig_text: str, changed_text: str, path: str, label: str = 
         if not skip_compile and is_python_script(path) and not compile_code(changed_text):
             logging.error(f"{ANSI_RED}Failed to compile the changed python script. Aborting write.{ANSI_RESET}")
             return False  # Don't write if it won't compile, and don't continue.
-        Path(path).write_text(changed_text, encoding=DEFAULT_ENCODING)
+        path.write_text(changed_text, encoding=DEFAULT_ENCODING)
         if the_fix:
             logging.info(f"{ANSI_GREEN}Applied {the_fix} to {path}{ANSI_RESET}")
         else:
@@ -2329,7 +2566,7 @@ def diff_and_confirm(orig_text: str, changed_text: str, path: str, label: str = 
     return True
 
 
-def ask_and_autopep8(path: str, code: str, description: str = "", diff_choice: int = 1,
+def ask_and_autopep8(path: str | os.PathLike[str], code: str, description: str = "", diff_choice: int = 1,
                      changed_color: str = ANSI_CYAN, deleted_color: str = ANSI_RED,
                      added_color: str = ANSI_YELLOW) -> bool:
     """
@@ -2338,7 +2575,7 @@ def ask_and_autopep8(path: str, code: str, description: str = "", diff_choice: i
     The fix will be applied without saving, and the user will be shown a diff
     of the changes before saving to the file.
 
-    Parameters:
+    Args:
         path:          The path to the file to modify.
         code:          The specific PEP 8 violation code to fix.
         description:   A description of the issue being fixed (default "").
@@ -2347,11 +2584,19 @@ def ask_and_autopep8(path: str, code: str, description: str = "", diff_choice: i
         deleted_color: Color to use for the deleted characters in orig lines (default ANSI_YELLOW).
         added_color:   Color to use for the added characters in changed lines (default ANSI_GREEN).
 
-    Returns true if the user wants to continue, False if they want to quit.
+    Returns:
+        bool: True if the user wants to continue, False if they want to quit.
+    
+    Raises:
+        FileNotFoundError: If the specified file does not exist.
+        ValueError: If the specified path is not a file. The function which raises this exception is autopep8.fix_file().
     """
     import autopep8
     fallback_logging_config()
-    logging.debug(f"At the top of the function {return_function_name()}(), {diff_choice=}")
+    path = Path(path).expanduser().resolve(strict=True)
+    if not path.is_file():
+        raise IsADirectoryError(f"Not a file: {path}")
+    logging.debug(f"At the top of the function {return_method_name()}(), {diff_choice=}")
     # The number of blank lines expected in various contexts.
     blank_line_overrides = {
         'E301': 1,  # expected 1 blank line, found 0
@@ -2387,14 +2632,14 @@ def ask_and_autopep8(path: str, code: str, description: str = "", diff_choice: i
                             the_fix=the_fix, description=description)
 
 
-def ask_and_replace(old_str: str, new_str: str, path: str,  label: str = "",
+def ask_and_replace(old_str: str, new_str: str, path: str | os.PathLike[str],  label: str = "",
                     diff_choice: int = 1, description: str = "",
                     changed_color: str = ANSI_CYAN, deleted_color: str = ANSI_RED,
                     added_color: str = ANSI_YELLOW, skip_compile: bool = False) -> bool:
     """
     Read 'path', do orig.replace(old, new), then show a diff and ask to confirm.
 
-    Parameters:
+    Args:
         old_str:       Old string to search for.
         new_str:       New string to replace the old string.
         path:          Path to the file being modified.
@@ -2407,10 +2652,14 @@ def ask_and_replace(old_str: str, new_str: str, path: str,  label: str = "",
         the_fix:       A string describing the fix being applied (e.g. "autopep8", "manual edit") (default "").
         description:   A longer description of the issue being fixed (default "").
 
-    Returns False if the user chose to quit; True otherwise.
+    Returns:
+        False if the user chose to quit; True otherwise.
 
     """
     fallback_logging_config()
+    path = Path(path).expanduser().resolve(strict=True)
+    if not path.is_file():
+        raise IsADirectoryError(f"Not a file: {path}")
     orig_text = my_fopen(path)
     changed_text = orig_text.replace(old_str, new_str)
     if changed_text == orig_text:
@@ -2425,14 +2674,14 @@ def ask_and_replace(old_str: str, new_str: str, path: str,  label: str = "",
                             the_fix=the_fix, description=description)
 
 
-def interactive_flake8(path: str, diff_choice: int = 1, ignore_codes: list[str] = [], max_line_length: int = 100,
+def interactive_flake8(path: str | os.PathLike[str], diff_choice: int = 1, ignore_codes: list[str] = [], max_line_length: int = 100,
                        changed_color: str = ANSI_CYAN, deleted_color: str = ANSI_RED, added_color: str = ANSI_YELLOW) -> None:
     """
     1) Run the flake8 API for summary counts.
     2) Shell out to flake8 CLI once to harvest one description per code.
     3) For each code, ask the user; on "yes", call autopep8 to fix only that code.
 
-    Parameters:
+    Args:
         path:            Path to the Python file to check.
         diff_choice:     How many context lines to show in the diff (0 = old-style diff, 1 = unified diff with 0 context lines, 2+ = unified diff with 'diff_choice - 1' context lines).
         ignore_codes:    List of Flake8 codes to ignore (default: empty list).
@@ -2442,7 +2691,10 @@ def interactive_flake8(path: str, diff_choice: int = 1, ignore_codes: list[str] 
         added_color:     Color for added characters in changed lines (default: ANSI_YELLOW).
     """
     fallback_logging_config()
-    logging.debug(f"At the top of the function {return_function_name()}(), {diff_choice=}")
+    path = Path(path).expanduser().resolve(strict=True)
+    if not path.is_file():
+        raise IsADirectoryError(f"Not a file: {path}")
+    logging.debug(f"At the top of the function {return_method_name()}(), {diff_choice=}")
     if not run_flake8(path, ignore_codes=ignore_codes, max_line_length=max_line_length):
         logging.info("No flake8 errors—nothing to do.")
         return
@@ -2463,7 +2715,7 @@ def interactive_flake8(path: str, diff_choice: int = 1, ignore_codes: list[str] 
 
 # - Use {str(univ_defs_dir)!r} so Windows backslashes are safely escaped in the string literal.
 # - Double the braces around `univ_defs_dir` in the f-string to keep them literal in the written file.
-UNIV_DEFS_SYS_PATH_SCRIPT = f'''# Auto-generated helper: ensure the univ_defs directory is on sys.path
+UNIV_DEFS_SYS_PATH_SCRIPT: str = f'''# Auto-generated helper: ensure the univ_defs directory is on sys.path
 import sys
 from pathlib import Path
 
@@ -2474,12 +2726,13 @@ if str(univ_defs_dir) not in sys.path:
     sys.path.append(str(univ_defs_dir))
 '''
 
-MYDIFF_SCRIPT = '''import argparse
+MYDIFF_SCRIPT: str = '''import argparse
 import logging
 
 import univ_defs_sys_path_script  # Appends sys.path with the location of univ_defs.py
 import univ_defs as ud
 
+__version__: str = "0.0.1"
 
 def main() -> None:
     """Main entry point for the script."""
@@ -2518,11 +2771,12 @@ if __name__ == "__main__":
     main()
 '''
 
-MYAUDIT_SCRIPT = '''import argparse
+MYAUDIT_SCRIPT: str = '''import argparse
 
 import univ_defs_sys_path_script  # Appends sys.path with the location of univ_defs.py
 import univ_defs as ud
 
+__version__: str = "0.0.1"
 
 def main() -> None:
     """Main entry point for the script."""
@@ -2550,7 +2804,7 @@ if __name__ == "__main__":
     main()
 '''
 
-MULTIREPLACE_SCRIPT = '''#!/usr/bin/env python3
+MULTIREPLACE_SCRIPT: str = '''#!/usr/bin/env python3
 from __future__ import annotations
 
 import sys
@@ -2562,7 +2816,7 @@ from collections.abc import Iterable
 import univ_defs_sys_path_script  # Appends sys.path with the location of univ_defs.py
 import univ_defs as ud
 
-__version__ = "0.0.1"
+__version__: str = "0.0.1"
 
 
 class Options:
@@ -2699,7 +2953,7 @@ if __name__ == "__main__":
     main()
 '''
 
-TREEVIEW_SCRIPT = '''#!/usr/bin/env python3
+TREEVIEW_SCRIPT: str = '''#!/usr/bin/env python3
 from __future__ import annotations
 
 import sys
@@ -2711,7 +2965,7 @@ from collections.abc import Iterable
 import univ_defs_sys_path_script  # Appends sys.path with the location of univ_defs.py
 import univ_defs as ud
 
-__version__ = "0.0.1"
+__version__: str = "0.0.1"
 
 
 class Options:
@@ -2778,27 +3032,23 @@ def verify_script(thepath: str | os.PathLike[str], thescript: str) -> None:
     - Otherwise, nothing happens.
     """
     # Check if it exists and is a file
-    thepath = Path(thepath)
+    thepath = Path(thepath).expanduser().resolve()
     if not thepath.is_file():
         if thepath.is_dir():
             logging.error(f"Expected a file at {thepath}, but it is a directory.")
             return
-        with open(thepath, 'w', encoding=DEFAULT_ENCODING) as f:
-            logging.info(f"Creating {thepath} with the audit script.")
-            f.write(thescript)
+        thepath.write_text(thescript, encoding=DEFAULT_ENCODING)
+        logging.info(f"Creating {thepath} with the audit script.")
         return
 
     # It is a file: read and compare
-    with open(thepath, 'r', encoding=DEFAULT_ENCODING) as f:
-        existing = f.read()
-
+    existing = thepath.read_text(encoding=DEFAULT_ENCODING)
     # Overwrite if different
     if existing != thescript:
         logging.info(f"Contents of {thepath} differ from the audit script in {__file__} as follows:")
         my_diff(existing, thescript, thepath, diff_choice=1)
         logging.info(f"Overwriting {thepath} with the audit script.")
-        with open(thepath, 'w', encoding=DEFAULT_ENCODING) as f:
-            f.write(thescript)
+        thepath.write_text(thescript, encoding=DEFAULT_ENCODING)
 
 
 def decode_utf8(raw_bytes: bytes, path: str = "input string") -> str | None:
@@ -2849,12 +3099,15 @@ def contains_mojibake(text: str) -> bool:
     return mojibake_present
 
 
-def fix_text(current_text: str, path: str, raw_bytes: bytes) -> str | None:
+def fix_text(current_text: str, path: str | os.PathLike[str], raw_bytes: bytes) -> str | None:
     """
     Fix mojibake in a string using ftfy.fix_encoding().
     """
     import ftfy
     fallback_logging_config()
+    path = Path(path).expanduser().resolve(strict=True)
+    if not path.is_file():
+        raise IsADirectoryError(f"Not a file: {path}")
     logging.debug(f"Checking {path} for mojibake.")
     if not contains_mojibake(current_text):
         return None
@@ -2919,23 +3172,23 @@ def my_atomic_write(filepath: str | Path | os.PathLike[str], data: str | bytes |
                    ) -> None:
     """
     Atomically write `data` to `filepath` with an advisory lock.
-    
+
     - If write_mode='a' and file exists, data is appended.
     - If write_mode='a' and file does *not* exist, file is created.
     - A `.lock` file beside `filepath` prevents concurrent writers.
 
-    Parameters:
+    Args:
         filepath:     Path to the file to write.
         data:         Data to write (str or bytes).
         write_mode:   'w' for overwrite, 'a' for append.
         encoding:     Encoding to use for text data (default: DEFAULT_ENCODING).
         lock_timeout: Maximum time to wait for the lock (default: None, meaning wait indefinitely).
-    
-    Raises:
-        RuntimeError: If the lock cannot be acquired within the specified timeout.
-    
+
     Returns:
         None: The file is written atomically.
+
+    Raises:
+        RuntimeError: If the lock cannot be acquired within the specified timeout.
     """
     from atomicwrites import atomic_write
     from filelock import FileLock, Timeout
@@ -2994,7 +3247,7 @@ def fix_mojibake(filepath: str | os.PathLike[str], make_backup: bool = True,
         logging.info(f"✔ Fixed mojibake: {filepath}")
 
     # If the text is from an HTML file, ensure it has a UTF-8 meta tag
-    if filepath.lower().endswith(('.html','.htm')):
+    if filepath.suffix.casefold() in ('.html','.htm'):
         current_text = ensure_utf8_meta(current_text)
 
     # If we have fixed the text, write it back
@@ -3023,8 +3276,8 @@ def treeview_new_files(directory:      str | os.PathLike[str],
                        state: dict = None, probe_only: bool = False) -> bool:
     """
     Recursively scan the directory, print the contents of files newer than last_file_path (if provided- if so store its modification date in last_mtime). Return True if any relevant files are found.
-    
-    Parameters:
+
+    Args:
         directory:      The directory to scan.
         last_file_path: The optional path to a chosen file. Only files newer than this will be printed.
         last_mtime:     The modification time of the last_file_path. If None, all files will be considered.
@@ -3036,12 +3289,12 @@ def treeview_new_files(directory:      str | os.PathLike[str],
         level:          The current recursion level (default 0).
         state:          A dictionary to maintain state across recursive calls (default None).
         probe_only:     If True, do not print file contents, just check for existence of relevant files (default False).
-    
-    Raises:
-        ValueError: If the directory is not a valid directory or does not exist.
-    
+
     Returns:
         bool: True if any relevant files are found or the directory itself is newer than last_mtime, False otherwise.
+
+    Raises:
+        None: Catches exceptions, logs an error and returns False if the directory is not a valid directory or does not exist.
     """
     import datetime as dt
     fallback_logging_config(rawlog=True)
@@ -3058,10 +3311,7 @@ def treeview_new_files(directory:      str | os.PathLike[str],
         last_mtime = 0
         logging.debug(f"{prefix}No last file path provided, considering all files.")
     else:
-        last_file_path = Path(last_file_path).resolve()
-        if not last_file_path.is_file():
-            logging.error(f"{prefix}└── [Last file path does not exist: {last_file_path}]")
-            return False
+        last_file_path = Path(last_file_path).expanduser().resolve()
         if not last_file_path.exists():
             logging.error(f"{prefix}└── [Last file path does not exist: {last_file_path}]")
             return False
@@ -3083,7 +3333,7 @@ def treeview_new_files(directory:      str | os.PathLike[str],
     if state is None:
         state = {'excluded_dirs'   : {'__pycache__'},
                  'already_printed' : set(),
-                 'my_filepath'     : Path(__file__).resolve()}
+                 'my_filepath'     : Path(__file__).expanduser().resolve()}
     already_printed = state['already_printed']
     excluded_dirs   = state['excluded_dirs']
     my_filepath     = state['my_filepath']
@@ -3109,7 +3359,7 @@ def treeview_new_files(directory:      str | os.PathLike[str],
                 entry.name.startswith('.')
             )) or
             (entry.is_dir() and entry.name in excluded_dirs) or
-            (entry.is_dir() and entry.resolve() in already_printed)
+            (entry.is_dir() and entry.expanduser().resolve() in already_printed)
         )
     ]
 
@@ -3173,12 +3423,12 @@ def treeview_new_files(directory:      str | os.PathLike[str],
         # Print subdirectories first
         printable_subdirs = [
             d for d in subdirectories
-            if d.name not in excluded_dirs and d.resolve() not in already_printed
+            if d.name not in excluded_dirs and d.expanduser().resolve() not in already_printed
         ]
         for i, subdir in enumerate(printable_subdirs):
             is_sub_last = (i == len(printable_subdirs) - 1) and (len(relevant_entries) == 0)
             # Only scan the subdirectory if it isn't excluded
-            if subdir.name not in excluded_dirs and subdir.resolve() not in already_printed:
+            if subdir.name not in excluded_dirs and subdir.expanduser().resolve() not in already_printed:
                 treeview_new_files(subdir, last_file_path=last_file_path, last_mtime=last_mtime,
                                    maxlines=maxlines, use_colors=use_colors, prefix=child_prefix,
                                    is_last=is_sub_last, level=level + 1)
@@ -3314,7 +3564,7 @@ def open_filemanager_with_dirs(directories: list[str | os.PathLike[str]]) -> Non
     import time
     fallback_logging_config()
     if not sys.platform.startswith('linux'):
-        logging.error(f"The function {return_function_name()} is only implemented for Linux systems.")
+        logging.error(f"The function {return_method_name()} is only implemented for Linux systems.")
         return
     logging.info("Opening file manager with specified directories...")
     for directory in directories:
@@ -3338,7 +3588,7 @@ def detect_country(force_wtfismyip: bool = False) -> str | None:
     Detect the country of the IP address using ipinfo.io service.
     If the request fails, it falls back to wtfismyip.com service.
 
-    Parameters:
+    Args:
         force_wtfismyip: If True, always use wtfismyip.com
     
     Returns:
@@ -3399,13 +3649,13 @@ def set_system_volume(percent: int, tolerance: int = 1,
     Try to set the PulseAudio default sink volume to `percent`% via pulsectl,
     verify it, and if that fails, fall back to pactl.
 
-    Parameters:
-        percent     : Desired volume level (0–100).
-        tolerance   : Allowed percent difference when verifying (default: 1%).
-        change_mute : If set to "mute", the function will mute the audio instead of
-                      setting a specific volume. If set to "unmute", it will unmute
-                      the audio. If None, it will not change the mute state.
-        force_pactl : If True, always use pactl even if pulsectl is available (default: False).
+    Args:
+        percent:     Desired volume level (0–100).
+        tolerance:   Allowed percent difference when verifying (default: 1%).
+        change_mute: If set to "mute", the function will mute the audio instead of
+                     setting a specific volume. If set to "unmute", it will unmute
+                     the audio. If None, it will not change the mute state.
+        force_pactl: If True, always use pactl even if pulsectl is available (default: False).
 
     Returns:
         None
@@ -3537,7 +3787,7 @@ def open_dir_in_VLC(the_dir: str | os.PathLike[str], sort_choice: str = "sort_by
     import subprocess
     if the_dir is None:
         raise ValueError("The directory path cannot be None.")
-    the_dir = Path(the_dir)
+    the_dir = Path(the_dir).expanduser().resolve(strict=True)
     if not the_dir.is_dir():
         raise ValueError(f"The specified path '{the_dir}' is not a valid directory.")
     # start_flag = "--start-paused" if no_start else False # The "--start-paused" flag forces you to press play in VLC EACH TIME YOU GO TO A NEW PLAYLIST ENTRY!
@@ -3545,24 +3795,15 @@ def open_dir_in_VLC(the_dir: str | os.PathLike[str], sort_choice: str = "sort_by
     # List to store files with their modification times
     files_with_times: list[tuple[float, Path]] = []
     dirs_with_times:  list[tuple[float, Path]] = []  # Only used if not recursive
-    if recursive:
-        # Recursively iterate over the files in the directory
-        for root, dirs, files in os.walk(the_dir):
-            for filename in files:
-                file_path = Path(root) / filename
-                if file_path.is_file() and not filename.endswith('.m3u'):
-                    mod_time = file_path.stat().st_mtime
-                    files_with_times.append((mod_time, file_path))
-    else:
-        for item in the_dir.iterdir():
-            item_path = the_dir / item
-            if item_path.is_file() and not item.name.endswith('.m3u'):
-                mod_time = item_path.stat().st_mtime
-                files_with_times.append((mod_time, item_path))
-            elif item_path.is_dir():
-                mod_time = item_path.stat().st_mtime
-                dirs_with_times.append((mod_time, item_path))
-
+    entries: Iterator[Path] = the_dir.rglob("*") if recursive else the_dir.iterdir()
+    for p in entries:
+        if p.is_file():
+            # Exclude .m3u or .m3u8 playlist files
+            if p.suffix.casefold() in (".m3u", ".m3u8"):
+                continue
+            files_with_times.append((p.stat().st_mtime, p))
+        elif not recursive and p.is_dir():
+            dirs_with_times.append((p.stat().st_mtime, p))
     if sort_choice == "sort_by_name":
         # Sort files by name, case-insensitively
         files_with_times.sort(   key=lambda x: x[1].name.casefold())
@@ -3575,15 +3816,14 @@ def open_dir_in_VLC(the_dir: str | os.PathLike[str], sort_choice: str = "sort_by
             dirs_with_times.sort(key=lambda x: x[0])
     # If present, put directories at the top of the list
     files_with_times = dirs_with_times + files_with_times
-    # Create the .m3u playlist content
+    # Create the .m3u playlist content with as_posix() to ensure forward slashes even on Windows
     playlist_content = "#EXTM3U\n"
     for _, file_path in files_with_times:
         playlist_content += f"#EXTINF:-1,{file_path.name.replace(',', '').replace('-', '')}" \
-                            f"\n{file_path}\n"
+                            f"\n{file_path.as_posix()}\n"
     # Write the playlist to disk in the directory
     playlist_path = the_dir / f"{filename_format(the_dir.name)}_playlist.m3u"
-    with open(playlist_path, 'w') as playlist_file:
-        playlist_file.write(playlist_content)
+    playlist_path.write_text(playlist_content, encoding=DEFAULT_ENCODING)
     # Open the playlist in VLC
     if start_flag: command_list = ["vlc", start_flag, playlist_path]
     else:          command_list = ["vlc",             playlist_path]
@@ -3596,22 +3836,22 @@ def remove_prefix_from_filename(filepath: str | os.PathLike[str], prefix: str) -
       1. Remove the prefix (and any " _-" immediately following it).
       2. Move the file (but only if that doesn't cause errors).
     
-    Parameters:
-    - filepath: The path to the file whose name may need to be changed.
-    - prefix: The prefix to remove from the filename.
+    Args:
+        filepath: The path to the file whose name may need to be changed.
+        prefix:   The prefix to remove from the filename.
 
     Returns:
-    True if the file was successfully renamed, or if it didn't need renaming.
-    False if the file was not renamed because it didn't start with the prefix,
-    or if the new filename already exists.
+        True:  If the file was successfully renamed, or if it didn't need renaming.
+        False: If the file was not renamed because it didn't start with the prefix,
+               or if the new filename already exists.
 
     Raises:
-    OSError: If the rename operation fails due to an OS error (e.g., permission denied).
+        OSError: If the rename operation fails due to an OS error (e.g., permission denied).
     """
     fallback_logging_config()
-    filepath = Path(filepath)
-    if not filepath.is_file():
-        logging.warning(f"File '{filepath}' does not exist or is not a file.")
+    filepath = Path(filepath).expanduser().resolve()
+    if not filepath.exists():
+        logging.warning(f"File or directory '{filepath}' does not exist.")
         return False
     file = filepath.name
     if file.startswith(prefix):
@@ -3641,7 +3881,7 @@ def remove_prefix_from_html_title(filepath: str | os.PathLike[str], prefix: str)
     if not filepath.is_file():
         logging.warning(f"File '{filepath}' does not exist or is not a file.")
         return False
-    if not filepath.endswith('.html') and not filepath.endswith('.htm'):
+    if filepath.suffix.casefold() not in ('.html', '.htm'):
         logging.warning(f"File '{filepath}' is not an HTML or HTM file.")
         return False
     html = my_fopen(filepath)
@@ -3654,9 +3894,8 @@ def remove_prefix_from_html_title(filepath: str | os.PathLike[str], prefix: str)
     if title.startswith(prefix):
         new_title = title.replace(prefix, "", 1)  # Replace only the first occurrence
         new_html = html[:title_start] + new_title + html[title_end:]
-        with open(filepath, 'w', encoding=DEFAULT_ENCODING) as file:
-            file.write(new_html)
-        print(f"Removed prefix '{prefix}' from the title in '{filepath}'.")
+        filepath.write_text(new_html, encoding=DEFAULT_ENCODING)
+        logging.info(f"Removed prefix '{prefix}' from the title in '{filepath}'.")
         return True
     else:
         return False
@@ -3668,20 +3907,20 @@ def combine_html_files(file_paths: list[str | os.PathLike[str]],
     Combine multiple HTML files into a single HTML file.
     The first file's <head> is preserved, and all <body> contents are concatenated.
 
-    Parameters:
-    - file_paths       : List of (presorted) file paths to the HTML files to combine.
-    - output_file_path : Path to save the combined HTML file.
-
-    Raises:
-    - Exception: If there is an error reading any of the HTML files or writing the output file.
-    - FileNotFoundError: If any of the input files do not exist.
-    - ValueError: If the output file path is not valid.
-    - ImportError: If BeautifulSoup is not installed.
-    - RuntimeError: If the output file cannot be written.
-    - OSError: If there is an error during file operations.
+    Args:
+        file_paths:       List of (presorted) file paths to the HTML files to combine.
+        output_file_path: Path to save the combined HTML file.
 
     Returns:
-    - None - the combined HTML is saved to the specified output file path.
+        None: the combined HTML is saved to the specified output file path.
+
+    Raises:
+        Exception:         If there is an error reading any of the HTML files or writing the output file.
+        FileNotFoundError: If any of the input files do not exist.
+        ValueError:        If the output file path is not valid.
+        ImportError:       If BeautifulSoup is not installed.
+        RuntimeError:      If the output file cannot be written.
+        OSError:           If there is an error during file operations.
     """
     from bs4 import BeautifulSoup
     fallback_logging_config()
@@ -3689,7 +3928,6 @@ def combine_html_files(file_paths: list[str | os.PathLike[str]],
     head_content = ''
     first_file_processed = False
     for file_path in file_paths:
-        file_path = Path(file_path)
         file = my_fopen(file_path)
         try:
             soup = BeautifulSoup(file, 'html.parser')
@@ -3706,8 +3944,9 @@ def combine_html_files(file_paths: list[str | os.PathLike[str]],
     combined_html = f"<!DOCTYPE html>\n<html>\n{head_content}\n<body>\n{combined_body}\n</body>\n</html>"
     # Save to the output file path
     try:
-        with open(output_file_path, 'w', encoding=DEFAULT_ENCODING) as output_file:
-            output_file.write(combined_html)
+        output_file_path = Path(output_file_path).expanduser().resolve()
+        output_file_path.parent.mkdir(parents=True, exist_ok=True)
+        output_file_path.write_text(combined_html, encoding=DEFAULT_ENCODING)
     except Exception:  # Catch any unexpected errors from writing the file without crashing.
         logging.exception(f"Error saving combined HTML to {output_file_path}.")
     logging.info(f"Saved combined HTML to '{output_file_path}'.")
@@ -3721,7 +3960,7 @@ def check_list_for_duplicates(the_list: list) -> bool:
 
 
 # A comprehensive list of encodings to try when reading files, with most likely encodings first.
-text_encodings = [
+text_encodings: list[str] = [
     'utf-8',        'latin-1',      'ascii',          'iso-8859-1',      'big5',         'utf-8-sig',
     'utf-16',       'utf-16-be',    'utf-16-le',      'utf-32',          'utf-32-be',    'utf-32-le',
     'cp1252',       'cp1251',       'cp1250',         'cp1253',          'cp1254',       'cp1255',
@@ -3740,23 +3979,26 @@ text_encodings = [
     'ptcp154',      'shift-jis',    'shift-jis-2004', 'shift-jisx0213',  'hz',           'tis-620',
     'euc-tw',       'iso2022-tw'
 ]
+text_encodings = [e.casefold() for e in text_encodings]  # Just in... case.
 # check_list_for_duplicates(text_encodings) # Run this after adding new extensions to ensure there are no duplicates.
 
 # A comprehensive list of python extensions.
-python_extensions = ['.py', '.pyw']
+python_extensions: list[str] = ['.py', '.pyw']
+python_extensions = [e.casefold() for e in python_extensions]  # Just in... case.
 
 # A comprehensive list of text file extensions.
-text_extensions = [
+text_extensions: list[str] = [
     '.txt',  '.html',     '.htm',      '.csv',        '.json', '.xml'
     '.adoc', '.asciidoc', '.bib',      '.cfg',        '.conf', '.ini',
     '.log',  '.md',       '.markdown', '.properties', '.rtf',  '.rst',
     '.sgm',  '.sgml',     '.tex',      '.toml',       '.tsv',  '.xhtml',
     '.yaml', '.yml',
 ]
+text_extensions = [e.casefold() for e in text_extensions]  # Just in... case.
 # check_list_for_duplicates(text_extensions) # Run this after adding new extensions to ensure there are no duplicates.
 
 # A comprehensive list of video file extensions.
-video_extensions = [
+video_extensions: list[str] = [
     '.mp4',   '.mkv',   '.mov',   '.avi',  '.mpg',  '.mpeg',
     '.wmv',   '.m4v',   '.flv',   '.divx', '.vob',  '.iso',
     '.3gp',   '.webm',  '.mts',   '.m2ts', '.ts',   '.ogv',
@@ -3776,10 +4018,11 @@ video_extensions = [
     '.vc1',   '.vcd',   '.mpcpl', '.bin',  '.sfd',  '.qtz',
     '.vdat',  '.vft',
 ]
+video_extensions = [e.casefold() for e in video_extensions]  # Just in... case.
 # check_list_for_duplicates(video_extensions) # Run this after adding new extensions to ensure there are no duplicates.
 
 # A comprehensive list of audio file extensions.
-audio_extensions = [
+audio_extensions: list[str] = [
     '.mp3',   '.wav',   '.flac',  '.aac',   '.ogg',   '.wma',
     '.m4a',   '.alac',  '.aiff',  '.opus',  '.amr',   '.pcm',
     '.au',    '.raw',   '.dts',   '.ac3',   '.mka',   '.mpc',
@@ -3794,10 +4037,11 @@ audio_extensions = [
     '.mt2',   '.mo3',   '.umx',   '.tt',    '.tak',   '.trk',
     '.669',   '.abc',   '.ts',    '.ym',    '.hsq',   '.mpa',
 ]
+audio_extensions = [e.casefold() for e in audio_extensions]  # Just in... case.
 # check_list_for_duplicates(audio_extensions) # Run this after adding new extensions to ensure there are no duplicates.
 
 # A comprehensive list of subtitle file extensions.
-subtitle_extensions = [
+subtitle_extensions: list[str] = [
     '.srt',   '.sub',    '.idx',   '.ass',   '.ssa',   '.vtt',
     '.ttml',  '.dfxp',   '.smi',   '.smil',  '.usf',   '.psb',
     '.mks',   '.lrc',    '.stl',   '.pjs',   '.rt',    '.aqt',
@@ -3805,10 +4049,11 @@ subtitle_extensions = [
     '.zeg',   '.webvtt', '.scc',   '.cap',   '.asc',   '.qt.txt',  # match .qt.txt before .txt
     '.sbv',   '.ebu',    '.sami',  '.xml',   '.itt',   '.txt',
 ]
+subtitle_extensions = [e.casefold() for e in subtitle_extensions]  # Just in... case.
 # check_list_for_duplicates(subtitle_extensions) # Run this after adding new extensions to ensure there are no duplicates.
 
 # A comprehensive list of image file extensions.
-image_extensions = [
+image_extensions: list[str] = [
     '.bmp',   '.dib',   '.gif',   '.jpeg',  '.jpg',   '.jpe',
     '.jfif',  '.pjpeg', '.pjp',   '.png',   '.pbm',   '.pgm',
     '.ppm',   '.pnm',   '.pam',   '.tif',   '.tiff',  '.sgi',
@@ -3823,10 +4068,11 @@ image_extensions = [
     '.psb',   '.kra',   '.fit',   '.fits',  '.fpx',   '.djvu',
     '.djv',   '.lbm',   '.iff',
 ]
+image_extensions = [e.casefold() for e in image_extensions]  # Just in... case.
 # check_list_for_duplicates(image_extensions) # Run this after adding new extensions to ensure there are no duplicates.
 
 # A comprehensive list of archive file extensions.
-archive_extensions = [
+archive_extensions: list[str] = [
     '.zip',     '.rar',    '.7z',    '.tar.gz', '.tar.bz2', '.tar.xz',  # match .tar.(gz,bz2,xz) before (.gz,.bz2,.xz)
     '.tar.zst', '.tar',    '.gz',    '.tgz',    '.bz2',     '.xz',
     '.tbz2',    '.tz2',    '.lzma',  '.lz',     '.xpi',     '.crx',
@@ -3837,8 +4083,12 @@ archive_extensions = [
     '.shar',    '.run',    '.shk',   '.sit',    '.sitx',    '.zpaq',
     '.br', 
 ]
+archive_extensions = [e.casefold() for e in archive_extensions]  # Just in... case.
 # check_list_for_duplicates(archive_extensions) # Run this after adding new extensions to ensure there are no duplicates.
 
-all_extensions = python_extensions + subtitle_extensions + video_extensions + audio_extensions + \
-                 text_extensions + image_extensions + archive_extensions  # put subtitle_ext before text_ext so .qt.txt matches before .txt
-# check_list_for_duplicates(all_extensions) # Run this after adding new extensions to ensure there are no duplicates.
+# Put subtitle_ext before text_ext so .qt.txt matches before .txt
+all_known_extensions: list[str] = python_extensions + subtitle_extensions + \
+                                  text_extensions   + video_extensions    + \
+                                  audio_extensions  + image_extensions    + \
+                                  archive_extensions  
+# check_list_for_duplicates(all_extensions) # Run this after adding new extensions to ensure there are no duplicates. But in this case there WILL be because subtitle_extensions and text_extensions overlap.

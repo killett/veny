@@ -21,6 +21,7 @@ from collections.abc import Iterable
 import logging
 import tempfile
 import shlex  # For safely quoting shell commands
+from functools import lru_cache  # For caching results of expensive function calls
 
 import univ_defs as ud
 
@@ -35,9 +36,9 @@ class Options():
 
     def __init__(self) -> None:
         """Initialize the Options class with default values."""
-        self.log_mode: str = "INFO"  # Use the -debug command line argument to change to DEBUG.
+        self.log_mode: int = logging.INFO  # Use -debug to change to logging.DEBUG.
         self.search_above_this_dir: bool = True
-        self.my_filepath:   Path = Path(__file__).resolve()            # Full path to this script
+        self.my_filepath:   Path = Path(sys.argv[0]).expanduser().resolve()  # Full path to this script
         self.home:   Path = Path.home()  # User's home directory
         # The base name of this script without the .py extension:
         self.my_name: str = self.my_filepath.stem
@@ -74,8 +75,8 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.pathlibcutoff: str = "20250810-224900"
         self.alias: str = ''  # The alias to use for this script, if any.
         self.additional_alias_files:   list[Path] = []
-        self.alias_command:                   str = ''  # The command to run when the alias is used.
-        self.computer_name:                   str = ud.get_computer_name()
+        self.alias_command:            str | None = None  # The command to run when the alias is used.
+        self.computer_name:                   str = ''  # The name of this computer, retrieved from various methods.
         self.cwd:                            Path = Path.cwd()
         self.venv_name:                       str = 'myenv'  # Can NOT include dashes ('-')
         self.packages_dir:                   Path = self.my_dir / "packages"
@@ -83,6 +84,8 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.uninstalled_imports:   set[str]      = set()
         self.installed_imports:     set[str]      = set()
         self.bad_imports:           set[str]      = set()
+        self.all_imports:           set[str]      = set()
+        self.total_imports:                   int = 0
         self.custom_modules:       dict[str, str] = {}
         self.subfolders:           list[str]      = []
         self.samedir_files:        list[Path]     = []
@@ -93,6 +96,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.python_script: Path | None = None
         self.script_name: str = ''  # python_script without the .py extension
         self.script_dir: Path | None = None
+        self.script_args:        list[str] = []
         self.options_json_filepath: Path | None = None
         self.current_pip_version:                   str = ''
         self.new_pip_version:                       str = ''
@@ -106,15 +110,9 @@ If you're using the bash shell, follow these steps to add the alias manually:
         self.simultaneous_success: bool = False
         self.max_checks: int = 10  # Maximum number of times to check any repeated process.
         self.check_interval: int = 5  # Number of seconds to wait between checks.
-        self.script_args:        list[str] = []
-        self.all_imports:         set[str] = set()
-        self.installed_imports:   set[str] = set()
-        self.uninstalled_imports: set[str] = set()
-        self.bad_imports:         set[str] = set()
-        self.total_imports: int = 0
         self.rawlog: bool = False
         self.pipreqs_available: bool = False
-        self.univ_defs_path:            Path = Path(ud.__file__).resolve() # Full path to univ_defs.py
+        self.univ_defs_path:            Path = Path(ud.__file__).expanduser().resolve() # Full path to univ_defs.py
         self.univ_defs_sys_path_script: Path = self.my_dir / "univ_defs_sys_path_script.py"
         self.mydiff_path:               Path = self.my_dir / "mydiff.py"
         self.myaudit_path:              Path = self.my_dir / "myaudit.py"
@@ -2251,10 +2249,10 @@ If you're using the bash shell, follow these steps to add the alias manually:
 
     def set_venv_dir(self, venv_dir: str | os.PathLike[str]) -> None:
         """Set the directory for the virtual environment."""
-        p = Path(venv_dir).expanduser()
+        p = Path(venv_dir).expanduser()  # Don't resolve() yet because the path might not exist yet.
         self.venv_dir             = p
-        self.venv_python          = p / "bin" / "python"
-        self.venv_pip             = p / "bin" / "pip"
+        self.venv_python          = p / "bin" / "python"  # Do NOT resolve() this symlink path
+        self.venv_pip             = p / "bin" / "pip"     # Do NOT resolve() this symlink path
         self.requirements_file    = p / "requirements.txt"
         self.download_script_path = p / "download_packages.sh"
         p.mkdir(parents=True, exist_ok=True)  # Create the directory if it doesn't exist
@@ -2263,39 +2261,39 @@ If you're using the bash shell, follow these steps to add the alias manually:
 def parse_arguments(options: Options) -> None:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Run a python script with optional flags.")
-    parser.add_argument('-version', action='store_true',
+    parser.add_argument('-version', '--version', action='store_true',
                         help="Print the version of this program.")
-    parser.add_argument('-manual', action='store_true',
+    parser.add_argument('-manual', '--manual', action='store_true',
                         help="Print instructions for manually adding the alias to the shell configuration file.")
-    parser.add_argument('-feeling-lucky', action='store_true',
-                        help="NOT FINISHED!!! Run the script with the -feeling-lucky flag, which will try to run the script with the last used virtual environment, or if that fails, try the latest virtual environment which has all the packages needed now.")
-    parser.add_argument('-debug', action='store_true',
+    parser.add_argument('-feeling-lucky', '--feeling-lucky', action='store_true',
+                        help="NOT FINISHED!!! Don't analyze imports, just try to run the script with the last used virtual environment. If that fails, try the latest virtual environment which has all the packages needed now.")
+    parser.add_argument('-debug', '--debug', action='store_true',
                         help="Run this program in debug mode, which prints additional debug messages.")
-    parser.add_argument('-blank-slate', action='store_true',
+    parser.add_argument('-blank-slate', '--blank-slate', action='store_true',
                         help=f"Delete ~/{options.my_name}/ and all {options.my_name} .out and .err and .json and .pkl files in the current directory.")
-    parser.add_argument('-full', action='store_true',
-                        help="Build a virtual environment (venv) that can run every python script in the specified directory (defaults to the current working directory).")
-    parser.add_argument('-y', action='store_true',
+    parser.add_argument('-full', '--full', action='store_true',
+                        help="Build a virtual environment (venv) that can run every python script in the current directory. Cannot be used with a python script argument.")
+    parser.add_argument('-y', '--yes', action='store_true',
                         help="Automatically say yes to any prompts to allow this program to run without the need for user interaction.")
-    parser.add_argument('-no-cache', action='store_true',
+    parser.add_argument('-no-cache', '--no-cache', action='store_true',
                         help="Don't search the cache. Instead, create a new virtual environment. Also, refresh the custom modules cache and the pip list.")
-    parser.add_argument('-latest', action='store_true',
-                        help="Load the latest venv in the cache which has all the packages needed now.")
-    parser.add_argument('-oldest', action='store_true',
-                        help="Load the oldest venv in the cache which has all the packages needed now.")
-    parser.add_argument('-last-used', action='store_true',
-                        help="Load the last used venv in the cache, but if that fails try the latest venv which has all the packages needed now.")
-    parser.add_argument('-smallest', action='store_true',
-                        help="Load the smallest venv in the cache (with the fewest packages) which has all the packages needed now.")
-    parser.add_argument('-rc', action='store_true',
+    parser.add_argument('-latest', '--latest', action='store_true',
+                        help="Load the latest cached venv which has all the packages needed now.")
+    parser.add_argument('-oldest', '--oldest', action='store_true',
+                        help="Load the oldest cached venv which has all the packages needed now.")
+    parser.add_argument('-last-used', '--last-used', action='store_true',
+                        help="Load the last used cached venv, but if that fails try the latest cached venv which has all the packages needed now.")
+    parser.add_argument('-smallest', '--smallest', action='store_true',
+                        help="Load the smallest cached venv (with the fewest packages) which has all the packages needed now.")
+    parser.add_argument('-rc', '--rc', action='store_true',
                         help="Refresh the custom modules cache and the pip list.")
-    parser.add_argument('-reqs', action='store_true',
+    parser.add_argument('-reqs', '--reqs', action='store_true',
                         help="Read the extra_requirements.txt file in the current directory and install the packages listed there (with specific versions if present in the file) into the venv (along with the other packages needed to run the script as determined elsewhere in this program).")
-    parser.add_argument('-alias', type=str,
+    parser.add_argument('-alias', '--alias', type=str,
                         help="Add an alias to the shell configuration file so that typing ALIAS anywhere runs this program.")
-    parser.add_argument('-rawlog', action='store_true',
+    parser.add_argument('-rawlog', '--rawlog', action='store_true',
                         help=f"Do not add timestamps or INFO level to log messages, and do not add extra INFO level log statements. Just produce the same output that would be seen when running the program without {options.my_name}.")
-    parser.add_argument('-justprint', action='store_true',
+    parser.add_argument('-justprint', '--justprint', action='store_true',
                         help="Don't run the script, just print its package requirements.")
     parser.add_argument('script', nargs='?',
                         help="The script to run.")
@@ -2319,18 +2317,22 @@ def parse_arguments(options: Options) -> None:
         sys.exit(0)
 
     if getattr(options.args, 'debug', False):
-        options.log_mode = 'DEBUG'
+        options.log_mode = logging.DEBUG
 
 
 def detect_shell(options: Options) -> None:
     """
     Detect the current interactive shell, falling back to parent process name if needed.
 
-    Parameters:
-    - options: Options object to store the detected shell information.
+    Args:
+        options: Options object to store the detected shell information.
 
     Returns:
-    - None, but updates options.shell with the detected shell name.
+        None, but updates options.shell with the detected shell name.
+    
+    Raises:
+        None, but logs an error if the shell cannot be detected via
+        subprocess.CalledProcessError or FileNotFoundError.
     """
     shell_path = os.getenv("SHELL")
     if not shell_path: # If shell_path is None or empty (""), try to get the parent process name
@@ -2343,7 +2345,7 @@ def detect_shell(options: Options) -> None:
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             logging.error(f"Error detecting shell via ps: {e}")
     if shell_path:
-        options.shell = Path(shell_path).name.lstrip("-")
+        options.shell = Path(shell_path).resolve().name.lstrip("-")
     else:
         logging.error("Could not detect shell from SHELL environment variable or parent process.")
         options.shell = None
@@ -2354,11 +2356,15 @@ def find_shell_rc_file(options: Options) -> None:
     Find the shell configuration file for the current user, store in options.rc_file.
     For bash/zsh, also consider login‐shell files if the usual rc isn’t present.
 
-    Parameters:
-    - options: Options object containing the shell type and rc_file attribute.
+    Args:
+        options: Options object containing the shell type and rc_file attribute.
 
     Returns:
-    - None, but updates options.rc_file with the path to the shell configuration file.
+        None, but updates options.rc_file with the path to the shell configuration file.
+    
+    Raises:
+        None, but logs an error if the shell is unsupported or if no rc file is found
+        for the specified shell.
     """
     candidates = []
 
@@ -2416,11 +2422,14 @@ def define_alias_command(options: Options) -> None:
     """
     Define the alias command for the shell, store in options.alias_command.
 
-    Parameters:
-    - options: Options object containing the alias, python_command, and my_filepath attributes.
+    Args:
+        options: Options object containing the alias, python_command, and my_filepath attributes.
 
     Returns:
-    - None, but updates options.alias_command with the appropriate alias command string.
+        None, but updates options.alias_command with the appropriate alias command string.
+    
+    Raises:
+        None, but logs an error if no alias is specified or if the shell is unsupported.
     """
     if not options.alias:
         logging.error("No alias specified, skipping alias command generation.")
@@ -2441,16 +2450,19 @@ def define_alias_command(options: Options) -> None:
         options.alias_command = None
 
 
-def alias_exists(this_file: str, alias_pattern: str) -> bool:
+def alias_exists(this_file: str | os.PathLike[str], alias_pattern: str) -> bool:
     """
     Check if an alias exists in this_file using a regex pattern "alias_pattern".
 
-    Parameters:
-    - this_file: The file to check for the alias.
-    - alias_pattern: The regex pattern to match the alias.
+    Args:
+        this_file:     The file to check for the alias.
+        alias_pattern: The regex pattern to match the alias.
 
     Returns:
-    - True if the alias exists, False otherwise.
+        True if the alias exists, False otherwise.
+    
+    Raises:
+        None, but logs an error if the file cannot be found.
     """
     try:
         with open(this_file, 'r') as file:
@@ -2494,11 +2506,14 @@ def add_alias(options: Options) -> None:
     This function detects the shell, finds the appropriate rc file,
     and adds the alias command to it if it doesn't already exist.
 
-    Parameters:
-    - options: Options object containing shell type, rc_file, alias, and alias_command attributes.
+    Args:
+        options: Options object containing shell type, rc_file, alias, and alias_command attributes.
 
     Returns:
-    - None, but updates options.rc_file and options.alias_command as needed.
+        None, but updates options.rc_file and options.alias_command as needed.
+    
+    Raises:
+        None.
     """
     detect_shell(options)
     if options.shell:
@@ -2532,9 +2547,22 @@ def _record_IO(options: Options, file_content: str,
     """
     Record an IO operation by appending a target to an options attribute
     and logging the operation.
+
+    Args:
+        options:      Options object containing attributes for file operations.
+        file_content: The content of the file being analyzed.
+        attr:         The attribute of options to append the target to (e.g., 'read_files').
+        target:       The target file or directory being read/written.
+        node:         The AST node representing the operation.
+    
+    Returns:
+        None, but logs the operation and appends the target to the specified attribute.
+    
+    Raises:
+        None, but logs an error if the target is not a string or if the node does not have a source segment.
     """
     snippet = ast.get_source_segment(file_content, node) or ""
-    logging.info(f"I/O operation → {attr}: {target!r} (line {node.lineno}: {snippet.strip()} - found by {options.current_method_name})")
+    if not options.rawlog: logging.info(f"I/O operation → {attr}: {target!r} (line {node.lineno}: {snippet.strip()} - found by {options.current_method_name})")
     if target not in getattr(options, attr):
         getattr(options, attr).append(target)
 
@@ -2548,6 +2576,15 @@ def _get_full_attr_name(node: ast.AST) -> str | None:
     Attribute(Attribute(Name('pkg'), 'zipfile'), 'ZipFile')
         -> 'pkg.zipfile.ZipFile'
     Returns None on anything else.
+
+    Args:
+        node: The AST node to analyze, which can be a Name or Attribute.
+    
+    Returns:
+        A string representing the full dotted name of the node, or None if the node is not a Name or Attribute.
+    
+    Raises:
+        None, but logs an error if the node is not a Name or Attribute.
     """
     if isinstance(node, ast.Name):
         return node.id
@@ -2613,7 +2650,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
     def _process_open(self, node: ast.Call) -> bool:
         """Process open(...) calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         # Only examine open(...)
         if (isinstance(node.func, ast.Name) and node.func.id == 'open'
             and node.args):  # protect against calls without arguments
@@ -2645,7 +2682,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
     def _process_pathlib(self, node: ast.Call) -> bool:
         """Process pathlib.Path(...) calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Call)
                 and isinstance(node.func.value.func, ast.Attribute)
@@ -2670,7 +2707,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
     def _process_shutil(self, node: ast.Call) -> bool:
         """Process shutil operations like copy, move, etc."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'shutil'
@@ -2688,7 +2725,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
     def _process_os_open(self, node: ast.Call) -> bool:
         """Detect os.open(path, flags, [mode]) and record read/write based on flags."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if not (
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
@@ -2743,7 +2780,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
         Parses any “>”, “>>” or “<” in the literal command string to pull out filenames.
         """
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         # 1) Identify the call as subprocess.* or os.system/os.popen
         is_sub = (
             isinstance(node.func, ast.Attribute)
@@ -2814,7 +2851,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
         Detect direct libc open calls via ctypes (CDLL/pydll/…)
         and record the path literals passed to open/fopen as writes.
         """
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         # 1) Must be an attribute call, e.g. (<something>).open(...)
         if not isinstance(node.func, ast.Attribute):
             return False
@@ -2849,7 +2886,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
     def _process_zipfile(self, node: ast.Call) -> bool:
         """Process zipfile.ZipFile(...) calls like extract, extractall, open."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         unpacked = unpack_method_call(node)
         if not unpacked:
             return False
@@ -2875,7 +2912,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
     def _process_tarfile(self, node: ast.Call) -> bool:
         """Process tarfile.open(...) calls like extract, extractall, open."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'tarfile'
@@ -2895,7 +2932,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
     def _process_pandas(self, node: ast.Call) -> bool:
         """Process pandas.read_csv/excel, DataFrame.to_csv/excel calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id in ('pd','pandas')):
@@ -2921,7 +2958,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
     def _process_numpy(self, node: ast.Call) -> bool:
         """Process numpy.load, save, savez, savez_compressed calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id in ('np','numpy')):
@@ -2939,7 +2976,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
     def _process_netcdf4(self, node: ast.Call) -> bool:
         """Process netCDF4.Dataset(...) calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'netCDF4'
@@ -2957,7 +2994,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
     def _process_xarray(self, node: ast.Call) -> bool:
         """Process xarray.open_dataset/open_dataarray, to_netcdf calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id in ('xr','xarray')):
@@ -2980,7 +3017,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
     def _process_json(self, node: ast.Call) -> bool:
         """Process json.load, loads, dump, dumps calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'json'
@@ -2997,7 +3034,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
     def _process_csv(self, node: ast.Call) -> bool:
         """Process csv.reader, writer calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'csv'
@@ -3014,7 +3051,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
     def _process_yaml(self, node: ast.Call) -> bool:
         """Process yaml.safe_load, load, dump calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id in ('yaml','ruamel.yaml')
@@ -3031,7 +3068,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
     def _process_configparser(self, node: ast.Call) -> bool:
         """Process configparser.ConfigParser(...) calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Call)
                 and isinstance(node.func.value.func, ast.Attribute)
@@ -3053,7 +3090,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
     def _process_h5py(self, node: ast.Call) -> bool:
         """Process h5py.File(...) calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'h5py'
@@ -3071,7 +3108,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
     def _process_pillow(self, node: ast.Call) -> bool:
         """Process PIL.Image.open, save calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'Image'):
@@ -3089,7 +3126,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
     def _process_wave(self, node: ast.Call) -> bool:
         """Process wave.open(...) calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'wave'
@@ -3107,7 +3144,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
     def _process_soundfile(self, node: ast.Call) -> bool:
         """Process soundfile.read, write calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'soundfile'
@@ -3124,7 +3161,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
     def _process_sqlite(self, node: ast.Call) -> bool:
         """Process sqlite3.connect(...) calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'sqlite3'
@@ -3138,7 +3175,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
     def _process_gzip(self, node: ast.Call) -> bool:
         """Process gzip.open(...) calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'gzip'
@@ -3156,7 +3193,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
     def _process_bz2(self, node: ast.Call) -> bool:
         """Process bz2.open(...) calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'bz2'
@@ -3186,7 +3223,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
         Heuristic catch-all for any MODULE.open(path, mode) calls
         on unknown modules that we haven’t explicitly handled.
         """
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         # 1) Must look like MODULE.open(...)
         if not (isinstance(node.func, ast.Attribute)
                 and node.func.attr == 'open'
@@ -3230,7 +3267,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
         that *looks* like a path, and the function name contains
         typical I/O verbs, record it.
         """
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         # Must have at least one literal-string arg:
         if not node.args:
             return False
@@ -3317,7 +3354,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
     def _process_requests(self, node: ast.Call) -> bool:
         """Process requests.get/post/put/...(...) calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.args  # protect against calls without arguments
@@ -3341,7 +3378,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
     def _process_urllib(self, node: ast.Call) -> bool:
         """Process urllib.request.urlopen(...) and urllib.request.Request(...) calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and node.args  # protect against calls without arguments
                 and isinstance(node.func.value, ast.Attribute)
@@ -3359,7 +3396,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
     def _process_ftp(self, node: ast.Call) -> bool:
         """Process ftplib.FTP.retrbinary/storbinary/retrlines/storlines(...) calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Call)
                 and isinstance(node.func.value.func, ast.Attribute)
@@ -3387,7 +3424,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
     def _process_httpx(self, node: ast.Call) -> bool:
         """Process httpx.get/post/put/...(...) and httpx.request(method, url) calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         # httpx.get/post/...() and httpx.request(method, url)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
@@ -3434,7 +3471,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
     def _process_aiohttp(self, node: ast.Call) -> bool:
         """Process aiohttp.request(...) and session.get/post/... calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         # static aiohttp.request
         if (isinstance(node.func, ast.Name)
                 and node.func.id == 'request'
@@ -3479,7 +3516,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
     def _process_socket(self, node: ast.Call) -> bool:
         """Process socket operations like create_connection, connect, send, recv."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'socket'
@@ -3495,7 +3532,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
     def _process_http_client(self, node: ast.Call) -> bool:
         """Process http.client HTTPConnection().request calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         unpacked = unpack_method_call(node)
         if not unpacked:
             return False
@@ -3519,7 +3556,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
     def _process_urllib3(self, node: ast.Call) -> bool:
         """Process urllib3 requests (PoolManager().request)."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         unpacked = unpack_method_call(node)
         if not unpacked:
             return False
@@ -3544,7 +3581,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
     def _process_smtplib(self, node: ast.Call) -> bool:
         """Process smtplib SMTP.sendmail calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         unpacked = unpack_method_call(node)
         if not unpacked:
             return False
@@ -3569,7 +3606,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
     def _process_imaplib(self, node: ast.Call) -> bool:
         """Process imaplib operations (IMAP4/IMAP4_SSL().fetch/login/select)."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         unpacked = unpack_method_call(node)
         if not unpacked:
             return False
@@ -3592,7 +3629,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
     def _process_boto3(self, node: ast.Call) -> bool:
         """Process boto3 S3 operations (…client().download_file/upload_file)."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         unpacked = unpack_method_call(node)
         if not unpacked:
             return False
@@ -3620,7 +3657,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
     def _process_paramiko(self, node: ast.Call) -> bool:
         """Process paramiko SFTP operations (…open_sftp().get/put…)."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         # 1) unpack the method call
         unpacked = unpack_method_call(node)
         if not unpacked:
@@ -3651,7 +3688,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
     def _process_requests_ftp(self, node: ast.Call) -> bool:
         """Process requests_ftp operations."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
@@ -3668,7 +3705,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
     def _process_websockets(self, node: ast.Call) -> bool:
         """Process websockets.connect(...) calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
@@ -3684,7 +3721,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
     def _process_socketio(self, node: ast.Call) -> bool:
         """Process socketio.Client().connect(...) or emit(...) calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         unpacked = unpack_method_call(node)
         if not unpacked:
             return False
@@ -3710,7 +3747,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
     def _process_mqtt(self, node: ast.Call) -> bool:
         """Process paho.mqtt.client.Client().connect(...) calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Call)
@@ -3729,7 +3766,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
     def _process_grpc(self, node: ast.Call) -> bool:
         """Process grpc.insecure_channel(...) or grpc.secure_channel(...) calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
@@ -3745,7 +3782,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
     def _process_psycopg2(self, node: ast.Call) -> bool:
         """Process psycopg2.connect(...) calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
@@ -3761,7 +3798,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
     def _process_redis(self, node: ast.Call) -> bool:
         """Process redis.Redis(...) calls."""
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if (
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
@@ -3783,7 +3820,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
         Heuristic fallback: if a call’s first argument is a string literal
         that looks like a URL (http:// or https://), record it.
         """
-        ud.record_method_name(self, self.options)
+        ud.return_method_name(self.options)
         if not node.args:
             return False
         candidate = _literal_str(node.args[0])
@@ -4054,7 +4091,7 @@ def process_import(options: Options, module_name: str, file_path: str | os.PathL
         logging.debug(f"Skipping standard library import: {module_name}")
         return False
     
-    file_path = Path(file_path).resolve()
+    file_path = Path(file_path).expanduser().resolve()
 
     logging.debug(f"Processing import: {module_name} from file {file_path}")
 
@@ -4071,7 +4108,7 @@ def process_import(options: Options, module_name: str, file_path: str | os.PathL
     logging.debug(f"Constructed module path: {module_path_str}")
 
     # Check if the import is a .py file in the same directory
-    potential_file_path = (base_dir / f"{module_path_str}.py").resolve()
+    potential_file_path = (base_dir / f"{module_path_str}.py").expanduser().resolve()
     if potential_file_path.is_file() and potential_file_path not in options.samedir_files:
         options.custom_modules[module_name] = potential_file_path
         options.loaded_custom_modules.add(module_name)
@@ -4080,7 +4117,7 @@ def process_import(options: Options, module_name: str, file_path: str | os.PathL
         return True
 
     # Check if the import is a package (directory with __init__.py)
-    potential_dir_path = (base_dir / module_path_str).resolve()
+    potential_dir_path = (base_dir / module_path_str).expanduser().resolve()
     logging.debug(f"Constructed potential directory path: {potential_dir_path}")
     if potential_dir_path.is_dir() and (potential_dir_path / "__init__.py").is_file() and module_path_str not in options.subfolders:
         options.custom_modules[module_name] = potential_dir_path
@@ -4373,14 +4410,17 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
     Find all imports and I/O in the script (including functions and classes
     that it imports from its dependencies.)
 
-    Parameters:
-    - options     : Options object containing paths to the python script and custom modules.
-    - first_path  : Path to the Python script to analyze for imports and I/O.
+    Args:
+        options:    Options object containing paths to the python script and custom modules.
+        first_path: Path to the Python script to analyze for imports and I/O.
 
     Returns:
-    None - modifies options to include all imports and I/O operations found in the script.
+        None - modifies options to include all imports and I/O operations found in the script.
+
+    Raises:
+        None, but logs errors if the provided path is not a valid Python script or if parsing fails.
     """
-    first_path = Path(first_path)
+    first_path = Path(first_path).expanduser().resolve()
     if not first_path.is_file():
         logging.error(f"Provided first_path is not a file: {first_path}")
         return
@@ -4396,24 +4436,23 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
     modules_to_process: list[Path]            = [first_path]
     module_contents:    dict[str, str]        = {}
     module_trees:       dict[str, ast.AST]    = {}
-    init_name = "__init__.py"
     while modules_to_process:
         module_path = modules_to_process.pop()
         if not options.rawlog: logging.info(f"Processing module: {module_path} where {type(module_path) = }")
         if module_path.is_dir():
             pkg_dir = module_path
-            init_py = pkg_dir / init_name
+            init_py = pkg_dir / "__init__.py"
             if init_py.is_file():
                 # 1) Parse the package __init__.py
                 module_path = init_py
                 # 2) Also enqueue all other .py modules in that same folder
                 for fname in pkg_dir.iterdir():
-                    if ud.is_python_script(fname) and fname != init_name:
+                    if ud.is_python_script(fname) and fname != "__init__.py":
                         path = pkg_dir / fname
                         if path not in modules_to_process and path not in processed_modules:
                             modules_to_process.append(path)
             else:
-                logging.error(f"No {init_name} in package directory {pkg_dir}, skipping.")
+                logging.error(f"No __init__.py in package directory {pkg_dir}, skipping.")
                 continue
         module_name = module_path.stem
         if module_name in processed_modules:
@@ -4595,6 +4634,67 @@ def add_dependencies(options: Options) -> None:
                     added = True
 
 
+def check_packages_in_venv(options: Options, package: str | None = None,
+                           venv_dir: str | os.PathLike[str] | None = None) -> bool:
+    """
+    Check if packages can be imported in the specified virtual environment.
+
+    Args:
+        options:    Options object containing settings and paths.
+        package:    Optional package name to check. If None, checks all uninstalled imports.
+        venv_dir:   Optional path to the virtual environment directory. If None, uses options.venv_dir.
+
+    Returns:
+        bool:       True if all packages can be imported successfully, False otherwise.
+
+    Raises:
+        None:       This function does not raise exceptions, but logs errors if the import fails.
+    """
+    if not venv_dir:
+        venv_dir = options.venv_dir
+    else:
+        venv_dir = Path(venv_dir).expanduser().resolve()
+    if sys.platform == "win32":
+        venv_python = (venv_dir / "Scripts" / "python.exe").absolute()
+    else:  # Do NOT use resolve() here because this is a symlink and resolve() would break it
+        venv_python = (venv_dir / "bin" / "python").absolute()
+    if package:
+        packages = [options.reversed_module_aliases.get(package, package)]
+    else:
+        use_pip_list(options)
+        packages = [options.reversed_module_aliases.get(pkg, pkg) for pkg in options.uninstalled_imports]
+    logging.debug(f"Packages to check in venv: {packages}")
+    python_code = f"""
+import sys
+from importlib import import_module
+successes = []
+failures = []
+counter = 0
+for package in {packages!r}:
+    counter += 1
+    try:
+        import_module(package)
+        successes.append(package)
+    except ImportError:
+        failures.append(package)
+if failures:
+    print("Failed packages: " + ", ".join(failures))
+    sys.exit(1)
+elif len(successes) != counter:
+    print(f"Warning: No failures, but only recorded {{len(successes)}} successes out of {{counter}}.")
+    sys.exit(2)
+else:
+    print(f"All {{len(successes)}} (out of {{counter}}) packages imported successfully.")
+    sys.exit(0)
+"""
+    the_command = [venv_python, "-c", python_code]
+    result = subprocess.run(the_command, capture_output=True, text=True, check=False)
+    # logging.debug(f"check_packages_in_venv command:\n{' '.join(shlex.quote(os.fspath(arg)) for arg in the_command)}")
+    logging.debug(f"check_packages_in_venv stdout:\n{result.stdout}")
+    logging.debug(f"check_packages_in_venv stderr:\n{result.stderr}")
+    return "packages imported successfully" in result.stdout
+
+
 def split_imports(options: Options) -> None:
     """Split imports into installed, uninstalled, and bad imports."""
     options.bad_imports = options.known_bad_imports.intersection(options.all_imports)
@@ -4602,8 +4702,8 @@ def split_imports(options: Options) -> None:
     if options.bad_imports:
         logging.debug(f"Identified bad imports: {options.bad_imports}")  # New logging
     options.all_imports = options.all_imports - options.bad_imports
-    options.installed_imports:   set[str] = set()
-    options.uninstalled_imports: set[str] = set()
+    options.installed_imports   = set()
+    options.uninstalled_imports = set()
     if getattr(options.args, 'reqs', False):
         options.all_imports = options.all_imports.union(options.extra_requirements.keys())
     options.total_imports = len(options.all_imports)
@@ -4639,7 +4739,19 @@ def split_imports(options: Options) -> None:
 
 
 def list_packages(options: Options) -> None:
-    """Examine command line arguments to determine if we're looking at a directory or a single python script. List all installed and uninstalled packages that are imported in that directory or python script. Return these sets inside the options object."""
+    """
+    Examine command line arguments to determine if we're looking at a directory or a single python script. List all installed and uninstalled packages that are imported in that directory or python script. Return these sets inside the options object.
+
+    Args:
+        options: Options object containing command line arguments and settings.
+
+    Returns:
+        None - modifies options to include all imports found in the specified Python script or directory.
+
+    Raises:
+        ValueError:        If the provided path is not a valid Python script or directory.
+        FileNotFoundError: If the specified file or directory does not exist.
+    """
     if getattr(options.args, 'full', False):
         if not options.rawlog: logging.info(f"Building a virtual environment that can run every python script in {options.script_dir}.")
 
@@ -4653,7 +4765,7 @@ def list_packages(options: Options) -> None:
                 options.all_imports = set()
                 find_imports_and_IO_in_script(options, python_file)
             else:
-                ud.my_critical_error(f"'{options.python_script}' is not a valid Python script.")
+                raise ValueError(f"'{options.python_script}' is not a valid Python script.")
         elif options.python_script.is_dir():
             if not options.rawlog: logging.info(f"Processing an entire folder of Python scripts: {options.python_script}.")
             python_dir = options.python_script
@@ -4666,9 +4778,9 @@ def list_packages(options: Options) -> None:
                 if not options.rawlog: logging.info("Using custom script to find imports.")
                 get_all_imports(options, options.python_script)
         else:
-            ud.my_critical_error(f"The file or directory {options.python_script} does not exist.")
+            raise FileNotFoundError(f"The file or directory {options.python_script} does not exist.")
     else:
-        raise(ValueError(f"Unexpected type for options.python_script: {type(options.python_script)}"))
+        raise ValueError(f"Unexpected type for options.python_script: {type(options.python_script)}")
 
     # Filter out invalid imports before splitting
     options.all_imports = {imp for imp in options.all_imports if re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', imp)}
@@ -4676,23 +4788,30 @@ def list_packages(options: Options) -> None:
     split_imports(options)
 
 
+def stayed_out_dir(options: Options, p: Path) -> bool:
+    """Check if the parent directory of path p contains any substrings from the stay_out_list."""
+    parent_str = str(p.parent)
+    return any(sub in parent_str for sub in options.stay_out_list)
+
+
 def get_all_imports(options: Options, directory: str | os.PathLike[str]) -> None:
     """Get all imports from all Python scripts in a directory."""
     directory = Path(directory).expanduser().resolve()
     options.all_imports = set()
-    total_files = sum(len(files) for _, _, files in os.walk(directory) if 'myenv' not in _)
+    # Build one iterator of candidate files (recursive)
+    candidates = (p for p in directory.rglob("*") if p.is_file() and not stayed_out_dir(options, p))
+    # If you want a progress denominator that matches what you'll actually process:
+    total_files = sum(1 for p in candidates if ud.is_python_script(p))
+    max_digits = len(str(total_files))  # For formatting progress output
     processed_files = 0
-
-    for root, _, files in os.walk(directory):
-        if any(substring in root for substring in options.stay_out_list):
-            continue
-        for file in files:
-            file_path = Path(root) / file
-            if ud.is_python_script(file_path):
-                find_imports_and_IO_in_script(options, file_path)
-                processed_files += 1
-                if not options.rawlog: logging.info(f"Processing {file_path} ({processed_files}/{total_files})")
-
+    # Recreate the iterator (generators are single-use)
+    candidates = (p for p in directory.rglob("*") if p.is_file() and not stayed_out_dir(options, p))
+    for file_path in candidates:
+        if ud.is_python_script(file_path):
+            find_imports_and_IO_in_script(options, file_path)
+            processed_files += 1
+            if not options.rawlog:
+                logging.info(f"Processing file {processed_files:>{max_digits}}/{total_files} : {file_path}")
     if not options.rawlog: logging.info(f"\nFinished processing files in {directory}")  # No period at the end because sometimes directory = '.'
 
 
@@ -4734,9 +4853,8 @@ def download_packages(options: Options) -> bool:
 
     try:
         if not options.rawlog: logging.info(f"Writing download script to {options.download_script_path}")
-        with open(options.download_script_path, 'w') as f:
-            f.write(download_script)
-        os.chmod(options.download_script_path, 0o755)
+        options.download_script_path.write_text(download_script, encoding=ud.DEFAULT_ENCODING)
+        options.download_script_path.chmod(0o755)
         # Run the initial download script and capture the output
         result = ud.my_popen([options.download_script_path])
         return result.returncode == 0
@@ -4803,52 +4921,6 @@ def install_package(package_name: str, options: Options) -> bool:
             if not options.rawlog: logging.info(f"Successfully installed {package_name}")
         return result.returncode == 0
     return result.returncode == 0
-
-
-def check_packages_in_venv(options: Options, package: str | None = None,
-                           venv_dir: str | os.PathLike[str] | None = None) -> bool:
-    """Check if packages can be imported in the specified virtual environment."""
-    if not venv_dir:
-        venv_dir = options.venv_dir
-    else:
-        venv_dir = Path(venv_dir).expanduser().resolve()
-    if sys.platform == "win32":
-        venv_python = venv_dir / "Scripts" / "python.exe"
-    else:
-        venv_python = venv_dir / "bin" / "python"
-    if package:
-        packages = [options.reversed_module_aliases.get(package, package)]
-    else:
-        use_pip_list(options)
-        packages = [options.reversed_module_aliases.get(pkg, pkg) for pkg in options.uninstalled_imports]
-    python_code = f"""
-import sys
-from importlib import import_module
-successes = []
-failures = []
-counter = 0
-for package in {packages!r}:
-    counter += 1
-    try:
-        import_module(package)
-        successes.append(package)
-    except ImportError:
-        failures.append(package)
-if failures:
-    print("Failed packages: " + ", ".join(failures))
-    sys.exit(1)
-elif len(successes) != counter:
-    print(f"Warning: No failures, but only recorded {{len(successes)}} successes out of {{counter}}.")
-    sys.exit(2)
-else:
-    print(f"All {{len(successes)}} (out of {{counter}}) packages imported successfully.")
-    sys.exit(0)
-"""
-    result = subprocess.run([venv_python, "-c", python_code],
-                            capture_output=True, text=True, check=False)
-    logging.debug("check_packages_in_venv stdout:\n%s", result.stdout)
-    logging.debug("check_packages_in_venv stderr:\n%s", result.stderr)
-    return "packages imported successfully" in result.stdout
 
 
 def recover_pip_versions(output: str, options: Options) -> None:
@@ -4937,8 +5009,7 @@ print("\\n".join(installed_packages + available_modules + list(builtin_modules))
         logging.debug(f"\n{options.pip_list = }")
 
         pip_list_filename = options.my_dir / f"pip_list_{options.timestamp}.txt"
-        with open(pip_list_filename, 'w') as f:
-            f.write('\n'.join(options.pip_list))
+        pip_list_filename.write_text('\n'.join(options.pip_list), encoding=ud.DEFAULT_ENCODING)
 
     new_uninstalled_imports = options.installed_imports - set(options.pip_list)
     options.uninstalled_imports = options.uninstalled_imports.union(new_uninstalled_imports)
@@ -5019,7 +5090,7 @@ def setup_virtualenv(options: Options) -> bool:
 
     # Activate virtual environment and install wheel
     install_command = [options.venv_pip, "install", "wheel"]
-    logging.info("Running pip install: %s", ' '.join(shlex.quote(os.fspath(arg)) for arg in install_command))
+    logging.info(f"Running pip install: {' '.join(shlex.quote(os.fspath(arg)) for arg in install_command)}")
     subprocess.run(install_command, check=True)
     if not options.rawlog: logging.info("Wheel installed in the virtual environment.")
 
@@ -5041,6 +5112,25 @@ def is_virtualenv() -> bool:
     return sys.prefix != sys.base_prefix
 
 
+def _coerce_log_mode(value: Any) -> int:
+    """Accept old string values like 'INFO' (or '20') and return an int."""
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        s = value.strip()
+        # Handle numeric strings like "20"
+        try:
+            return int(s)
+        except ValueError:
+            pass
+        # Handle level names like "INFO", "debug", etc. (case-insensitive)
+        lvl = logging.getLevelName(s.upper())
+        if isinstance(lvl, int):
+            return lvl
+    logging.warning(f"Unrecognized log_mode {value!r}; defaulting to INFO")
+    return logging.INFO
+
+
 def _json_default(o: object) -> dict[str, str | list[Any] | dict[str, Any]]:
     """Custom JSON serializer for non-serializable objects."""
     if isinstance(o, Path):
@@ -5057,7 +5147,7 @@ def _json_object_hook(d: dict[str, Any]) -> object:
     """Custom JSON deserializer for non-serializable objects. Converts JSON objects back to their original types."""
     t = d.get("__type__")
     if t == "path":
-        return Path(d["value"])
+        return Path(d["value"])  # Don't resolve() here; leave it to the caller
     if t == "set":
         return set(d["value"])
     if t == "namespace":
@@ -5084,14 +5174,19 @@ def save_options_to_json(options: Options) -> None:
 
 def load_options_from_json(options: Options, json_file: str | os.PathLike[str]) -> Options | None:
     """Load the options object from a JSON file."""
-    json_file = Path(json_file)
+    json_file = Path(json_file).expanduser().resolve()
     if not json_file.is_file():
         logging.error(f"JSON file {json_file} does not exist.")
         return None
     with open(json_file, 'r', encoding=ud.DEFAULT_ENCODING) as file:
         options_dict = json.load(file, object_hook=_json_object_hook)
+
+    # Backwards compatibility: coerce old string log levels to ints
+    if "log_mode" in options_dict:
+        options_dict["log_mode"] = _coerce_log_mode(options_dict["log_mode"])
+
     # Create a new Options object and set attributes from the dictionary
-    options_FROM_JSON = Options()
+    options_FROM_JSON = copy.deepcopy(Options())  # Just in case.
     for key, value in options_dict.items():
         setattr(options_FROM_JSON, key, value)
     if not options.rawlog: logging.info(f"options loaded from {json_file}")
@@ -5100,13 +5195,13 @@ def load_options_from_json(options: Options, json_file: str | os.PathLike[str]) 
 
 def load_last_used_options(options: Options) -> Options | None:
     """Look for the most recent JSON file in the script directory that matches the script name and load it into a new Options object."""
-    # json_files = [f for f in options.script_dir.iterdir() if f.name.startswith("."+options.python_script.name) and f.name.casefold().endswith('.json')]
+    # json_files = [f for f in options.script_dir.iterdir() if f.name.startswith("."+options.python_script.name) and f.suffix.casefold() == '.json']
     pattern = re.compile(r"last-used-on-(\d{8}-\d{6})")
     json_files = [
         f
         for f in options.script_dir.iterdir()
         if f.name.startswith("." + options.python_script.name)
-        and f.name.casefold().endswith(".json")
+        and f.suffix.casefold() == ".json"
         and (m := pattern.search(f.name))        # extract timestamp
         and m.group(1) >= options.pathlibcutoff  # compare as strings
     ]
@@ -5118,7 +5213,7 @@ def load_last_used_options(options: Options) -> Options | None:
     return load_options_from_json(options, options.script_dir / json_files[0])
 
 
-def load_last_used_venv_dir(options: Options) -> str | None:
+def load_last_used_venv_dir(options: Options) -> Path | None:
     """Look for the most recent JSON file in the script directory that matches the script name and return the venv_dir from it."""
     last_used_options = load_last_used_options(options)
     if not last_used_options:
@@ -5217,15 +5312,19 @@ def check_venv_dir(options: Options, options_from_cache: Options) -> bool:
     return False
 
 
-def find_match_dir_in_cache(options: Options) -> str | None:
+def find_match_dir_in_cache(options: Options) -> Path | None:
     """
     Try to find a matching virtual environment directory in the cache.
 
-    Parameters:
-    - options: Options object containing the necessary parameters.
+    Args:
+        options: Options object containing the necessary parameters.
 
     Returns:
-    - The path to the matching virtual environment directory if found, otherwise None.
+        The path to the matching virtual environment directory if found, otherwise None.
+
+    Raises:
+        None, but logs errors if the combination of flags is invalid, if no matching venv is found,
+        or if the cached venv is invalid.
     """
     if not getattr(options.args, 'latest',    False) and \
        not getattr(options.args, 'oldest',    False) and \
@@ -5325,9 +5424,9 @@ def find_match_dir_in_cache(options: Options) -> str | None:
 
 def is_standard_path(options: Options, path: str | os.PathLike[str]) -> bool:
     """Check if the given path is a standard system path or part of a virtual environment."""
-    p = Path(path).absolute()  # use absolute, don't resolve symlinks unless you need canonical paths
-    standard_paths = [Path(os.sep) / "usr" / "lib",
-                      Path(os.sep) / "usr" / "local" / "lib"]
+    p = Path(path).expanduser().resolve()
+    standard_paths = [Path("/") / "usr" / "lib",
+                      Path("/") / "usr" / "local" / "lib"]
     # Check if path is inside standard system paths
     for std_path in standard_paths:
         if p.is_relative_to(std_path):  # Python 3.9+
@@ -5342,39 +5441,38 @@ def is_standard_path(options: Options, path: str | os.PathLike[str]) -> bool:
         for i, comp in enumerate(parts[:-1]):
             if comp in ("lib", "lib64"):
                 nxt = parts[i + 1]
-                if nxt == "python" or nxt.startswith("python"):
+                if nxt.startswith("python"):  # also matches "python"
                     return True
     return False
 
 
-def only_search_here_filename_boolean(filename: str, thestring: str) -> bool:
+def only_search_here_filename_boolean(filename: str | os.PathLike[str], thestring: str) -> bool:
     """Check if the given filename contains thestring, which is used to determine if the search is limited to the current directory."""
-    return thestring in filename
+    return thestring in os.fspath(filename)
 
 
-def search_anywhere_filename_boolean(filename: str, thestring: str) -> bool:
+def search_anywhere_filename_boolean(filename: str | os.PathLike[str], thestring: str) -> bool:
     """Check if the given filename does NOT contain thestring. By default, those files are assumed to have been created by searching above the current directory."""
-    return thestring not in filename
+    return thestring not in os.fspath(filename)
 
 
-def only_search_here_path_boolean(options: Options, path: str) -> bool:
+def only_search_here_path_boolean(options: Options, path: str | os.PathLike[str]) -> bool:
     """Check if the given path is in the current directory."""
     return Path(path).absolute().is_relative_to(options.cwd)
 
 
-def search_anywhere_path_boolean(options: Options, path: str) -> bool:
+def search_anywhere_path_boolean(options: Options, path: str | os.PathLike[str]) -> bool:
     """Return True regardless."""
     return True
 
 
-def dict_of_custom_modules(options: Options) -> dict[str, str]:
-    """Create a dictionary of all local custom modules in the non-standard sys.path directories and their associated filepaths."""
+def dict_of_custom_modules(options: Options) -> dict[str, Path]:
+    """Create (or load) a dictionary of all local custom modules in the non-standard sys.path directories and their associated filepaths."""
     # If -rc and -no-cache were not specified, look for a pickle file with the custom modules dictionary the last time this script was run.
 
     # I.f.f. options.search_above_this_dir is True, then search above the current directory for custom modules.
     # Either way, only load custom module pickle files that searched in the same places as requested.
     search_above_text_to_match = 'only_search_here_'  # For legacy reasons, custom module pickle files are assumed to have searched above the current directory unless this text is present in the filename.
-    init_name = "__init__.py"  # This is used to identify package directories.
     if options.search_above_this_dir:
         search_above_text_to_write = '_'  # This will be added to the filename of the custom modules pickle file.
         search_constraint_filename_boolean = search_anywhere_filename_boolean
@@ -5384,45 +5482,88 @@ def dict_of_custom_modules(options: Options) -> dict[str, str]:
         search_constraint_filename_boolean = only_search_here_filename_boolean
         search_constraint_path_boolean     = only_search_here_path_boolean
 
+    logging.debug(f"Searching for custom modules pickle files with constraint: {search_above_text_to_match = }")
     if not getattr(options.args, 'rc',       False) and \
        not getattr(options.args, 'no_cache', False):
-        for file in options.cwd.iterdir():
-            if file.name.startswith(f'.{options.my_name}_custom_modules_') and \
-               file.name.casefold().endswith('.pkl') and options.computer_name in file.name and \
-               search_constraint_filename_boolean(file.name, search_above_text_to_match):
-                if not options.rawlog: logging.info(f"Loading custom modules from {file}")
-                with open(file, 'rb') as f:
-                    custom_modules = pickle.load(f)
-                pattern = re.compile(r"(\d{8}-\d{6}).pkl$")
-                if (m := pattern.search(file.name)) and m.group(1) < options.pathlibcutoff:
-                    if not options.rawlog: logging.info(f"Custom modules file {file} is from date {m.group(1)} which is older than the point when paths were stored as Paths (which happened on {options.pathlibcutoff}). Converting all paths to pathlib.Path objects.")
-                    custom_modules = {k: Path(v) for k, v in custom_modules.items()}
-                return custom_modules
+        try:
+            potential_files = [file for file in options.cwd.iterdir()
+                               if file.name.startswith(f'.{options.my_name}_custom_modules_') and
+                                  file.suffix.casefold() == '.pkl' and
+                                  options.computer_name in file.name and
+                                  search_constraint_filename_boolean(file.name, search_above_text_to_match)]
+            if not potential_files:
+                if not options.rawlog: logging.info("No existing custom modules pickle files found in the current directory.")
+            else:
+                # If multiple files are found, pick the most recent one based on the timestamp in the filename.
+                potential_files_with_timestamps = [(file, ud.extract_timestamp(file.name)) for file in potential_files]
+                # Filter out files where timestamp extraction failed
+                potential_files_with_timestamps = [(file, ts) for file, ts in potential_files_with_timestamps if ts is not None]
+                if not potential_files_with_timestamps:
+                    if not options.rawlog: logging.info("No valid timestamps found in custom modules pickle filenames.")
+                else:
+                    # Sort by timestamp descending
+                    potential_files_with_timestamps.sort(key=lambda x: x[1], reverse=True)
+                    most_recent_file = potential_files_with_timestamps[0][0]
+                    most_recent_timestamp = potential_files_with_timestamps[0][1]
+                    if not options.rawlog: logging.info(f"Loading custom modules from most recent pickle file: {most_recent_file}")
+                    with open(most_recent_file, 'rb') as f:
+                        custom_modules = pickle.load(f)
+                    if most_recent_timestamp < options.pathlibcutoff:
+                        if not options.rawlog: logging.info(f"Custom modules file {most_recent_file} is from date {most_recent_timestamp} which is older than the point when paths were stored as Paths (which happened on {options.pathlibcutoff}). Converting all paths to pathlib.Path objects.")
+                        custom_modules = {k: Path(v).expanduser().resolve() for k, v in custom_modules.items()}
+                    return custom_modules
+        except Exception as e:
+            logging.error(f"Error loading custom modules from pickle file: {e}\nException type: ", exc_info=True)
+            logging.error("Falling back to regenerating the custom modules dictionary from sys.path.")
 
-    custom_modules = {}
+    custom_modules: dict[str, Path] = {}
+    exts_tuple  = tuple(ud.python_extensions)
+    package_dirs: set[Path] = set()  # directories confirmed to be packages
 
+    # Use lru_cache to speed up repeated calls to is_standard_path()
+    @lru_cache(maxsize=8192)
+    def _is_std_path_cached(p_str: str) -> bool:
+        return is_standard_path(options, Path(p_str))
+
+    logging.debug("Generating custom modules dictionary from sys.path...")
     for path in map(Path, sys.path):
-        if not is_standard_path(options, path) and path.is_dir() and search_constraint_path_boolean(options, path):
-            for root, dirs, files in os.walk(path):
-                for file in files:
-                    if any(file.casefold().endswith(ext) for ext in ud.python_extensions) \
-                       and file != init_name:  # Exclude __init__.py files
-                        module_name = os.path.splitext(file)[0]  # Get the module name without the .py extension
-                        if module_name not in custom_modules.keys():
-                            full_path = Path(root) / file
-                            if not is_standard_path(options, full_path):
-                                custom_modules[module_name] = full_path
-                for dir in dirs:
-                    if not is_standard_path(options, Path(root) / dir):
-                        package_path = Path(root) / dir
-                        if (package_path / init_name).is_file():
-                            if dir not in custom_modules and not is_standard_path(options, package_path):
-                                custom_modules[dir] = package_path
-                            # Remove any individual module entries within the package directory
-                            for file in package_path.iterdir():
-                                module_name = file.stem
-                                if module_name in custom_modules and package_path == Path(custom_modules[module_name]).parent:
-                                    del custom_modules[module_name]
+        if not _is_std_path_cached(str(path)) and path.is_dir() and search_constraint_path_boolean(options, path):
+            logging.debug(f"Checking path: {path}")
+            for root, dirs, files in os.walk(path, topdown=True):
+                root_path = Path(root)
+                # If the root itself is standard, skip the whole subtree immediately
+                if _is_std_path_cached(str(root_path)):
+                    dirs[:] = []  # stop descending
+                    continue
+                # PRUNE: remove standard subdirs in-place to avoid descending into them
+                # Also collect package dirs (those with __init__.py) while we're here
+                kept_dirs = []
+                for d in dirs:
+                    pkg = root_path / d
+                    if _is_std_path_cached(str(pkg)):
+                        continue  # prune
+                    kept_dirs.append(d)
+                    if (pkg / "__init__.py").is_file():
+                        package_dirs.add(pkg)
+                        # prefer packages; first occurrence wins
+                        custom_modules.setdefault(d, pkg)
+                dirs[:] = kept_dirs  # apply pruning
+                # Files: skip quickly by filename; only build Path when needed
+                for fname in files:
+                    fl = fname.casefold()
+                    # fast extension + __init__ checks (exactly final extension)
+                    if not any(fl.endswith(ext) for ext in exts_tuple):
+                        continue
+                    if fl == "__init__.py":
+                        continue
+                    fpath = root_path / fname
+                    if _is_std_path_cached(str(fpath)):
+                        continue
+                    # if file lives inside a known package dir, skip (package already recorded)
+                    if fpath.parent in package_dirs:
+                        continue
+                    custom_modules.setdefault(fpath.stem, fpath)
+
     # Now save to a pickle file:
     current_time = dt.datetime.now().strftime('%Y%m%d-%H%M%S')
     custom_filename = f'.{options.my_name}_custom_modules_{options.computer_name}{search_above_text_to_write}{current_time}.pkl'
@@ -5494,6 +5635,8 @@ def main() -> None:
     memory_handler = ud.configure_logging(options.my_name, log_level=options.log_mode,
                                           rawlog=options.rawlog)
 
+    options.computer_name = ud.get_computer_name(options.rawlog)
+
     options.python_command = find_preferred_python_version()
     if options.python_command:
         logging.debug(f"Python {ud.PY_VERSION} is available at: {options.python_command}")
@@ -5505,6 +5648,8 @@ def main() -> None:
         options.alias = options.args.alias
         add_alias(options)
         sys.exit(0)
+    elif getattr(options.args, 'full', False) and options.python_script:
+        ud.my_critical_error("Full mode is not supported with a script argument.")
     elif options.python_script:
         pass  # If a script was provided as an argument, skip the rest of these checks.
     elif getattr(options.args, 'blank_slate', False):
@@ -5518,15 +5663,15 @@ def main() -> None:
         for file in options.cwd.iterdir():
             logging.debug(f"Checking {file}")
             if file.is_file():
-                if (file.name.startswith(f'.{options.my_name}-')                 and file.name.casefold().endswith('.out') ) or \
-                   (file.name.startswith(f'.{options.my_name}-')                 and file.name.casefold().endswith('.err') ) or \
-                   (file.name.startswith(f'.{options.my_name}_custom_modules_')  and file.name.casefold().endswith('.pkl') ) or \
-                   (file.name.startswith('.') and f'-{options.my_name}-' in file.name and file.name.casefold().endswith('.json')):
+                if (file.name.startswith(f'.{options.my_name}-')                      and file.suffix.casefold() == '.out' ) or \
+                   (file.name.startswith(f'.{options.my_name}-')                      and file.suffix.casefold() == '.err' ) or \
+                   (file.name.startswith(f'.{options.my_name}_custom_modules_')       and file.suffix.casefold() == '.pkl' ) or \
+                   (file.name.startswith('.') and f'-{options.my_name}-' in file.name and file.suffix.casefold() == '.json'):
                     try:
                         logging.info(f"Deleting {file}")
                         file.unlink()
                     except BaseException:
-                        logging.error(f"Error deleting {file}")
+                        logging.exception(f"Error deleting {file}")
         sys.exit(0)
     elif getattr(options.args, 'full', False):  # implied by now: and not options.python_script:
         options.python_script = options.cwd
@@ -5614,15 +5759,16 @@ def main() -> None:
             match_dir = None
         else:
             match_dir = find_match_dir_in_cache(options)
-        if not match_dir:
+        if match_dir is None:
             if not options.rawlog: logging.info(f"Creating new virtual environment '{options.venv_name}'...")
             if setup_virtualenv(options):
                 match_dir = options.venv_dir
+                created_new_venv = True
             else:
                 ud.my_critical_error("Failed to create a virtual environment.", choose_breakpoint=True)
-                match_dir = None
         else:
-            if not options.rawlog: logging.info(f"Using directory: {match_dir}")
+            if not options.rawlog: logging.info(f"Using existing virtual environment: {match_dir}")
+            created_new_venv = False
 
         if match_dir:
             options.set_venv_dir(match_dir)
@@ -5631,7 +5777,7 @@ def main() -> None:
             if not options.rawlog: logging.info(f"Elapsed time: {elapsed_time}")
             if not getattr(options.args, 'full', False):
                 command_list = [options.venv_python, options.python_script] + [arg for arg in options.script_args]
-                if not options.rawlog: logging.info("Running command: %s", ' '.join(shlex.quote(os.fspath(arg)) for arg in command_list))
+                if not options.rawlog: logging.info(f"Running command: {' '.join(shlex.quote(os.fspath(arg)) for arg in command_list)}")
                 result = subprocess.run(command_list)
                 end_time = dt.datetime.now()
                 elapsed_time = end_time - start_venv_time
@@ -5640,6 +5786,11 @@ def main() -> None:
                     logging.error(f"Error running script: {result.stderr}")
             if options.venv_dir.name.startswith('failed-') and options.simultaneous_success:
                 # If the program has made it to this point, it has run successfully, so the venv directory can be renamed because it DIDN'T fail.
+                new = options.venv_dir.with_name(options.venv_dir.name.removeprefix('failed-'))
+                if new != options.venv_dir:
+                    options.venv_dir.rename(new)
+                options.set_venv_dir(new)
+
                 options.venv_dir.rename(options.venv_dir.replace('failed-', ''))
                 options.set_venv_dir(options.venv_dir.replace('failed-', ''))
                 cfg_file_path = options.venv_dir / 'pyvenv.cfg'
@@ -5664,7 +5815,9 @@ def main() -> None:
             save_options_to_json(options)
 
             if getattr(options.args, 'full', False):
-                logging.info(f"Successfully used 'full' mode to build/find a virtual environment that can run all python scripts in {options.script_dir}. Use this virtual environment directory:\n{options.venv_dir}")
+                built_or_found = "built" if created_new_venv else "found"
+                logging.info(f"Successfully {built_or_found} a virtual environment that can run all python scripts in {options.script_dir}.\n"
+                             f"Use this virtual environment:\n{options.venv_dir}")
 
     ud.print_all_errors(memory_handler, options.rawlog)
     logging.shutdown()
