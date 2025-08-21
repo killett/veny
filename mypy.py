@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 
-# Written by Emmy Killett (she/her), ChatGPT 4o (it/its), ChatGPT o1-preview (it/its), ChatGPT o3-mini-high (it/its), ChatGPT o4-mini-high (it/its), and GitHub Copilot (it/its).
+# Written by Emmy Killett (she/her), ChatGPT 4o (it/its), ChatGPT o1-preview (it/its), ChatGPT o3-mini-high (it/its), ChatGPT o4-mini-high (it/its), ChatGPT 5 (it/its), and GitHub Copilot (it/its).
 from __future__ import annotations  # For Python 3.7+ compatibility with type annotations
 import os
-from platform import node
 import sys
 import subprocess
 import datetime as dt
@@ -17,7 +16,6 @@ import venv
 import pickle
 from pathlib import Path  # Preferred over os.path for path manipulations.
 from typing import Any
-from collections.abc import Iterable
 import logging
 import tempfile
 import shlex  # For safely quoting shell commands
@@ -36,16 +34,71 @@ class Options():
 
     def __init__(self) -> None:
         """Initialize the Options class with default values."""
-        self.log_mode: int = logging.INFO  # Use -debug to change to logging.DEBUG.
-        self.search_above_this_dir: bool = True
-        self.my_filepath:   Path = Path(sys.argv[0]).expanduser().resolve()  # Full path to this script
-        self.home:   Path = Path.home()  # User's home directory
-        # The base name of this script without the .py extension:
-        self.my_name: str = self.my_filepath.stem
+        self.log_mode:                      int = logging.INFO  # Use -debug to change to logging.DEBUG.
+        self.search_above_this_dir:        bool = True
+        self.my_filepath:                  Path = Path(sys.argv[0]).expanduser().resolve()  # Full (invoked) path to this script
+        self.my_name:                       str = self.my_filepath.stem  # The base name of this script without the .py extension
+        self.home:                         Path = Path.home()  # User's home directory
         # The "my_dir" is NOT the directory where this script is located.
         # Instead, it's the directory where this script will store its virtual environments and packages.
-        self.my_dir: Path = self.home / self.my_name
-        self.manual_instructions: str = f"""
+        self.my_dir:                       Path = self.home / self.my_name
+        self.python_command:                str = ''
+        self.shell:                         str = ''
+        self.rc_file:               Path | None = None
+        self.alias:                         str = ''  # The alias to use for this script, if any.
+        self.additional_alias_files: list[Path] = []
+        self.alias_command:          str | None = None  # The command to run when the alias is used.
+        self.computer_name:                 str = ''  # The name of this computer, retrieved from various methods.
+        self.cwd:                          Path = Path.cwd()
+        self.venv_name:                     str = 'myenv'  # Can NOT include dashes ('-')
+        self.packages_dir:                 Path = self.my_dir / "packages"
+        self.test_dir:                     Path = self.my_dir / "test"
+        self.uninstalled_imports:      set[str] = set()
+        self.installed_imports:        set[str] = set()
+        self.bad_imports:              set[str] = set()
+        self.all_imports:              set[str] = set()
+        self.total_imports:                 int = 0
+        self.custom_modules:     dict[str, str] = {}
+        self.subfolders:              list[str] = []
+        self.samedir_files:          list[Path] = []
+        self.pip_list:                list[str] = []
+        self.loaded_custom_modules:    set[str] = set()
+        self.pretty_list:                   str = ''  # A pretty-printed string listing "all" imports
+        self.timestamp:                     str = dt.datetime.now().strftime('%Y%m%d-%H%M%S')
+        self.python_script:         Path | None = None
+        self.script_name:                   str = ''  # python_script without the .py extension
+        self.script_dir:            Path | None = None
+        self.script_args:             list[str] = []
+        self.options_json_filepath: Path | None = None
+        # Before 2025-08-10 at 22:49:00, paths were stored as strings. After that date, they were stored as pathlib.Path objects. Any .pkl files created before that date have their paths converted to pathlib.Path objects when loaded. Any .json files created before that date are ignored when loading last-used options.
+        self.pathlibcutoff:                 str = "20250810-224900"
+        self.current_pip_version:           str = ''
+        self.new_pip_version:               str = ''
+        self.venv_dir:              Path | None = None
+        self.venv_python:           Path | None = None
+        self.venv_pip:              Path | None = None
+        self.requirements_file:     Path | None = None
+        self.extra_requirements: dict[str, str] = {}
+        self.extra_requirements_file:       str = "extra_requirements.txt"
+        self.download_script_path:  Path | None = None
+        self.simultaneous_success:         bool = False
+        self.max_checks:                    int = 10  # Maximum number of times to check any repeated process.
+        self.check_interval:                int = 5  # Number of seconds to wait between checks.
+        self.rawlog:                       bool = False
+        self.pipreqs_available:            bool = False
+        self.univ_defs_path:               Path = Path(ud.__file__).expanduser().resolve() # Full path to univ_defs.py
+        self.univ_defs_sys_path_script:    Path = self.my_dir / "univ_defs_sys_path_script.py"
+        self.mydiff_path:                  Path = self.my_dir / "mydiff.py"
+        self.myaudit_path:                 Path = self.my_dir / "myaudit.py"
+        self.multireplace_path:            Path = self.my_dir / "multireplace.py"
+        self.treeview_path:                Path = self.my_dir / "treeview.py"
+        self.read_files:             list[Path] = []  # List of files read       by the Python script.
+        self.write_files:            list[Path] = []  # List of files written    by the Python script.
+        self.download_urls:          list[Path] = []  # List of  URLs downloaded by the Python script.
+        self.upload_urls:            list[Path] = []  # List of  URLs uploaded   by the Python script.
+        self.current_method_name:           str = ''  # Name of the current method being executed.
+        self.args:    argparse.Namespace | None = None
+        self.manual_instructions:           str = f"""
 This program acts as a wrapper around Python to automate the creation of virtual environments and the installation of any required packages. Instead of typing "python3 script.py", you can type "{self.my_name} script.py" to run script.py in a virtual environment which has all the required packages.
 
 It's convenient to add an alias to the shell configuration file so that typing ALIAS anywhere runs this program. This can either be done by running this program with the "-alias ALIAS" command line argument (for example: "python3 {self.my_name}.py -alias {self.my_name}") or by following the manual instructions below. The following steps assume this program is saved as {self.my_name}.py in your home directory (~), but you can adjust the path and filename to match your setup.
@@ -68,69 +121,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
 4. Reload your bash configuration by running the following command:
    source ~/.bashrc
 """
-        self.python_command: str = ''
-        self.shell: str = ''
-        self.rc_file: Path | None = None
-        # Before 2025-08-10 at 22:49:00, paths were stored as strings. After that date, they were stored as pathlib.Path objects. Any .pkl files created before that date have their paths converted to pathlib.Path objects when loaded. Any .json files created before that date are ignored when loading last-used options.
-        self.pathlibcutoff: str = "20250810-224900"
-        self.alias: str = ''  # The alias to use for this script, if any.
-        self.additional_alias_files:   list[Path] = []
-        self.alias_command:            str | None = None  # The command to run when the alias is used.
-        self.computer_name:                   str = ''  # The name of this computer, retrieved from various methods.
-        self.cwd:                            Path = Path.cwd()
-        self.venv_name:                       str = 'myenv'  # Can NOT include dashes ('-')
-        self.packages_dir:                   Path = self.my_dir / "packages"
-        self.test_dir:                       Path = self.my_dir / "test"
-        self.uninstalled_imports:   set[str]      = set()
-        self.installed_imports:     set[str]      = set()
-        self.bad_imports:           set[str]      = set()
-        self.all_imports:           set[str]      = set()
-        self.total_imports:                   int = 0
-        self.custom_modules:       dict[str, str] = {}
-        self.subfolders:           list[str]      = []
-        self.samedir_files:        list[Path]     = []
-        self.pip_list:             list[str]      = []
-        self.loaded_custom_modules: set[str]      = set()
-        self.pretty_list: str = ''  # A pretty-printed string listing "all" imports
-        self.timestamp: str = dt.datetime.now().strftime('%Y%m%d-%H%M%S')
-        self.python_script: Path | None = None
-        self.script_name: str = ''  # python_script without the .py extension
-        self.script_dir: Path | None = None
-        self.script_args:        list[str] = []
-        self.options_json_filepath: Path | None = None
-        self.current_pip_version:                   str = ''
-        self.new_pip_version:                       str = ''
-        self.venv_dir:                      Path | None = None
-        self.venv_python:                   Path | None = None
-        self.venv_pip:                      Path | None = None
-        self.requirements_file:             Path | None = None
-        self.extra_requirements:         dict[str, str] = {}
-        self.extra_requirements_file:               str = "extra_requirements.txt"
-        self.download_script_path:          Path | None = None
-        self.simultaneous_success: bool = False
-        self.max_checks: int = 10  # Maximum number of times to check any repeated process.
-        self.check_interval: int = 5  # Number of seconds to wait between checks.
-        self.rawlog: bool = False
-        self.pipreqs_available: bool = False
-        self.univ_defs_path:            Path = Path(ud.__file__).expanduser().resolve() # Full path to univ_defs.py
-        self.univ_defs_sys_path_script: Path = self.my_dir / "univ_defs_sys_path_script.py"
-        self.mydiff_path:               Path = self.my_dir / "mydiff.py"
-        self.myaudit_path:              Path = self.my_dir / "myaudit.py"
-        self.multireplace_path:         Path = self.my_dir / "multireplace.py"
-        self.treeview_path:             Path = self.my_dir / "treeview.py"
-        ud.verify_script(self.univ_defs_sys_path_script, ud.UNIV_DEFS_SYS_PATH_SCRIPT)
-        ud.verify_script(self.mydiff_path,               ud.MYDIFF_SCRIPT)
-        ud.verify_script(self.myaudit_path,              ud.MYAUDIT_SCRIPT)
-        ud.verify_script(self.multireplace_path,         ud.MULTIREPLACE_SCRIPT)
-        ud.verify_script(self.treeview_path,             ud.TREEVIEW_SCRIPT)
-        self.read_files:    list[Path] = []  # List of files read       by the Python script.
-        self.write_files:   list[Path] = []  # List of files written    by the Python script.
-        self.download_urls: list[Path] = []  # List of  URLs downloaded by the Python script.
-        self.upload_urls:   list[Path] = []  # List of  URLs uploaded   by the Python script.
-        self.current_method_name: str = ''  # Name of the current method being executed.
-        self.args: argparse.Namespace | None = None
-        # Some packages also need other packages to be installed.
-        self.also_needs: dict[str, list[str]] = {
+        self.also_needs: dict[str, list[str]] = {  # Some packages also need other packages to be installed.
             'xarray': ['dask', 'netcdf4', 'h5netcdf'],
             # NOT PIP PACKAGES: 'pyautogui': ['scrot', 'python3-tk']
             # Add more packages and their dependencies here
@@ -2309,7 +2300,7 @@ def parse_arguments(options: Options) -> None:
     options.args = parser.parse_args()
 
     if getattr(options.args, 'version', False):
-        print(__version__)
+        print(f"{options.my_name} {__version__}")
         sys.exit(0)
     # Print instructions for manually adding the alias to the shell configuration file, etc.
     if getattr(options.args, 'manual', False):
@@ -2562,7 +2553,7 @@ def _record_IO(options: Options, file_content: str,
         None, but logs an error if the target is not a string or if the node does not have a source segment.
     """
     snippet = ast.get_source_segment(file_content, node) or ""
-    if not options.rawlog: logging.info(f"I/O operation → {attr}: {target!r} (line {node.lineno}: {snippet.strip()} - found by {options.current_method_name})")
+    if not options.rawlog: logging.info(f"I/O operation → {attr}: {target!r} (line {node.lineno}: {snippet.strip()} - found by {ud.return_method_name(levels_up=2)})")
     if target not in getattr(options, attr):
         getattr(options, attr).append(target)
 
@@ -2650,7 +2641,6 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
     def _process_open(self, node: ast.Call) -> bool:
         """Process open(...) calls."""
-        ud.return_method_name(self.options)
         # Only examine open(...)
         if (isinstance(node.func, ast.Name) and node.func.id == 'open'
             and node.args):  # protect against calls without arguments
@@ -2674,15 +2664,16 @@ class FileOperationsVisitor(ast.NodeVisitor):
                 # because we don't care about binary mode.
                 mode = (mode or 'r').replace('b', '')
                 if 'r' in mode:
-                    _record_IO(self.options, self.file_content, 'read_files', filename, node)
+                    _record_IO(self.options, self.file_content, 'read_files',
+                               filename, node)
                 elif any(m in mode for m in ('w','a','x')):
-                    _record_IO(self.options, self.file_content, 'write_files', filename, node)
+                    _record_IO(self.options, self.file_content, 'write_files',
+                               filename, node)
                 return True
         return False
 
     def _process_pathlib(self, node: ast.Call) -> bool:
         """Process pathlib.Path(...) calls."""
-        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Call)
                 and isinstance(node.func.value.func, ast.Attribute)
@@ -2698,16 +2689,17 @@ class FileOperationsVisitor(ast.NodeVisitor):
                 return False
             # classify
             if method in ('read_text','read_bytes'):
-                _record_IO(self.options, self.file_content, 'read_files', filename, node)
+                _record_IO(self.options, self.file_content, 'read_files',
+                           filename, node)
                 return True
             elif method in ('write_text','write_bytes','open'):
-                _record_IO(self.options, self.file_content, 'write_files', filename, node)
+                _record_IO(self.options, self.file_content, 'write_files',
+                           filename, node)
                 return True
         return False
 
     def _process_shutil(self, node: ast.Call) -> bool:
         """Process shutil operations like copy, move, etc."""
-        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'shutil'
@@ -2716,16 +2708,17 @@ class FileOperationsVisitor(ast.NodeVisitor):
             src = safe_eval(ast.unparse(node.args[0]))
             dst = safe_eval(ast.unparse(node.args[1]))
             if isinstance(src, str):
-                _record_IO(self.options, self.file_content,  'read_files', src, node)
+                _record_IO(self.options, self.file_content,  'read_files',
+                           src, node)
                 return True
             if isinstance(dst, str):
-                _record_IO(self.options, self.file_content, 'write_files', dst, node)
+                _record_IO(self.options, self.file_content, 'write_files',
+                           dst, node)
                 return True
         return False
 
     def _process_os_open(self, node: ast.Call) -> bool:
         """Detect os.open(path, flags, [mode]) and record read/write based on flags."""
-        ud.return_method_name(self.options)
         if not (
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
@@ -2755,7 +2748,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
                     return (False, True)
             # recursive for bitwise ORs: os.O_CREAT | os.O_WRONLY, etc.
             if isinstance(fn, ast.BinOp) and isinstance(fn.op, ast.BitOr):
-                left = _parse_flags(fn.left)
+                left  = _parse_flags(fn.left)
                 right = _parse_flags(fn.right)
                 return (left[0] or right[0], left[1] or right[1])
             # anything else: assume both
@@ -2765,10 +2758,12 @@ class FileOperationsVisitor(ast.NodeVisitor):
         can_read, can_write = _parse_flags(flags_node) if flags_node else (True, False)
         # 4) Record into the right lists
         if can_read:
-            _record_IO(self.options, self.file_content, 'read_files', filename, node)
+            _record_IO(self.options, self.file_content, 'read_files',
+                       filename, node)
             return True
         if can_write:
-            _record_IO(self.options, self.file_content, 'write_files', filename, node)
+            _record_IO(self.options, self.file_content, 'write_files',
+                       filename, node)
             return True
         return False
 
@@ -2780,7 +2775,6 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
         Parses any “>”, “>>” or “<” in the literal command string to pull out filenames.
         """
-        ud.return_method_name(self.options)
         # 1) Identify the call as subprocess.* or os.system/os.popen
         is_sub = (
             isinstance(node.func, ast.Attribute)
@@ -2841,7 +2835,8 @@ class FileOperationsVisitor(ast.NodeVisitor):
             if not filename:
                 continue
             attr = 'write_files' if '>' in op else 'read_files'
-            _record_IO(self.options, self.file_content, attr, filename, node)
+            _record_IO(self.options, self.file_content, attr,
+                       filename, node)
             return True
         # If we reach here, no redirection was found
         return False
@@ -2851,7 +2846,6 @@ class FileOperationsVisitor(ast.NodeVisitor):
         Detect direct libc open calls via ctypes (CDLL/pydll/…)
         and record the path literals passed to open/fopen as writes.
         """
-        ud.return_method_name(self.options)
         # 1) Must be an attribute call, e.g. (<something>).open(...)
         if not isinstance(node.func, ast.Attribute):
             return False
@@ -2881,12 +2875,12 @@ class FileOperationsVisitor(ast.NodeVisitor):
             return False
 
         # 5) Record it as a write
-        _record_IO(self.options, self.file_content, 'write_files', path, node)
+        _record_IO(self.options, self.file_content, 'write_files',
+                   path, node)
         return True
 
     def _process_zipfile(self, node: ast.Call) -> bool:
         """Process zipfile.ZipFile(...) calls like extract, extractall, open."""
-        ud.return_method_name(self.options)
         unpacked = unpack_method_call(node)
         if not unpacked:
             return False
@@ -2903,16 +2897,17 @@ class FileOperationsVisitor(ast.NodeVisitor):
             return False
 
         if mode.startswith('r') and method in ("extract", "extractall", "open"):
-            _record_IO(self.options, self.file_content, "read_files",  filename, node)
+            _record_IO(self.options, self.file_content, "read_files",
+                       filename, node)
             return True
         elif mode.startswith(('w','x','a')):
-            _record_IO(self.options, self.file_content, "write_files", filename, node)
+            _record_IO(self.options, self.file_content, "write_files",
+                       filename, node)
             return True
         return False
 
     def _process_tarfile(self, node: ast.Call) -> bool:
         """Process tarfile.open(...) calls like extract, extractall, open."""
-        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'tarfile'
@@ -2923,16 +2918,17 @@ class FileOperationsVisitor(ast.NodeVisitor):
             method = node.func.attr
             if filename:
                 if mode.startswith('r'):
-                    _record_IO(self.options, self.file_content, 'read_files', filename, node)
+                    _record_IO(self.options, self.file_content, 'read_files',
+                               filename, node)
                     return True
                 elif mode[0] in ('w','a','x'):
-                    _record_IO(self.options, self.file_content, 'write_files', filename, node)
+                    _record_IO(self.options, self.file_content, 'write_files',
+                               filename, node)
                     return True
         return False
 
     def _process_pandas(self, node: ast.Call) -> bool:
         """Process pandas.read_csv/excel, DataFrame.to_csv/excel calls."""
-        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id in ('pd','pandas')):
@@ -2949,16 +2945,17 @@ class FileOperationsVisitor(ast.NodeVisitor):
                         url = maybe
             if url:
                 if fn.startswith('read_'):
-                    _record_IO(self.options, self.file_content, 'read_files', url, node)
+                    _record_IO(self.options, self.file_content, 'read_files',
+                               url, node)
                     return True
                 elif fn.startswith('to_'):
-                    _record_IO(self.options, self.file_content, 'write_files', url, node)
+                    _record_IO(self.options, self.file_content, 'write_files',
+                               url, node)
                     return True
         return False
 
     def _process_numpy(self, node: ast.Call) -> bool:
         """Process numpy.load, save, savez, savez_compressed calls."""
-        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id in ('np','numpy')):
@@ -2966,17 +2963,18 @@ class FileOperationsVisitor(ast.NodeVisitor):
             if fn in ('load',) and node.args:
                 path = _literal_str(node.args[0])
                 if path:
-                    _record_IO(self.options, self.file_content, 'read_files', path, node)
+                    _record_IO(self.options, self.file_content, 'read_files',
+                               path, node)
             elif fn in ('save','savez','savez_compressed') and node.args:
                 path = _literal_str(node.args[0])
                 if path:
-                    _record_IO(self.options, self.file_content, 'write_files', path, node)
+                    _record_IO(self.options, self.file_content, 'write_files',
+                               path, node)
                     return True
         return False
 
     def _process_netcdf4(self, node: ast.Call) -> bool:
         """Process netCDF4.Dataset(...) calls."""
-        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'netCDF4'
@@ -2986,15 +2984,16 @@ class FileOperationsVisitor(ast.NodeVisitor):
             mode     = _literal_str(node.args[1]) if len(node.args) > 1 else 'r'
             if filename:
                 if mode.startswith('r'):
-                    _record_IO(self.options, self.file_content, 'read_files', filename, node)
+                    _record_IO(self.options, self.file_content, 'read_files',
+                               filename, node)
                 else:
-                    _record_IO(self.options, self.file_content, 'write_files', filename, node)
+                    _record_IO(self.options, self.file_content, 'write_files',
+                               filename, node)
                 return True
         return False
 
     def _process_xarray(self, node: ast.Call) -> bool:
         """Process xarray.open_dataset/open_dataarray, to_netcdf calls."""
-        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id in ('xr','xarray')):
@@ -3002,7 +3001,8 @@ class FileOperationsVisitor(ast.NodeVisitor):
             if fn in ('open_dataset','open_dataarray') and node.args:
                 path = _literal_str(node.args[0])
                 if path:
-                    _record_IO(self.options, self.file_content, 'read_files', path, node)
+                    _record_IO(self.options, self.file_content, 'read_files',
+                               path, node)
             elif fn == 'to_netcdf' and node.args:
                 path = _literal_str(node.args[0])
                 for kw in node.keywords:
@@ -3011,13 +3011,13 @@ class FileOperationsVisitor(ast.NodeVisitor):
                         if maybe:
                             path = maybe
                 if path:
-                    _record_IO(self.options, self.file_content, 'write_files', path, node)
+                    _record_IO(self.options, self.file_content, 'write_files',
+                               path, node)
                     return True
         return False
 
     def _process_json(self, node: ast.Call) -> bool:
         """Process json.load, loads, dump, dumps calls."""
-        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'json'
@@ -3026,15 +3026,16 @@ class FileOperationsVisitor(ast.NodeVisitor):
             target = _literal_str(node.args[0])
             if target:
                 if node.func.attr.startswith('load'):
-                    _record_IO(self.options, self.file_content, 'read_files', target, node)
+                    _record_IO(self.options, self.file_content, 'read_files',
+                               target, node)
                 else:
-                    _record_IO(self.options, self.file_content, 'write_files', target, node)
+                    _record_IO(self.options, self.file_content, 'write_files',
+                               target, node)
                 return True
         return False
 
     def _process_csv(self, node: ast.Call) -> bool:
         """Process csv.reader, writer calls."""
-        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'csv'
@@ -3043,15 +3044,16 @@ class FileOperationsVisitor(ast.NodeVisitor):
             target = _literal_str(node.args[0])
             if target:
                 if node.func.attr == 'reader':
-                    _record_IO(self.options, self.file_content,  'read_files', target, node)
+                    _record_IO(self.options, self.file_content,  'read_files',
+                               target, node)
                 else:
-                    _record_IO(self.options, self.file_content, 'write_files', target, node)
+                    _record_IO(self.options, self.file_content, 'write_files',
+                               target, node)
                 return True
         return False
 
     def _process_yaml(self, node: ast.Call) -> bool:
         """Process yaml.safe_load, load, dump calls."""
-        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id in ('yaml','ruamel.yaml')
@@ -3060,15 +3062,16 @@ class FileOperationsVisitor(ast.NodeVisitor):
             target = _literal_str(node.args[-1])
             if target:
                 if node.func.attr in ('safe_load','load'):
-                    _record_IO(self.options, self.file_content,  'read_files', target, node)
+                    _record_IO(self.options, self.file_content,  'read_files',
+                               target, node)
                 else:
-                    _record_IO(self.options, self.file_content, 'write_files', target, node)
+                    _record_IO(self.options, self.file_content, 'write_files',
+                               target, node)
                 return True
         return False
 
     def _process_configparser(self, node: ast.Call) -> bool:
         """Process configparser.ConfigParser(...) calls."""
-        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Call)
                 and isinstance(node.func.value.func, ast.Attribute)
@@ -3079,18 +3082,19 @@ class FileOperationsVisitor(ast.NodeVisitor):
             if mode_call == 'read' and node.args:
                 fp = _literal_str(node.args[0])
                 if fp:
-                    _record_IO(self.options, self.file_content, 'read_files', fp, node)
+                    _record_IO(self.options, self.file_content, 'read_files',
+                               fp, node)
                     return True
             elif mode_call == 'write' and node.args:
                 fp = _literal_str(node.args[0])
                 if fp:
-                    _record_IO(self.options, self.file_content, 'write_files', fp, node)
+                    _record_IO(self.options, self.file_content, 'write_files',
+                               fp, node)
                     return True
         return False
 
     def _process_h5py(self, node: ast.Call) -> bool:
         """Process h5py.File(...) calls."""
-        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'h5py'
@@ -3100,33 +3104,35 @@ class FileOperationsVisitor(ast.NodeVisitor):
             mode = _literal_str(node.args[1]) if len(node.args) > 1 else 'r'
             if fn:
                 if mode.startswith('r'):
-                    _record_IO(self.options, self.file_content, 'read_files', fn, node)
+                    _record_IO(self.options, self.file_content, 'read_files',
+                               fn, node)
                 else:
-                    _record_IO(self.options, self.file_content, 'write_files', fn, node)
+                    _record_IO(self.options, self.file_content, 'write_files',
+                               fn, node)
                 return True
         return False
 
     def _process_pillow(self, node: ast.Call) -> bool:
         """Process PIL.Image.open, save calls."""
-        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'Image'):
             if node.func.attr == 'open' and node.args:
                 fp = _literal_str(node.args[0])
                 if fp:
-                    _record_IO(self.options, self.file_content, 'read_files', fp, node)
+                    _record_IO(self.options, self.file_content, 'read_files',
+                               fp, node)
                     return True
             elif node.func.attr == 'save' and node.args:
                 fp = _literal_str(node.args[0])
                 if fp:
-                    _record_IO(self.options, self.file_content, 'write_files', fp, node)
+                    _record_IO(self.options, self.file_content, 'write_files',
+                               fp, node)
                     return True
         return False
 
     def _process_wave(self, node: ast.Call) -> bool:
         """Process wave.open(...) calls."""
-        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'wave'
@@ -3136,15 +3142,16 @@ class FileOperationsVisitor(ast.NodeVisitor):
             mode = _literal_str(node.args[1]) if len(node.args) > 1 else 'rb'
             if fn:
                 if mode.startswith('r'):
-                    _record_IO(self.options, self.file_content, 'read_files', fn, node)
+                    _record_IO(self.options, self.file_content, 'read_files',
+                               fn, node)
                 else:
-                    _record_IO(self.options, self.file_content, 'write_files', fn, node)
+                    _record_IO(self.options, self.file_content, 'write_files',
+                               fn, node)
                 return True
         return False
 
     def _process_soundfile(self, node: ast.Call) -> bool:
         """Process soundfile.read, write calls."""
-        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'soundfile'
@@ -3153,15 +3160,16 @@ class FileOperationsVisitor(ast.NodeVisitor):
             fn = _literal_str(node.args[0])
             if fn:
                 if node.func.attr == 'read':
-                    _record_IO(self.options, self.file_content, 'read_files', fn, node)
+                    _record_IO(self.options, self.file_content, 'read_files',
+                               fn, node)
                 else:
-                    _record_IO(self.options, self.file_content, 'write_files', fn, node)
+                    _record_IO(self.options, self.file_content, 'write_files',
+                               fn, node)
                 return True
         return False
 
     def _process_sqlite(self, node: ast.Call) -> bool:
         """Process sqlite3.connect(...) calls."""
-        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'sqlite3'
@@ -3169,13 +3177,13 @@ class FileOperationsVisitor(ast.NodeVisitor):
                 and node.args):
             fn = _literal_str(node.args[0])
             if fn:
-                _record_IO(self.options, self.file_content, 'read_files', fn, node)
+                _record_IO(self.options, self.file_content, 'read_files',
+                           fn, node)
                 return True
         return False
 
     def _process_gzip(self, node: ast.Call) -> bool:
         """Process gzip.open(...) calls."""
-        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'gzip'
@@ -3185,15 +3193,16 @@ class FileOperationsVisitor(ast.NodeVisitor):
             mode = _literal_str(node.args[1]) if len(node.args) > 1 else 'rb'
             if fn:
                 if mode.startswith('r'):
-                    _record_IO(self.options, self.file_content, 'read_files', fn, node)
+                    _record_IO(self.options, self.file_content, 'read_files',
+                               fn, node)
                 else:
-                    _record_IO(self.options, self.file_content, 'write_files', fn, node)
+                    _record_IO(self.options, self.file_content, 'write_files',
+                               fn, node)
                 return True
         return False
 
     def _process_bz2(self, node: ast.Call) -> bool:
         """Process bz2.open(...) calls."""
-        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'bz2'
@@ -3203,9 +3212,11 @@ class FileOperationsVisitor(ast.NodeVisitor):
             mode = _literal_str(node.args[1]) if len(node.args) > 1 else 'rb'
             if fn:
                 if mode.startswith('r'):
-                    _record_IO(self.options, self.file_content, 'read_files', fn, node)
+                    _record_IO(self.options, self.file_content, 'read_files',
+                               fn, node)
                 else:
-                    _record_IO(self.options, self.file_content, 'write_files', fn, node)
+                    _record_IO(self.options, self.file_content, 'write_files',
+                               fn, node)
                 return True
         return False
 
@@ -3223,7 +3234,6 @@ class FileOperationsVisitor(ast.NodeVisitor):
         Heuristic catch-all for any MODULE.open(path, mode) calls
         on unknown modules that we haven’t explicitly handled.
         """
-        ud.return_method_name(self.options)
         # 1) Must look like MODULE.open(...)
         if not (isinstance(node.func, ast.Attribute)
                 and node.func.attr == 'open'
@@ -3254,10 +3264,12 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
         # 6) Record
         if 'r' in mode:
-            _record_IO(self.options, self.file_content, 'read_files', filename, node)
+            _record_IO(self.options, self.file_content, 'read_files',
+                       filename, node)
             return True
         elif any(m in mode for m in ('w','a','x')):
-            _record_IO(self.options, self.file_content, 'write_files', filename, node)
+            _record_IO(self.options, self.file_content, 'write_files',
+                       filename, node)
             return True
         return False
 
@@ -3267,7 +3279,6 @@ class FileOperationsVisitor(ast.NodeVisitor):
         that *looks* like a path, and the function name contains
         typical I/O verbs, record it.
         """
-        ud.return_method_name(self.options)
         # Must have at least one literal-string arg:
         if not node.args:
             return False
@@ -3284,15 +3295,16 @@ class FileOperationsVisitor(ast.NodeVisitor):
         # Look for I/O-related function names:
         fn = None
         if isinstance(node.func, ast.Name):
-            fn = node.func.id.lower()
+            fn = node.func.id.casefold()
         elif isinstance(node.func, ast.Attribute):
-            fn = node.func.attr.lower()
+            fn = node.func.attr.casefold()
 
         if fn and any(verb in fn for verb in ('open','read','write','load','save')):
             # If we see “read” or “load” in the name, treat it as read:
             mode = 'read'       if any(fn.startswith(v) for v in ('read','load')) else 'write'
             attr = 'read_files' if mode == 'read'                                 else 'write_files'
-            _record_IO(self.options, self.file_content, attr, candidate, node)
+            _record_IO(self.options, self.file_content, attr,
+                       candidate, node)
             return True
         return False
 
@@ -3354,7 +3366,6 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
     def _process_requests(self, node: ast.Call) -> bool:
         """Process requests.get/post/put/...(...) calls."""
-        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.args  # protect against calls without arguments
@@ -3370,15 +3381,16 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
                         url = maybe
             if url:
                 if node.func.attr == 'get':
-                    _record_IO(self.options, self.file_content, 'download_urls', url, node)
+                    _record_IO(self.options, self.file_content, 'download_urls',
+                               url, node)
                 else:
-                    _record_IO(self.options, self.file_content,   'upload_urls', url, node)
+                    _record_IO(self.options, self.file_content,   'upload_urls',
+                               url, node)
                 return True
         return False
 
     def _process_urllib(self, node: ast.Call) -> bool:
         """Process urllib.request.urlopen(...) and urllib.request.Request(...) calls."""
-        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and node.args  # protect against calls without arguments
                 and isinstance(node.func.value, ast.Attribute)
@@ -3390,13 +3402,13 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
                     if maybe:
                         url = maybe
             if url:
-                _record_IO(self.options, self.file_content, 'download_urls', url, node)
+                _record_IO(self.options, self.file_content, 'download_urls',
+                           url, node)
                 return True
         return False
 
     def _process_ftp(self, node: ast.Call) -> bool:
         """Process ftplib.FTP.retrbinary/storbinary/retrlines/storlines(...) calls."""
-        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Call)
                 and isinstance(node.func.value.func, ast.Attribute)
@@ -3411,20 +3423,21 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
             if len(parts) < 2:
                 return False
             filename = parts[1]
-            op = node.func.attr.lower()
+            op = node.func.attr.casefold()
             if op in ('retrbinary', 'retrlines'):
                 # remote-to-local: treat as read
-                _record_IO(self.options, self.file_content,  'read_files', filename, node)
+                _record_IO(self.options, self.file_content,  'read_files',
+                           filename, node)
                 return True
             elif op in ('storbinary', 'storlines'):
                 # local-to-remote: treat as write
-                _record_IO(self.options, self.file_content, 'write_files', filename, node)
+                _record_IO(self.options, self.file_content, 'write_files',
+                           filename, node)
                 return True
         return False
 
     def _process_httpx(self, node: ast.Call) -> bool:
         """Process httpx.get/post/put/...(...) and httpx.request(method, url) calls."""
-        ud.return_method_name(self.options)
         # httpx.get/post/...() and httpx.request(method, url)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
@@ -3439,9 +3452,11 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
                         url = maybe
             if url:
                 if node.func.attr == 'get':
-                    _record_IO(self.options, self.file_content, 'download_urls', url, node)
+                    _record_IO(self.options, self.file_content, 'download_urls',
+                               url, node)
                 else:
-                    _record_IO(self.options, self.file_content,   'upload_urls', url, node)
+                    _record_IO(self.options, self.file_content,   'upload_urls',
+                               url, node)
                 return True
         # handle httpx.request(method, url)
         elif (isinstance(node.func, ast.Attribute)
@@ -3461,17 +3476,18 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
                     if maybe:
                         url = maybe
             if url:
-                method = (method or '').lower()
+                method = (method or '').casefold()
                 if method == 'get':
-                    _record_IO(self.options, self.file_content, 'download_urls', url, node)
+                    _record_IO(self.options, self.file_content, 'download_urls',
+                               url, node)
                 else:
-                    _record_IO(self.options, self.file_content,   'upload_urls', url, node)
+                    _record_IO(self.options, self.file_content,   'upload_urls',
+                               url, node)
                 return True
         return False
 
     def _process_aiohttp(self, node: ast.Call) -> bool:
         """Process aiohttp.request(...) and session.get/post/... calls."""
-        ud.return_method_name(self.options)
         # static aiohttp.request
         if (isinstance(node.func, ast.Name)
                 and node.func.id == 'request'
@@ -3488,11 +3504,13 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
                     if maybe:
                         url = maybe
             if url:
-                method = (method or '').lower()
+                method = (method or '').casefold()
                 if method == 'get':
-                    _record_IO(self.options, self.file_content, 'download_urls', url, node)
+                    _record_IO(self.options, self.file_content, 'download_urls',
+                               url, node)
                 else:
-                    _record_IO(self.options, self.file_content,   'upload_urls', url, node)
+                    _record_IO(self.options, self.file_content,   'upload_urls',
+                               url, node)
                 return True
         # session-based calls: session.get/post/etc.
         elif (isinstance(node.func, ast.Attribute)
@@ -3508,15 +3526,16 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
                         url = maybe
             if url:
                 if node.func.attr == 'get':
-                    _record_IO(self.options, self.file_content, 'download_urls', url, node)
+                    _record_IO(self.options, self.file_content, 'download_urls',
+                               url, node)
                 else:
-                    _record_IO(self.options, self.file_content,   'upload_urls', url, node)
+                    _record_IO(self.options, self.file_content,   'upload_urls',
+                               url, node)
                 return True
         return False
 
     def _process_socket(self, node: ast.Call) -> bool:
         """Process socket operations like create_connection, connect, send, recv."""
-        ud.return_method_name(self.options)
         if (isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == 'socket'
@@ -3532,7 +3551,6 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
     def _process_http_client(self, node: ast.Call) -> bool:
         """Process http.client HTTPConnection().request calls."""
-        ud.return_method_name(self.options)
         unpacked = unpack_method_call(node)
         if not unpacked:
             return False
@@ -3550,13 +3568,13 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
         method = _literal_str(inner_call.args[0]) or ""
         url = _literal_str(inner_call.args[1]) or ""
-        kind = "download_urls" if method.lower() == "get" else "upload_urls"
-        _record_IO(self.options, self.file_content, kind, url, node)
+        kind = "download_urls" if method.casefold() == "get" else "upload_urls"
+        _record_IO(self.options, self.file_content, kind,
+                   url, node)
         return True
 
     def _process_urllib3(self, node: ast.Call) -> bool:
         """Process urllib3 requests (PoolManager().request)."""
-        ud.return_method_name(self.options)
         unpacked = unpack_method_call(node)
         if not unpacked:
             return False
@@ -3575,13 +3593,13 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
         method = _literal_str(inner_call.args[0]) or ""
         url = _literal_str(inner_call.args[1]) or ""
-        kind = "download_urls" if method.lower() == "get" else "upload_urls"
-        _record_IO(self.options, self.file_content, kind, url, node)
+        kind = "download_urls" if method.casefold() == "get" else "upload_urls"
+        _record_IO(self.options, self.file_content, kind,
+                   url, node)
         return True
 
     def _process_smtplib(self, node: ast.Call) -> bool:
         """Process smtplib SMTP.sendmail calls."""
-        ud.return_method_name(self.options)
         unpacked = unpack_method_call(node)
         if not unpacked:
             return False
@@ -3601,12 +3619,12 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
             return False
 
         to_addrs = ast.get_source_segment(self.file_content, inner_call.args[1]) or ""
-        _record_IO(self.options, self.file_content, "upload_urls", to_addrs, node)
+        _record_IO(self.options, self.file_content, "upload_urls",
+                   to_addrs, node)
         return True
 
     def _process_imaplib(self, node: ast.Call) -> bool:
         """Process imaplib operations (IMAP4/IMAP4_SSL().fetch/login/select)."""
-        ud.return_method_name(self.options)
         unpacked = unpack_method_call(node)
         if not unpacked:
             return False
@@ -3624,12 +3642,12 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
             return False
 
         snippet = ast.get_source_segment(self.file_content, inner_call.args[0]) or ""
-        _record_IO(self.options, self.file_content, "download_urls", snippet, node)
+        _record_IO(self.options, self.file_content, "download_urls",
+                   snippet, node)
         return True
 
     def _process_boto3(self, node: ast.Call) -> bool:
         """Process boto3 S3 operations (…client().download_file/upload_file)."""
-        ud.return_method_name(self.options)
         unpacked = unpack_method_call(node)
         if not unpacked:
             return False
@@ -3652,12 +3670,12 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
             return False
 
         kind = "download_urls" if method == "download_file" else "upload_urls"
-        _record_IO(self.options, self.file_content, kind, fn, node)
+        _record_IO(self.options, self.file_content, kind,
+                   fn, node)
         return True
 
     def _process_paramiko(self, node: ast.Call) -> bool:
         """Process paramiko SFTP operations (…open_sftp().get/put…)."""
-        ud.return_method_name(self.options)
         # 1) unpack the method call
         unpacked = unpack_method_call(node)
         if not unpacked:
@@ -3683,12 +3701,12 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
         # 5) record I/O
         kind = "download_urls" if method == "get" else "upload_urls"
-        _record_IO(self.options, self.file_content, kind, local, node)
+        _record_IO(self.options, self.file_content, kind,
+                   local, node)
         return True
 
     def _process_requests_ftp(self, node: ast.Call) -> bool:
         """Process requests_ftp operations."""
-        ud.return_method_name(self.options)
         if (
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
@@ -3699,13 +3717,13 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
             url = _literal_str(node.args[0])
             if url:
                 kind = 'download_urls' if node.func.attr=='get' else 'upload_urls'
-                _record_IO(self.options, self.file_content, kind, url, node)
+                _record_IO(self.options, self.file_content, kind,
+                           url, node)
                 return True
         return False
 
     def _process_websockets(self, node: ast.Call) -> bool:
         """Process websockets.connect(...) calls."""
-        ud.return_method_name(self.options)
         if (
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
@@ -3715,13 +3733,13 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
         ):
             url = _literal_str(node.args[0])
             if url:
-                _record_IO(self.options, self.file_content, 'download_urls', url, node)
+                _record_IO(self.options, self.file_content, 'download_urls',
+                           url, node)
                 return True
         return False
 
     def _process_socketio(self, node: ast.Call) -> bool:
         """Process socketio.Client().connect(...) or emit(...) calls."""
-        ud.return_method_name(self.options)
         unpacked = unpack_method_call(node)
         if not unpacked:
             return False
@@ -3742,12 +3760,12 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
             return False
 
         kind = "download_urls" if method == "connect" else "upload_urls"
-        _record_IO(self.options, self.file_content, kind, target, node)
+        _record_IO(self.options, self.file_content, kind,
+                   target, node)
         return True
 
     def _process_mqtt(self, node: ast.Call) -> bool:
         """Process paho.mqtt.client.Client().connect(...) calls."""
-        ud.return_method_name(self.options)
         if (
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Call)
@@ -3760,13 +3778,13 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
             target = _literal_str(node.args[0])
             if target:
                 kind = 'download_urls' if node.func.attr=='subscribe' else 'upload_urls'
-                _record_IO(self.options, self.file_content, kind, target, node)
+                _record_IO(self.options, self.file_content, kind,
+                           target, node)
                 return True
         return False
 
     def _process_grpc(self, node: ast.Call) -> bool:
         """Process grpc.insecure_channel(...) or grpc.secure_channel(...) calls."""
-        ud.return_method_name(self.options)
         if (
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
@@ -3776,13 +3794,13 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
         ):
             target = _literal_str(node.args[0])
             if target:
-                _record_IO(self.options, self.file_content, 'download_urls', target, node)
+                _record_IO(self.options, self.file_content, 'download_urls',
+                           target, node)
                 return True
         return False
 
     def _process_psycopg2(self, node: ast.Call) -> bool:
         """Process psycopg2.connect(...) calls."""
-        ud.return_method_name(self.options)
         if (
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
@@ -3792,13 +3810,13 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
         ):
             target = _literal_str(node.args[0])
             if target:
-                _record_IO(self.options, self.file_content, 'download_urls', target, node)
+                _record_IO(self.options, self.file_content, 'download_urls',
+                           target, node)
                 return True
         return False
 
     def _process_redis(self, node: ast.Call) -> bool:
         """Process redis.Redis(...) calls."""
-        ud.return_method_name(self.options)
         if (
             isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
@@ -3811,7 +3829,8 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
                 if kw.arg == 'host':
                     host = _literal_str(kw.value)
             if host:
-                _record_IO(self.options, self.file_content, 'download_urls', host, node)
+                _record_IO(self.options, self.file_content, 'download_urls',
+                           host, node)
                 return True
         return False
 
@@ -3820,7 +3839,6 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
         Heuristic fallback: if a call’s first argument is a string literal
         that looks like a URL (http:// or https://), record it.
         """
-        ud.return_method_name(self.options)
         if not node.args:
             return False
         candidate = _literal_str(node.args[0])
@@ -3830,9 +3848,10 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
         # Simple URL check:
         if candidate.startswith(("http://", "https://", "ftp://")):
             # If the function name starts with 'get', assume download:
-            fn = node.func.attr.lower() if isinstance(node.func, ast.Attribute) else ""
+            fn = node.func.attr.casefold() if isinstance(node.func, ast.Attribute) else ""
             kind = 'download_urls' if fn.startswith('get') else 'upload_urls'
-            _record_IO(self.options, self.file_content, kind, candidate, node)
+            _record_IO(self.options, self.file_content, kind,
+                       candidate, node)
             return True
         return False
 
@@ -3879,7 +3898,7 @@ def collect_pathlib_aliases(module: ast.Module) -> set[str]:
     return aliases
 
 
-def is_pathlib_ctor(fn: ast.AST, pathlib_aliases: set[str], *, allow_pure: bool) -> bool:
+def is_pathlib_ctor(fn: ast.AST, pathlib_aliases: set[str], allow_pure: bool) -> bool:
     """
     True if `fn` is a constructor for a pathlib *Path* type.
     - When allow_pure=False, only concrete (filesystem) paths are allowed.
@@ -5194,7 +5213,7 @@ def load_options_from_json(options: Options, json_file: str | os.PathLike[str]) 
 
 
 def load_last_used_options(options: Options) -> Options | None:
-    """Look for the most recent JSON file in the script directory that matches the script name and load it into a new Options object."""
+    """Look for the most recent JSON file in the script directory that matches the script name and load it into a new Options object. Ignore any JSON files created before the options.pathlibcutoff timestamp."""
     # json_files = [f for f in options.script_dir.iterdir() if f.name.startswith("."+options.python_script.name) and f.suffix.casefold() == '.json']
     pattern = re.compile(r"last-used-on-(\d{8}-\d{6})")
     json_files = [
@@ -5605,8 +5624,9 @@ def main() -> None:
     start_time = dt.datetime.now()
     options = Options()
     parse_arguments(options)
-    script_string         = getattr(options.args, 'script', None)
-    options.script_args   = getattr(options.args, 'script_args', [])
+    assert options.args is not None  # for type-checkers
+    script_string         = getattr(options.args, 'script',       None)
+    options.script_args   = getattr(options.args, 'script_args',    [])
     options.rawlog        = getattr(options.args, 'rawlog',      False)
     if script_string is None:
         options.python_script = None
@@ -5642,6 +5662,12 @@ def main() -> None:
         logging.debug(f"Python {ud.PY_VERSION} is available at: {options.python_command}")
     else:
         logging.debug(f"Python {ud.PY_VERSION} is not available.")
+
+    ud.verify_script(options.univ_defs_sys_path_script, ud.UNIV_DEFS_SYS_PATH_SCRIPT)
+    ud.verify_script(options.mydiff_path,               ud.MYDIFF_SCRIPT)
+    ud.verify_script(options.myaudit_path,              ud.MYAUDIT_SCRIPT)
+    ud.verify_script(options.multireplace_path,         ud.MULTIREPLACE_SCRIPT)
+    ud.verify_script(options.treeview_path,             ud.TREEVIEW_SCRIPT)
 
     if getattr(options.args, 'alias', False):
         # Add the alias to the shell configuration file

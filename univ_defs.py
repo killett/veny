@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# Written by Emmy Killett (she/her), ChatGPT 4o (it/its), ChatGPT o1-preview (it/its), ChatGPT o3-mini-high (it/its), ChatGPT o4-mini-high (it/its), and GitHub Copilot (it/its).
+# Written by Emmy Killett (she/her), ChatGPT 4o (it/its), ChatGPT o1-preview (it/its), ChatGPT o3-mini-high (it/its), ChatGPT o4-mini-high (it/its), ChatGPT 5 (it/its), and GitHub Copilot (it/its).
 from __future__ import annotations  # For Python 3.7+ compatibility with type annotations
 import os
 from pathlib import Path  # Preferred over os.path for path manipulations.
@@ -65,7 +65,7 @@ class Options:
 
     def __init__(self) -> None:
         """Initialize the options with default values."""
-        self.log_mode: str = "INFO"
+        self.log_mode: int = logging.INFO
 
 
 class PlotOptions:
@@ -75,15 +75,15 @@ class PlotOptions:
         """Initialize PlotOptions class with default values."""
         # Ideas for improving this parent class: https://chatgpt.com/share/6876a7e2-da84-8006-9c8f-100d243b73e4
         self.myfigsize: tuple[int, int] = (16, 9)
-        self.fsize:             int = 24
-        self.dpi_choice:        int = 300
+        self.fsize:                 int = 24
+        self.dpi_choice:            int = 300
         # self.colors      are used for shaded areas in light mode or for lines in dark mode
         # self.lightcolors are used for lines in light mode or for shaded areas in dark mode
-        self.markers:     list[str] = ['o',     's',      '^',         'v',          '<',     '>']
-        self.colors:      list[str] = ['black', 'red',    'blue',      'green',      'purple']
-        self.lightcolors: list[str] = ['grey',  'pink',   'lightblue', 'lightgreen', 'lightpurple']
-        self.linestyles:  list[str] = ['solid', 'dashed', 'dashdot',   'dotted']
-        self.dark_mode:         int = 0  # 1 = dark mode, 0 = light mode
+        self.markers:         list[str] = ['o',     's',      '^',         'v',          '<',     '>']
+        self.colors:          list[str] = ['black', 'red',    'blue',      'green',      'purple']
+        self.lightcolors:     list[str] = ['grey',  'pink',   'lightblue', 'lightgreen', 'lightpurple']
+        self.linestyles:      list[str] = ['solid', 'dashed', 'dashdot',   'dotted']
+        self.dark_mode:             int = 0  # 1 = dark mode, 0 = light mode
         if self.dark_mode:  # Define colors as hexadecimal mainly because VS Code has a nifty color picker for hex colors.
             self.background_color:  str = '#000000'  # black background for dark mode
             self.text_color:        str = '#FFFFFF'  # white text for dark mode
@@ -106,9 +106,9 @@ class UnivClass:
         import openai
 
 
-def return_method_name(options: Options | None = None) -> str:
+def return_method_name(levels_up: int = 1) -> str:
     """
-    Return (and optionally, record in options) the caller's qualified method/function name.
+    Return the caller's qualified method/function name.
 
     - For instance methods: ClassName.method
     - For classmethods:     ClassName.method
@@ -116,11 +116,9 @@ def return_method_name(options: Options | None = None) -> str:
                             otherwise just 'method' (class is not recoverable without heuristics)
     - For functions:        function
 
-    If `options` is provided and is an Options instance, sets
-    `options.current_method_name` to the same string.
-
     Args:
-        options: An instance of Options to store the current method name (optional).
+        levels_up: How many frames up to inspect (1 = caller). If greater than
+                   the stack depth, the highest available frame is used.
     
     Returns:
         The current method name as a string, formatted as 'ClassName.method' or 'function'.
@@ -130,51 +128,80 @@ def return_method_name(options: Options | None = None) -> str:
               if sys._getframe or inspect fails.
     """
     fallback_logging_config()
+    try:
+        levels = int(levels_up)
+    except Exception:
+        levels = 1
+    if levels < 1:
+        levels = 1
     name = "<unknown>"
-    fr = None
+    fr   = None
     # Try sys._getframe first
     try:
-        fr = sys._getframe(1)
+        fr = sys._getframe(levels)  # Get the frame at the specified level
     except Exception as e1:
-        logging.warning("return_method_name(): sys._getframe(1) failed. Falling back to inspect...",
-                        exc_info=e1)
+        logging.warning("return_method_name(): sys._getframe(%s) failed. Falling back to inspect...",
+                        levels, exc_info=e1)
         try:
             import inspect
             frame = inspect.currentframe()
             try:
-                fr = frame.f_back if frame is not None else None
+                fr = frame
+                climbed = 0
+                for _ in range(levels):
+                    if fr is None or fr.f_back is None:
+                        break
+                    fr = fr.f_back
+                    climbed += 1
+                if climbed < levels:
+                    logging.debug("return_method_name(): truncated at top of stack (requested levels_up=%s but only climbed=%s)", levels, climbed)
             finally:
-                del frame
+                if frame is not None:
+                    try:
+                        frame.clear()
+                    except Exception:
+                        pass
+                    del frame
         except Exception as e2:
             logging.warning("return_method_name(): inspect fallback failed", exc_info=e2)
             fr = None
-    try:
-        if fr is not None:
-            # Python 3.11+: co_qualname gives 'Class.method' (or 'outer.<locals>.inner')
-            qual = getattr(fr.f_code, "co_qualname", None)
-            if isinstance(qual, str) and qual:
-                # Remove inner function noise like '.<locals>.' from the qualified name.
-                name = qual.replace(".<locals>.", ".")
-            else:
-                func = fr.f_code.co_name
-                self_obj = fr.f_locals.get("self")
-                cls_obj  = fr.f_locals.get("cls")
-                if self_obj is not None:
-                    name = f"{type(self_obj).__name__}.{func}"
-                elif cls_obj is not None:
-                    name = f"{cls_obj.__name__}.{func}"
-                else:  # staticmethod on <3.11 or plain function
-                    name = func
+    if fr is not None:
+        # Python 3.11+: co_qualname gives 'Class.method' (or 'outer.<locals>.inner')
+        qual = getattr(fr.f_code, "co_qualname", None)
+        if isinstance(qual, str) and qual:
+            # Remove all occurrences of '.<locals>.' from the qualified name.
+            name = qual.replace(".<locals>.", ".")
         else:
-            logging.warning("return_method_name(): no frame available.")
-    finally:
-        # Avoid reference cycles
-        try:
-            del fr
-        except NameError:
-            pass
-    if options is not None and isinstance(options, Options):
-        options.current_method_name = name
+            func     = fr.f_code.co_name
+            self_obj = fr.f_locals.get("self")
+            cls_obj  = fr.f_locals.get("cls")
+            if self_obj is not None:
+                name = f"{type(self_obj).__qualname__}.{func}"
+            elif isinstance(cls_obj, type):
+                name = f"{cls_obj.__qualname__}.{func}"
+            else:
+                argc = getattr(fr.f_code, "co_posonlyargcount", 0) + fr.f_code.co_argcount
+                if argc:
+                    for a in fr.f_code.co_varnames[:argc]:
+                        obj = fr.f_locals.get(a)
+                        if obj is not None:
+                            t = obj if isinstance(obj, type) else type(obj)
+                            attr = getattr(t, func, None)
+                            if attr is not None:
+                                name = f"{getattr(t, '__qualname__', t.__name__)}.{func}"
+                                break
+                    else:
+                        name = func
+                else:
+                    name = func
+    else:
+        logging.warning("return_method_name(): no frame available.")
+    if fr is not None:
+        if name == "<module>":
+            mod = fr.f_globals.get("__name__")
+            if isinstance(mod, str) and mod:
+                name = mod
+    fr = None  # Clear the frame reference to free memory.
     return name
 
 
@@ -663,25 +690,37 @@ def normalize_to_dict(value: Any, var_name: str, script_path: str | os.PathLike[
 
 def get_hostname_socket(rawlog: bool = False) -> str:
     """Retrieves the hostname using socket.gethostname()."""
-    import socket
-    return socket.gethostname()
+    try:
+        import socket
+        return socket.gethostname()
+    except Exception as e:
+        if not rawlog: logging.warning(f"Failed to retrieve hostname using {return_method_name()}: {e}")
+        return "ERROR-NO-NAME"
 
 
 def get_hostname_platform(rawlog: bool = False) -> str:
     """Retrieves the hostname using platform.node()."""
-    import platform
-    return platform.node()
+    try:
+        import platform
+        return platform.node()
+    except Exception as e:
+        if not rawlog: logging.warning(f"Failed to retrieve hostname using {return_method_name()}: {e}")
+        return "ERROR-NO-NAME"
 
 
 def get_hostname_os_uname(rawlog: bool = False) -> str:
     """Retrieves the hostname using os.uname().nodename."""
-    return os.uname().nodename
+    try:
+        return os.uname().nodename
+    except Exception as e:
+        if not rawlog: logging.warning(f"Failed to retrieve hostname using {return_method_name()}: {e}")
+        return "ERROR-NO-NAME"
 
 
 def get_hostname_subprocess_hostname(rawlog: bool = False) -> str:
     """Retrieves the hostname using the 'hostname' system command via subprocess."""
-    import subprocess
     try:
+        import subprocess
         result = subprocess.run(['hostname'], capture_output=True, text=True)
         return result.stdout.strip()
     except Exception as e:
@@ -691,13 +730,15 @@ def get_hostname_subprocess_hostname(rawlog: bool = False) -> str:
 
 def get_hostname_subprocess_scutil(rawlog: bool = False) -> str:
     """Retrieves the hostname using the 'scutil --get ComputerName' command on macOS via subprocess."""
-    import subprocess
-    try:
-        result = subprocess.run(['scutil', '--get', 'ComputerName'], capture_output=True, text=True)
-        return result.stdout.strip()
-    except Exception as e:
-        if not rawlog: logging.warning(f"Failed to retrieve hostname using {return_method_name()}: {e}")
-        return "ERROR-NO-NAME"
+    if sys.platform == 'darwin':
+        try:
+            import subprocess
+            result = subprocess.run(['scutil', '--get', 'ComputerName'],
+                                    capture_output=True, text=True)
+            return result.stdout.strip()
+        except Exception as e:
+            if not rawlog: logging.warning(f"Failed to retrieve hostname using {return_method_name()}: {e}")
+    return "ERROR-NO-NAME"
 
 
 def get_computer_name(rawlog: bool = False) -> str:
@@ -716,10 +757,10 @@ def get_computer_name(rawlog: bool = False) -> str:
     """
     fallback_logging_config(rawlog=rawlog)
     methods = {
-        'socket_gethostname': get_hostname_socket,
-        'platform_node': get_hostname_platform,
-        'os_uname_nodename': get_hostname_os_uname,
-        'subprocess_hostname': get_hostname_subprocess_hostname,
+        'socket_gethostname':             get_hostname_socket,
+        'platform_node':                  get_hostname_platform,
+        'os_uname_nodename':              get_hostname_os_uname,
+        'subprocess_hostname':            get_hostname_subprocess_hostname,
         'subprocess_scutil_computername': get_hostname_subprocess_scutil  # macOS specific
     }
 
@@ -733,12 +774,12 @@ def get_computer_name(rawlog: bool = False) -> str:
             if not rawlog: logging.exception(f"Method {method_name} failed.")
             pass  # Skip methods that fail
 
-    computer_name = analyze_results(results, rawlog=rawlog)
+    computer_name = analyze_computer_name_results(results, rawlog=rawlog)
 
     return computer_name
 
 
-def analyze_results(results: dict[str, str], rawlog: bool = False) -> str:
+def analyze_computer_name_results(results: dict[str, str], rawlog: bool = False) -> str:
     """
     Analyzes the retrieved computer names.
 
@@ -764,6 +805,15 @@ def analyze_results(results: dict[str, str], rawlog: bool = False) -> str:
     name_values = list(results.values())
     name_counts = Counter(name_values)
     most_common = name_counts.most_common()
+
+    if most_common[0][0] != "ERROR-NO-NAME":
+        # If one or two names are just the error placeholder, that's okay.
+        # After all, one of the methods only works on macOS.
+        # Remove "ERROR-NO-NAME" from the results if it isn't the most common.
+        results = {k: v for k, v in results.items() if v != "ERROR-NO-NAME"}
+        name_values = list(results.values())
+        name_counts = Counter(name_values)
+        most_common = name_counts.most_common()
 
     if len(name_counts) == 1:
         # All names are identical
@@ -794,7 +844,7 @@ def ensure_even_dimensions(image_path: str | os.PathLike[str]) -> None:
         raise IsADirectoryError(f"File does not exist: {image_path}")
     with Image.open(image_path) as img:
         width, height = img.size
-        new_width = width if width % 2 == 0 else width - 1
+        new_width = width   if  width % 2 == 0 else width - 1
         new_height = height if height % 2 == 0 else height - 1
 
         if new_width != width or new_height != height:
@@ -864,8 +914,143 @@ def human_bytesize(num: float | int, *, suffix: str = "B", si: bool = False, pre
 
 
 def my_plural(n: int, word: str) -> str:
-    """Return a pluralized word based on the count."""
-    return f"{n} {word}" + ("" if n == 1 else "s")
+    """
+    Return a pluralized version of `word` preceded by `n`.
+
+    Behavior:
+    - If the open-source `inflect` library is available, use it for pluralization.
+    - Otherwise, fall back to a casefold()-based irregulars table, some uncountables,
+      and a small set of morphological rules.
+
+    Examples (fallback behavior):
+        1 millennium -> "1 millennium"
+        2 millennium -> "2 millennia"
+        2 millenium  -> "2 millennia"   # (handles the common misspelling too)
+
+    Args:
+        n:    The quantity of the item.
+        word: The singular form of the item.
+
+    Raises:
+        None.
+    """
+    if n == 1:
+        return f"{n} {word}"
+
+    # 1) Try the open-source 'inflect' library if present
+    try:
+        import inflect  # MIT-licensed, widely used for pluralization
+        engine = getattr(my_plural, "_inflect_engine", None)
+        if engine is None:
+            engine = inflect.engine()
+            setattr(my_plural, "_inflect_engine", engine)
+
+        # plural_noun returns False when it can't/shouldn't pluralize
+        plural = engine.plural_noun(word)
+        if not plural:
+            plural = engine.plural(word)
+        if plural:
+            return f"{n} {plural}"
+    except Exception:
+        # Fall through to custom logic if inflect isn't available or errors
+        pass
+
+    # 2) Fallback: irregular/uncountable lists (case-insensitive via casefold)
+    irregulars = {
+        # Common irregulars
+        "child"      : "children",
+        "person"     : "people",
+        "man"        : "men",
+        "woman"      : "women",
+        "mouse"      : "mice",
+        "goose"      : "geese",
+        "tooth"      : "teeth",
+        "foot"       : "feet",
+        "ox"         : "oxen",
+
+        # Classical/latin/greek
+        "cactus"     : "cacti",
+        "focus"      : "foci",
+        "fungus"     : "fungi",
+        "nucleus"    : "nuclei",
+        "syllabus"   : "syllabi",
+        "analysis"   : "analyses",
+        "diagnosis"  : "diagnoses",
+        "thesis"     : "theses",
+        "crisis"     : "crises",
+        "phenomenon" : "phenomena",
+        "criterion"  : "criteria",
+        "datum"      : "data",
+        "index"      : "indices",
+        "appendix"   : "appendices",
+        "matrix"     : "matrices",
+        "vertex"     : "vertices",
+        "radius"     : "radii",
+        "alumnus"    : "alumni",
+        "alumna"     : "alumnae",
+        "bacterium"  : "bacteria",
+        "medium"     : "media",
+        "millennium" : "millennia",
+        "millenium"  : "millennia",  # handle common misspelling
+
+        # Mixed/accepted forms — pick one
+        "octopus"    : "octopuses",
+        "platypus"   : "platypuses",
+        "virus"      : "viruses",
+    }
+
+    uncountables = {
+        "sheep", "fish", "deer", "series", "species", "aircraft", "moose",
+        "bison", "salmon", "trout", "swine", "rice", "information", "equipment",
+        "money", "news", "offspring", "fruit"
+    }
+
+    def _preserve_simple_case(src: str, target: str) -> str:
+        """Match ALLCAPS or Titlecase of `src` onto `target`."""
+        if src.isupper():
+            return target.upper()
+        if src.istitle():
+            # Capitalize first letter only; keeps internal case of target
+            return target[:1].upper() + target[1:]
+        return target
+
+    def _basic_rules(w: str) -> str:
+        """Very small set of English pluralization rules."""
+        lw = w.casefold()
+        # Endings that usually take 'es'
+        if lw.endswith(("s", "ss", "sh", "ch", "x", "z")):
+            return w + "es"
+
+        # consonant + 'y' -> 'ies'
+        vowels = set("aeiou")
+        if len(w) >= 2 and w[-1] in "yY" and w[-2].casefold() not in vowels:
+            return w[:-1] + "ies"
+
+        # Words ending with 'f' / 'fe' -> 'ves' (with some common exceptions)
+        f_exceptions = {"roof", "chief", "chef", "belief", "cliff", "proof", "reef", "gulf", "brief"}
+        if lw.endswith("fe") and lw[:-2] not in f_exceptions:
+            return w[:-2] + "ves"
+        if lw.endswith("f") and lw[:-1] not in f_exceptions:
+            return w[:-1] + "ves"
+
+        # Words ending with 'o' sometimes take 'es' (common subset)
+        o_es = {"potato", "tomato", "hero", "echo", "torpedo", "veto"}
+        if lw.endswith("o") and lw in o_es:
+            return w + "es"
+
+        # Default: just 's'
+        return w + "s"
+
+    key = word.casefold()
+
+    if key in uncountables:
+        plural_word = word  # unchanged
+    elif key in irregulars:
+        plural_word = _preserve_simple_case(word, irregulars[key])
+    else:
+        plural_word = _basic_rules(word)
+
+    return f"{n} {plural_word}"
 
 
 def human_timespan(timespan: int | float) -> str:
@@ -1013,13 +1198,13 @@ _UNIT_SECONDS = {
     **dict.fromkeys(['decasecond',   'decaseconds',   'das'], 1E01),
     **dict.fromkeys(['hectosecond',  'hectoseconds',  'hs'],  1E02),
     **dict.fromkeys(['kilosecond',   'kiloseconds',   'ks'],  1E03),
-    **dict.fromkeys(['megasecond',   'megaseconds'],          1E06),  # no Ms because .lower() would convert it to ms
+    **dict.fromkeys(['megasecond',   'megaseconds'],          1E06),  # no Ms because .casefold() would convert it to ms
     **dict.fromkeys(['gigasecond',   'gigaseconds',   'gs'],  1E09),
     **dict.fromkeys(['terasecond',   'teraseconds',   'ts'],  1E12),
-    **dict.fromkeys(['petasecond',   'petaseconds'],          1E15),  # no Ps because .lower() would convert it to ps
+    **dict.fromkeys(['petasecond',   'petaseconds'],          1E15),  # no Ps because .casefold() would convert it to ps
     **dict.fromkeys(['exasecond',    'exaseconds',    'es'],  1E18),
-    **dict.fromkeys(['zettasecond',  'zettaseconds'],         1E21),  # no Zs because .lower() would convert it to zs
-    **dict.fromkeys(['yottasecond',  'yottaseconds'],         1E24),  # no Ys because .lower() would convert it to ys
+    **dict.fromkeys(['zettasecond',  'zettaseconds'],         1E21),  # no Zs because .casefold() would convert it to zs
+    **dict.fromkeys(['yottasecond',  'yottaseconds'],         1E24),  # no Ys because .casefold() would convert it to ys
     **dict.fromkeys(['ronnasecond',  'ronnaseconds',  'rs'],  1E27),
     **dict.fromkeys(['quettasecond', 'quettaseconds', 'qs'],  1E30),
 }
@@ -1028,7 +1213,7 @@ _UNIT_SECONDS = {
 def seconds_in_unit(unit: str) -> float:
     """Return the number of seconds in a given time unit."""
     try:
-        return _UNIT_SECONDS[unit.lower()]
+        return _UNIT_SECONDS[unit.casefold()]
     except KeyError:
         raise ValueError(f"Unknown time unit: {unit!r}")
 
@@ -1901,13 +2086,13 @@ def _make_format_checker() -> Type[Any]:
             The 'who' parameter is a string describing the context (e.g. function or class name).
             """
             if not node.body or not isinstance(node.body[0], ast.Expr):
-                self.errors.append((node.__class__.__name__.lower(), who, "no docstring",
+                self.errors.append((node.__class__.__name__.casefold(), who, "no docstring",
                                     node.lineno))
                 return
 
             expr = node.body[0]
             if not (isinstance(expr.value, ast.Constant) and isinstance(expr.value.value, str)):
-                self.errors.append((node.__class__.__name__.lower(), who, "no docstring",
+                self.errors.append((node.__class__.__name__.casefold(), who, "no docstring",
                                     node.lineno))
                 return
 
@@ -1915,7 +2100,7 @@ def _make_format_checker() -> Type[Any]:
             literal = ast.get_source_segment(self.source, expr.value) or ""
             first_line = literal.strip().splitlines()[0]
             if first_line.startswith("'''"):
-                self.errors.append((node.__class__.__name__.lower(), who,
+                self.errors.append((node.__class__.__name__.casefold(), who,
                                     'docstring should use triple double quotes ("""…""")',
                                     node.lineno))
 
@@ -1929,7 +2114,7 @@ def _make_format_checker() -> Type[Any]:
                     first = literal.strip().splitlines()[0]
                     # If it starts with triple quotes, it’s an extra docstring
                     if first.startswith(('"""', "'''")):
-                        self.errors.append((node.__class__.__name__.lower(),
+                        self.errors.append((node.__class__.__name__.casefold(),
                                             who, "extra docstring", extra.lineno))
 
             # Check the docstring style
@@ -1964,7 +2149,7 @@ def _make_format_checker() -> Type[Any]:
             try:
                 params_idx = next(i for i, L in enumerate(lines) if L.strip() == "Parameters")
             except StopIteration:
-                self.errors.append((node.__class__.__name__.lower(), who,
+                self.errors.append((node.__class__.__name__.casefold(), who,
                                     "NumPy docstring missing 'Parameters' section",
                                     node.lineno))
                 return
@@ -1972,7 +2157,7 @@ def _make_format_checker() -> Type[Any]:
             try:
                 returns_idx = next(i for i, L in enumerate(lines) if L.strip() == "Returns")
             except StopIteration:
-                self.errors.append((node.__class__.__name__.lower(), who,
+                self.errors.append((node.__class__.__name__.casefold(), who,
                                     "NumPy docstring missing 'Returns' section",
                                     node.lineno))
 
@@ -1992,7 +2177,7 @@ def _make_format_checker() -> Type[Any]:
 
             missing = [a for a in sig_args if a not in documented]
             if missing:
-                self.errors.append((node.__class__.__name__.lower(), who,
+                self.errors.append((node.__class__.__name__.casefold(), who,
                                     "NumPy docstring missing parameter(s): " + ", ".join(missing), node.lineno))
 
     return FormatChecker
@@ -2297,6 +2482,19 @@ def highlight_changes(orig: str, new: str, unchanged_color: str,
     - old_highlighted has parts present only in 'orig' wrapped in deleted_color.
     - new_highlighted has parts present only in 'new' wrapped in added_color
       and unchanged parts in unchanged_color.
+    
+    Args:
+        orig:            The original string.
+        new:             The modified string.
+        unchanged_color: The color to use for unchanged parts.
+        added_color:     The color to use for added parts.
+        deleted_color:   The color to use for deleted parts.
+    
+    Returns:
+        A tuple of (old_highlighted, new_highlighted) strings.
+
+    Raises:
+        None.
     """
     import difflib
     sm = difflib.SequenceMatcher(None, orig, new)
@@ -2472,8 +2670,19 @@ def my_diff(orig_text: str, changed_text: str, orig_path: str | os.PathLike[str]
 def is_python_script(path: str | os.PathLike[str]) -> bool:
     """
     Return True if 'path' looks like a Python script:
-      1. It ends in .py or .pyw
+      1. It's a file which ends in .py or .pyw
       2. Or it is executable AND its first line is a python shebang
+    
+    Args:
+        path: The file path to check.
+
+    Returns:
+        bool: True if the path is a Python script, False otherwise.
+
+    Raises:
+        IsADirectoryError: If the path is a directory.
+        FileNotFoundError: If the file is not found.
+        PermissionError:   If the file is not accessible due to permission issues.
     """
     import stat
     path = Path(path)
@@ -2524,7 +2733,6 @@ def diff_and_confirm(orig_text: str, changed_text: str, path: str | os.PathLike[
         the_fix:       A string describing the fix being applied (e.g. "autopep8", "manual edit") (default "").
         description:   A longer description of the issue being fixed (default "").
 
-
     Returns:
         bool: False if the user chose to quit; True otherwise.
     
@@ -2546,7 +2754,7 @@ def diff_and_confirm(orig_text: str, changed_text: str, path: str | os.PathLike[
     if description:
         prefix = f"{label_str}: "                if label_str else ""
         logging.info(f"{prefix}{ANSI_YELLOW}{description}{ANSI_RESET}")
-    ans = input("Apply these changes? [y/N/q] ").strip().lower()
+    ans = input("Apply these changes? [y/N/q] ").strip().casefold()
     if ans in ("y", "yes"):
         # If the user hasn't chosen to skip compilation and this is a Python script,
         # try to compile the changed text before writing it. If compilation fails, abort the write.
@@ -2655,6 +2863,10 @@ def ask_and_replace(old_str: str, new_str: str, path: str | os.PathLike[str],  l
     Returns:
         False if the user chose to quit; True otherwise.
 
+    Raises:
+        IsADirectoryError: If the path is a directory.
+        FileNotFoundError: If the file is not found.
+        PermissionError: If the file is not accessible due to permission issues.
     """
     fallback_logging_config()
     path = Path(path).expanduser().resolve(strict=True)
@@ -2670,8 +2882,104 @@ def ask_and_replace(old_str: str, new_str: str, path: str | os.PathLike[str],  l
         return True
     the_fix = f"replace '{old_str}' with '{new_str}'"
     return diff_and_confirm(orig_text, changed_text, path, label=label, diff_choice=diff_choice,
-                            changed_color=changed_color, deleted_color=deleted_color, added_color=added_color, skip_compile=skip_compile,
-                            the_fix=the_fix, description=description)
+                            changed_color=changed_color, deleted_color=deleted_color, added_color=added_color,
+                            skip_compile=skip_compile, the_fix=the_fix, description=description)
+
+
+def _validate_glob_pattern(pattern: str) -> None:
+    """Basic validation for glob pattern (non-empty string)."""
+    if not isinstance(pattern, str) or not pattern.strip():
+        raise ValueError("glob_pattern must be a non-empty string.")
+
+
+def _resolve_dir(dir_arg: str | None) -> Path:
+    """Resolve the directory from the command line argument."""
+    if dir_arg:
+        p = Path(dir_arg).expanduser().resolve()
+    else:
+        p = Path.cwd()
+    if not p.exists():
+        raise FileNotFoundError(f"Directory does not exist: {p}")
+    if not p.is_dir():
+        raise NotADirectoryError(f"Path is not a directory: {p}")
+    return p
+
+
+def _collect_files(root: Path, pattern: str, recursive: bool) -> list[Path]:
+    """Collect files matching the glob pattern from root."""
+    from collections.abc import Iterable
+    search_iter: Iterable[Path]
+    if recursive:
+        search_iter = root.rglob(pattern)
+    else:
+        search_iter = root.glob(pattern)
+
+    files = [p for p in search_iter if p.is_file()]
+    return files
+
+
+def multireplace(options: Options) -> None:
+    """
+    Perform a multi-file replace operation.
+
+    Args:
+        options: The parsed command-line options. Contains:
+            - old_str: The text to be replaced in the files.
+            - new_str: The text to replace the old_str.
+            - glob_pattern: Glob pattern of files to edit.
+            - dir: Directory to search in.
+            - recursive: Whether to search recursively in subdirectories.
+
+    Returns:
+        None. Modifies files in place if the user confirms the changes.
+
+    Raises:
+        ValueError:         If the glob pattern is invalid.
+        FileNotFoundError:  If the specified directory does not exist.
+        NotADirectoryError: If the specified path is not a directory.
+    """
+    fallback_logging_config()
+    try:
+        _validate_glob_pattern(options.args.glob_pattern)
+    except Exception as e:
+        logging.error(f"Invalid glob pattern: {e}")
+        sys.exit(2)
+
+    try:
+        dir = _resolve_dir(options.args.dir)
+    except Exception as e:
+        logging.error(str(e))
+        sys.exit(2)
+
+    logging.debug(f"Directory: {dir}")
+    logging.debug(f"Glob pattern: {options.args.glob_pattern}")
+    logging.debug(f"Recursive: {options.args.recursive}")
+
+    files = _collect_files(dir, options.args.glob_pattern, options.args.recursive)
+
+    if not files:
+        logging.warning("No files matched the given pattern.")
+        return
+
+    logging.info(f"Found {len(files)} file(s) to process:")
+    num_files  = len(files)
+    max_digits = len(str(num_files))
+    for i, f in enumerate(files, start=1):
+        logging.info(f"{i:>{max_digits}}/{num_files}: {f}")
+
+    logging.info("==========================================")
+    for f in files:
+        logging.info(f"Processing: {f}")
+        try:
+            if not ask_and_replace(old_str=options.args.old_str, new_str=options.args.new_str, path=str(f)):
+                break
+        except KeyboardInterrupt:
+            logging.warning("Interrupted by user.")
+            sys.exit(130)
+        except Exception as e:
+            logging.error(f"Error processing {f}: {e}")
+
+    logging.info("Done.")
 
 
 def interactive_flake8(path: str | os.PathLike[str], diff_choice: int = 1, ignore_codes: list[str] = [], max_line_length: int = 100,
@@ -2726,17 +3034,29 @@ if str(univ_defs_dir) not in sys.path:
     sys.path.append(str(univ_defs_dir))
 '''
 
-MYDIFF_SCRIPT: str = '''import argparse
+MYDIFF_SCRIPT: str = '''import sys
+import argparse
 import logging
-
+from pathlib import Path
 import univ_defs_sys_path_script  # Appends sys.path with the location of univ_defs.py
 import univ_defs as ud
 
-__version__: str = "0.0.1"
+__version__: str = "0.1.0"
 
-def main() -> None:
-    """Main entry point for the script."""
-    ud.configure_logging("mydiff", log_level="INFO", rawlog=True)
+
+class Options:
+    """Class that has all global options in one place."""
+
+    def __init__(self) -> None:
+        """Initialize the Options class with default values."""
+        self.my_name:  str = Path(sys.argv[0]).stem  # The invoked name of this script without the .py extension
+        self.log_mode: int = logging.INFO  # Use the -debug command line argument to change to DEBUG.
+        self.args: argparse.Namespace | None = None
+        self.default_dir: Path = Path.cwd()  # Default to current working directory
+
+
+def parse_arguments(options: Options) -> None:
+    """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Diff two files using ud.my_diff().")
     parser.add_argument("orig_path", type=str, help="Path to original file.")
     parser.add_argument("changed_path", type=str, help="Path to changed file.")
@@ -2749,38 +3069,71 @@ def main() -> None:
                         help="Color for deleted characters in original lines (default: ANSI_RED)")
     parser.add_argument("--added_color", type=str, default=ud.ANSI_GREEN,
                         help="Color for added characters in changed lines (default: ANSI_GREEN)")
-    args = parser.parse_args()
+    parser.add_argument("-version", "--version", action="store_true",
+                        help="Print the version of this program and exit.")
+    parser.add_argument("-debug", "--debug", action="store_true",
+                        help="Enable DEBUG logging.")
+    options.args = parser.parse_args()
+    if options.args.version:
+        print(f"{options.my_name} {__version__}")
+        sys.exit(0)
+    if options.args.debug:
+        options.log_mode = logging.DEBUG
 
-    orig_text    = ud.my_fopen(args.orig_path)
-    changed_text = ud.my_fopen(args.changed_path)
+
+def main() -> None:
+    """Main function."""
+    options = Options()
+    parse_arguments(options)
+    assert options.args is not None  # for type-checkers
+    memory_handler = ud.configure_logging(options.my_name, log_level=options.log_mode,
+                                          rawlog=True)
+    orig_text    = ud.my_fopen(options.args.orig_path)
+    changed_text = ud.my_fopen(options.args.changed_path)
     if orig_text is False:
-        logging.error(f"Failed to read original file: {args.orig_path}")
+        logging.error(f"Failed to read original file: {options.args.orig_path}")
         return
     if changed_text is False:
-        logging.error(f"Failed to read changed file: {args.changed_path}")
+        logging.error(f"Failed to read changed file: {options.args.changed_path}")
         return
     if orig_text == changed_text:
         return  # Standard diff would show no changes
-    ud.my_diff(orig_text, changed_text, args.orig_path,
-               changed_path=args.changed_path, diff_choice=args.diff_choice,
-               changed_color=args.changed_color, deleted_color=args.deleted_color,
-               added_color=args.added_color)
+    ud.my_diff(orig_text, changed_text, options.args.orig_path,
+               changed_path=options.args.changed_path, diff_choice=options.args.diff_choice,
+               changed_color=options.args.changed_color, deleted_color=options.args.deleted_color,
+               added_color=options.args.added_color)
+    ud.print_all_errors(memory_handler)
+    logging.shutdown()
 
 
 if __name__ == "__main__":
     main()
 '''
 
-MYAUDIT_SCRIPT: str = '''import argparse
+MYAUDIT_SCRIPT: str = '''import sys
+import argparse
+import logging
+from pathlib import Path
 
 import univ_defs_sys_path_script  # Appends sys.path with the location of univ_defs.py
 import univ_defs as ud
 
-__version__: str = "0.0.1"
+__version__: str = "0.1.0"
 
-def main() -> None:
-    """Main entry point for the script."""
-    ud.configure_logging("format_checker", log_level="INFO")
+
+class Options:
+    """Class that has all global options in one place."""
+
+    def __init__(self) -> None:
+        """Initialize the Options class with default values."""
+        self.my_name:  str = Path(sys.argv[0]).stem  # The invoked name of this script without the .py extension
+        self.log_mode: int = logging.INFO  # Use the -debug command line argument to change to DEBUG.
+        self.args: argparse.Namespace | None = None
+        self.default_dir: Path = Path.cwd()  # Default to current working directory
+
+
+def parse_arguments(options: Options) -> None:
+    """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Check Python formatting in a file.")
     parser.add_argument("filepath", type=str, help="Path to the Python file to check")
     parser.add_argument("--diff_choice", type=int, default=1,
@@ -2792,31 +3145,49 @@ def main() -> None:
                         help="Color for deleted characters in original lines (default: ANSI_RED)")
     parser.add_argument("--added_color", type=str, default=ud.ANSI_GREEN,
                         help="Color for added characters in changed lines (default: ANSI_GREEN)")
-    args = parser.parse_args()
+    parser.add_argument("-version", "--version", action="store_true",
+                        help="Print the version of this program and exit.")
+    parser.add_argument("-debug", "--debug", action="store_true",
+                        help="Enable DEBUG logging.")
+    options.args = parser.parse_args()
+    if options.args.version:
+        print(f"{options.my_name} {__version__}")
+        sys.exit(0)
+    if options.args.debug:
+        options.log_mode = logging.DEBUG
 
-    if not ud.check_python_formatting(args.filepath, diff_choice=args.diff_choice):
+
+def main() -> None:
+    """Main function."""
+    options = Options()
+    parse_arguments(options)
+    assert options.args is not None  # for type-checkers
+    memory_handler = ud.configure_logging(options.my_name, log_level=options.log_mode,
+                                          rawlog=True)
+    if not ud.check_python_formatting(options.args.filepath, diff_choice=options.args.diff_choice):
         return
+    ud.interactive_flake8(options.args.filepath, diff_choice=options.args.diff_choice,
+                          ignore_codes=ud.IGNORED_CODES, max_line_length=1000,
+                          changed_color=options.args.changed_color, deleted_color=options.args.deleted_color,
+                          added_color=options.args.added_color)
+    ud.print_all_errors(memory_handler)
+    logging.shutdown()
 
-    ud.interactive_flake8(args.filepath, diff_choice=args.diff_choice, ignore_codes=ud.IGNORED_CODES, max_line_length=1000,
-                          changed_color=args.changed_color, deleted_color=args.deleted_color, added_color=args.added_color)
 
 if __name__ == "__main__":
     main()
 '''
 
-MULTIREPLACE_SCRIPT: str = '''#!/usr/bin/env python3
-from __future__ import annotations
 
-import sys
+MULTIREPLACE_SCRIPT: str = '''import sys
 import argparse
 import logging
 from pathlib import Path
-from collections.abc import Iterable
 
 import univ_defs_sys_path_script  # Appends sys.path with the location of univ_defs.py
 import univ_defs as ud
 
-__version__: str = "0.0.1"
+__version__: str = "0.1.0"
 
 
 class Options:
@@ -2824,127 +3195,46 @@ class Options:
 
     def __init__(self) -> None:
         """Initialize the Options class with default values."""
-        self.my_name: str = Path(__file__).stem  # The base name of this script without the .py extension
-        self.log_mode: str = "INFO"  # Use the -debug command line argument to change to DEBUG.
+        self.my_name:  str = Path(sys.argv[0]).stem  # The invoked name of this script without the .py extension
+        self.log_mode: int = logging.INFO  # Use the -debug command line argument to change to DEBUG.
         self.args: argparse.Namespace | None = None
-
         self.default_glob_pattern: str = "*"
         self.default_dir: Path = Path.cwd()  # Default to current working directory
 
 
 def parse_arguments(options: Options) -> None:
     """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Find files by glob and call ud.ask_and_replace() on each until it returns False.",
-    )
-    parser.add_argument("old_str",
+    parser = argparse.ArgumentParser(description="Find files by glob and call ud.ask_and_replace() on each until it returns False.")
+    parser.add_argument("old_str", required=True,
                         help="The text to be replaced in the files.")
-    parser.add_argument("new_str",
+    parser.add_argument("new_str", required=True,
                         help="The text to replace the old_str.")
-    parser.add_argument("glob_pattern", nargs="?",
-                        default=options.default_glob_pattern,
+    parser.add_argument("glob_pattern", nargs="?", default=options.default_glob_pattern,
                         help=f'Glob pattern of files to edit (default: "{options.default_glob_pattern}"). Example: "*.py"')
     parser.add_argument("-dir", "-d", default=options.default_dir,
                         help=f"Directory to search in (defaults to current working directory: {options.default_dir}).")
     parser.add_argument("-recursive", "-r", action="store_true",
                         help="Search recursively in subdirectories.")
-    parser.add_argument("-version", action="store_true",
+    parser.add_argument("-version", "--version", action="store_true",
                         help="Print the version of this program and exit.")
-    parser.add_argument("-debug", action="store_true",
+    parser.add_argument("-debug", "--debug", action="store_true",
                         help="Enable DEBUG logging.")
     options.args = parser.parse_args()
-
     if options.args.version:
         print(f"{options.my_name} {__version__}")
         sys.exit(0)
-
     if options.args.debug:
-        options.log_mode = "DEBUG"
-
-
-def _validate_glob_pattern(pattern: str) -> None:
-    """Basic validation for glob pattern (non-empty string)."""
-    if not isinstance(pattern, str) or not pattern.strip():
-        raise ValueError("glob_pattern must be a non-empty string.")
-
-
-def _resolve_dir(dir_arg: str | None) -> Path:
-    """Resolve the directory from the command line argument."""
-    if dir_arg:
-        p = Path(dir_arg).expanduser().resolve()
-    else:
-        p = Path.cwd()
-    if not p.exists():
-        raise FileNotFoundError(f"Directory does not exist: {p}")
-    if not p.is_dir():
-        raise NotADirectoryError(f"Path is not a directory: {p}")
-    return p
-
-
-def _collect_files(root: Path, pattern: str, recursive: bool) -> list[Path]:
-    """Collect files matching the glob pattern from root."""
-    search_iter: Iterable[Path]
-    if recursive:
-        search_iter = root.rglob(pattern)
-    else:
-        search_iter = root.glob(pattern)
-
-    files = [p for p in search_iter if p.is_file()]
-    return files
+        options.log_mode = logging.DEBUG
 
 
 def main() -> None:
     """Main function."""
     options = Options()
+    parse_arguments(options)
+    assert options.args is not None  # for type-checkers
     memory_handler = ud.configure_logging(options.my_name, log_level=options.log_mode,
                                           rawlog=True)
-
-    parse_arguments(options)
-
-    assert options.args is not None  # for type-checkers
-
-    try:
-        _validate_glob_pattern(options.args.glob_pattern)
-    except Exception as e:
-        logging.error(f"Invalid glob pattern: {e}")
-        sys.exit(2)
-
-    try:
-        dir = _resolve_dir(options.args.dir)
-    except Exception as e:
-        logging.error(str(e))
-        sys.exit(2)
-
-    logging.debug(f"Directory: {dir}")
-    logging.debug(f"Glob pattern: {options.args.glob_pattern}")
-    logging.debug(f"Recursive: {options.args.recursive}")
-
-    files = _collect_files(dir, options.args.glob_pattern, options.args.recursive)
-
-    if not files:
-        logging.warning("No files matched the given pattern.")
-        return
-
-    logging.info(f"Found {len(files)} file(s) to process:")
-    num_files = len(files)
-    max_digits = len(str(num_files))
-    for i, f in enumerate(files, start=1):
-        logging.info(f"{i:>{max_digits}}/{num_files}: {f}")
-
-    logging.info("==========================================")
-    for f in files:
-        logging.info(f"Processing: {f}")
-        try:
-            if not ud.ask_and_replace(old_str=options.args.old_str, new_str=options.args.new_str,
-                                      path=str(f)):
-                break
-        except KeyboardInterrupt:
-            logging.warning("Interrupted by user.")
-            sys.exit(130)
-        except Exception as e:
-            logging.error(f"Error processing {f}: {e}")
-
-    logging.info("Done.")
+    ud.multireplace(options)
     ud.print_all_errors(memory_handler)
     logging.shutdown()
 
@@ -2960,12 +3250,11 @@ import sys
 import argparse
 import logging
 from pathlib import Path
-from collections.abc import Iterable
 
 import univ_defs_sys_path_script  # Appends sys.path with the location of univ_defs.py
 import univ_defs as ud
 
-__version__: str = "0.0.1"
+__version__: str = "0.1.0"
 
 
 class Options:
@@ -2973,48 +3262,40 @@ class Options:
 
     def __init__(self) -> None:
         """Initialize the Options class with default values."""
-        self.my_name: str = Path(__file__).stem  # The base name of this script without the .py extension
-        self.log_mode: str = "INFO"  # Use the -debug command line argument to change to DEBUG.
+        self.my_name:  str = Path(sys.argv[0]).stem  # The invoked name of this script without the .py extension
+        self.log_mode: int = logging.INFO  # Use the -debug command line argument to change to DEBUG.
         self.args: argparse.Namespace | None = None
-
         self.default_dir: Path = Path.cwd()  # Default to current working directory
 
 
 def parse_arguments(options: Options) -> None:
     """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Print a tree view of the specified directory.",
-    )
+    parser = argparse.ArgumentParser(description="Print a tree view of the specified directory.")
     parser.add_argument("dir", default=options.default_dir, nargs="?",
                         help=f"Directory to search in (defaults to current working directory: {options.default_dir}).")
     parser.add_argument("-no_colors", action="store_true",
                         help="Do not use colors in the output.")
-    parser.add_argument("-version", action="store_true",
+    parser.add_argument("-version", "--version", action="store_true",
                         help="Print the version of this program and exit.")
-    parser.add_argument("-debug", action="store_true",
+    parser.add_argument("-debug", "--debug", action="store_true",
                         help="Enable DEBUG logging.")
     options.args = parser.parse_args()
-
     if options.args.version:
         print(f"{options.my_name} {__version__}")
         sys.exit(0)
-
     if options.args.debug:
-        options.log_mode = "DEBUG"
+        options.log_mode = logging.DEBUG
 
 
 def main() -> None:
     """Main function."""
     options = Options()
+    parse_arguments(options)
+    assert options.args is not None  # for type-checkers
     memory_handler = ud.configure_logging(options.my_name, log_level=options.log_mode,
                                           rawlog=True)
-
-    parse_arguments(options)
-
     logging.debug(f"Directory: {options.args.dir}")
-
     ud.treeview_new_files(options.args.dir, use_colors=not options.args.no_colors)
-
     ud.print_all_errors(memory_handler)
     logging.shutdown()
 
@@ -3671,9 +3952,9 @@ def set_system_volume(percent: int, tolerance: int = 1,
     fraction = percent / 100.0
     mute_arg = None
     if change_mute is not None:
-        if change_mute.lower() == "mute":
+        if change_mute.casefold() == "mute":
             mute_arg = 1
-        elif change_mute.lower() == "unmute":
+        elif change_mute.casefold() == "unmute":
             mute_arg = 0
         else:
             raise ValueError("change_mute must be 'mute', 'unmute', or None")
