@@ -9,7 +9,6 @@ import datetime as dt
 import argparse
 import ast
 import re
-import json
 import copy
 import shutil
 import venv
@@ -23,7 +22,7 @@ from functools import lru_cache  # For caching results of expensive function cal
 
 import univ_defs as ud
 
-__version__ = '0.1.8'
+__version__: str = '0.1.8'
 
 print("REPLACE ALL WRITE AND APPEND STATEMENTS WITH ud.my_atomic_write()!")
 print("FILE I/O SHOULD ALSO CATCH mask_ds_aligned.to_netcdf(output_mask_filename)")
@@ -2250,7 +2249,23 @@ If you're using the bash shell, follow these steps to add the alias manually:
 
 
 def parse_arguments(options: Options) -> None:
-    """Parse command-line arguments."""
+    """
+    Parse command-line arguments.
+
+    Args:
+        options: Options object to store parsed arguments. Contains:
+            - my_name:             Name of the program.
+            - manual_instructions: Instructions for manually adding the alias to the shell configuration file.
+            - log_mode:            Logging mode (default is logging.INFO).
+            - args:                Parsed arguments will be stored here.
+
+    Returns:
+        None, but updates options.args with parsed arguments.
+
+    Raises:
+        SystemExit: If '-version' or '-manual' flags are provided, the program will print the relevant information and exit.
+        ValueError: If any of the arguments are invalid.
+    """
     parser = argparse.ArgumentParser(description="Run a python script with optional flags.")
     parser.add_argument('-version', '--version', action='store_true',
                         help="Print the version of this program.")
@@ -2298,6 +2313,7 @@ def parse_arguments(options: Options) -> None:
 
     # Otherwise, parse the arguments and store them in options.args for later use.
     options.args = parser.parse_args()
+    assert options.args is not None  # for type-checkers
 
     if getattr(options.args, 'version', False):
         print(f"{options.my_name} {__version__}")
@@ -4446,10 +4462,10 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
     if not ud.is_python_script(first_path) or not ud.compile_code(first_path):
         logging.error(f"Skipping invalid Python script: {first_path}")
         return
-    options.read_files    = []
-    options.write_files   = []
-    options.download_urls = []
-    options.upload_urls   = []
+    options.read_files                        = []
+    options.write_files                       = []
+    options.download_urls                     = []
+    options.upload_urls                       = []
     processed_modules:  set[Path]             = set()
     modules_info:       dict[str, ModuleInfo] = {}
     modules_to_process: list[Path]            = [first_path]
@@ -5131,90 +5147,8 @@ def is_virtualenv() -> bool:
     return sys.prefix != sys.base_prefix
 
 
-def _coerce_log_mode(value: Any) -> int:
-    """Accept old string values like 'INFO' (or '20') and return an int."""
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str):
-        s = value.strip()
-        # Handle numeric strings like "20"
-        try:
-            return int(s)
-        except ValueError:
-            pass
-        # Handle level names like "INFO", "debug", etc. (case-insensitive)
-        lvl = logging.getLevelName(s.upper())
-        if isinstance(lvl, int):
-            return lvl
-    logging.warning(f"Unrecognized log_mode {value!r}; defaulting to INFO")
-    return logging.INFO
-
-
-def _json_default(o: object) -> dict[str, str | list[Any] | dict[str, Any]]:
-    """Custom JSON serializer for non-serializable objects."""
-    if isinstance(o, Path):
-        return {"__type__": "path", "value": str(o)}
-    if isinstance(o, set):
-        return {"__type__": "set", "value": list(o)}
-    if isinstance(o, argparse.Namespace):
-        return {"__type__": "namespace", "value": vars(o)}
-    # Let json raise for anything else you haven't handled
-    raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
-
-
-def _json_object_hook(d: dict[str, Any]) -> object:
-    """Custom JSON deserializer for non-serializable objects. Converts JSON objects back to their original types."""
-    t = d.get("__type__")
-    if t == "path":
-        return Path(d["value"])  # Don't resolve() here; leave it to the caller
-    if t == "set":
-        return set(d["value"])
-    if t == "namespace":
-        return argparse.Namespace(**d["value"])
-    return d
-
-
-def save_options_to_json(options: Options) -> None:
-    """Save the options object to a JSON file."""
-    options.options_json_filepath = options.script_dir / f".{options.python_script.name}-{options.my_name}-last-used-on-{options.timestamp}.json"
-
-    # Convert options to a dictionary and handle sets
-    options_dict = options.__dict__.copy()
-
-    # Ensure directory exists
-    logging.debug(f"Ensuring directory exists: {options.options_json_filepath.parent}")
-    options.options_json_filepath.parent.mkdir(parents=True, exist_ok=True)
-
-    # Write the dictionary to a JSON file (ensure_ascii=False to preserve non-ASCII characters)
-    with open(options.options_json_filepath, 'w', encoding=ud.DEFAULT_ENCODING) as json_file:
-        json.dump(options_dict, json_file, indent=4, ensure_ascii=False, default=_json_default)
-    logging.debug(f"Options saved to JSON file: {options.options_json_filepath}")
-
-
-def load_options_from_json(options: Options, json_file: str | os.PathLike[str]) -> Options | None:
-    """Load the options object from a JSON file."""
-    json_file = Path(json_file).expanduser().resolve()
-    if not json_file.is_file():
-        logging.error(f"JSON file {json_file} does not exist.")
-        return None
-    with open(json_file, 'r', encoding=ud.DEFAULT_ENCODING) as file:
-        options_dict = json.load(file, object_hook=_json_object_hook)
-
-    # Backwards compatibility: coerce old string log levels to ints
-    if "log_mode" in options_dict:
-        options_dict["log_mode"] = _coerce_log_mode(options_dict["log_mode"])
-
-    # Create a new Options object and set attributes from the dictionary
-    options_FROM_JSON = copy.deepcopy(Options())  # Just in case.
-    for key, value in options_dict.items():
-        setattr(options_FROM_JSON, key, value)
-    if not options.rawlog: logging.info(f"options loaded from {json_file}")
-    return options_FROM_JSON
-
-
 def load_last_used_options(options: Options) -> Options | None:
     """Look for the most recent JSON file in the script directory that matches the script name and load it into a new Options object. Ignore any JSON files created before the options.pathlibcutoff timestamp."""
-    # json_files = [f for f in options.script_dir.iterdir() if f.name.startswith("."+options.python_script.name) and f.suffix.casefold() == '.json']
     pattern = re.compile(r"last-used-on-(\d{8}-\d{6})")
     json_files = [
         f
@@ -5229,7 +5163,7 @@ def load_last_used_options(options: Options) -> Options | None:
         return None
     if len(json_files) > 1:
         json_files.sort(key=lambda x: dt.datetime.strptime(x.name.split('-')[-2] + x.name.split('-')[-1].replace('.json', ''), "%Y%m%d%H%M%S"), reverse=True)
-    return load_options_from_json(options, options.script_dir / json_files[0])
+    return ud.load_options_from_json(options, options.script_dir / json_files[0])
 
 
 def load_last_used_venv_dir(options: Options) -> Path | None:
@@ -5624,7 +5558,6 @@ def main() -> None:
     start_time = dt.datetime.now()
     options = Options()
     parse_arguments(options)
-    assert options.args is not None  # for type-checkers
     script_string         = getattr(options.args, 'script',       None)
     options.script_args   = getattr(options.args, 'script_args',    [])
     options.rawlog        = getattr(options.args, 'rawlog',      False)
@@ -5816,9 +5749,6 @@ def main() -> None:
                 if new != options.venv_dir:
                     options.venv_dir.rename(new)
                 options.set_venv_dir(new)
-
-                options.venv_dir.rename(options.venv_dir.replace('failed-', ''))
-                options.set_venv_dir(options.venv_dir.replace('failed-', ''))
                 cfg_file_path = options.venv_dir / 'pyvenv.cfg'
                 with open(cfg_file_path, 'r') as file:
                     lines = file.readlines()
@@ -5838,7 +5768,7 @@ def main() -> None:
                 with open(options.download_script_path , 'w') as file:
                     file.writelines(modified_lines)
 
-            save_options_to_json(options)
+            ud.save_options_to_json(options)
 
             if getattr(options.args, 'full', False):
                 built_or_found = "built" if created_new_venv else "found"

@@ -621,7 +621,8 @@ def my_fopen(file_path: str | os.PathLike[str], suppress_errors: bool = False,
     return False
 
 
-def load_ast_var(var_name: str, script_path: str | os.PathLike[str], rawlog: bool = False) -> Any:
+def load_ast_var(var_name: str, script_path: str | os.PathLike[str],
+                 rawlog: bool = False) -> Any | None:
     """
     Load a top-level literal Python variable from a module without executing it.
 
@@ -631,13 +632,14 @@ def load_ast_var(var_name: str, script_path: str | os.PathLike[str], rawlog: boo
         rawlog:      If True, use a simple log format without timestamps or levels.
 
     Returns:
-        The value of the variable if found.
+        The value of the variable if found, or None.
 
     Raises:
         FileNotFoundError: If the script file does not exist.
         AttributeError:    If the variable is not found at the top level of the script.
         ValueError:        If the value of the variable cannot be evaluated as a literal expression.
     """
+    fallback_logging_config(rawlog=rawlog)
     import ast
     file_content = my_fopen(script_path, rawlog=rawlog)
     if not file_content:
@@ -664,7 +666,158 @@ def load_ast_var(var_name: str, script_path: str | os.PathLike[str], rawlog: boo
                 except ValueError as e:
                     raise ValueError(f"Cannot literal_eval the value of {var_name}: {e}") from e
 
-    raise AttributeError(f"Top-level variable {var_name!r} not found in {script_path}")
+    logging.info(f"Top-level variable {var_name!r} not found in {script_path}")
+    return None
+
+
+def _sanitize_text_signature(sig: str | None) -> str:
+    """
+    Clean up a __text_signature__ string for display.
+    
+    Args:
+        sig: The __text_signature__ string to clean up.
+    
+    Returns:
+        A cleaned-up version of the signature string.
+    
+    Raises:
+        None.
+    """
+    if not sig:
+        return "(...)"
+    s = sig
+    # Replace CPython-internal placeholders
+    s = s.replace("$self", "self").replace("$module", "")
+    # Tidy up commas/spaces that might be left after removing $module
+    s = re.sub(r"\(\s*,", "(", s)
+    s = re.sub(r",\s*,", ", ", s)
+    s = s.replace("(,", "(").replace(", )", ")")
+    return s
+
+
+def _builtin_stub(obj: object) -> str:
+    """
+    Return a stub definition for a built-in or C-extension function.
+    
+    Args:
+        obj: The built-in function or method object.
+    
+    Returns:
+        A string representing a stub definition of the function.
+    
+    Raises:
+        None.
+    """
+    import inspect
+    from textwrap import indent
+    def_name = getattr(obj, "__name__", getattr(obj, "__qualname__", "<builtin>"))
+    context = None
+    if hasattr(obj, "__objclass__"):
+        context = f"{obj.__objclass__.__name__}.{def_name}"   # e.g., "list.append"
+    else:
+        mod = getattr(obj, "__module__", None)
+        if mod and mod != "builtins":
+            context = f"{mod}.{def_name}"                     # e.g., "math.prod"
+    header = f"# {context}\n" if context else ""
+
+    try:
+        sig = str(inspect.signature(obj))
+    except Exception:
+        sig = _sanitize_text_signature(getattr(obj, "__text_signature__", None))
+
+    doc = inspect.getdoc(obj) or "Built-in function; Python source unavailable."
+    doc = doc.replace('"""', '\\"""')  # keep our triple quotes intact
+    doc = indent(doc, '    ')
+    return f"{header}def {def_name}{sig}:\n    \"\"\"\n{doc}\n    \"\"\"\n    ...\n"
+
+
+def show_function_source(target: object | str, *, unwrap: bool = True,
+                         file: TextIO | None = None) -> str:
+    """
+    Print the full source text of a Python function (including comments,
+    docstrings, decorators, and type hints).
+
+    Args:
+        target: A function *name* (string) or a function object.
+                If a string is given, it's resolved in the caller's scope, then
+                in builtins, then as a dotted path via pydoc.locate (e.g. 'pkg.mod.func').
+        unwrap: If True, attempt to unwrap decorated functions to show
+                the original implementation. Defaults to True.
+        file:   A file-like object to write to (defaults to sys.stdout).
+
+    Returns:
+        str: The source text that was printed.
+
+    Raises:
+        NameError: If a string cannot be resolved to an object.
+        OSError:   If source is unavailable (e.g., built-in/C extension or optimized away).
+        TypeError: If the resolved object isn't suitable for source extraction.
+    """
+    import builtins
+    import functools
+    import inspect
+    import pydoc
+    # Resolve the object if `target` is a string
+    if isinstance(target, str):
+        name = target
+        frame = inspect.currentframe().f_back  # caller's frame
+        try:
+            obj = frame.f_locals.get(name)
+            if obj is None:
+                obj = frame.f_globals.get(name)
+            if obj is None:
+                obj = getattr(builtins, name, None)
+            if obj is None and "." in name:
+                head, *tail = name.split(".")
+                base = frame.f_locals.get(head)
+                if base is None:
+                    base = frame.f_globals.get(head)
+                if base is None:
+                    base = getattr(builtins, head, None)
+                if base is not None:
+                    try:
+                        for part in tail:
+                            base = getattr(base, part)
+                        obj = base
+                    except Exception:
+                        pass
+            if obj is None:
+                # Try dotted-path resolution (e.g., "pkg.module.func")
+                obj = pydoc.locate(name)
+        finally:
+            # Avoid reference cycles
+            del frame
+
+        if obj is None:
+            raise NameError(f"Could not resolve '{name}' to a function object.")
+    else:
+        obj = target
+
+    # Optionally unwrap decorated functions
+    if unwrap:
+        try:
+            obj = inspect.unwrap(obj)
+        except Exception:
+            pass  # not fatal if we can't unwrap
+
+    if isinstance(obj, functools.partial):
+        obj = obj.func
+
+    if not (inspect.isroutine(obj) or inspect.ismethoddescriptor(obj)):
+        call = getattr(obj, "__call__", None)
+        if call and (inspect.isfunction(call) or inspect.ismethod(call)):
+            obj = call
+
+    # Built-ins / C-extensions don’t have retrievable Python source
+    if inspect.isbuiltin(obj) or inspect.ismethoddescriptor(obj):
+        src = _builtin_stub(obj)
+    else:
+        src = inspect.getsource(obj)
+
+    out = file or sys.stdout
+    # Preserve the exact text (including trailing newline if missing)
+    print(src, file=out, end="" if src.endswith("\n") else "\n")
+    return src
 
 
 def normalize_to_dict(value: Any, var_name: str, script_path: str | os.PathLike[str]) -> dict:
@@ -688,36 +841,36 @@ def normalize_to_dict(value: Any, var_name: str, script_path: str | os.PathLike[
     return {}
 
 
-def get_hostname_socket(rawlog: bool = False) -> str:
+def get_hostname_socket(rawlog: bool = False) -> str | None:
     """Retrieves the hostname using socket.gethostname()."""
     try:
         import socket
         return socket.gethostname()
     except Exception as e:
         if not rawlog: logging.warning(f"Failed to retrieve hostname using {return_method_name()}: {e}")
-        return "ERROR-NO-NAME"
+        return None
 
 
-def get_hostname_platform(rawlog: bool = False) -> str:
+def get_hostname_platform(rawlog: bool = False) -> str | None:
     """Retrieves the hostname using platform.node()."""
     try:
         import platform
         return platform.node()
     except Exception as e:
         if not rawlog: logging.warning(f"Failed to retrieve hostname using {return_method_name()}: {e}")
-        return "ERROR-NO-NAME"
+        return None
 
 
-def get_hostname_os_uname(rawlog: bool = False) -> str:
+def get_hostname_os_uname(rawlog: bool = False) -> str | None:
     """Retrieves the hostname using os.uname().nodename."""
     try:
         return os.uname().nodename
     except Exception as e:
         if not rawlog: logging.warning(f"Failed to retrieve hostname using {return_method_name()}: {e}")
-        return "ERROR-NO-NAME"
+        return None
 
 
-def get_hostname_subprocess_hostname(rawlog: bool = False) -> str:
+def get_hostname_subprocess_hostname(rawlog: bool = False) -> str | None:
     """Retrieves the hostname using the 'hostname' system command via subprocess."""
     try:
         import subprocess
@@ -725,10 +878,10 @@ def get_hostname_subprocess_hostname(rawlog: bool = False) -> str:
         return result.stdout.strip()
     except Exception as e:
         if not rawlog: logging.warning(f"Failed to retrieve hostname using {return_method_name()}: {e}")
-        return "ERROR-NO-NAME"
+        return None
 
 
-def get_hostname_subprocess_scutil(rawlog: bool = False) -> str:
+def get_hostname_subprocess_scutil(rawlog: bool = False) -> str | None:
     """Retrieves the hostname using the 'scutil --get ComputerName' command on macOS via subprocess."""
     if sys.platform == 'darwin':
         try:
@@ -738,7 +891,7 @@ def get_hostname_subprocess_scutil(rawlog: bool = False) -> str:
             return result.stdout.strip()
         except Exception as e:
             if not rawlog: logging.warning(f"Failed to retrieve hostname using {return_method_name()}: {e}")
-    return "ERROR-NO-NAME"
+    return None
 
 
 def get_computer_name(rawlog: bool = False) -> str:
@@ -757,19 +910,22 @@ def get_computer_name(rawlog: bool = False) -> str:
     """
     fallback_logging_config(rawlog=rawlog)
     methods = {
-        'socket_gethostname':             get_hostname_socket,
-        'platform_node':                  get_hostname_platform,
-        'os_uname_nodename':              get_hostname_os_uname,
-        'subprocess_hostname':            get_hostname_subprocess_hostname,
-        'subprocess_scutil_computername': get_hostname_subprocess_scutil  # macOS specific
+        'socket_gethostname':  get_hostname_socket,
+        'platform_node':       get_hostname_platform,
+        'os_uname_nodename':   get_hostname_os_uname,
+        'subprocess_hostname': get_hostname_subprocess_hostname,
     }
+
+    if sys.platform == 'darwin':  # This next method is macOS-specific
+        methods['subprocess_scutil_computername'] = get_hostname_subprocess_scutil
 
     results = {}
 
     for method_name, method_func in methods.items():
         try:
             name = method_func(rawlog=rawlog)
-            results[method_name] = name
+            if name:
+              results[method_name] = name
         except Exception:  # Ignore all exceptions for individual methods
             if not rawlog: logging.exception(f"Method {method_name} failed.")
             pass  # Skip methods that fail
@@ -806,15 +962,6 @@ def analyze_computer_name_results(results: dict[str, str], rawlog: bool = False)
     name_counts = Counter(name_values)
     most_common = name_counts.most_common()
 
-    if most_common[0][0] != "ERROR-NO-NAME":
-        # If one or two names are just the error placeholder, that's okay.
-        # After all, one of the methods only works on macOS.
-        # Remove "ERROR-NO-NAME" from the results if it isn't the most common.
-        results = {k: v for k, v in results.items() if v != "ERROR-NO-NAME"}
-        name_values = list(results.values())
-        name_counts = Counter(name_values)
-        most_common = name_counts.most_common()
-
     if len(name_counts) == 1:
         # All names are identical
         if not rawlog: logging.info(f"Computer name: {most_common[0][0]}")
@@ -835,16 +982,153 @@ def analyze_computer_name_results(results: dict[str, str], rawlog: bool = False)
         return primary_name
 
 
+def ensure_path_is_a_file(path: str | os.PathLike[str]) -> Path:
+    """
+    Ensure that the given path is an existing file and return it as a Path object.
+    
+    Args:
+        path: The path to check.
+
+    Returns:
+        A Path object representing the file.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+    """
+    p = Path(path).resolve(strict=True)
+    if not p.is_file():
+        raise IsADirectoryError(f"Expected a file, got directory: {p}")
+    if p.stat().st_size == 0:
+        logging.warning(f"File is empty: {p}")
+    return p
+
+
+def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
+                  chunk_size: int = 1 << 20, timeout: int = 30) -> None:
+    """
+    Download a file to 'dest' with retry + exponential backoff.
+    Writes to a temporary .part file and renames atomically on success.
+    Verifies Content-Length if provided.
+    Logs progress by bytes (rough).
+
+    Args:
+        url:        The source URL to download from.
+        dest:       Destination file path.
+        retries:    Number of attempts (default 5 is a good balance for transient errors).
+        chunk_size: Bytes per read chunk (default 1MiB).
+        timeout:    Per-attempt socket timeout (seconds).
+
+    Returns:
+        None. Writes the file to 'dest'.
+    
+    Raises:
+        SystemExit on failure after retries.
+    """
+    import time
+    from urllib.request import Request, urlopen
+    from urllib.error import URLError, HTTPError
+    fallback_logging_config()
+    dest = Path(dest).resolve()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    temp = dest.with_suffix(dest.suffix + ".part")
+
+    backoff = 1.0
+    last_err: Exception | None = None
+
+    for attempt in range(1, max(1, retries) + 1):
+        try:
+            logging.info("Downloading %s → %s (attempt %d/%d)", url, dest, attempt, retries)
+            req = Request(url, headers={"User-Agent": "kokoro-downloader/1.0"})
+            with urlopen(req, timeout=timeout) as resp:
+                total = resp.headers.get("Content-Length")
+                total_i = int(total) if total and total.isdigit() else None
+
+                with temp.open("wb") as f:
+                    downloaded = 0
+                    while True:
+                        chunk = resp.read(chunk_size)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total_i:
+                            # Lightweight textual progress (kept minimal for logging)
+                            pct = int(downloaded * 100 / total_i)
+                            if pct % 10 == 0:  # log every ~10%
+                                logging.debug("… %d%% (%d/%d bytes)", pct, downloaded, total_i)
+
+            # Verify size if Content-Length available
+            if total_i is not None:
+                actual = temp.stat().st_size
+                if actual != total_i:
+                    raise IOError(f"Incomplete download: expected {total_i} bytes, got {actual} bytes")
+
+            temp.replace(dest)
+            logging.info("Saved %s (%s bytes)", dest, dest.stat().st_size)
+            return
+        except (HTTPError, URLError, TimeoutError, IOError) as e:
+            last_err = e
+            logging.warning("Download failed (%s).", e)
+            if attempt >= retries:
+                break
+            sleep_s = backoff
+            backoff = min(backoff * 2, 30.0)  # cap backoff
+            logging.info("Retrying in %.1f seconds…", sleep_s)
+            time.sleep(sleep_s)
+        except Exception as e:
+            # Unexpected errors: don't loop indefinitely
+            last_err = e
+            logging.exception("Unexpected error during download.")
+            break
+
+    raise SystemExit(f"Failed to download {url} after {retries} attempts. Last error: {last_err}")
+
+
+def query_free_space(path: str | os.PathLike[str]) -> int:
+    """
+    Return the free space (in bytes) available to the current user on the
+    filesystem that contains `path`. Works for files or directories, and
+    for paths that don't yet exist (it climbs to the nearest existing parent).
+
+    Args:
+        path: A file or directory path.
+    
+    Returns:
+        Free space in bytes available to the current user on the filesystem.
+    
+    Raises:
+        FileNotFoundError: If no existing parent directory is found.
+        OSError:           If the filesystem information cannot be retrieved.
+    """
+    p = Path(path)
+
+    # Use the path itself if it's an existing directory; otherwise use its parent.
+    base = p if (p.exists() and p.is_dir()) else p.parent
+
+    # Climb up until we find an existing directory.
+    while not base.exists():
+        if base == base.parent:
+            raise FileNotFoundError(f"No existing parent found for {path!r}")
+        base = base.parent
+
+    # POSIX: prefer statvfs to get user-available bytes (excludes reserved blocks).
+    if hasattr(os, "statvfs"):
+        st = os.statvfs(base)
+        return st.f_bavail * st.f_frsize
+
+    # Windows / others: fallback to shutil.disk_usage
+    import shutil
+    return shutil.disk_usage(str(base)).free
+
+
 def ensure_even_dimensions(image_path: str | os.PathLike[str]) -> None:
     """Ensure the image at 'image_path' has dimensions divisible by 2, by resizing if necessary."""
     from PIL import Image
     fallback_logging_config()
-    image_path = Path(image_path).expanduser().resolve(strict=True)
-    if not image_path.is_file():
-        raise IsADirectoryError(f"File does not exist: {image_path}")
+    image_path = ensure_path_is_a_file(image_path)
     with Image.open(image_path) as img:
         width, height = img.size
-        new_width = width   if  width % 2 == 0 else width - 1
+        new_width  = width  if width  % 2 == 0 else width  - 1
         new_height = height if height % 2 == 0 else height - 1
 
         if new_width != width or new_height != height:
@@ -859,7 +1143,7 @@ def ensure_even_dimensions(image_path: str | os.PathLike[str]) -> None:
 
 
 def human_bytesize(num: float | int, *, suffix: str = "B", si: bool = False, precision: int = 1,
-                   space: bool = False, trim_trailing_zeros: bool = False, long_units: bool = False) -> str:
+                   space: bool = True, trim_trailing_zeros: bool = False, long_units: bool = False) -> str:
     """
     Formats a byte count into a human-readable string.
 
@@ -1727,6 +2011,118 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
     raise ValueError(error_message + "\n".join(errors) + "\nPlease check the input format and try again.")
 
 
+def _coerce_log_mode(value: Any) -> int:
+    """Accept old string values like 'INFO' (or '20') and return an int."""
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        s = value.strip()
+        # Handle numeric strings like "20"
+        try:
+            return int(s)
+        except ValueError:
+            pass
+        # Handle level names like "INFO", "debug", etc. (case-insensitive)
+        lvl = logging.getLevelName(s.upper())
+        if isinstance(lvl, int):
+            return lvl
+    logging.warning(f"Unrecognized log_mode {value!r}; defaulting to INFO")
+    return logging.INFO
+
+
+def _json_default(o: object) -> dict[str, str | list[Any] | dict[str, Any]]:
+    """Custom JSON serializer for non-serializable objects."""
+    if isinstance(o, Path):
+        return {"__type__": "path", "value": str(o)}
+    if isinstance(o, set):
+        return {"__type__": "set", "value": list(o)}
+    import argparse
+    if isinstance(o, argparse.Namespace):
+        return {"__type__": "namespace", "value": vars(o)}
+    # Let json raise for anything else you haven't handled
+    raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
+
+
+def _json_object_hook(d: dict[str, Any]) -> object:
+    """Custom JSON deserializer for non-serializable objects. Converts JSON objects back to their original types."""
+    t = d.get("__type__")
+    if t == "path":
+        return Path(d["value"])  # Don't resolve() here; leave it to the caller
+    if t == "set":
+        return set(d["value"])
+    if t == "namespace":
+        import argparse
+        return argparse.Namespace(**d["value"])
+    return d
+
+
+def save_options_to_json(options: Options) -> None:
+    """
+    Save the options object to a JSON file.
+    
+    Args:
+        options: Options object containing:
+            - script_dir:    Directory where the JSON file will be saved.
+            - python_script: Name of the Python script (used in the JSON filename).
+            - my_name:       Name of the current script (used in the JSON filename).
+            - timestamp:     Current timestamp (used in the JSON filename).
+
+    Returns:
+        None - writes the options to a JSON file.
+    
+    Raises:
+        IOError:    If there is an error writing to the file.
+        ValueError: If the options object is invalid.
+    """
+    import json
+    options.options_json_filepath = options.script_dir / f".{options.python_script.name}-{options.my_name}-last-used-on-{options.timestamp}.json"
+
+    # Convert options to a dictionary and handle sets
+    options_dict = options.__dict__.copy()
+
+    # Ensure directory exists
+    logging.debug(f"Ensuring directory exists: {options.options_json_filepath.parent}")
+    options.options_json_filepath.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write the dictionary to a JSON file (ensure_ascii=False to preserve non-ASCII characters)
+    with open(options.options_json_filepath, 'w', encoding=DEFAULT_ENCODING) as json_file:
+        json.dump(options_dict, json_file, indent=4, ensure_ascii=False, default=_json_default)
+    logging.debug(f"Options saved to JSON file: {options.options_json_filepath}")
+
+
+def load_options_from_json(options: Options, json_file: str | os.PathLike[str]) -> Options | None:
+    """
+    Load the options object from a JSON file.
+    
+    Args:
+        options:    An existing Options object (used for logging purposes).
+        json_file:  Path to the JSON file to load.
+    
+    Returns:
+        Options object loaded from the JSON file, or None if the file does not exist or cannot be read.
+    
+    Raises:
+        IOError:    If there is an error reading the file.
+        ValueError: If the JSON file is invalid or cannot be parsed.
+    """
+    import json
+    import copy
+    json_file = ensure_path_is_a_file(json_file)
+    with open(json_file, 'r', encoding=DEFAULT_ENCODING) as file:
+        options_dict = json.load(file, object_hook=_json_object_hook)
+
+    # Backwards compatibility: coerce old string log levels to ints
+    if "log_mode" in options_dict:
+        options_dict["log_mode"] = _coerce_log_mode(options_dict["log_mode"])
+
+    # Create a new Options object and set attributes from the dictionary
+    options_FROM_JSON = copy.deepcopy(Options())  # Just in case.
+    for key, value in options_dict.items():
+        setattr(options_FROM_JSON, key, value)
+    if not options.rawlog: logging.info(f"options loaded from {json_file}")
+    return options_FROM_JSON
+
+
 def sci_exp(x: float | int, max_digits: int = 15) -> int:
     """Return floor(log10(|x|)), clamped to -max_digits for very small |x|.
     For x == 0, returns -max_digits.
@@ -2204,9 +2600,7 @@ def check_python_formatting(path: str | os.PathLike[str], diff_choice: int = 1) 
     """
     import ast
     fallback_logging_config()
-    path = Path(path).expanduser().resolve(strict=True)
-    if not path.is_file():
-        raise IsADirectoryError(f"Not a file: {path}")
+    path = ensure_path_is_a_file(path)
     src = my_fopen(path)
     if src is False:
         logging.error(f"❌ Failed to open file: {path}")
@@ -2298,9 +2692,7 @@ def run_flake8(path: str | os.PathLike[str], ignore_codes: list[str] = [], max_l
     from collections import defaultdict
     from flake8.api import legacy as flake8
     fallback_logging_config()
-    path = Path(path).expanduser().resolve(strict=True)
-    if not path.is_file():
-        raise IsADirectoryError(f"Not a file: {path}")
+    path = ensure_path_is_a_file(path)
     style_guide = flake8.get_style_guide(max_line_length=max_line_length, ignore=ignore_codes)
     report = style_guide.check_files([path])
     if report.total_errors == 0:
@@ -2364,9 +2756,7 @@ def _gather_flake8_issues(path: str | os.PathLike[str], ignore_codes: list[str] 
 def _gather_via_cli(path: str | os.PathLike[str], max_line_length: int, ignore_codes: list[str]) -> dict[str, str]:
     """Use the flake8 CLI to gather codes and descriptions."""
     import subprocess
-    path = Path(path).expanduser().resolve(strict=True)
-    if not path.is_file():
-        raise IsADirectoryError(f"Not a file: {path}")
+    path = ensure_path_is_a_file(path)
     fmt = "%(row)d:%(col)d: %(code)s %(text)s"
     args = [
         "flake8",
@@ -2388,14 +2778,13 @@ def _gather_via_cli(path: str | os.PathLike[str], max_line_length: int, ignore_c
     return codes
 
 
-def _gather_via_app(path: str | os.PathLike[str], max_line_length: int, ignore_codes: list[str]) -> dict[str, str]:
+def _gather_via_app(path: str | os.PathLike[str], max_line_length: int,
+                    ignore_codes: list[str]) -> dict[str, str]:
     """Use the flake8 Application API to gather codes and descriptions."""
     from flake8.main.application import Application
     from flake8.formatting.base import BaseFormatter
     from flake8.violation import Violation
-    path = Path(path).expanduser().resolve(strict=True)
-    if not path.is_file():
-        raise IsADirectoryError(f"Not a file: {path}")
+    path = ensure_path_is_a_file(path)
 
     class CodeDictFormatter(BaseFormatter):
         """Custom formatter that collects codes and their first descriptions."""
@@ -2742,9 +3131,7 @@ def diff_and_confirm(orig_text: str, changed_text: str, path: str | os.PathLike[
     """
     fallback_logging_config()
     logging.debug(f"At the top of the function {return_method_name()}(), {diff_choice=}")
-    path = Path(path).expanduser().resolve(strict=True)
-    if not path.is_file():
-        raise IsADirectoryError(f"Not a file: {path}")
+    path = ensure_path_is_a_file(path)
     my_diff(orig_text, changed_text, path, diff_choice=diff_choice,
             changed_color=changed_color, deleted_color=deleted_color, added_color=added_color)
     label_str = f"{ANSI_RED}{label}{ANSI_RESET}" if label     else ""
@@ -2801,9 +3188,7 @@ def ask_and_autopep8(path: str | os.PathLike[str], code: str, description: str =
     """
     import autopep8
     fallback_logging_config()
-    path = Path(path).expanduser().resolve(strict=True)
-    if not path.is_file():
-        raise IsADirectoryError(f"Not a file: {path}")
+    path = ensure_path_is_a_file(path)
     logging.debug(f"At the top of the function {return_method_name()}(), {diff_choice=}")
     # The number of blank lines expected in various contexts.
     blank_line_overrides = {
@@ -2869,9 +3254,7 @@ def ask_and_replace(old_str: str, new_str: str, path: str | os.PathLike[str],  l
         PermissionError: If the file is not accessible due to permission issues.
     """
     fallback_logging_config()
-    path = Path(path).expanduser().resolve(strict=True)
-    if not path.is_file():
-        raise IsADirectoryError(f"Not a file: {path}")
+    path = ensure_path_is_a_file(path)
     orig_text = my_fopen(path)
     changed_text = orig_text.replace(old_str, new_str)
     if changed_text == orig_text:
@@ -2999,9 +3382,7 @@ def interactive_flake8(path: str | os.PathLike[str], diff_choice: int = 1, ignor
         added_color:     Color for added characters in changed lines (default: ANSI_YELLOW).
     """
     fallback_logging_config()
-    path = Path(path).expanduser().resolve(strict=True)
-    if not path.is_file():
-        raise IsADirectoryError(f"Not a file: {path}")
+    path = ensure_path_is_a_file(path)
     logging.debug(f"At the top of the function {return_method_name()}(), {diff_choice=}")
     if not run_flake8(path, ignore_codes=ignore_codes, max_line_length=max_line_length):
         logging.info("No flake8 errors—nothing to do.")
@@ -3074,6 +3455,7 @@ def parse_arguments(options: Options) -> None:
     parser.add_argument("-debug", "--debug", action="store_true",
                         help="Enable DEBUG logging.")
     options.args = parser.parse_args()
+    assert options.args is not None  # for type-checkers
     if options.args.version:
         print(f"{options.my_name} {__version__}")
         sys.exit(0)
@@ -3085,7 +3467,6 @@ def main() -> None:
     """Main function."""
     options = Options()
     parse_arguments(options)
-    assert options.args is not None  # for type-checkers
     memory_handler = ud.configure_logging(options.my_name, log_level=options.log_mode,
                                           rawlog=True)
     orig_text    = ud.my_fopen(options.args.orig_path)
@@ -3150,6 +3531,7 @@ def parse_arguments(options: Options) -> None:
     parser.add_argument("-debug", "--debug", action="store_true",
                         help="Enable DEBUG logging.")
     options.args = parser.parse_args()
+    assert options.args is not None  # for type-checkers
     if options.args.version:
         print(f"{options.my_name} {__version__}")
         sys.exit(0)
@@ -3161,7 +3543,6 @@ def main() -> None:
     """Main function."""
     options = Options()
     parse_arguments(options)
-    assert options.args is not None  # for type-checkers
     memory_handler = ud.configure_logging(options.my_name, log_level=options.log_mode,
                                           rawlog=True)
     if not ud.check_python_formatting(options.args.filepath, diff_choice=options.args.diff_choice):
@@ -3220,6 +3601,7 @@ def parse_arguments(options: Options) -> None:
     parser.add_argument("-debug", "--debug", action="store_true",
                         help="Enable DEBUG logging.")
     options.args = parser.parse_args()
+    assert options.args is not None  # for type-checkers
     if options.args.version:
         print(f"{options.my_name} {__version__}")
         sys.exit(0)
@@ -3231,7 +3613,6 @@ def main() -> None:
     """Main function."""
     options = Options()
     parse_arguments(options)
-    assert options.args is not None  # for type-checkers
     memory_handler = ud.configure_logging(options.my_name, log_level=options.log_mode,
                                           rawlog=True)
     ud.multireplace(options)
@@ -3280,6 +3661,7 @@ def parse_arguments(options: Options) -> None:
     parser.add_argument("-debug", "--debug", action="store_true",
                         help="Enable DEBUG logging.")
     options.args = parser.parse_args()
+    assert options.args is not None  # for type-checkers
     if options.args.version:
         print(f"{options.my_name} {__version__}")
         sys.exit(0)
@@ -3291,7 +3673,6 @@ def main() -> None:
     """Main function."""
     options = Options()
     parse_arguments(options)
-    assert options.args is not None  # for type-checkers
     memory_handler = ud.configure_logging(options.my_name, log_level=options.log_mode,
                                           rawlog=True)
     logging.debug(f"Directory: {options.args.dir}")
@@ -3302,6 +3683,18 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+'''
+
+SITECUSTOMIZE_LAMBDA_SCRIPT: str = '''import os, sys
+os.environ.setdefault('HOME',                       '/tmp')
+os.environ.setdefault('MPLCONFIGDIR',               '/tmp/matplotlib')
+os.environ.setdefault('XDG_CACHE_HOME',             '/tmp/.cache')
+os.environ.setdefault('HDF5_USE_FILE_LOCKING',      'FALSE')
+os.environ.setdefault('HDF5_DISABLE_VERSION_CHECK', '2')
+os.environ.setdefault('HDF5_PLUGIN_PATH',           '/tmp')
+os.makedirs(os.environ['MPLCONFIGDIR'],             exist_ok=True)
+os.makedirs(os.environ['XDG_CACHE_HOME'],           exist_ok=True)
+sys.dont_write_bytecode = True  # Avoid writing .pyc into read-only code dir
 '''
 
 
@@ -3386,9 +3779,7 @@ def fix_text(current_text: str, path: str | os.PathLike[str], raw_bytes: bytes) 
     """
     import ftfy
     fallback_logging_config()
-    path = Path(path).expanduser().resolve(strict=True)
-    if not path.is_file():
-        raise IsADirectoryError(f"Not a file: {path}")
+    path = ensure_path_is_a_file(path)
     logging.debug(f"Checking {path} for mojibake.")
     if not contains_mojibake(current_text):
         return None
@@ -4052,13 +4443,9 @@ def set_system_volume(percent: int, tolerance: int = 1,
 def open_playlist_in_VLC(playlist: str | os.PathLike[str], no_start:  bool = False) -> None:
     """Open a playlist in VLC. If no_start is True, don't start playback in VLC."""
     import subprocess
-    if playlist is None:
-        raise ValueError("The directory path cannot be None.")
-    playlist = Path(playlist)
-    if not playlist.is_file():
-        raise ValueError(f"The specified path '{playlist}' is not a valid file.")
-    if no_start: command_list = ["vlc", "--no-playlist-autostart", playlist]
-    else:        command_list = ["vlc",                            playlist]
+    playlist = ensure_path_is_a_file(playlist)
+    if no_start: command_list = ["vlc", "--no-playlist-autostart", os.fspath(playlist)]
+    else:        command_list = ["vlc",                            os.fspath(playlist)]
     subprocess.Popen(command_list, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
