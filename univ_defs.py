@@ -10,22 +10,20 @@ from typing import TextIO, Any, TypeAlias, Type, Literal
 from collections.abc import Iterator
 import re  # Used to precompile regexes for performance
 
-print("REPLACE ALL WRITE AND APPEND STATEMENTS WITH ud.my_atomic_write()! THIS INCLUDES 'path.write_text(changed_text, encoding=DEFAULT_ENCODING)'")
-
 # This is the version of univ_defs.py
 __version__: str = '0.1.7'
 
 # This is the version of python which should be used in scripts that import this module.
-PY_VERSION: int = 3.11
+PY_VERSION: float = 3.11
 
 DEFAULT_ENCODING: str = 'utf-8'  # This is the default encoding used for reading and writing text files.
 
 # ANSI escape codes
-ANSI_RED: str    = "\033[91m"
-ANSI_GREEN: str  = "\033[92m"  # this is bold/bright green on Linux but orange on my Mac
+ANSI_RED:    str = "\033[91m"
+ANSI_GREEN:  str = "\033[92m"  # this is bold/bright green on Linux but orange on my Mac
 ANSI_YELLOW: str = "\033[93m"
-ANSI_CYAN: str   = "\033[94m"  # this is blue on Linux but cyan on my Mac
-ANSI_RESET: str  = "\033[0m"
+ANSI_CYAN:   str = "\033[94m"  # this is blue on Linux but cyan on my Mac
+ANSI_RESET:  str = "\033[0m"
 
 # All the formatting rules to ignore when running flake8 to check Python formatting.
 IGNORED_CODES: list[str] = [
@@ -66,6 +64,7 @@ class Options:
     def __init__(self) -> None:
         """Initialize the options with default values."""
         self.log_mode: int = logging.INFO
+        self.home:    Path = Path.home()  # User's home directory
 
 
 class PlotOptions:
@@ -140,8 +139,7 @@ def return_method_name(levels_up: int = 1) -> str:
     try:
         fr = sys._getframe(levels)  # Get the frame at the specified level
     except Exception as e1:
-        logging.warning("return_method_name(): sys._getframe(%s) failed. Falling back to inspect...",
-                        levels, exc_info=e1)
+        logging.warning("return_method_name(): sys._getframe(%s) failed. Falling back to inspect...", levels, exc_info=e1)
         try:
             import inspect
             frame = inspect.currentframe()
@@ -154,7 +152,7 @@ def return_method_name(levels_up: int = 1) -> str:
                     fr = fr.f_back
                     climbed += 1
                 if climbed < levels:
-                    logging.debug("return_method_name(): truncated at top of stack (requested levels_up=%s but only climbed=%s)", levels, climbed)
+                    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("return_method_name(): truncated at top of stack (requested levels_up=%s but only climbed=%s)", levels, climbed)
             finally:
                 if frame is not None:
                     try:
@@ -335,25 +333,29 @@ class MaxLevelFilter(logging.Filter):
         return record.levelno <= self.max_level
 
 
-def fallback_logging_config(log_level: int | str = 'INFO', rawlog: bool = False) -> None:
+def fallback_logging_config(log_level: int | str = logging.INFO, rawlog: bool = False) -> None:
     """
     Configure the root logger with a basic configuration if no handlers are set.
     Run this at the start of functions which might be run without first configuring logging.
 
     Args:
-        level  : The logging level to set. Defaults to 'INFO'.
+        level  : The logging level to set. Defaults to logging.INFO.
         rawlog : If True, use a simple log format without timestamps or levels.
     """
+    root = logging.getLogger()
+    for h in root.handlers:
+        print(h, h.level, getattr(h.formatter, "_fmt", None))
+
     if not logging.getLogger().handlers:
         if not rawlog:  # Use a full logging format with timestamps and levels.
             logging.basicConfig(level=log_level,
-                                format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+                                format="%(asctime)s - %(levelname)s - %(message)s",
                                 datefmt="%Y-%m-%d %H:%M:%S")
         else:  # rawlog is True, so use a simple format without timestamps or levels.
             logging.basicConfig(level=log_level, format="%(message)s")
 
 
-def configure_logging(basename: str, log_level: int | str = 'INFO',
+def configure_logging(basename: str, log_level: int | str = logging.INFO,
                       rawlog: bool = False, logdir: str | os.PathLike[str] = '') -> MemoryHandler:
     """Configure logging to write to files and stdout/stderr, and return a MemoryHandler to capture ERROR logs for later (duplicate) printing."""
     import datetime as dt
@@ -419,7 +421,7 @@ def configure_logging(basename: str, log_level: int | str = 'INFO',
     root_logger.addHandler(console_handler_stdout)
     root_logger.addHandler(console_handler_stderr)
     root_logger.addHandler(memory_handler)
-    if not rawlog: root_logger.info(f'Logging to {log_info} and {log_errors} with level {logging.getLevelName(root_logger.level)}')
+    if not rawlog: root_logger.info("Logging to '%s' and '%s' with level %s", log_info, log_errors, logging.getLevelName(root_logger.level))
 
     return memory_handler
 
@@ -471,14 +473,14 @@ def my_popen(command_list: list, suppress_info: bool = False,
     """Execute a command using subprocess.Popen and capture the output line by line using threads."""
     import threading
     import subprocess
-    fallback_logging_config(log_level='INFO' if not suppress_info else 'ERROR')
+    import shlex
+    fallback_logging_config(log_level=logging.INFO if not suppress_info else logging.ERROR)
     command_list_str = [str(item) for item in command_list]
-    the_statement = "Executing command: " + ' '.join(command_list_str)
-
+    the_statement = "Executing command: " + ' '.join(shlex.quote(os.fspath(arg)) for arg in command_list_str)
     if not suppress_info:
         logging.info(the_statement)
     else:
-        logging.debug(the_statement)
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(the_statement)
 
     try:
         process = subprocess.Popen(
@@ -500,7 +502,7 @@ def my_popen(command_list: list, suppress_info: bool = False,
                 if not suppress_info:
                     logging.info(log_line)
                 else:
-                    logging.debug(log_line)
+                    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(log_line)
 
         def read_stderr() -> None:
             """Read stderr line by line and log it."""
@@ -512,7 +514,7 @@ def my_popen(command_list: list, suppress_info: bool = False,
                 elif not suppress_info:
                     logging.info(log_line)
                 else:
-                    logging.debug(log_line)
+                    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(log_line)
 
         # Start threads
         stdout_thread = threading.Thread(target=read_stdout)
@@ -532,9 +534,9 @@ def my_popen(command_list: list, suppress_info: bool = False,
 
     except Exception as e:  # I don't want any exception here to crash the script, so I catch it and return a MyPopenResult with an error message.
         if not suppress_error:
-            logging.error(f"An error occurred while executing the command '{command_list_str}'", exc_info=True)
+            logging.error("An error occurred while executing the command '%s'", command_list_str, exc_info=True)
         else:
-            logging.info( f"An error occurred while executing the command '{command_list_str}'", exc_info=True)
+            logging.info("An error occurred while executing the command '%s'", command_list_str, exc_info=True)
         return MyPopenResult(stdout="", stderr=str(e), returncode=-1)
 
 
@@ -556,7 +558,8 @@ def my_fopen(file_path: str | os.PathLike[str], suppress_errors: bool = False,
         FileNotFoundError:  If the file does not exist.
         UnicodeDecodeError: If the file cannot be read with any of the specified encodings.
     """
-    fallback_logging_config(log_level='INFO' if not suppress_errors else 'CRITICAL')
+    fallback_logging_config(log_level=logging.INFO if not suppress_errors else logging.CRITICAL,
+                            rawlog=rawlog)
     file_path = Path(file_path).expanduser().resolve()
     if not file_path.exists():
         this_message = f"File does not exist: {file_path}"
@@ -580,23 +583,23 @@ def my_fopen(file_path: str | os.PathLike[str], suppress_errors: bool = False,
     # Join all suffixes because some listed extensions look like ".tar.gz"
     if "".join(file_path.suffixes).casefold() in video_extensions:
         if not rawlog:
-            if not suppress_errors: logging.error(f"Skipping video file {file_path}")
-            else:                   logging.info( f"Skipping video file {file_path}")
+            if not suppress_errors: logging.error("Skipping video file %s", file_path)
+            else:                   logging.info( "Skipping video file %s", file_path)
         return False
     if "".join(file_path.suffixes).casefold() in audio_extensions:
         if not rawlog:
-            if not suppress_errors: logging.error(f"Skipping audio file {file_path}")
-            else:                   logging.info( f"Skipping audio file {file_path}")
+            if not suppress_errors: logging.error("Skipping audio file %s", file_path)
+            else:                   logging.info( "Skipping audio file %s", file_path)
         return False
     if "".join(file_path.suffixes).casefold() in image_extensions:
         if not rawlog:
-            if not suppress_errors: logging.error(f"Skipping image file {file_path}")
-            else:                   logging.info( f"Skipping image file {file_path}")
+            if not suppress_errors: logging.error("Skipping image file %s", file_path)
+            else:                   logging.info( "Skipping image file %s", file_path)
         return False
     if "".join(file_path.suffixes).casefold() in archive_extensions:
         if not rawlog:
-            if not suppress_errors: logging.error(f"Skipping archive file {file_path}")
-            else:                   logging.info( f"Skipping archive file {file_path}")
+            if not suppress_errors: logging.error("Skipping archive file %s", file_path)
+            else:                   logging.info( "Skipping archive file %s", file_path)
         return False
     for encoding in text_encodings:
         try:
@@ -605,7 +608,7 @@ def my_fopen(file_path: str | os.PathLike[str], suppress_errors: bool = False,
                     file_content = file.read()
                 else:
                     file_content = ''.join(file.readline() for _ in range(numlines))
-            logging.debug(f"Successfully read {file_path} with encoding {encoding}")
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Successfully read %s with encoding %s", file_path, encoding)
             return file_content  # Exit the function if reading is successful
         except UnicodeDecodeError:
             this_message = f"Unicode decode error with encoding {encoding} reading file {file_path}"
@@ -666,7 +669,7 @@ def load_ast_var(var_name: str, script_path: str | os.PathLike[str],
                 except ValueError as e:
                     raise ValueError(f"Cannot literal_eval the value of {var_name}: {e}") from e
 
-    logging.info(f"Top-level variable {var_name!r} not found in {script_path}")
+    logging.info("Top-level variable %r not found in %s", var_name, script_path)
     return None
 
 
@@ -833,11 +836,11 @@ def normalize_to_dict(value: Any, var_name: str, script_path: str | os.PathLike[
             parsed = json.loads(value)
             if isinstance(parsed, dict):
                 return parsed
-            logging.warning(f"Variable {var_name!r} in {script_path} JSON-decoded to {type(parsed).__name__}, expected dict.")
+            logging.warning("Variable %r in %r JSON-decoded to %s, expected dict.", var_name, script_path, type(parsed).__name__)
         except json.JSONDecodeError as e:
-            logging.warning(f"Failed to JSON-decode variable {var_name!r} from {script_path}. Expected a dict or JSON string.", exc_info=e)
+            logging.warning("Failed to JSON-decode variable %r from %s. Expected a dict or JSON string.", var_name, script_path, exc_info=e)
     else:
-        logging.warning(f"Variable {var_name!r} in {script_path} is of type {type(value).__name__}, expected dict or JSON string.")
+        logging.warning("Variable %r in %s is of type %s, expected dict or JSON string.", var_name, script_path, type(value).__name__)
     return {}
 
 
@@ -847,7 +850,7 @@ def get_hostname_socket(rawlog: bool = False) -> str | None:
         import socket
         return socket.gethostname()
     except Exception as e:
-        if not rawlog: logging.warning(f"Failed to retrieve hostname using {return_method_name()}: {e}")
+        if not rawlog: logging.warning("Failed to retrieve hostname using %s: %s", return_method_name(), e)
         return None
 
 
@@ -857,7 +860,7 @@ def get_hostname_platform(rawlog: bool = False) -> str | None:
         import platform
         return platform.node()
     except Exception as e:
-        if not rawlog: logging.warning(f"Failed to retrieve hostname using {return_method_name()}: {e}")
+        if not rawlog: logging.warning("Failed to retrieve hostname using %s: %s", return_method_name(), e)
         return None
 
 
@@ -866,7 +869,7 @@ def get_hostname_os_uname(rawlog: bool = False) -> str | None:
     try:
         return os.uname().nodename
     except Exception as e:
-        if not rawlog: logging.warning(f"Failed to retrieve hostname using {return_method_name()}: {e}")
+        if not rawlog: logging.warning("Failed to retrieve hostname using %s: %s", return_method_name(), e)
         return None
 
 
@@ -877,7 +880,7 @@ def get_hostname_subprocess_hostname(rawlog: bool = False) -> str | None:
         result = subprocess.run(['hostname'], capture_output=True, text=True)
         return result.stdout.strip()
     except Exception as e:
-        if not rawlog: logging.warning(f"Failed to retrieve hostname using {return_method_name()}: {e}")
+        if not rawlog: logging.warning("Failed to retrieve hostname using %s: %s", return_method_name(), e)
         return None
 
 
@@ -890,7 +893,7 @@ def get_hostname_subprocess_scutil(rawlog: bool = False) -> str | None:
                                     capture_output=True, text=True)
             return result.stdout.strip()
         except Exception as e:
-            if not rawlog: logging.warning(f"Failed to retrieve hostname using {return_method_name()}: {e}")
+            if not rawlog: logging.warning("Failed to retrieve hostname using %s: %s", return_method_name(), e)
     return None
 
 
@@ -927,7 +930,7 @@ def get_computer_name(rawlog: bool = False) -> str:
             if name:
               results[method_name] = name
         except Exception:  # Ignore all exceptions for individual methods
-            if not rawlog: logging.exception(f"Method {method_name} failed.")
+            if not rawlog: logging.exception("Method %s failed.", method_name)
             pass  # Skip methods that fail
 
     computer_name = analyze_computer_name_results(results, rawlog=rawlog)
@@ -964,7 +967,7 @@ def analyze_computer_name_results(results: dict[str, str], rawlog: bool = False)
 
     if len(name_counts) == 1:
         # All names are identical
-        if not rawlog: logging.info(f"Computer name: {most_common[0][0]}")
+        if not rawlog: logging.info("Computer name: %s", most_common[0][0])
         return most_common[0][0]
     else:
         # Names are not identical
@@ -980,6 +983,107 @@ def analyze_computer_name_results(results: dict[str, str], rawlog: bool = False)
             logging.warning(the_string)
 
         return primary_name
+
+
+def detect_shell(options: Options) -> None:
+    """
+    Detect the current interactive shell, falling back to parent process name if needed.
+
+    Args:
+        options: Options object to store the detected shell information.
+
+    Returns:
+        None, but updates options.shell with the detected shell name.
+    
+    Raises:
+        None, but logs an error if the shell cannot be detected via
+        subprocess.CalledProcessError or FileNotFoundError.
+    """
+    import subprocess
+    shell_path = os.getenv("SHELL")
+    if not shell_path: # If shell_path is None or empty (""), try to get the parent process name
+        try:
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("SHELL environment variable not set, trying to detect shell from parent process.")
+            ppid   = os.getppid()
+            result = subprocess.run(["ps", "-p", str(ppid), "-o", "comm="],
+                                    capture_output=True, text=True, check=True)
+            shell_path = result.stdout.strip()
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            logging.error(f"Error detecting shell via ps: {e}")
+    if shell_path:
+        options.shell = Path(shell_path).resolve().name.lstrip("-")
+    else:
+        logging.error("Could not detect shell from SHELL environment variable or parent process.")
+        options.shell = None
+
+
+def find_shell_rc_file(options: Options) -> None:
+    """
+    Find the shell configuration file for the current user, store in options.rc_file.
+    For bash/zsh, also consider login‐shell files if the usual rc isn’t present.
+
+    Args:
+        options: Options object containing the shell type and rc_file attribute.
+
+    Returns:
+        None, but updates options.rc_file with the path to the shell configuration file.
+    
+    Raises:
+        None, but logs an error if the shell is unsupported or if no rc file is found
+        for the specified shell.
+    """
+    candidates = []
+
+    xdg = Path(os.environ.get("XDG_CONFIG_HOME", options.home / ".config"))
+    if options.shell == "bash":
+        candidates = [".bashrc", ".bash_profile", ".bash_login", ".profile"]
+    elif options.shell == "zsh":
+        candidates = [".zshrc", ".zprofile"]
+    elif options.shell == "fish":
+        candidates = [os.fspath(xdg / "fish" / "config.fish")]  # just to be consistent with the other strings.
+    elif options.shell == "csh":
+        candidates = [".cshrc"]
+    elif options.shell == "tcsh":
+        candidates = [".tcshrc"]
+    else:
+        logging.error(f"Unsupported shell: {options.shell}")
+        options.rc_file = None
+        return
+
+    # pick the first one that actually exists
+    for fname in candidates:
+        path = options.home / fname
+        if path.is_file():
+            options.rc_file = path
+            break
+    else:
+        options.rc_file = None
+        logging.error("No existing rc file found for %s shell in %s. Tried: %s.",
+                      options.shell, options.home, ', '.join(candidates))
+
+
+def find_additional_alias_files(options: Options) -> None:
+    """Find additional alias files for the shell."""
+    # Define common potential additional alias files based on the shell type.
+    if options.shell == "bash":
+        options.additional_alias_files.append(options.home / ".bash_aliases")
+    elif options.shell == "zsh":
+        options.additional_alias_files.append(options.home / ".zsh_aliases")
+    elif options.shell == "fish":
+        options.additional_alias_files.append(options.home / ".config" / "fish" / "conf.d" / "aliases.fish")
+    elif options.shell == "csh":
+        options.additional_alias_files.append(options.home / ".csh_aliases")
+    elif options.shell == "tcsh":
+        options.additional_alias_files.append(options.home / ".tcsh_aliases")
+    else:
+        logging.error(f"Unsupported shell for additional alias files: {options.shell}")
+    valid_files = []
+    for this_file in options.additional_alias_files:
+        if this_file.is_file():
+            valid_files.append(this_file)
+        else:
+            logging.error(f"Additional alias file {this_file} does not exist for shell {options.shell}.")
+    options.additional_alias_files = valid_files
 
 
 def ensure_path_is_a_file(path: str | os.PathLike[str]) -> Path:
@@ -999,17 +1103,19 @@ def ensure_path_is_a_file(path: str | os.PathLike[str]) -> Path:
     if not p.is_file():
         raise IsADirectoryError(f"Expected a file, got directory: {p}")
     if p.stat().st_size == 0:
-        logging.warning(f"File is empty: {p}")
+        logging.warning("File is empty: %s", p)
     return p
 
 
 def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
-                  chunk_size: int = 1 << 20, timeout: int = 30) -> None:
+                  chunk_size: int = 1 << 20, timeout: int = 30,
+                  headers: dict[str, str] | None = None) -> None:
     """
     Download a file to 'dest' with retry + exponential backoff.
     Writes to a temporary .part file and renames atomically on success.
     Verifies Content-Length if provided.
     Logs progress by bytes (rough).
+    Also checks free disk space (if size is known) before downloading.
 
     Args:
         url:        The source URL to download from.
@@ -1017,20 +1123,64 @@ def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
         retries:    Number of attempts (default 5 is a good balance for transient errors).
         chunk_size: Bytes per read chunk (default 1MiB).
         timeout:    Per-attempt socket timeout (seconds).
+        headers:    Optional dict of HTTP headers to include in the request.
 
     Returns:
         None. Writes the file to 'dest'.
-    
+
     Raises:
-        SystemExit on failure after retries.
+        SystemExit on failure after retries or if insufficient free space is detected.
     """
     import time
     from urllib.request import Request, urlopen
     from urllib.error import URLError, HTTPError
+    import socket
+
     fallback_logging_config()
     dest = Path(dest).resolve()
     dest.parent.mkdir(parents=True, exist_ok=True)
     temp = dest.with_suffix(dest.suffix + ".part")
+
+    base_headers = {"Accept-Encoding" : "identity",
+                    "User-Agent"      : "python-download/1.0",}
+    eff_headers  = {**base_headers, **(headers or {})}
+
+    succeeded = False  # Track if download succeeded
+
+    # Remove any stale partial to avoid skewing free-space checks.
+    try:
+        if temp.exists():
+            temp.unlink()
+    except OSError:
+        # If we can't remove it, we'll truncate on open later; free-space check may be conservative.
+        pass
+
+    # Pre-flight: attempt to learn expected size and check free space.
+    expected: int | None = None
+    try:
+        req_head = Request(url, headers=eff_headers, method="HEAD")
+        with urlopen(req_head, timeout=timeout) as r:
+            cl = r.headers.get("Content-Length")
+            if cl:
+                try:
+                    expected = int(cl.strip())
+                except ValueError:
+                    expected = None
+    except Exception as e:
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("HEAD probe failed (%s); proceeding without pre-known size.", e)
+
+    if expected is not None:
+        # Skip re-download if size matches on disk already.
+        if dest.exists():
+            try:
+                if dest.stat().st_size == expected:
+                    logging.info("File already present with expected size; skipping: %s", dest)
+                    return
+            except OSError:
+                pass
+        free_bytes = query_free_space(dest)
+        if free_bytes < expected:
+            raise SystemExit(f"Not enough disk space: need {human_bytesize(expected)}, have {human_bytesize(free_bytes)}")
 
     backoff = 1.0
     last_err: Exception | None = None
@@ -1038,13 +1188,26 @@ def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
     for attempt in range(1, max(1, retries) + 1):
         try:
             logging.info("Downloading %s → %s (attempt %d/%d)", url, dest, attempt, retries)
-            req = Request(url, headers={"User-Agent": "kokoro-downloader/1.0"})
+            req = Request(url, headers=eff_headers)
             with urlopen(req, timeout=timeout) as resp:
                 total = resp.headers.get("Content-Length")
-                total_i = int(total) if total and total.isdigit() else None
+                total_i = None
+                if total:
+                    try:
+                        total_i = int(total.strip())
+                    except ValueError:
+                        pass
+                # Re-check space at the moment of download if size is known.
+                if total_i is not None:
+                    free_bytes = query_free_space(dest)
+                    if free_bytes < total_i:
+                        raise SystemExit(
+                            f"Not enough disk space: need {human_bytesize(total_i)}, have {human_bytesize(free_bytes)}"
+                        )
 
                 with temp.open("wb") as f:
                     downloaded = 0
+                    last_bucket = -1
                     while True:
                         chunk = resp.read(chunk_size)
                         if not chunk:
@@ -1054,19 +1217,24 @@ def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
                         if total_i:
                             # Lightweight textual progress (kept minimal for logging)
                             pct = int(downloaded * 100 / total_i)
-                            if pct % 10 == 0:  # log every ~10%
-                                logging.debug("… %d%% (%d/%d bytes)", pct, downloaded, total_i)
+                            bucket = pct // 10
+                            # Log just once every ~10% but not at 0%
+                            if pct and pct % 10 == 0 and bucket != last_bucket:
+                                logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("… %d%% (%s out of %s)", pct, human_bytesize(downloaded), human_bytesize(total_i))
+                                last_bucket = bucket
+                    f.flush()
+                    os.fsync(f.fileno())
 
             # Verify size if Content-Length available
             if total_i is not None:
                 actual = temp.stat().st_size
                 if actual != total_i:
                     raise IOError(f"Incomplete download: expected {total_i} bytes, got {actual} bytes")
-
             temp.replace(dest)
-            logging.info("Saved %s (%s bytes)", dest, dest.stat().st_size)
+            logging.info("Saved %s (%s)", dest, human_bytesize(dest.stat().st_size))
+            succeeded = True
             return
-        except (HTTPError, URLError, TimeoutError, IOError) as e:
+        except (HTTPError, URLError, socket.timeout, TimeoutError, IOError) as e:
             last_err = e
             logging.warning("Download failed (%s).", e)
             if attempt >= retries:
@@ -1080,6 +1248,12 @@ def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
             last_err = e
             logging.exception("Unexpected error during download.")
             break
+        finally:
+            try:
+                if not succeeded and temp.exists():
+                    temp.unlink()
+            except OSError:
+                pass
 
     raise SystemExit(f"Failed to download {url} after {retries} attempts. Last error: {last_err}")
 
@@ -1135,11 +1309,11 @@ def ensure_even_dimensions(image_path: str | os.PathLike[str]) -> None:
             try:
                 img = img.resize((new_width, new_height), Image.LANCZOS)
                 img.save(image_path)
-                logging.info(f"Resized image to even dimensions: width = {new_width}, height = {new_height}")
+                logging.info("Resized image to even dimensions: width = %d, height = %d", new_width, new_height)
             except OSError as e:
                 raise ValueError(f"Could not resize image {image_path} to even dimensions: {e}") from e
         else:
-            logging.info(f"Image already has even dimensions: width = {width}, height = {height}")
+            logging.info("Image already has even dimensions: width = %d, height = %d", width, height)
 
 
 def human_bytesize(num: float | int, *, suffix: str = "B", si: bool = False, precision: int = 1,
@@ -1720,30 +1894,30 @@ def _should_convert(given_date: AnyDateTimeType, format_str: str | None = None) 
 
     # 1) Numbers, JD/MJD, decimal years, special keywords
     if isinstance(given_date, (int, float)) and not isinstance(given_date, bool):
-        logging.debug(f"Given date is a number: {given_date}, so it will be converted by shifting the clock")
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Given date is a number: %s, so it will be converted by shifting the clock", given_date)
         return True
     if isinstance(given_date, str):
         u = given_date.strip().upper()
         if u in ('J2000', 'UNIX', 'NOW'):
-            logging.debug(f"Given date is a special keyword: {u}, so it will be converted by shifting the clock")
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Given date is a special keyword: %s, so it will be converted by shifting the clock", u)
             return True
         if format_str and format_str.upper() in ('JD', 'MJD'):
-            logging.debug(f"Given date has a format_str: {format_str}, so it will be converted by shifting the clock")
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Given date has a format_str: %s, so it will be converted by shifting the clock", format_str)
             return True
         if _JD_MJD_SIMPLE_RE.fullmatch(given_date):
-            logging.debug(f"Given date is a JD/MJD: {given_date}, so it will be converted by shifting the clock")
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Given date is a JD/MJD: %s, so it will be converted by shifting the clock", given_date)
             return True
         # explicit offset or Z
         if _OFFSET_IN_STR_RE.search(given_date):
-            logging.debug(f"Given date has an explicit offset or Z: {given_date}, so it will be converted by shifting the clock")
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Given date has an explicit offset or Z: %s, so it will be converted by shifting the clock", given_date)
             return True
     # 2) Any datetime/timestamp already aware
     if isinstance(given_date, dt.datetime) and given_date.tzinfo is not None:
-        logging.debug(f"Given date is an aware datetime: {given_date}, so it will be converted by shifting the clock")
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Given date is an aware datetime: %s, so it will be converted by shifting the clock", given_date)
         return True
 
     # Otherwise treat it as local‐time → attach only
-    logging.debug(f"Given date is not a number, JD/MJD, or aware datetime: {given_date}, so the timezone will be attached without shifting the clock")
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Given date is not a number, JD/MJD, or aware datetime: %s, so the timezone will be attached without shifting the clock", given_date)
     return False
 
 
@@ -1772,14 +1946,14 @@ def _finalize_datetime(parsed_dt: dt.datetime, original_input: AnyDateTimeType,
         TypeError:  If the parsed_dt is not a datetime.datetime object.
     """
     if isinstance(tz_arg, str) and tz_arg.strip().upper() == 'NAIVE':
-        logging.debug(f"Naive timezone requested, returning datetime {parsed_dt} without any timezone info")
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Naive timezone requested, returning datetime %s without any timezone info", parsed_dt)
         return parsed_dt.replace(tzinfo=None)
     target_tz = parse_timezone(tz_arg)
     if should_convert is not False and (_should_convert(original_input, format_str) or should_convert is True):
-        logging.debug(f"Converting datetime {parsed_dt} to timezone {target_tz} by shifting the clock")
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Converting datetime %s to timezone %s by shifting the clock", parsed_dt, target_tz)
         return parsed_dt.astimezone(target_tz)
     else:
-        logging.debug(f"Attaching timezone {target_tz} to datetime {parsed_dt} without shifting the clock")
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Attaching timezone %s to datetime %s without shifting the clock", target_tz, parsed_dt)
         return parsed_dt.replace(tzinfo=target_tz)
 
 
@@ -1916,7 +2090,7 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
             # Make sure the format string is a valid example of "units (optionally: since/after epoch)"
             # Try to split by since or after, whichever works:
             format_parts = re.split(r'\s+(since|after)\s+', format_str, maxsplit=1)
-            logging.debug(f"Parsing date with format string: '{format_str}' split into parts: {format_parts}")
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Parsing date with format string: '%s' split into parts: %s", format_str, format_parts)
             if len(format_parts) > 3:
                 raise ValueError(f"Invalid format string: '{format_str}'. Expected at most three parts: 'units', 'since/after', and 'epoch'.")
             # The first part should be acceptable by seconds_in_unit():
@@ -2008,7 +2182,7 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
         # Finalize the datetime object by converting it to the target timezone or just attaching the timezone without shifting the clock
         return _finalize_datetime(parsed_dt, given_date, format_str, parsed_tz, should_convert)
 
-    raise ValueError(error_message + "\n".join(errors) + "\nPlease check the input format and try again.")
+    raise ValueError(error_message + "\n".join(map(str, errors)) + "\nPlease check the input format and try again.")
 
 
 def _coerce_log_mode(value: Any) -> int:
@@ -2023,10 +2197,17 @@ def _coerce_log_mode(value: Any) -> int:
         except ValueError:
             pass
         # Handle level names like "INFO", "debug", etc. (case-insensitive)
-        lvl = logging.getLevelName(s.upper())
+        value_map = {'INFO'    : logging.INFO,
+                    'DEBUG'    : logging.DEBUG,
+                    'WARNING'  : logging.WARNING,
+                    'WARN'     : logging.WARNING,
+                    'ERROR'    : logging.ERROR,
+                    'CRITICAL' : logging.CRITICAL}
+        lvl = value_map.get(s.upper())
+        # lvl = logging.getLevelName(s.upper())  # deprecated
         if isinstance(lvl, int):
             return lvl
-    logging.warning(f"Unrecognized log_mode {value!r}; defaulting to INFO")
+    logging.warning("Unrecognized log_mode %r; defaulting to INFO", value)
     return logging.INFO
 
 
@@ -2081,13 +2262,13 @@ def save_options_to_json(options: Options) -> None:
     options_dict = options.__dict__.copy()
 
     # Ensure directory exists
-    logging.debug(f"Ensuring directory exists: {options.options_json_filepath.parent}")
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Ensuring directory exists: %s", options.options_json_filepath.parent)
     options.options_json_filepath.parent.mkdir(parents=True, exist_ok=True)
 
     # Write the dictionary to a JSON file (ensure_ascii=False to preserve non-ASCII characters)
     with open(options.options_json_filepath, 'w', encoding=DEFAULT_ENCODING) as json_file:
         json.dump(options_dict, json_file, indent=4, ensure_ascii=False, default=_json_default)
-    logging.debug(f"Options saved to JSON file: {options.options_json_filepath}")
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Options saved to JSON file: %s", options.options_json_filepath)
 
 
 def load_options_from_json(options: Options, json_file: str | os.PathLike[str]) -> Options | None:
@@ -2119,7 +2300,7 @@ def load_options_from_json(options: Options, json_file: str | os.PathLike[str]) 
     options_FROM_JSON = copy.deepcopy(Options())  # Just in case.
     for key, value in options_dict.items():
         setattr(options_FROM_JSON, key, value)
-    if not options.rawlog: logging.info(f"options loaded from {json_file}")
+    if not options.rawlog: logging.info("options loaded from %s", json_file)
     return options_FROM_JSON
 
 
@@ -2188,7 +2369,7 @@ def prompt_then_choose(prompt: str, choices: list[str], default: str = None) -> 
 
     logging.info(prompt)
     for i, choice in enumerate(choices, 1):
-        logging.info(f"  {i}) {choice}")
+        logging.info("  %d) %s", i, choice)
     prompt = f"Select [1-{len(choices)}]"
     if default is not None:
         prompt += f" (default {default}): "
@@ -2198,10 +2379,10 @@ def prompt_then_choose(prompt: str, choices: list[str], default: str = None) -> 
     while True:
         ans = input(prompt).strip()
         if not ans and default:
-            logging.info(f"No input provided, using default: {default}")
+            logging.info("No input provided, using default: %s", default)
             return default
         if ans.isdigit() and 1 <= int(ans) <= len(choices):
-            logging.info(f"User selected choice {ans}: {choices[int(ans)-1]}")
+            logging.info("User selected choice %d: %s", int(ans), choices[int(ans)-1])
             return choices[int(ans)-1]
         logging.warning("Invalid choice, try again.")
 
@@ -2326,15 +2507,15 @@ def if_filepath_then_read(input_string_or_filepath: str | os.PathLike[str],
         try:
             contents = my_fopen(file_path, suppress_errors=True)
             if not contents:
-                logging.error(f"Could not read file: {file_path}")
+                logging.error("Could not read file: %s", file_path)
                 return ""
             return contents
         except FileNotFoundError as e:
-            logging.exception(f"File not found: {file_path}")
+            logging.exception("File not found: %s", file_path)
         except PermissionError as e:
-            logging.exception(f"Permission denied: {file_path}")
+            logging.exception("Permission denied: %s", file_path)
         except UnicodeDecodeError as e:
-            logging.exception(f"Could not decode {file_path!r}.")
+            logging.exception("Could not decode %r.", file_path)
     else:  # Otherwise, treat "input_string" as a string.
         if not isinstance(input_string_or_filepath, str):
             raise TypeError(f"Expected 'input_string_or_filepath' to be a string or file path, got {type(input_string_or_filepath).__name__!r}")
@@ -2521,20 +2702,21 @@ def _make_format_checker() -> Type[Any]:
             if not self.doc_style or self.doc_style.casefold() == "none":
                 return
             checker = {
-                "NumPy"              : self._check_numpy_docstring,
-                # "Google"           : self._check_google_docstring,
+                "Google"           : self._check_google_docstring,
+                # "NumPy"              : self._check_numpy_docstring,
                 # "reStructuredText" : self._check_rst_docstring,
             }.get(self.doc_style)
 
             if checker is not None:
                 checker(node, who)
 
-        def _check_numpy_docstring(self, node: ast.AST, who: str) -> None:
+        def _check_google_docstring(self, node: ast.AST, who: str) -> None:
             """
-            Very basic NumPy‑style docstring validator:
-            - must have a 'Parameters' and 'Returns' section header
+            Very basic Google‑style docstring validator:
+            - must have a 'Args:' and 'Returns:' section header
             - every non‑self arg must be listed under Parameters
             """
+            doctype = "Google"
             # Get the cleaned docstring
             doc = ast.get_docstring(node)
             if not doc:
@@ -2543,18 +2725,18 @@ def _make_format_checker() -> Type[Any]:
             lines = doc.splitlines()
             # Locate the section headers
             try:
-                params_idx = next(i for i, L in enumerate(lines) if L.strip() == "Parameters")
+                params_idx = next(i for i, L in enumerate(lines) if L.strip() == "Args:")
             except StopIteration:
                 self.errors.append((node.__class__.__name__.casefold(), who,
-                                    "NumPy docstring missing 'Parameters' section",
+                                    f"{doctype} docstring missing 'Args' section",
                                     node.lineno))
                 return
 
             try:
-                returns_idx = next(i for i, L in enumerate(lines) if L.strip() == "Returns")
+                returns_idx = next(i for i, L in enumerate(lines) if L.strip() == "Returns:")
             except StopIteration:
                 self.errors.append((node.__class__.__name__.casefold(), who,
-                                    "NumPy docstring missing 'Returns' section",
+                                    f"{doctype} docstring missing 'Returns' section",
                                     node.lineno))
 
             # Collect documented params: lines immediately under 'Parameters'
@@ -2574,7 +2756,56 @@ def _make_format_checker() -> Type[Any]:
             missing = [a for a in sig_args if a not in documented]
             if missing:
                 self.errors.append((node.__class__.__name__.casefold(), who,
-                                    "NumPy docstring missing parameter(s): " + ", ".join(missing), node.lineno))
+                                    f"{doctype} docstring missing parameter(s): " + ", ".join(missing), node.lineno))
+
+
+        def _check_numpy_docstring(self, node: ast.AST, who: str) -> None:
+            """
+            Very basic NumPy‑style docstring validator:
+            - must have a 'Parameters' and 'Returns' section header
+            - every non‑self arg must be listed under Parameters
+            """
+            doctype = "NumPy"
+            # Get the cleaned docstring
+            doc = ast.get_docstring(node)
+            if not doc:
+                return  # already flagged as missing
+
+            lines = doc.splitlines()
+            # Locate the section headers
+            try:
+                params_idx = next(i for i, L in enumerate(lines) if L.strip() == "Parameters")
+            except StopIteration:
+                self.errors.append((node.__class__.__name__.casefold(), who,
+                                    f"{doctype} docstring missing 'Parameters' section",
+                                    node.lineno))
+                return
+
+            try:
+                returns_idx = next(i for i, L in enumerate(lines) if L.strip() == "Returns")
+            except StopIteration:
+                self.errors.append((node.__class__.__name__.casefold(), who,
+                                    f"{doctype} docstring missing 'Returns' section",
+                                    node.lineno))
+
+            # Collect documented params: lines immediately under 'Parameters'
+            documented = set()
+            for line in lines[params_idx+1:]:
+                if not line.strip():
+                    break
+                m = re.match(r'^(\w+)\s*:\s*(.+)$', line)
+                if m:
+                    documented.add(m.group(1))
+
+            # Get function args (excluding self)
+            sig_args = []
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                sig_args = [a.arg for a in node.args.args if a.arg != "self"]
+
+            missing = [a for a in sig_args if a not in documented]
+            if missing:
+                self.errors.append((node.__class__.__name__.casefold(), who,
+                                    f"{doctype} docstring missing parameter(s): " + ", ".join(missing), node.lineno))
 
     return FormatChecker
 
@@ -2603,11 +2834,11 @@ def check_python_formatting(path: str | os.PathLike[str], diff_choice: int = 1) 
     path = ensure_path_is_a_file(path)
     src = my_fopen(path)
     if src is False:
-        logging.error(f"❌ Failed to open file: {path}")
+        logging.error("❌ Failed to open file: %s", path)
         return
 
     if compile_code(src):
-        logging.info(f"✅ {path} compiled successfully.")
+        logging.info("✅ %s compiled successfully.", path)
 
     # Check for some characters that I personally dislike in Python source code:
     BACKTICK            = "\u0060"  # U+0060 "GRAVE ACCENT" (the backtick)
@@ -2618,13 +2849,13 @@ def check_python_formatting(path: str | os.PathLike[str], diff_choice: int = 1) 
     HORIZONTAL_ELLIPSIS = "\u2026"  # U+2026 "HORIZONTAL ELLIPSIS" (three closely spaced periods)
 
     if BACKTICK in src:
-        logging.warning(f"File {path} contains the backtick character ({BACKTICK!r}). Use straight quotation marks (') instead.")
+        logging.warning("File %s contains the backtick character (%r). Use straight quotation marks (') instead.", path, BACKTICK)
         if not ask_and_replace(old_str=BACKTICK, new_str="'", path=path, label='backtick',
                                diff_choice=diff_choice,
                                description=f"Replace backtick ({BACKTICK}) with straight apostrophe (')"):
             return False
     if LSQUOTE in src or RSQUOTE in src:
-        logging.warning(f"File {path} contains curly single quotation marks ({LSQUOTE!r} or {RSQUOTE!r}). Use straight apostrophes (') instead.")
+        logging.warning("File %s contains curly single quotation marks (%r or %r). Use straight apostrophes (') instead.", path, LSQUOTE, RSQUOTE)
         if not ask_and_replace(old_str=LSQUOTE, new_str="'", path=path, label='left-curly-apostrophe',
                                diff_choice=diff_choice,
                                description=f"Replace left curly apostrophe ({LSQUOTE}) with straight apostrophe (')"):
@@ -2634,7 +2865,7 @@ def check_python_formatting(path: str | os.PathLike[str], diff_choice: int = 1) 
                                description=f"Replace right curly apostrophe ({RSQUOTE}) with straight apostrophe (')"):
             return False
     if LDQUOTE in src or RDQUOTE in src:
-        logging.warning(f'File {path} contains curly double quotation marks ({LDQUOTE!r} or {RDQUOTE!r}). Use straight quotation marks (") instead.')
+        logging.warning('File %s contains curly double quotation marks (%r or %r). Use straight quotation marks (") instead.', path, LDQUOTE, RDQUOTE)
         if not ask_and_replace(old_str=LDQUOTE, new_str='"', path=path,
                                label='left-curly-quotation-mark',
                                diff_choice=diff_choice,
@@ -2645,7 +2876,7 @@ def check_python_formatting(path: str | os.PathLike[str], diff_choice: int = 1) 
                                description=f'Replace right curly double quotation mark ({RDQUOTE}) with straight double quotation mark (")'):
             return False
     if HORIZONTAL_ELLIPSIS in src:
-        logging.warning(f"File {path} contains the horizontal ellipsis character ({HORIZONTAL_ELLIPSIS!r}). Use three periods (...) instead.")
+        logging.warning("File %s contains the horizontal ellipsis character (%r). Use three periods (...) instead.", path, HORIZONTAL_ELLIPSIS)
         if not ask_and_replace(old_str=HORIZONTAL_ELLIPSIS, new_str='...', path=path,
                                label='horizontal-ellipsis', diff_choice=diff_choice,
                                description=f"Replace horizontal ellipsis ({HORIZONTAL_ELLIPSIS}) with three periods (...)"):
@@ -2654,7 +2885,7 @@ def check_python_formatting(path: str | os.PathLike[str], diff_choice: int = 1) 
     try:
         tree = ast.parse(src, path)
     except SyntaxError:
-        logging.exception(f"❌ {path} contains a syntax error.")
+        logging.exception("❌ %s contains a syntax error.", path)
         return False
 
     checker = FormatChecker(src)
@@ -2671,7 +2902,8 @@ def check_python_formatting(path: str | os.PathLike[str], diff_choice: int = 1) 
     return True
 
 
-def run_flake8(path: str | os.PathLike[str], ignore_codes: list[str] = [], max_line_length: int = 100) -> flake8.Report:
+def run_flake8(path: str | os.PathLike[str], ignore_codes: list[str] = [],
+               max_line_length: int = 100) -> flake8.Report:
     """
     Run Flake8 on 'path', but:
       - only flag E501 if a line exceeds 'max_line_length',
@@ -2696,11 +2928,11 @@ def run_flake8(path: str | os.PathLike[str], ignore_codes: list[str] = [], max_l
     style_guide = flake8.get_style_guide(max_line_length=max_line_length, ignore=ignore_codes)
     report = style_guide.check_files([path])
     if report.total_errors == 0:
-        logging.info(f"✅ No Flake8 violations found in {path}.")
+        logging.info("✅ No Flake8 violations found in %s.", path)
         return report
-    logging.error(f"Found {report.total_errors} total violations in {path}:")
+    logging.error("Found %d total violations in %s:", report.total_errors, path)
     for stat in report.get_statistics(""):
-        logging.error(f"  {stat}")
+        logging.error("  %s", stat)
 
     # This section was SUPPOSED to print a grouped summary of violations by code with line numbers.
     # However, it CORRUPTS THE FILE IT IS EXAMINING! https://chatgpt.com/share/688ba75b-7860-8006-bc9f-1bce8cb01359
@@ -2740,7 +2972,8 @@ def run_flake8(path: str | os.PathLike[str], ignore_codes: list[str] = [], max_l
     return report
 
 
-def _gather_flake8_issues(path: str | os.PathLike[str], ignore_codes: list[str] = [], max_line_length: int = 100) -> dict[str, str]:
+def _gather_flake8_issues(path: str | os.PathLike[str], ignore_codes: list[str] = [],
+                          max_line_length: int = 100) -> dict[str, str]:
     """
     Returns a dict mapping each Flake8 error code to its first-seen description
     in the file at 'path'.
@@ -2753,7 +2986,8 @@ def _gather_flake8_issues(path: str | os.PathLike[str], ignore_codes: list[str] 
         return _gather_via_app(path, max_line_length, ignore_codes)
 
 
-def _gather_via_cli(path: str | os.PathLike[str], max_line_length: int, ignore_codes: list[str]) -> dict[str, str]:
+def _gather_via_cli(path: str | os.PathLike[str], max_line_length: int,
+                    ignore_codes: list[str]) -> dict[str, str]:
     """Use the flake8 CLI to gather codes and descriptions."""
     import subprocess
     path = ensure_path_is_a_file(path)
@@ -2828,7 +3062,7 @@ def get_autopep8_fixable_codes() -> set[str]:
     try:
         proc = subprocess.run(["autopep8", "--list-fixes"], capture_output=True, text=True, check=True)
     except (FileNotFoundError, subprocess.CalledProcessError):
-        logging.warning(f"autopep8 not found or failed.", exc_info=True)
+        logging.warning("autopep8 not found or failed.", exc_info=True)
         # autopep8 not on PATH or error—assume nothing fixable
         return set()
 
@@ -2939,7 +3173,7 @@ def my_diff(orig_text: str, changed_text: str, orig_path: str | os.PathLike[str]
     orig_path = Path(orig_path).expanduser().resolve()
     if not changed_path:
         changed_path = orig_path
-    logging.debug(f"At the top of the function {return_method_name()}(), {diff_choice=}")
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("At the top of the function %s(), diff_choice=%s", return_method_name(), diff_choice)
     orig_lines    =    orig_text.splitlines(keepends=True)
     changed_lines = changed_text.splitlines(keepends=True)
     the_digits = max(len(str(len(orig_lines))), len(str(len(changed_lines))))
@@ -2991,7 +3225,7 @@ def my_diff(orig_text: str, changed_text: str, orig_path: str | os.PathLike[str]
             last_removed = None
 
     if diff_choice == 0:  # old style diff (difflib.Differ)
-        logging.debug(f"Using old-style diff for {orig_path} with {len(orig_lines)} original and {len(changed_lines)} fixed lines.")
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Using old-style diff for %s with %d original and %d fixed lines.", orig_path, len(orig_lines), len(changed_lines))
         orig_lineno = 1
         new_lineno  = 1
         for line in difflib.Differ().compare(orig_lines, changed_lines):
@@ -3000,8 +3234,6 @@ def my_diff(orig_text: str, changed_text: str, orig_path: str | os.PathLike[str]
                 # end of any previous mini‑hunk
                 process_hunk()
                 flush_removed(orig_lineno)
-                # show context lines if you like, e.g.:
-                # logging.info(f"  {orig_lineno:>{the_digits}}: {_vis_trailing_ws(body)}")
                 orig_lineno += 1
                 new_lineno  += 1
             elif tag == "- ":  # original line
@@ -3017,7 +3249,7 @@ def my_diff(orig_text: str, changed_text: str, orig_path: str | os.PathLike[str]
         process_hunk()
         flush_removed(orig_lineno)
     elif diff_choice >= 1:  # unified or context diff
-        logging.debug(f"Using unified diff for {orig_path} with {len(orig_lines)} original and {len(changed_lines)} fixed lines.")
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Using unified diff for %s with %d original and %d fixed lines.", orig_path, len(orig_lines), len(changed_lines))
         ctx  = max(diff_choice - 1, 0)
         diff = difflib.unified_diff(
             orig_lines, changed_lines,
@@ -3053,7 +3285,7 @@ def my_diff(orig_text: str, changed_text: str, orig_path: str | os.PathLike[str]
         process_hunk()
         flush_removed(orig_lineno)
     else:
-        logging.error(f"Unsupported diff_choice = {diff_choice}. Must be a non-negative integer.")
+        logging.error("Unsupported diff_choice = %d. Must be a non-negative integer.", diff_choice)
 
 
 def is_python_script(path: str | os.PathLike[str]) -> bool:
@@ -3130,14 +3362,14 @@ def diff_and_confirm(orig_text: str, changed_text: str, path: str | os.PathLike[
         ValueError: If the specified path is not a file. The function which raises this exception is my_fopen().
     """
     fallback_logging_config()
-    logging.debug(f"At the top of the function {return_method_name()}(), {diff_choice=}")
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("At the top of the function %s(), diff_choice=%s", return_method_name(), diff_choice)
     path = ensure_path_is_a_file(path)
     my_diff(orig_text, changed_text, path, diff_choice=diff_choice,
             changed_color=changed_color, deleted_color=deleted_color, added_color=added_color)
     label_str = f"{ANSI_RED}{label}{ANSI_RESET}" if label     else ""
     fix_str   = f" using {the_fix}"              if the_fix   else ""
     subject   = f"{label_str} "                  if label_str else ""
-    logging.info(f"End of proposed {subject}changes to {path}{fix_str}.")
+    logging.info("End of proposed %schanges to %s%s.", subject, path, fix_str)
     if description:
         prefix = f"{label_str}: "                if label_str else ""
         logging.info(f"{prefix}{ANSI_YELLOW}{description}{ANSI_RESET}")
@@ -3161,7 +3393,8 @@ def diff_and_confirm(orig_text: str, changed_text: str, path: str | os.PathLike[
     return True
 
 
-def ask_and_autopep8(path: str | os.PathLike[str], code: str, description: str = "", diff_choice: int = 1,
+def ask_and_autopep8(path: str | os.PathLike[str], code: str,
+                     description: str = "", diff_choice: int = 1,
                      changed_color: str = ANSI_CYAN, deleted_color: str = ANSI_RED,
                      added_color: str = ANSI_YELLOW) -> bool:
     """
@@ -3189,7 +3422,7 @@ def ask_and_autopep8(path: str | os.PathLike[str], code: str, description: str =
     import autopep8
     fallback_logging_config()
     path = ensure_path_is_a_file(path)
-    logging.debug(f"At the top of the function {return_method_name()}(), {diff_choice=}")
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("At the top of the function %s(), diff_choice=%s", return_method_name(), diff_choice)
     # The number of blank lines expected in various contexts.
     blank_line_overrides = {
         'E301': 1,  # expected 1 blank line, found 0
@@ -3209,10 +3442,10 @@ def ask_and_autopep8(path: str | os.PathLike[str], code: str, description: str =
             changed_text = candidate
             break
     if changed_text == orig_text:
-        logging.info(f"No changes for {code} in {path} using {the_fix}.")
+        logging.info("No changes for %s in %s using %s.", code, path, the_fix)
         return True
     if not isinstance(diff_choice, int) or diff_choice < 0:
-        logging.error(f"Invalid diff_choice={diff_choice}. Must be a non-negative integer.")
+        logging.error("Invalid diff_choice=%d. Must be a non-negative integer.", diff_choice)
         return False
     # If this is a blank‑line code, force unified with the number of context lines specified in blank_line_overrides.
     if code in blank_line_overrides:
@@ -3259,9 +3492,9 @@ def ask_and_replace(old_str: str, new_str: str, path: str | os.PathLike[str],  l
     changed_text = orig_text.replace(old_str, new_str)
     if changed_text == orig_text:
         if label:
-            logging.info(f"No occurrences of {label} in {path}.")
+            logging.info("No occurrences of %s in %s.", label, path)
         else:
-            logging.info(f"No occurrences of '{old_str}' in {path}.")
+            logging.info("No occurrences of '%s' in %s.", old_str, path)
         return True
     the_fix = f"replace '{old_str}' with '{new_str}'"
     return diff_and_confirm(orig_text, changed_text, path, label=label, diff_choice=diff_choice,
@@ -3334,9 +3567,9 @@ def multireplace(options: Options) -> None:
         logging.error(str(e))
         sys.exit(2)
 
-    logging.debug(f"Directory: {dir}")
-    logging.debug(f"Glob pattern: {options.args.glob_pattern}")
-    logging.debug(f"Recursive: {options.args.recursive}")
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Directory: %s", dir)
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Glob pattern: %s", options.args.glob_pattern)
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Recursive: %s", options.args.recursive)
 
     files = _collect_files(dir, options.args.glob_pattern, options.args.recursive)
 
@@ -3344,7 +3577,7 @@ def multireplace(options: Options) -> None:
         logging.warning("No files matched the given pattern.")
         return
 
-    logging.info(f"Found {len(files)} file(s) to process:")
+    logging.info("Found %d file(s) to process:", len(files))
     num_files  = len(files)
     max_digits = len(str(num_files))
     for i, f in enumerate(files, start=1):
@@ -3352,7 +3585,7 @@ def multireplace(options: Options) -> None:
 
     logging.info("==========================================")
     for f in files:
-        logging.info(f"Processing: {f}")
+        logging.info("Processing: %s", f)
         try:
             if not ask_and_replace(old_str=options.args.old_str, new_str=options.args.new_str, path=str(f)):
                 break
@@ -3365,8 +3598,10 @@ def multireplace(options: Options) -> None:
     logging.info("Done.")
 
 
-def interactive_flake8(path: str | os.PathLike[str], diff_choice: int = 1, ignore_codes: list[str] = [], max_line_length: int = 100,
-                       changed_color: str = ANSI_CYAN, deleted_color: str = ANSI_RED, added_color: str = ANSI_YELLOW) -> None:
+def interactive_flake8(path: str | os.PathLike[str], diff_choice: int = 1,
+                       ignore_codes: list[str] = [], max_line_length: int = 100,
+                       changed_color: str = ANSI_CYAN, deleted_color: str = ANSI_RED,
+                       added_color: str = ANSI_YELLOW) -> None:
     """
     1) Run the flake8 API for summary counts.
     2) Shell out to flake8 CLI once to harvest one description per code.
@@ -3374,7 +3609,9 @@ def interactive_flake8(path: str | os.PathLike[str], diff_choice: int = 1, ignor
 
     Args:
         path:            Path to the Python file to check.
-        diff_choice:     How many context lines to show in the diff (0 = old-style diff, 1 = unified diff with 0 context lines, 2+ = unified diff with 'diff_choice - 1' context lines).
+        diff_choice:     How many context lines to show in the diff (0 = old-style diff,
+                         1  = unified diff with 0 context lines,
+                         2+ = unified diff with 'diff_choice - 1' context lines).
         ignore_codes:    List of Flake8 codes to ignore (default: empty list).
         max_line_length: Maximum line length for E501 (default: 100).
         changed_color:   Color for unchanged characters in changed lines (default: ANSI_CYAN).
@@ -3383,22 +3620,22 @@ def interactive_flake8(path: str | os.PathLike[str], diff_choice: int = 1, ignor
     """
     fallback_logging_config()
     path = ensure_path_is_a_file(path)
-    logging.debug(f"At the top of the function {return_method_name()}(), {diff_choice=}")
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("At the top of the function %s(), diff_choice=%s", return_method_name(), diff_choice)
     if not run_flake8(path, ignore_codes=ignore_codes, max_line_length=max_line_length):
         logging.info("No flake8 errors—nothing to do.")
         return
     codes = _gather_flake8_issues(path, ignore_codes=ignore_codes, max_line_length=max_line_length)
     fixable_codes = get_autopep8_fixable_codes()
-    logging.debug(f"Autopep8 can fix these codes: {fixable_codes}")
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Autopep8 can fix these codes: %s", fixable_codes)
     for code, desc in codes.items():
         if code not in fixable_codes:
-            logging.debug(f"Skipping {code}: no autopep8 fixer")
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Skipping %s: no autopep8 fixer", code)
             continue
-        logging.info(f"\n→ {ANSI_RED}{code}{ANSI_RESET}: {ANSI_YELLOW}{desc}{ANSI_RESET}")
+        logging.info("\n→ %s: %s", ANSI_RED + code + ANSI_RESET, ANSI_YELLOW + desc + ANSI_RESET)
         if not ask_and_autopep8(path, code, desc, diff_choice=diff_choice,
                                 changed_color=changed_color, deleted_color=deleted_color, added_color=added_color):
             break
-    logging.info(f"{ANSI_GREEN}Done. Re-running flake8 to confirm fixes...{ANSI_RESET}")
+    logging.info("%sDone. Re-running flake8 to confirm fixes...%s", ANSI_GREEN, ANSI_RESET)
     run_flake8(path, ignore_codes=ignore_codes, max_line_length=max_line_length)
 
 
@@ -3415,7 +3652,8 @@ if str(univ_defs_dir) not in sys.path:
     sys.path.append(str(univ_defs_dir))
 '''
 
-MYDIFF_SCRIPT: str = '''import sys
+MYDIFF_SCRIPT: str = r'''from __future__ import annotations
+import sys
 import argparse
 import logging
 from pathlib import Path
@@ -3450,15 +3688,10 @@ def parse_arguments(options: Options) -> None:
                         help="Color for deleted characters in original lines (default: ANSI_RED)")
     parser.add_argument("--added_color", type=str, default=ud.ANSI_GREEN,
                         help="Color for added characters in changed lines (default: ANSI_GREEN)")
-    parser.add_argument("-version", "--version", action="store_true",
-                        help="Print the version of this program and exit.")
+    parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("-debug", "--debug", action="store_true",
                         help="Enable DEBUG logging.")
     options.args = parser.parse_args()
-    assert options.args is not None  # for type-checkers
-    if options.args.version:
-        print(f"{options.my_name} {__version__}")
-        sys.exit(0)
     if options.args.debug:
         options.log_mode = logging.DEBUG
 
@@ -3491,7 +3724,8 @@ if __name__ == "__main__":
     main()
 '''
 
-MYAUDIT_SCRIPT: str = '''import sys
+MYAUDIT_SCRIPT: str = r'''from __future__ import annotations
+import sys
 import argparse
 import logging
 from pathlib import Path
@@ -3526,15 +3760,10 @@ def parse_arguments(options: Options) -> None:
                         help="Color for deleted characters in original lines (default: ANSI_RED)")
     parser.add_argument("--added_color", type=str, default=ud.ANSI_GREEN,
                         help="Color for added characters in changed lines (default: ANSI_GREEN)")
-    parser.add_argument("-version", "--version", action="store_true",
-                        help="Print the version of this program and exit.")
+    parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("-debug", "--debug", action="store_true",
                         help="Enable DEBUG logging.")
     options.args = parser.parse_args()
-    assert options.args is not None  # for type-checkers
-    if options.args.version:
-        print(f"{options.my_name} {__version__}")
-        sys.exit(0)
     if options.args.debug:
         options.log_mode = logging.DEBUG
 
@@ -3559,8 +3788,8 @@ if __name__ == "__main__":
     main()
 '''
 
-
-MULTIREPLACE_SCRIPT: str = '''import sys
+MULTIREPLACE_SCRIPT: str = r'''from __future__ import annotations
+import sys
 import argparse
 import logging
 from pathlib import Path
@@ -3586,9 +3815,9 @@ class Options:
 def parse_arguments(options: Options) -> None:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Find files by glob and call ud.ask_and_replace() on each until it returns False.")
-    parser.add_argument("old_str", required=True,
+    parser.add_argument("old_str",
                         help="The text to be replaced in the files.")
-    parser.add_argument("new_str", required=True,
+    parser.add_argument("new_str",
                         help="The text to replace the old_str.")
     parser.add_argument("glob_pattern", nargs="?", default=options.default_glob_pattern,
                         help=f'Glob pattern of files to edit (default: "{options.default_glob_pattern}"). Example: "*.py"')
@@ -3596,15 +3825,10 @@ def parse_arguments(options: Options) -> None:
                         help=f"Directory to search in (defaults to current working directory: {options.default_dir}).")
     parser.add_argument("-recursive", "-r", action="store_true",
                         help="Search recursively in subdirectories.")
-    parser.add_argument("-version", "--version", action="store_true",
-                        help="Print the version of this program and exit.")
+    parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("-debug", "--debug", action="store_true",
                         help="Enable DEBUG logging.")
     options.args = parser.parse_args()
-    assert options.args is not None  # for type-checkers
-    if options.args.version:
-        print(f"{options.my_name} {__version__}")
-        sys.exit(0)
     if options.args.debug:
         options.log_mode = logging.DEBUG
 
@@ -3624,7 +3848,7 @@ if __name__ == "__main__":
     main()
 '''
 
-TREEVIEW_SCRIPT: str = '''#!/usr/bin/env python3
+TREEVIEW_SCRIPT: str = r'''#!/usr/bin/env python3
 from __future__ import annotations
 
 import sys
@@ -3656,15 +3880,10 @@ def parse_arguments(options: Options) -> None:
                         help=f"Directory to search in (defaults to current working directory: {options.default_dir}).")
     parser.add_argument("-no_colors", action="store_true",
                         help="Do not use colors in the output.")
-    parser.add_argument("-version", "--version", action="store_true",
-                        help="Print the version of this program and exit.")
+    parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("-debug", "--debug", action="store_true",
                         help="Enable DEBUG logging.")
     options.args = parser.parse_args()
-    assert options.args is not None  # for type-checkers
-    if options.args.version:
-        print(f"{options.my_name} {__version__}")
-        sys.exit(0)
     if options.args.debug:
         options.log_mode = logging.DEBUG
 
@@ -3675,7 +3894,7 @@ def main() -> None:
     parse_arguments(options)
     memory_handler = ud.configure_logging(options.my_name, log_level=options.log_mode,
                                           rawlog=True)
-    logging.debug(f"Directory: {options.args.dir}")
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Directory: %s", options.args.dir)
     ud.treeview_new_files(options.args.dir, use_colors=not options.args.no_colors)
     ud.print_all_errors(memory_handler)
     logging.shutdown()
@@ -3685,20 +3904,286 @@ if __name__ == "__main__":
     main()
 '''
 
-SITECUSTOMIZE_LAMBDA_SCRIPT: str = '''import os, sys
-os.environ.setdefault('HOME',                       '/tmp')
-os.environ.setdefault('MPLCONFIGDIR',               '/tmp/matplotlib')
-os.environ.setdefault('XDG_CACHE_HOME',             '/tmp/.cache')
-os.environ.setdefault('HDF5_USE_FILE_LOCKING',      'FALSE')
-os.environ.setdefault('HDF5_DISABLE_VERSION_CHECK', '2')
-os.environ.setdefault('HDF5_PLUGIN_PATH',           '/tmp')
-os.makedirs(os.environ['MPLCONFIGDIR'],             exist_ok=True)
-os.makedirs(os.environ['XDG_CACHE_HOME'],           exist_ok=True)
-sys.dont_write_bytecode = True  # Avoid writing .pyc into read-only code dir
+PRINTALL_SCRIPT: str = r'''from __future__ import annotations
+
+import os
+import sys
+import argparse
+import io
+import logging
+import re
+from pathlib import Path
+from typing import Iterable
+
+import tokenize  # stdlib
+
+__version__: str = "0.1.0"
+
+
+class Options():
+    """Class that has all global options in one place."""
+
+    def __init__(self) -> None:
+        """Initialize the Options class with default values."""
+        self.my_name:  str = Path(sys.argv[0]).stem  # The invoked name of this script without the extension
+        self.default_exclude_dirs: list[str] = [".git", "__pycache__", ".venv", "venv", "build", "dist"]
+        self.log_mode: int = logging.INFO  # Use -debug to change to logging.DEBUG.
+        self.args: argparse.Namespace | None = None
+
+
+def parse_arguments(options: Options) -> None:
+    """
+    Parse command-line arguments.
+    """
+    p = argparse.ArgumentParser(description="Search Python files and print full logical statements that match a pattern.")
+    p.add_argument("paths", nargs="+", type=Path,  # parse as Path at the boundary
+                   help="Files and/or directories to search.")
+    p.add_argument("-p", "--pattern", required=True, help="Search pattern (string or regex).")
+    p.add_argument("-E", "--regex", action="store_true",
+                   help="Treat the pattern as a regular expression.")
+    p.add_argument("-i", "--ignore-case", action="store_true", help="Case-insensitive match.")
+    p.add_argument("-n", "--line-numbers", action="store_true",
+                   help="Show line numbers in output blocks.")
+    p.add_argument("-r", "--recursive", action="store_true", help="Recurse into directories.")
+    p.add_argument("--no-glob", action="store_true",
+                   help="Do not automatically filter for *.py inside directories.")
+    p.add_argument("--exclude-dir", action="append",
+                   default=options.default_exclude_dirs,
+                   help=f"Directory name to exclude (can be given multiple times). Default: {options.default_exclude_dirs}")
+    p.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
+    p.add_argument("-debug", "--debug", action="store_true", help="Enable debug logging.")
+    options.args = p.parse_args()
+    if options.args.debug:
+        options.log_mode = logging.DEBUG
+
+
+def _is_excluded(path: Path, excluded: set[str]) -> bool:
+    """Return True if any ancestor directory name is in the excluded set."""
+    # Only compare directory names (Path.name); do not do string-prefix checks.
+    return any(parent.name in excluded for parent in path.parents)
+
+
+def iter_files(paths: Iterable[str | os.PathLike[str]],
+               recursive: bool,
+               exclude_dirs: list[str],
+               only_py: bool) -> Iterable[Path]:
+    """
+    Yield files from given paths, respecting recursion and directory excludes.
+
+    Parameters that represent paths accept str | os.PathLike[str] at the boundary.
+    Returned paths are pathlib.Path instances.
+    """
+    excluded = set(exclude_dirs)
+    pattern = "*.py" if only_py else "*"
+
+    for raw in paths:
+        base = Path(raw)
+
+        if base.is_dir():
+            if recursive:
+                # Prefer Path.rglob for recursion (portable across 3.9+).
+                for f in base.rglob(pattern):
+                    if f.is_file() and not _is_excluded(f, excluded):
+                        yield f
+            else:
+                for f in base.glob(pattern):
+                    if f.is_file() and not _is_excluded(f, excluded):
+                        yield f
+        else:
+            # Single file (or non-existent); yield if it meets filters.
+            if base.is_file() and (not only_py or base.suffix == ".py") and not _is_excluded(base, excluded):
+                yield base
+
+
+def _statement_spans(src: str) -> list[tuple[int, int]]:
+    """Return list of (start_line, end_line) for each logical statement in the source."""
+    reader = io.StringIO(src).readline
+    spans: list[tuple[int, int]] = []
+    depth = 0
+    start_line: int | None = None
+
+    for tok in tokenize.generate_tokens(reader):
+        tok_type, tok_str, start, end, _ = tok
+
+        # establish start at first meaningful token of a statement
+        if start_line is None and tok_type not in (tokenize.NL, tokenize.COMMENT,
+                                                   tokenize.INDENT, tokenize.DEDENT,
+                                                   tokenize.ENDMARKER):
+            start_line = start[0]
+
+        if tok_type == tokenize.OP:
+            if tok_str in "([{":
+                depth += 1
+            elif tok_str in ")]}":
+                depth -= 1
+            elif tok_str == ";" and depth == 0 and start_line is not None:
+                spans.append((start_line, start[0]))
+                start_line = None
+                continue
+
+        if tok_type == tokenize.NEWLINE and depth == 0:
+            if start_line is not None:
+                spans.append((start_line, end[0]))
+            start_line = None
+
+        if tok_type == tokenize.ENDMARKER:
+            break
+
+    return spans
+
+
+def _mask_strings_and_comments(src: str) -> str:
+    """Return source with STRING and COMMENT contents replaced by spaces (preserving positions)."""
+    lines = src.splitlines(keepends=True)
+    matrix = [list(line) for line in lines]
+    reader = io.StringIO(src).readline
+    for tok in tokenize.generate_tokens(reader):
+        tok_type, _tok_str, start, end, _ = tok
+        if tok_type in (tokenize.STRING, tokenize.COMMENT):
+            (sr, sc), (er, ec) = start, end
+            # mask all full lines covered by the token
+            for r in range(sr - 1, er - 1):
+                cstart = sc if r == sr - 1 else 0
+                for c in range(cstart, len(matrix[r])):
+                    if matrix[r][c] != "\n":
+                        matrix[r][c] = " "
+            # final line (partial)
+            r = er - 1
+            if 0 <= r < len(matrix):
+                cstart = 0 if sr != er else sc
+                for c in range(cstart, ec):
+                    if matrix[r][c] != "\n":
+                        matrix[r][c] = " "
+    return "".join("".join(row) for row in matrix)
+
+
+def _merge_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Merge overlapping or adjacent spans."""
+    if not spans:
+        return []
+    spans = sorted(spans)
+    merged: list[list[int]] = [[spans[0][0], spans[0][1]]]
+    for s, e in spans[1:]:
+        last = merged[-1]
+        if s <= last[1] + 1:
+            last[1] = max(last[1], e)
+        else:
+            merged.append([s, e])
+    return [(s, e) for s, e in merged]
+
+
+def _extract_blocks(src: str, spans: list[tuple[int, int]], show_line_numbers: bool) -> list[str]:
+    """Return pretty-printed blocks for each span."""
+    lines = src.splitlines()
+    if show_line_numbers:
+        max_line = max((e for _, e in spans), default=0)
+        width = len(str(max_line))
+    blocks: list[str] = []
+    for s, e in spans:
+        segment = lines[s - 1:e]
+        if show_line_numbers:
+            segment = [f"{i:>{width}} | {line}" for i, line in zip(range(s, e + 1), segment)]
+        blocks.append("\n".join(segment))
+    return blocks
+
+
+def search_file(path: str | os.PathLike[str],
+                pattern: str, *,
+                regex: bool,
+                ignore_case: bool,
+                show_line_numbers: bool) -> list[str]:
+    """Return matching blocks for a single file."""
+    p = Path(path)
+    try:
+        text = p.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        text = p.read_text(encoding="latin-1")
+    except Exception as ex:
+        logging.warning("Skipping %s (%s)", os.fspath(p), ex)  # convert at presentation boundary
+        return []
+
+    masked = _mask_strings_and_comments(text)
+    flags = re.IGNORECASE if ignore_case else 0
+    pat = re.compile(pattern if regex else re.escape(pattern), flags)
+
+    # lines that contain a match (in code, not in strings/comments)
+    hit_lines: set[int] = set()
+    for m in pat.finditer(masked):
+        before = masked[:m.start()]
+        line = before.count("\n") + 1
+        hit_lines.add(line)
+
+    if not hit_lines:
+        return []
+
+    # map lines to statement spans
+    spans = _statement_spans(text)
+    line_to_span: dict[int, tuple[int, int]] = {}
+    for s, e in spans:
+        for ln in range(s, e + 1):
+            line_to_span[ln] = (s, e)
+
+    chosen: list[tuple[int, int]] = []
+    for ln in sorted(hit_lines):
+        sp = line_to_span.get(ln)
+        if sp:
+            chosen.append(sp)
+
+    chosen = _merge_spans(chosen)
+    return _extract_blocks(text, chosen, show_line_numbers)
+
+
+def main() -> None:
+    """
+    Main function.
+    """
+    options = Options()
+    parse_arguments(options)
+    logging.basicConfig(level=options.log_mode,
+                        format="%(asctime)s - %(levelname)s - %(message)s",
+                        datefmt="%Y-%m-%d %H:%M:%S")
+
+    any_hits = False
+
+    for file in iter_files(options.args.paths, options.args.recursive,
+                           options.args.exclude_dir, only_py=not options.args.no_glob):
+        results = search_file(file, options.args.pattern, regex=options.args.regex,
+                              ignore_case=options.args.ignore_case,
+                              show_line_numbers=options.args.line_numbers)
+        if results:
+            any_hits = True
+            print(f"# {os.fspath(file)}")
+            for block in results:
+                print(block)
+                print()  # extra newline between blocks
+
+    if not any_hits:
+        logging.info("No matches found.")
+
+    logging.shutdown()
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+SETUP_CARTOPY_SCRIPT: str = r'''import os
+import matplotlib.pyplot as plt
+import cartopy
+cartopy.config['data_dir'] = os.getenv('CARTOPY_DATA_DIR', cartopy.config.get('data_dir'))
+
+fig, ax = plt.subplots(subplot_kw={'projection': cartopy.crs.PlateCarree()})
+ax.coastlines('110m')    # Explicitly specify resolution to ensure pre-loading
+ax.add_feature(cartopy.feature.OCEAN)  # Example color; adjust as needed
+ax.add_feature(cartopy.feature.LAND)   # Example color; adjust as needed
+
+# Force feature download
+plt.savefig('cartopy_test_map.png')
+os.remove('cartopy_test_map.png')
 '''
 
 
-def verify_script(thepath: str | os.PathLike[str], thescript: str) -> None:
+def verify_script(options: Options, thepath: str | os.PathLike[str], thescript: str) -> None:
     """
     Ensure that `thepath` exists and contains exactly `thescript`.
     - If `thepath` does not exist or is not a file, it will be created and populated.
@@ -3709,19 +4194,22 @@ def verify_script(thepath: str | os.PathLike[str], thescript: str) -> None:
     thepath = Path(thepath).expanduser().resolve()
     if not thepath.is_file():
         if thepath.is_dir():
-            logging.error(f"Expected a file at {thepath}, but it is a directory.")
+            if not options.rawlog:
+                logging.error(f"Expected a file at {thepath}, but it is a directory.")
             return
         thepath.write_text(thescript, encoding=DEFAULT_ENCODING)
-        logging.info(f"Creating {thepath} with the audit script.")
+        if not options.rawlog:
+            logging.info("Creating %s with the audit script.", thepath)
         return
 
     # It is a file: read and compare
     existing = thepath.read_text(encoding=DEFAULT_ENCODING)
     # Overwrite if different
     if existing != thescript:
-        logging.info(f"Contents of {thepath} differ from the audit script in {__file__} as follows:")
-        my_diff(existing, thescript, thepath, diff_choice=1)
-        logging.info(f"Overwriting {thepath} with the audit script.")
+        if not options.rawlog:
+            logging.info("Contents of %s differ from the audit script in %s as follows:", thepath, __file__)
+            my_diff(existing, thescript, thepath, diff_choice=1)
+            logging.info("Overwriting %s with the audit script.", thepath)
         thepath.write_text(thescript, encoding=DEFAULT_ENCODING)
 
 
@@ -3734,12 +4222,12 @@ def decode_utf8(raw_bytes: bytes, path: str = "input string") -> str | None:
     try:
         text = raw_bytes.decode('utf-8', errors='strict')
     except UnicodeDecodeError:
-        logging.debug(f"{path} failed to decode as UTF‑8.")
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s failed to decode as UTF‑8.", path)
         return None
     if any(0x0080 <= ord(ch) <= 0x009F for ch in text):
-        logging.debug(f"{path} contains lone C1 controls, not valid UTF-8.")
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s contains lone C1 controls, not valid UTF-8.", path)
         return None
-    logging.debug(f"{path} decoded as valid UTF‑8.")
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s decoded as valid UTF‑8.", path)
     return text
 
 
@@ -3751,10 +4239,10 @@ def decode_cp1252(raw_bytes: bytes, path: str = "input string") -> str | None:
     fallback_logging_config()
     try:
         text = raw_bytes.decode('cp1252', errors='strict')
-        logging.debug(f"{path} decoded as valid CP1252.")
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s decoded as valid CP1252.", path)
         return text
     except UnicodeDecodeError:
-        logging.debug(f"{path} failed to decode as CP1252.", exc_info=True)
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s failed to decode as CP1252.", path, exc_info=True)
         return None
 
 
@@ -3765,9 +4253,9 @@ def contains_mojibake(text: str) -> bool:
     try:
         mojibake_present = ftfy.badness.is_bad(text)
     except Exception: # Catch any unexpected errors from ftfy without crashing
-        logging.debug(f"Failed to check for mojibake.", exc_info=True)
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Failed to check for mojibake.", exc_info=True)
         mojibake_present = False
-    logging.debug(f"Mojibake present: {mojibake_present}")
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Mojibake present: %s", mojibake_present)
     # I HAVEN'T TRIED THIS NEXT LINE, BUT IT MIGHT CAUSE FEWER FALSE POSITIVES:
     # return ftfy.badness(text) > 1
     return mojibake_present
@@ -3780,13 +4268,13 @@ def fix_text(current_text: str, path: str | os.PathLike[str], raw_bytes: bytes) 
     import ftfy
     fallback_logging_config()
     path = ensure_path_is_a_file(path)
-    logging.debug(f"Checking {path} for mojibake.")
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Checking %s for mojibake.", path)
     if not contains_mojibake(current_text):
         return None
     try:
         fixed = ftfy.fix_encoding(current_text)
     except Exception:  # Catch any unexpected errors from ftfy without crashing
-        logging.error(f"Failed to fix mojibake in {path}.", exc_info=True)
+        logging.error("Failed to fix mojibake in %s.", path, exc_info=True)
         return None
     # If logging level is set to DEBUG, show my diff of original vs fixed:
     if logging.getLogger().isEnabledFor(logging.DEBUG):
@@ -3795,7 +4283,7 @@ def fix_text(current_text: str, path: str | os.PathLike[str], raw_bytes: bytes) 
             mangled_original = raw_bytes.decode('cp1252', errors='replace')
             my_diff(mangled_original, fixed, path)
         except Exception:  # Catch any unexpected errors from decoding but don't crash.
-            logging.debug(f"Could not simulate browser mangling in {path}.", exc_info=True)
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Could not simulate browser mangling in %s.", path, exc_info=True)
     return fixed
 
 
@@ -3916,7 +4404,7 @@ def fix_mojibake(filepath: str | os.PathLike[str], make_backup: bool = True,
     maybe_fixed = fix_text(current_text, filepath, raw_bytes)
     if maybe_fixed is not None:
         current_text = maybe_fixed
-        logging.info(f"✔ Fixed mojibake: {filepath}")
+        logging.info("✔ Fixed mojibake: %s", filepath)
 
     # If the text is from an HTML file, ensure it has a UTF-8 meta tag
     if filepath.suffix.casefold() in ('.html','.htm'):
@@ -3925,19 +4413,19 @@ def fix_mojibake(filepath: str | os.PathLike[str], make_backup: bool = True,
     # If we have fixed the text, write it back
     if current_text != original_text:
         if dry_run:
-            logging.info(f"Dry run: would write changes to {filepath}")
+            logging.info("Dry run: would write changes to %s", filepath)
         else:
             if make_backup:
                 current_datetime = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
                 backup_path = f"{filepath}_{current_datetime}.bak"
                 try:
                     filepath.rename(backup_path)
-                    logging.info(f"Backup created: {backup_path}")
+                    logging.info("Backup created: %s", backup_path)
                 except OSError:
-                    logging.exception(f"Failed to create backup for {filepath}.")
+                    logging.exception("Failed to create backup for %s.", filepath)
                     return
             my_atomic_write(filepath, current_text, 'w', encoding='utf-8')
-            logging.info(f"✔ Successfully fixed mojibake in {filepath}")
+            logging.info("✔ Successfully fixed mojibake in %s", filepath)
 
 
 def treeview_new_files(directory:      str | os.PathLike[str],
@@ -3952,21 +4440,26 @@ def treeview_new_files(directory:      str | os.PathLike[str],
     Args:
         directory:      The directory to scan.
         last_file_path: The optional path to a chosen file. Only files newer than this will be printed.
-        last_mtime:     The modification time of the last_file_path. If None, all files will be considered.
-        maxlines:       The maximum number of lines to read from each file. 0 means don't read at all, -1 means read all lines, otherwise read up to maxlines (default 0).
+        last_mtime:     The modification time of the last_file_path. If None, all files will be
+                        considered.
+        maxlines:       The maximum number of lines to read from each file. 0 means don't read at all,
+                        -1 means read all lines, otherwise read up to maxlines (default 0).
         use_colors:     Whether to use ANSI color codes in the output (default True).
         print_root:     If True, print the root directory name (default True).
         prefix:         The prefix to use for logging output (default '').
         is_last:        Whether this is the last item in the current level (default True).
         level:          The current recursion level (default 0).
         state:          A dictionary to maintain state across recursive calls (default None).
-        probe_only:     If True, do not print file contents, just check for existence of relevant files (default False).
+        probe_only:     If True, do not print file contents, just check for existence of relevant
+                        files (default False).
 
     Returns:
-        bool: True if any relevant files are found or the directory itself is newer than last_mtime, False otherwise.
+        bool: True if any relevant files are found or the directory itself is newer than last_mtime,
+              False otherwise.
 
     Raises:
-        None: Catches exceptions, logs an error and returns False if the directory is not a valid directory or does not exist.
+        None: Catches exceptions, logs an error and returns False if the directory is not a valid
+              directory or does not exist.
     """
     import datetime as dt
     fallback_logging_config(rawlog=True)
@@ -3981,15 +4474,15 @@ def treeview_new_files(directory:      str | os.PathLike[str],
 
     if last_file_path is None:
         last_mtime = 0
-        logging.debug(f"{prefix}No last file path provided, considering all files.")
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%sNo last file path provided, considering all files.", prefix)
     else:
         last_file_path = Path(last_file_path).expanduser().resolve()
         if not last_file_path.exists():
-            logging.error(f"{prefix}└── [Last file path does not exist: {last_file_path}]")
+            logging.error("%s└── [Last file path does not exist: %s]", prefix, last_file_path)
             return False
         last_mtime = last_file_path.stat().st_mtime
         last_mtime_readable = dt.datetime.fromtimestamp(last_mtime).strftime('%Y-%m-%d %H:%M:%S')
-        logging.debug(f"{prefix}Last file path: {last_file_path} (mtime: {last_mtime_readable})")
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%sLast file path: %s (mtime: %s)", prefix, last_file_path, last_mtime_readable)
 
     if use_colors:
         reset_color = ANSI_RESET
@@ -4136,7 +4629,15 @@ def treeview_new_files(directory:      str | os.PathLike[str],
 
 
 def check_if_command_exists(command: str) -> bool:
-    """Check if a command exists on the system."""
+    """
+    Check if a command exists on the system.
+    
+    Args:
+        command: The command to check.
+    
+    Returns:
+        bool: True if the command exists, False otherwise.
+    """
     import subprocess
     return subprocess.run(['which', command], capture_output=True).returncode == 0
 
@@ -4147,7 +4648,7 @@ def open_terminal_and_run_command(the_command: str, close_after: bool = False,
     and optionally close or keep the window open. Optionally, maximize it."""
     import subprocess
     fallback_logging_config()
-    logging.info(f"Opening terminal and running '{the_command}'…")
+    logging.info("Opening terminal and running '%s'...", the_command)
     terminal_args = ['gnome-terminal']
     if maximize_window:
         # either of these works; here we use both for clarity
@@ -4219,12 +4720,12 @@ def start_only_one_instance(process_name: str) -> None:
     import time
     fallback_logging_config()
     if not is_process_running(process_name):
-        logging.info(f"Starting {process_name}...")
+        logging.info("Starting %s...", process_name)
         subprocess.Popen([process_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         # Wait briefly to ensure the command is processed
         time.sleep(1)
     else:
-        logging.info(f"{process_name} is already running.")
+        logging.info("%s is already running.", process_name)
 
 
 def open_filemanager_with_dirs(directories: list[str | os.PathLike[str]]) -> None:
@@ -4274,7 +4775,7 @@ def detect_country(force_wtfismyip: bool = False) -> str | None:
     import json
     thecountryname = None
     if not force_wtfismyip:
-        logging.debug(f"force_wtfismyip={force_wtfismyip}.")
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("force_wtfismyip=%s.", force_wtfismyip)
         try:
             if 'IPINFO_API_TOKEN' in os.environ:
                 ipinfo_access_token = os.environ['IPINFO_API_TOKEN']
@@ -4287,27 +4788,35 @@ def detect_country(force_wtfismyip: bool = False) -> str | None:
             # handler = ipinfo.getHandler(ipinfo_access_token,
             #                             request_options={'timeout': ipinfo_timeout_seconds})
             # details = handler.getDetails()
-            # logging.debug(f"IPinfo DETAILS:\n{details}")
+            # logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("IPinfo DETAILS:\n%s", details)
             # thecountryname = details.country
             the_command = ["curl", f"https://api.ipinfo.io/lite/8.8.8.8?token={ipinfo_access_token}"]
-            logging.debug(f"Running command: {' '.join(the_command)}")
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Running command: %s", ' '.join(the_command))
             result = subprocess.run(the_command, capture_output=True,
                                     text=True, timeout=5)
             if result.returncode != 0:
-                logging.error(f"curl command failed with return code {result.returncode}")
+                logging.error("curl command failed with return code %d", result.returncode)
                 raise Exception("Curl command failed")
-            logging.debug(f"curl output: {result.stdout}")
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("curl output: %s", result.stdout)
             dct = json.loads(result.stdout)
             thecountryname = dct.get('country', '')
-            logging.debug(f"Detected country from curl: {thecountryname}")
-        except Exception as e:
-            logging.warning(f"IPinfo exception:\n{e}\nFalling back to using wtfismyip.com.")
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Detected country from curl: %s", thecountryname)
+        except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception) as e:
+            logging.warning("IPinfo exception: %s\nFalling back to wtfismyip.com.", e)
 
     if not thecountryname:
-        public_json = requests.get("http://wtfismyip.com/json", verify=False).text
-        dct = json.loads(public_json)
-        thecountryname = dct['YourFuckingCountry']
-        logging.debug(f"Detailed results:\n{dct}")
+        try:
+            resp = requests.get("https://wtfismyip.com/json", timeout=5)
+            resp.raise_for_status()
+            dct = resp.json()
+            thecountryname = dct.get("YourFuckingCountry", "")
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Detailed results: %s", dct)
+        except requests.exceptions.RequestException as e:
+            logging.error("Country detection failed (network error): %s", e)
+            return None
+        except (ValueError, KeyError) as e:
+            logging.error("Country detection failed (bad response): %s", e)
+            return None
 
     return thecountryname.strip() if thecountryname else None
 
@@ -4351,10 +4860,10 @@ def set_system_volume(percent: int, tolerance: int = 1,
             raise ValueError("change_mute must be 'mute', 'unmute', or None")
     # First, try using pulsectl to set the volume.
     if not force_pactl:
-        logging.debug(f"force_pactl={force_pactl}.")
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("force_pactl=%s.", force_pactl)
         try:
             from pulsectl import Pulse, PulseError
-            logging.debug(f"[pulsectl] Attempting to set the volume to {percent}% using pulsectl...")
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pulsectl] Attempting to set the volume to %d%% using pulsectl...", percent)
             with Pulse('volume-setter') as pulse:
                 default_name = pulse.server_info().default_sink_name
                 sink = pulse.get_sink_by_name(default_name)
@@ -4379,41 +4888,40 @@ def set_system_volume(percent: int, tolerance: int = 1,
                     raise RuntimeError(f"[pulsectl] Expected {percent}%, but got {actual}%")
                 if mute_arg is not None and sink_after.mute != mute_arg:
                     state = "muted" if sink_after.mute else "unmuted"
-                    raise RuntimeError(f"[pulsectl] Mute verify failed: got {state}")
-                logging.info(f"[pulsectl] Volume set to {actual}%"
-                            + (f", {'muted' if mute_arg else 'unmuted'}" if mute_arg is not None else ""))
+                    raise RuntimeError(f"Mute verify failed: got {state}")
+                logging.info("[pulsectl] Volume set to %d%%, %s", actual, state)
                 return  # Successfully set volume and verified
         except (ImportError, ModuleNotFoundError):
             logging.warning("[pulsectl] Not installed; falling back to pactl…")
         except PulseError as e:
-            logging.error(f"[pulsectl] PulseError: {e}; falling back to pactl…")
+            logging.error("[pulsectl] PulseError: %s; falling back to pactl…", e)
         except RuntimeError as e:
-            logging.error(f"{e}; falling back to pactl…")
+            logging.error("%s; falling back to pactl…", e)
         except Exception as e:
-            logging.error(f"[pulsectl] Unexpected error: {e}; falling back to pactl…")
+            logging.error("[pulsectl] Unexpected error: %s; falling back to pactl…", e)
 
     # Fallback to pactl if pulsectl is not available or fails
-    logging.debug(f"[pactl] Attempting to set the volume to {percent}% using pactl...")
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pactl] Attempting to set the volume to %d%% using pactl...", percent)
     the_command = ["pactl", "suspend-sink", "@DEFAULT_SINK@", "0"]
-    logging.debug(f"[pactl] Running command: {' '.join(the_command)}")
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pactl] Running command: %s", ' '.join(the_command))
     result = subprocess.run(the_command, check=True, capture_output=True, text=True)
     if result.stderr:
         raise RuntimeError(f"[pactl] Error waking up sink from suspension: {result.stderr.strip()}")
     the_command = ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{percent}%"]
-    logging.debug(f"[pactl] Running command: {' '.join(the_command)}")
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pactl] Running command: %s", ' '.join(the_command))
     result = subprocess.run(the_command, check=True, capture_output=True, text=True)
     if result.stderr:
         raise RuntimeError(f"[pactl] Error setting volume: {result.stderr.strip()}")
     # Set mute if requested
     if mute_arg is not None:
         cmd = ["pactl", "set-sink-mute", "@DEFAULT_SINK@", str(mute_arg)]
-        logging.debug(f"[pactl] {' '.join(cmd)}")
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pactl] %s", ' '.join(cmd))
         mute_result = subprocess.run(cmd, check=True, capture_output=True, text=True)
         if mute_result.stderr:
             raise RuntimeError(f"[pactl] Error setting mute: {mute_result.stderr.strip()}")
         # Verify mute state
         mute_check_cmd = ["pactl", "get-sink-mute", "@DEFAULT_SINK@"]
-        logging.debug(f"[pactl] Running command: {' '.join(mute_check_cmd)}")
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pactl] Running command: %s", ' '.join(mute_check_cmd))
         mute_result = subprocess.run(mute_check_cmd, check=True, capture_output=True, text=True)
         if mute_result.stderr:
             raise RuntimeError(f"[pactl] Error getting mute state: {mute_result.stderr.strip()}")
@@ -4422,10 +4930,10 @@ def set_system_volume(percent: int, tolerance: int = 1,
             raise RuntimeError("[pactl] Volume is not muted even though the user requested it to be muted.")
         elif mute_arg == 0 and "no"  not in mute_output:
             raise RuntimeError("[pactl] Volume is still muted even though the user requested it to be unmuted.")
-        logging.info(f"[pactl] Audio {'muted' if mute_arg else 'unmuted'}")
+        logging.info("[pactl] Audio %s", 'muted' if mute_arg else 'unmuted')
     # Verify volume setting with pactl
     the_command = ["pactl", "get-sink-volume", "@DEFAULT_SINK@"]
-    logging.debug(f"[pactl] Running command: {' '.join(the_command)}")
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pactl] Running command: %s", ' '.join(the_command))
     result = subprocess.run(the_command, check=True, capture_output=True, text=True)
     if result.stderr:
         raise RuntimeError(f"[pactl] Error getting volume: {result.stderr.strip()}")
@@ -4437,7 +4945,7 @@ def set_system_volume(percent: int, tolerance: int = 1,
     actual = int(parts[1].strip().replace('%', ''))
     if abs(actual - percent) > tolerance:
         raise RuntimeError(f"[pactl] Expected {percent}%, but got {actual}%")
-    logging.info(f"[pactl] Volume set to {percent}%")
+    logging.info("[pactl] Volume set to %d%%", percent)
 
 
 def open_playlist_in_VLC(playlist: str | os.PathLike[str], no_start:  bool = False) -> None:
@@ -4519,7 +5027,7 @@ def remove_prefix_from_filename(filepath: str | os.PathLike[str], prefix: str) -
     fallback_logging_config()
     filepath = Path(filepath).expanduser().resolve()
     if not filepath.exists():
-        logging.warning(f"File or directory '{filepath}' does not exist.")
+        logging.warning("File or directory '%s' does not exist.", filepath)
         return False
     file = filepath.name
     if file.startswith(prefix):
@@ -4531,12 +5039,12 @@ def remove_prefix_from_filename(filepath: str | os.PathLike[str], prefix: str) -
         if not new_filepath.exists():
             try:
                 filepath.rename(new_filepath)
-                logging.info(f"Renamed '{filepath}' to '{new_filepath}'.")
+                logging.info("Renamed '%s' to '%s'.", filepath, new_filepath)
                 return True
             except OSError as e:
                 raise OSError(f"Failed to rename '{filepath}' to '{new_filepath}': {e}") from e
         else:
-            logging.warning(f"Cannot rename '{filepath}' to '{new_filepath}': New path already exists.")
+            logging.warning("Cannot rename '%s' to '%s': New path already exists.", filepath, new_filepath)
             return False
     else:
         return False
@@ -4547,23 +5055,23 @@ def remove_prefix_from_html_title(filepath: str | os.PathLike[str], prefix: str)
     fallback_logging_config()
     filepath = Path(filepath)
     if not filepath.is_file():
-        logging.warning(f"File '{filepath}' does not exist or is not a file.")
+        logging.warning("File '%s' does not exist or is not a file.", filepath)
         return False
     if filepath.suffix.casefold() not in ('.html', '.htm'):
-        logging.warning(f"File '{filepath}' is not an HTML or HTM file.")
+        logging.warning("File '%s' is not an HTML or HTM file.", filepath)
         return False
     html = my_fopen(filepath)
     title_start = html.find('<title>') + len('<title>')
     title_end   = html.find('</title>', title_start)
     if title_start == -1 or title_end == -1:
-        logging.warning(f"Could not find the title in the HTML file '{filepath}'.")
+        logging.warning("Could not find the title in the HTML file '%s'.", filepath)
         return False
     title = html[title_start:title_end]
     if title.startswith(prefix):
         new_title = title.replace(prefix, "", 1)  # Replace only the first occurrence
         new_html = html[:title_start] + new_title + html[title_end:]
         filepath.write_text(new_html, encoding=DEFAULT_ENCODING)
-        logging.info(f"Removed prefix '{prefix}' from the title in '{filepath}'.")
+        logging.info("Removed prefix '%s' from the title in '%s'.", prefix, filepath)
         return True
     else:
         return False
@@ -4616,8 +5124,8 @@ def combine_html_files(file_paths: list[str | os.PathLike[str]],
         output_file_path.parent.mkdir(parents=True, exist_ok=True)
         output_file_path.write_text(combined_html, encoding=DEFAULT_ENCODING)
     except Exception:  # Catch any unexpected errors from writing the file without crashing.
-        logging.exception(f"Error saving combined HTML to {output_file_path}.")
-    logging.info(f"Saved combined HTML to '{output_file_path}'.")
+        logging.exception("Error saving combined HTML to %s.", output_file_path)
+    logging.info("Saved combined HTML to '%s'.", output_file_path)
 
 
 def check_list_for_duplicates(the_list: list) -> bool:
