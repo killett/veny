@@ -3,20 +3,26 @@
 # Written by Emmy Killett (she/her), ChatGPT 4o (it/its), ChatGPT o1-preview (it/its), ChatGPT o3-mini-high (it/its), ChatGPT o4-mini-high (it/its), ChatGPT 5 (it/its), and GitHub Copilot (it/its).
 from __future__ import annotations  # For Python 3.7+ compatibility with type annotations
 import os
-from pathlib import Path  # Preferred over os.path for path manipulations.
 import sys
+from pathlib import Path  # Preferred over os.path for path manipulations.
 import logging
-from typing import TextIO, Any, TypeAlias, Type, Literal
-from collections.abc import Iterator
+from types import ModuleType
+from collections.abc import Iterator, Sequence
+from typing import TextIO, Any, TypeAlias, Type, Literal, Protocol
 import re  # Used to precompile regexes for performance
+from dataclasses import dataclass, field, replace
+from enum import Enum
 
-# This is the version of univ_defs.py
-__version__: str = '0.1.7'
+# Version of univ_defs.py:
+__version__: str = "0.1.7"
 
-# This is the version of python which should be used in scripts that import this module.
-PY_VERSION: float = 3.11
+# Version of python which should be used in scripts that import this module.
+# Python 3.12 is supported until 2028-10. https://devguide.python.org/versions/
+# The next version (Python 3.13) will leave the bugfix phase around 2026-10.
+PY_VERSION: float = 3.12
 
-DEFAULT_ENCODING: str = 'utf-8'  # This is the default encoding used for reading and writing text files.
+# Default encoding used for reading and writing text files:
+DEFAULT_ENCODING: str = "utf-8"
 
 # ANSI escape codes
 ANSI_RED:    str = "\033[91m"
@@ -27,23 +33,23 @@ ANSI_RESET:  str = "\033[0m"
 
 # All the formatting rules to ignore when running flake8 to check Python formatting.
 IGNORED_CODES: list[str] = [
-    'W503',  # line break before binary operator (W503 and W504 are mutually exclusive, so ignore both)
-    'W504',  # line break  after binary operator (W503 and W504 are mutually exclusive, so ignore both)
-    'E128',  # continuation line under-indented for visual indent
-    'E201',  # whitespace after '('
-    'E202',  # whitespace before ')'
-    'E203',  # whitespace before ':'
-    'E211',  # whitespace before '('
-    'E221',  # multiple spaces before operator
-    'E222',  # multiple spaces after  operator
-    'E226',  # missing whitespace around arithmetic operator        (the fix doesn't work on the right side even with --aggressive)
-    'E227',  # missing whitespace around bitwise or shift operator  (the fix doesn't work on the right side even with --aggressive)
-    'E241',  # multiple spaces after ','
-    'E251',  # unexpected spaces around keyword / parameter equals
-    'E262',  # inline comment should start with '# '
-    'E271',  # multiple spaces  after keyword
-    'E272',  # multiple spaces before keyword
-    'E701',  # multiple statements on one line (colon)
+    "W503",  # line break before binary operator (W503 and W504 are mutually exclusive, so ignore both)
+    "W504",  # line break  after binary operator (W503 and W504 are mutually exclusive, so ignore both)
+    "E128",  # continuation line under-indented for visual indent
+    "E201",  # whitespace after "("
+    "E202",  # whitespace before ")"
+    "E203",  # whitespace before ":"
+    "E211",  # whitespace before "("
+    "E221",  # multiple spaces before operator
+    "E222",  # multiple spaces after  operator
+    "E226",  # missing whitespace around arithmetic operator        (the fix doesn't work on the right side even with --aggressive)
+    "E227",  # missing whitespace around bitwise or shift operator  (the fix doesn't work on the right side even with --aggressive)
+    "E241",  # multiple spaces after ","
+    "E251",  # unexpected spaces around keyword / parameter equals
+    "E262",  # inline comment should start with "# "
+    "E271",  # multiple spaces  after keyword
+    "E272",  # multiple spaces before keyword
+    "E701",  # multiple statements on one line (colon)
 ]
 
 
@@ -67,30 +73,49 @@ class Options:
         self.home:    Path = Path.home()  # User's home directory
 
 
-class PlotOptions:
+class PlotOptions(Options):
     """Global figure options."""
 
     def __init__(self) -> None:
-        """Initialize PlotOptions class with default values."""
+        """Initialize PlotOptions class with values from the Options class, and default plotting values."""
         # Ideas for improving this parent class: https://chatgpt.com/share/6876a7e2-da84-8006-9c8f-100d243b73e4
-        self.myfigsize: tuple[int, int] = (16, 9)
-        self.fsize:                 int = 24
-        self.dpi_choice:            int = 300
-        # self.colors      are used for shaded areas in light mode or for lines in dark mode
-        # self.lightcolors are used for lines in light mode or for shaded areas in dark mode
-        self.markers:         list[str] = ['o',     's',      '^',         'v',          '<',     '>']
-        self.colors:          list[str] = ['black', 'red',    'blue',      'green',      'purple']
-        self.lightcolors:     list[str] = ['grey',  'pink',   'lightblue', 'lightgreen', 'lightpurple']
-        self.linestyles:      list[str] = ['solid', 'dashed', 'dashdot',   'dotted']
-        self.dark_mode:             int = 0  # 1 = dark mode, 0 = light mode
-        if self.dark_mode:  # Define colors as hexadecimal mainly because VS Code has a nifty color picker for hex colors.
-            self.background_color:  str = '#000000'  # black background for dark mode
-            self.text_color:        str = '#FFFFFF'  # white text for dark mode
-            self.colors:      list[str] = [c.replace('black', 'darkgrey') for c in self.colors]
-            self.lightcolors: list[str] = [c.replace('grey', 'lightgrey') for c in self.lightcolors]
+        super().__init__()
+        self.myfigsize   = (16, 9)
+        self.fsize       = 24
+        self.dpi_choice  = 300
+        # keep immutable “base” palettes so we can recompute safely
+        self._base_colors      = ['black', 'red',    'blue',      'green',      'purple']
+        self._base_lightcolors = ['grey',  'pink',   'lightblue', 'lightgreen', 'lightpurple']
+        self.markers           = ['o',     's',      '^',         'v',          '<',          '>']
+        self.linestyles        = ['solid', 'dashed', 'dashdot',   'dotted']
+
+        self._dark_mode = False   # backing store
+        self._apply_theme()       # derive palettes/background/text from _dark_mode
+
+    @property
+    def dark_mode(self) -> bool:
+        """This is a property, so setting it will also update the theme."""
+        return self._dark_mode
+
+    @dark_mode.setter
+    def dark_mode(self, value: int | bool) -> None:
+        """This is a property with a setter, so any child class that changes self.dark_mode will also update the theme."""
+        self._dark_mode = bool(value)
+        self._apply_theme()
+
+    def _apply_theme(self) -> None:
+        """Apply the current theme (light or dark) to the plot options."""
+        if self._dark_mode:
+            self.background_color = '#000000'
+            self.text_color       = '#FFFFFF'
+            # recompute “view” palettes from the bases
+            self.colors      = [ ('darkgrey' if  c == 'black' else c) for c in self._base_colors ]
+            self.lightcolors = [ ('lightgrey' if c == 'grey'  else c) for c in self._base_lightcolors ]
         else:
-            self.background_color:  str = '#FFFFFF'  # white background for light mode
-            self.text_color:        str = '#000000'  # black text for light mode
+            self.background_color = '#FFFFFF'
+            self.text_color       = '#000000'
+            self.colors      = list(self._base_colors)
+            self.lightcolors = list(self._base_lightcolors)
 
 
 class UnivClass:
@@ -203,88 +228,850 @@ def return_method_name(levels_up: int = 1) -> str:
     return name
 
 
+class SelectionStrategy(str, Enum):
+    """Enumeration of selection strategies for model selection."""
+    CHEAPEST                 = "cheapest"
+    CONTEXT_THEN_PRICE       = "context_then_price"
+    CODE_SKILL_THEN_PRICE    = "code_skill_then_price"
+    GENERAL_SKILL_THEN_PRICE = "general_skill_then_price"
+    LOWEST_TTFT              = "lowest_TTFT"
+    FASTEST                  = "fastest"
+    SMALLEST                 = "smallest"
+
+
+@dataclass
+class LLMConfig:
+    """Configuration for LLM selection and usage. Data only."""
+    # Routing / engines
+    use_litellm:        bool = True
+    allow_local_models: bool = True
+    use_local_model:    bool = False
+    local_model_name:    str = "ollama/qwen2.5-coder:1.5b-base"
+
+    ollama_base_url:     str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    vllm_base_url:       str = os.getenv("VLLM_BASE_URL",   "http://localhost:8000")
+
+    # Selection knobs
+    selection_strategy: SelectionStrategy | str = SelectionStrategy.CHEAPEST
+    min_context_tokens:                     int = 0
+    assumed_prompt_tokens:                  int = 1000
+    assumed_output_tokens:                  int = 1000
+
+    # Candidates + scoring
+    candidate_models:    list[str] = field(default_factory=list)    # if empty -> _default_candidate_models()
+
+    # Back-compat defaults (filled after selection)
+    default_model:   str = "gpt-3.5-turbo"
+    default_company: str = "OpenAI"
+
+    # Optional: commonly-used knobs some programs keep near config
+    default_temperature: float = 0.0
+    max_tokens:            int = 1000
+
+    model_scores: dict[str, float | dict[str, float]] = field(default_factory=dict)
+
+    # --- multi-objective preferences ---
+    prefer_code:                    bool = False  # emphasize coding skill
+    prefer_low_TTFT:                bool = False  # emphasize time-to-first-token
+    prefer_local:                   bool = False  # *prefer* local (not a hard requirement)
+    max_estimated_cost:     float | None = None   # hard cap per (assumed_in, assumed_out)
+
+    # Optional constraints
+    speed_floor:              float | None = None   # minimum steady-state speed (in tokens/sec) (if known)
+
+    # --- weights for the composite score (lower = better) ---
+    # If a weight remains 0 but a corresponding prefer_* flag is True,
+    # defaults are injected in _resolve_config() so you don't have to tune.
+    weight_price:                  float = 1.0    # always keep some price pressure
+    weight_code_skill:             float = 0.0
+    weight_general_skill:          float = 0.0
+    weight_TTFT:                   float = 0.0    # lower penalty when higher TTFT
+    weight_speed:                  float = 0.0    # lower penalty when lower speed
+    weight_nonlocal_penalty:       float = 0.0    # penalty if prefer_local=True and model is not local
+
+
+_DEFAULT_MODEL_SKILL:      float =  0.5  # default skill level for models without specific default skill
+_DEFAULT_MODEL_CONTEXT:      int = 8192  # default context window for models without specific context
+_DEFAULT_MODEL_PARAMETERS: float = 9E99  # default number of parameters for models without specific parameter count
+
+@dataclass
+class ModelInfo:
+    """Information about a candidate Large Language Model (LLM)."""
+    name:                    str
+    provider:                str  # e.g., "OpenAI", "Anthropic", "Mistral", "IBM"
+    context_window:          int  # in+out, in tokens
+    input_cost_per_token:  float  # $/token (normalized)
+    output_cost_per_token: float  # $/token (normalized)
+    available:              bool  # Is env/api key/endpoint reachable (best effort)?
+    is_local:               bool  # True for Ollama, vLLM, or similar
+    # Values without defaults have to be listed before values with defaults.
+    runtime:        str | None = None  # e.g., "Ollama", "vLLM"
+    parameters:            float = _DEFAULT_MODEL_PARAMETERS  # number of model parameters
+    code_skill:            float = _DEFAULT_MODEL_SKILL  # 0..1, coding-centric capability
+    general_skill:         float = _DEFAULT_MODEL_SKILL  # 0..1, broad/academic capability
+    TTFT:           float | None = None  # time-to-first-token (seconds); None = unknown
+    speed:          float | None = None  # tokens/sec after first token;  None = unknown
+    meta:         dict[str, Any] = field(default_factory=dict)  # diagnostics/etc. not used for selection
+
+    def __post_init__(self) -> None:
+        """Post-initialization checks."""
+        # Enforce runtime only when relevant.
+        if self.is_local and not self.runtime:
+            raise ValueError(f"runtime is required when is_local=True for model '{self.name}' (e.g., 'Ollama', 'vLLM').")
+
+    def estimate_cost(self, tokens_in: int, tokens_out: int) -> float:
+        """Estimate cost for a given input/output token count."""
+        return self.input_cost_per_token * tokens_in + self.output_cost_per_token * tokens_out
+
+
+@dataclass
+class SelectionContext:
+    """Context passed to strategy functions."""
+    tokens_in:          int
+    tokens_out:         int
+    min_context_tokens: int
+    require_local:     bool = False
+    extras:  dict[str, Any] = field(default_factory=dict)
+
+
+class StrategyFn(Protocol):
+    """Strategy function interface."""
+    def __call__(self, candidates: Sequence[ModelInfo], ctx: SelectionContext) -> ModelInfo: ...
+
+
 class LLMs:
-    """Class that handles the import and operation of large language model APIs."""
+    """
+    - Owns legacy vendor SDK clients (OpenAI/Anthropic)
+    - Optionally routes via LiteLLM
+    - Builds ModelInfo list, filters by availability/context
+    - Applies registered/built-in selection strategy
+    - Exposes stable send_prompt(...)
+    """
+    # ----------------------------
+    # Default model preferences
+    # ----------------------------
 
+    model_info: dict[str, dict[str, Any]] = {
+
+        ##################################
+        # OpenAI
+        ##################################
+
+        "gpt-3.5-turbo": {
+            "provider"   : "OpenAI",
+            "context"    : 16_385,
+            "code_skill" : 0.60,
+            "local"      : False,
+            "parameters" : _DEFAULT_MODEL_PARAMETERS,
+        },
+
+        "gpt-4o-mini": {
+            "provider"   : "OpenAI",
+            "context"    : 128_000,
+            "code_skill" : 0.80,     # improved smalls trend; near 4.1-mini on many evals [S6]
+            "local"      : False,
+            "parameters" : _DEFAULT_MODEL_PARAMETERS,
+        },
+
+        "gpt-4o": {
+            "provider"   : "OpenAI",
+            "context"    : 128_000,
+            "code_skill" : 0.93,     # strong coding; multiple evals (Aider diff, SWE gains) [S6]
+            "local"      : False,
+            "parameters" : _DEFAULT_MODEL_PARAMETERS,
+        },
+
+        "gpt-4.1": {
+            "provider"      : "OpenAI",
+            "context"       : 1_000_000,  # [S5,S6]
+            "code_skill"    : 0.94,       # OpenAI shows +21% vs 4o on SWE-bench Verified [S6]
+            "general_skill" : 0.92,       # MMLU 90.2%, GPQA Diamond 66.3% [S6]
+            "TTFT"          : 15.0,       # ~15s TTFT at 128k; ~60s at 1M (OpenAI) [S7]
+            "speed"         : 124.0,      # ArtificialAnalysis provider aggregate [S2]
+            "local"         : False,
+            "parameters"    : _DEFAULT_MODEL_PARAMETERS,
+        },
+
+        "gpt-4.1-mini": {
+            "provider"   : "OpenAI",
+            "context"    : 1_000_000,  # [S6] (OpenAI says 4.1 family supports up to 1M)
+            "code_skill" : 0.82,       # “beats 4o on many evals”; keep slightly above 4o-mini [S6]
+            "speed"      : 75.8,       # AA aggregate (time-varying)
+            "local"      : False,
+            "parameters" : _DEFAULT_MODEL_PARAMETERS,
+        },
+
+        "gpt-4.1-nano": {
+            "provider"   : "OpenAI",
+            "context"    : 1_000_000,  # [S6]
+            "code_skill" : 0.65,       # small, but 1M ctx and better than 4o-mini on some evals [S6]
+            "TTFT"       : 5.0,        # “often <5s” for 128k inputs (OpenAI) [S7]
+            "local"      : False,
+            "parameters" : _DEFAULT_MODEL_PARAMETERS,
+        },
+
+        "o1-mini": {
+            "provider"   : "OpenAI",
+            "context"    : 128_000,  # context per OpenAI docs; o3/o4-mini are 200k [S28]
+            "code_skill" : 0.86,     # strong reasoning; coding solid but slower TTFT [S14,S7]
+            "local"      : False,
+            "parameters" : _DEFAULT_MODEL_PARAMETERS,
+        },
+
+        "o3-mini": {
+            "provider"      : "OpenAI",
+            "context"       : 200_000,  # [S28]
+            "code_skill"    : 0.88,     # faster TTFT than o1-mini; coding near o1 mini [S12,S6]
+            "general_skill" : 0.89,     # strong reasoning for size [S6,S7]
+            "TTFT"          : 8.0,      # AA & coverage: higher latency than smalls, but improved vs o1 [S14,S7]
+            "speed"         : 163.0,    # AA [S12]
+            "local"         : False,
+            "parameters"    : _DEFAULT_MODEL_PARAMETERS,
+        },
+
+        "o4-mini": {
+            "provider"   : "OpenAI",
+            "context"    : 200_000,  # [S28]
+            "code_skill" : 0.90,     # newer small reasoning; top small-code in AA index
+            "local"      : False,
+            "parameters" : _DEFAULT_MODEL_PARAMETERS,
+        },
+
+        "gpt-5": {
+            "provider"      : "OpenAI",
+            "context"       : 400_000,  # API total context, 128k max output (OpenAI) [S1]
+            "code_skill"    : 0.96,     # frontier; AA shows top “intelligence index” class [S1,S21]
+            "general_skill" : 0.95,     # AA Intelligence Index leader tier [S1,S21]
+            "local"         : False,
+            "parameters"    : _DEFAULT_MODEL_PARAMETERS,
+        },
+
+        ##################################
+        # Anthropic
+        ##################################
+
+        "claude-3-haiku-20240229": {
+            "provider"   : "Anthropic",
+            "context"    : 200_000,  # Anthropic docs & vendor pages [S26,S27]
+            "code_skill" : 0.70,
+            "local"      : False,
+            "parameters" : _DEFAULT_MODEL_PARAMETERS,
+        },
+
+        "claude-3-5-sonnet-20241022": {
+            "provider"   : "Anthropic",
+            "context"    : 200_000,  # [S26,S27]
+            "code_skill" : 0.92,
+            "local"      : False,
+            "parameters" : _DEFAULT_MODEL_PARAMETERS,
+        },
+
+        "claude-3-7-sonnet-20250219": {
+            "provider"      : "Anthropic",
+            "context"       : 200_000,  # [S21,S26,S27] (Sonnet 4 has 1M, not 3.7) [S20]
+            "code_skill"    : 0.93,     # leads/near-top on SWE-bench Verified [S13,S16]
+            "general_skill" : 0.90,     # hybrid reasoning; strong OSWorld & agentic [S16]
+            "TTFT"          : 1.16,     # ~1.16s avg; reports of ~0.2s for quick replies (varies) [S36]
+            "speed"         : 65.5,     # AA [S36]
+            "local"         : False,
+            "parameters"    : 123E9,
+        },
+
+        ##################################
+        # Mistral
+        ##################################
+
+        "mistral-large-2": {
+            "provider"      : "Mistral",
+            "context"       : 128_000,  # product pages and summaries [S9,S23]
+            "code_skill"    : 0.90,     # claims match GPT-4o on coding; multiple writeups [S11,S17]
+            "general_skill" : 0.86,     # broad improvements vs Large 1; multilingual [S9]
+            "local"         : False,
+            "parameters"    : _DEFAULT_MODEL_PARAMETERS,
+        },
+
+        "mistral-medium-2505": {
+            "provider"   : "Mistral",
+            "context"    : 128_000,  # [S8]
+            "code_skill" : 0.82,     # below Large, above earlier Mediums; frontier multi [S8]
+            "local"      : False,
+            "parameters" : _DEFAULT_MODEL_PARAMETERS,
+        },
+
+        "codestral-25.01": {
+            "provider"   : "Mistral",
+            "context"    : 256_000,  # Mistral docs list Codestral 25.01/25.08 at 256k [S8,S10]
+            "code_skill" : 0.86,     # upgraded Codestral; ~2x speed & strong HE/MBPP [S10,S9]
+            "local"      : False,
+            "parameters" : _DEFAULT_MODEL_PARAMETERS,
+        },
+
+        "codestral-25.08": {
+            "provider"   : "Mistral",
+            "context"    : 256_000,  # [S8]
+            "code_skill" : 0.88,     # latest Codestral (summer 2025) [S8]
+            "local"      : False,
+            "parameters" : _DEFAULT_MODEL_PARAMETERS,
+        },
+
+        ##################################
+        # Local (Ollama)
+        # Local models are hardware-dependent; leave None to encourage live measurement:
+        # local models -> measure at runtime
+        ##################################
+
+        "ollama/qwen2.5-coder:1.5b-base": {
+            "provider"   : "Alibaba Cloud",
+            "context"    : 32_768,
+            "code_skill" : 0.41,    # ~41 average across 9 langs for 1.5B *base* [S3]
+            "local"      : True,
+            "runtime"    : "Ollama",
+            "parameters" : 1.5E9,
+        },
+
+        "ollama/qwen2.5-coder:3b-base": {
+            "provider"   : "Alibaba Cloud",
+            "context"    : 32_768,
+            "code_skill" : 0.48,    # ~48 average across 9 langs for 3B *base* [S3]
+            "local"      : True,
+            "runtime"    : "Ollama",
+            "parameters" : 3.0E9,
+        },
+
+        "ollama/codegemma:2b-code": {
+            "provider"   : "Google",
+            "context"    : 8_192,   # [S38, S39]
+            "code_skill" : 0.311,   # HumanEval pass@1 = 31.1% (official model card)
+            "local"      : True,
+            "runtime"    : "Ollama",
+            "parameters" : 2.0E9,
+        },
+
+        "ollama/starcoder2:3b": {
+            "provider"   : "BigCode",
+            "context"    : 16_384,  # StarCoder2 smalls default 16k
+            "code_skill" : 0.317,   # ~31.7% pass@1 typical; ~31.1 avg across langs in Qwen2.5 tbl [S3,S30]
+            "local"      : True,
+            "runtime"    : "Ollama",
+            "parameters" : 3.0E9,
+        },
+
+        "ollama/granite-code:3b": {
+            "provider"   : "IBM",
+            "context"    : 128_000,  # IBM Granite-3B-Code-Instruct-128K [S18]
+            "code_skill" : 0.262,    # [S40, S41]
+            "local"      : True,
+            "runtime"    : "Ollama",
+            "parameters" : 3.0E9,
+        },
+
+        "ollama/phi3.5:3.8b": {
+            "provider"      : "Microsoft",
+            "context"       : 128_000,  # Microsoft release/Foundry catalog [S34]
+            "code_skill"    : 0.56,     # mid-estimate: reports cluster ~0.50–0.63 HE for 3.5-mini [S31,S33]
+            "general_skill" : 0.69,     # Phi-3 mini MMLU ~69%; 3.5 mini similar+ [S32]
+            "local"         : True,
+            "runtime"       : "Ollama",
+            "parameters"    : 3.8E9,
+        },
+
+        "ollama/mistral:7b-instruct-q4_0": {
+            "provider"      : "Mistral",
+            "context"       : 8_192,     # conservative default; some builds enable up to ~32k
+            "code_skill"    : 0.52,      # solid general LLM; decent coding for 7B instruct
+            "general_skill" : 0.64,      # typical bench range for Mistral-7B-Instruct [S42, S43, S44]
+            "local"         : True,
+            "runtime"       : "Ollama",
+            "parameters"    : 7.0E9,
+        },
+
+        "ollama/llama3:8b": {
+            "provider"      : "Meta",
+            "context"       : 8_192,
+            "code_skill"    : 0.55,   # aligns w/ public mid-tier code results
+            "general_skill" : 0.66,   # Llama3-8B MMLU ballpark; public reports ~66–67% [S35]
+            "local"         : True,
+            "runtime"       : "Ollama",
+            "parameters"    : 8.0E9,
+        },
+
+        "ollama/llama3.1:8b-instruct-q4_0": {
+            "provider"      : "Meta",
+            "context"       : 128_000,   # Llama 3.1 8B supports 128k
+            "code_skill"    : 0.58,      # slight bump vs Llama 3 8B; quantized
+            "general_skill" : 0.70,      # stronger reasoning/knowledge vs 3.0 [S45, S46]
+            "local"         : True,
+            "runtime"       : "Ollama",
+            "parameters"    : 8.0E9,
+        },
+    }
+
+    ##################################
+    # References
+    ##################################
+    #  S1 — OpenAI: Introducing GPT-5 for developers — https://openai.com/index/introducing-gpt-5-for-developers/  
+    #  S2 — Artificial Analysis: GPT-4.1 (speed/latency/TPS aggregates) — https://artificialanalysis.ai/models/gpt-4-1  
+    #  S3 — Aider LLM Leaderboards (Polyglot code-editing benchmark) — https://aider.chat/docs/leaderboards/  
+    #  S4 — OpenAI: Introducing GPT-5 (overview/benchmarks) — https://openai.com/index/introducing-gpt-5/  
+    #  S5 — OpenAI: Introducing GPT-4.1 in the API (capabilities & SWE-bench Verified) — https://openai.com/index/gpt-4-1/  
+    #  S6 — OpenAI: GPT-4.1 long-context details (up to 1M tokens) — https://openai.com/index/gpt-4-1/#long-context  
+    #  S7 — Artificial Analysis: GPT-4.1 (Providers view; TTFT/output speed) — https://artificialanalysis.ai/models/gpt-4-1/providers  
+    #  S8 — Mistral Docs: Models Overview (incl. mistral-medium-2505/2508, codestral-2508) — https://docs.mistral.ai/getting-started/models/models_overview/  
+    #  S9 — Mistral Blog: “Large Enough” (Mistral Large 2; 128k context, positioning) — https://mistral.ai/news/mistral-large-2407  
+    # S10 — Mistral Blog: Codestral 25.01 announcement — https://mistral.ai/news/codestral-2501  
+    # S11 — Artificial Analysis: Mistral Large 2 (quality/price/speed aggregates) — https://artificialanalysis.ai/models/mistral-large-2  
+    # S12 — Artificial Analysis: o3-mini (speed/latency metrics) — https://artificialanalysis.ai/models/o3-mini  
+    # S13 — OpenAI: Introducing o3 and o4-mini (reasoning series) — https://openai.com/index/introducing-o3-and-o4-mini/  
+    # S14 — TextCortex review: o3-mini vs o1-mini (relative response speed) — https://textcortex.com/post/openai-o3-mini-review  
+    # S15 — Mistral Docs: Codestral 2508 (latest Codestral release entry) — https://docs.mistral.ai/getting-started/models/models_overview/#codestral-2508  
+    # S16 — Anthropic News: Claude 3.7 Sonnet launch/overview — https://www.anthropic.com/news/claude-3-7-sonnet  
+    # S17 — AWS Blog: Mistral Large 2 now in Bedrock (confirms 128k context) — https://aws.amazon.com/blogs/machine-learning/mistral-large-2-is-now-available-in-amazon-bedrock/  
+    # S18 — IBM Granite-3B-Code-Instruct model card (context/perf references) — https://huggingface.co/ibm-granite/granite-3b-code-instruct  
+    # S19 — OpenAI: New tools & features in the Responses API (o3/o4-mini integration; 2025) — https://openai.com/index/new-tools-and-features-in-the-responses-api/  
+    # S20 — Anthropic News: Claude Opus 4.1 (SWE-bench Verified 74.5%) — https://www.anthropic.com/news/claude-opus-4-1  
+    # S21 — OpenAI: GPT-5 (coding focus; SWE-bench methodology note) — https://openai.com/index/introducing-gpt-5/  
+    # S22 — The Verge: GPT-4.1 in ChatGPT (rollout; context & coding improvements) — https://www.theverge.com/news/667507/openai-chatgpt-gpt-4-1-ai-model-general-availability  
+    # S23 — NVIDIA NIM Ref: Mistral Large 2 Instruct (128k context confirmation) — https://docs.api.nvidia.com/nim/reference/mistralai-mistral-large-2-instruct  
+    # S24 — OpenAI Blog: GPT-4o mini (128k context & pricing) — https://openai.com/index/gpt-4o-mini-advancing-cost-efficient-intelligence/  
+    # S25 — OpenAI Docs: o4-mini model page — https://platform.openai.com/docs/models/o4-mini  
+    # S26 — Qwen2.5-Coder technical report (benchmarks overview) — https://arxiv.org/abs/2501.03012  
+    # S27 — HF Model Card: Qwen2.5-Coder-3B-Base — https://huggingface.co/Qwen/Qwen2.5-Coder-3B  
+    # S28 — OpenAI Help: o3 & o4-mini context (200k) — https://help.openai.com/en/articles/9855712-openai-o1-models-faq-chatgpt-enterprise-and-edu  
+    # S29 — StarCoder2 paper (model details; evals) — https://arxiv.org/abs/2402.19173  
+    # S30 — HF Model Card: BigCode/StarCoder2-3B — https://huggingface.co/bigcode/starcoder2-3b  
+    # S31 — Phi-3 Technical Report (MMLU 69% etc.) — https://arxiv.org/abs/2404.14219  
+    # S32 — Meta Llama 3 models overview (general capability references) — https://www.llama.com/models/llama-3/  
+    # S33 — HF Model Card: microsoft/Phi-3-mini-128k-instruct (3.8B; 128k ctx) — https://huggingface.co/microsoft/Phi-3-mini-128k-instruct  
+    # S34 — NVIDIA NIM / HF: Phi-3.5-MoE (128k ctx; MoE details) — https://docs.api.nvidia.com/nim/reference/microsoft-phi-3_5-moe  
+    # S35 — HF Model Card: meta-llama/Meta-Llama-3-8B (8k ctx; base references) — https://huggingface.co/meta-llama/Meta-Llama-3-8B  
+    # S36 — Artificial Analysis: Claude 3.7 Sonnet (standard/thinking; TTFT & TPS) — https://artificialanalysis.ai/models/claude-3-7-sonnet / https://artificialanalysis.ai/models/claude-3-7-sonnet-thinking
+    # S37 — OpenAI Community - https://community.openai.com/t/what-is-the-token-context-window-size-of-the-gpt-4-o1-preview-model/954321
+    # S38 - https://huggingface.co/google/codegemma-2b
+    # S39 - https://arxiv.org/pdf/2406.11409
+    # S40 - https://huggingface.co/ibm-granite/granite-3b-code-instruct-128k/blame/main/README.md
+    # S41 - https://www.ibm.com/docs/en/watsonx/w-and-w/2.2.0?topic=models-granite-3b-code-instruct-v2-model-card
+    # S42 - MMLU-CF leaderboard — row “Mistral-7B-instruct-v0.3” (MMLU 5-shot 60.3; MMLU-CF 5-shot 50.7; also 0-shot values) - https://github.com/microsoft/MMLU-CF
+    # S43 - Evaluating Code Quality from Quantized LLMs — reports Mistral Instruct 7B HumanEval+ pass@1 ≈ 25% (notes the EvalPlus variant) - https://arxiv.org/pdf/2411.10656
+    # S44 - Mistral 7B announcement — qualitative coding claim “approaches CodeLlama 7B performance on code” - https://mistral.ai/news/announcing-mistral-7b
+    # S45 - Meta Llama 3.1 8B Instruct model card — instruction-tuned benchmarks incl. MMLU 69.4, HumanEval 72.6, MBPP++ 72.8 - https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct
+    # S46 - Llama 3.1 8B Instruct eval details dataset — per-task results backing the model card table - https://huggingface.co/datasets/meta-llama/Llama-3.1-8B-Instruct-evals
+
+    # Provider -> required env var
+    _provider_env: dict[str, str] = {
+        "OpenAI"    : "OPENAI_API_KEY",
+        "Anthropic" : "ANTHROPIC_API_KEY",
+        "Mistral"   : "MISTRAL_API_KEY",
+    }
+
+    _vllm_aliases = ("vllm", "vllm-openai", "vllm_compatible", "vlm")
+
+    # ---------- public lifecycle ----------
     def __init__(self) -> None:
-        """Initialize the LLM class and import the necessary modules."""
-        self.init_llms()
-
-    def init_llms(self) -> None:
         """
-        1. Import the LLM APIs into the self.llm_modules dictionary.
-        2. Check if the necessary environment variables are set.
-        3. Create clients for all successfully imported LLMs.
+        Initialize legacy vendors immediately (keeps backward compat).
+        LiteLLM is lazy-initialized when/if config.use_litellm is True.
         """
-        from types import ModuleType
-        # 1. Import the LLM APIs into the self.llm_modules dictionary.
-        # ADD NEW COMPANY LLMs HERE.
+        # Legacy direct API access:
         self.llms: list[dict[str, str]] = [
             {"name": "OpenAI",    "module": "openai",    "env_var": "OPENAI_API_KEY"},
             {"name": "Anthropic", "module": "anthropic", "env_var": "ANTHROPIC_API_KEY"},
         ]
-        self.found_llms:  dict[str,       bool] = {}
-        self.llm_modules: dict[str, ModuleType] = {}
+        self.found_llms:                         dict[str, bool] = {}
+        self.llm_modules:                  dict[str, ModuleType] = {}
+        self.clients:                             dict[str, Any] = {}
+
+        # New LiteLLM configuration:
+        self._config:                           LLMConfig | None = None
+        self._selected:                         ModelInfo | None = None
+        self._candidates_after_filter:           list[ModelInfo] = []
+        self._strategies:                  dict[str, StrategyFn] = {}
+        self._last_strategy:                                 str = str(SelectionStrategy.CHEAPEST.value)
+        self._pricing_cache: dict[str, tuple[float, float, int]] = {}
+        self._litellm_ready:                                bool = False
+        self._litellm_mod:                            Any | None = None
+        self._legacy_available:                             bool = False
+
+        self._register_builtin_strategies()
+        self.init_llms()  # sets up legacy clients
+
+        # Keep public fields for back-compat with existing call sites.
+        self.model:   str = "gpt-3.5-turbo"
+        self.company: str = "OpenAI"
+
+    # ---------- vendor discovery (legacy) ----------
+    def init_llms(self) -> None:
+        """Discover legacy vendor SDKs + clients."""
         for llm in self.llms:
             this_llm = llm["name"]
             this_key = llm["env_var"]
             try:
-                # THIS DOESN'T WORK YET BECAUSE DYNAMIC IMPORTS BREAK mypy.py!
-                # ALSO, THE importlib APPROACH IS MORE MODERN THAN THE __import__ APPROACH:
-                # https://chatgpt.com/share/68158ef6-b5ec-8006-ab89-15340479e6d2
-                # self.llm_modules[this_llm] = __import__(llm["module"])
-                # ADD NEW COMPANY LLMs HERE.
-                if  this_llm == "OpenAI":
-                    import openai
+                if this_llm == "OpenAI":
+                    import openai  # type: ignore
                     self.llm_modules[this_llm] = openai
                 elif this_llm == "Anthropic":
-                    import anthropic
+                    import anthropic  # type: ignore
                     self.llm_modules[this_llm] = anthropic
                 else:
                     my_critical_error(f"Unknown LLM: {this_llm}")
-                print(f"{this_llm} package found", end="")
-                # 2. Check if the necessary environment variables are set.
+
+                msg = f"{this_llm} package found"
                 if this_key in os.environ:
                     self.found_llms[this_llm] = True
-                    print(f", and the {this_key} environment variable is set.")
+                    msg += f", and the {this_key} environment variable is set."
                 else:
                     self.found_llms[this_llm] = False
-                    print(f", but the {this_key} environment variable is not set, so the {this_llm} package cannot be used.")
+                    msg += f", but the {this_key} environment variable is not set, so the {this_llm} package cannot be used."
+                print(msg)
             except ImportError as e:
                 self.found_llms[this_llm] = False
                 print(f"{this_llm} package not found, so it cannot be used. Error: {e}")
 
-        if not any(self.found_llms.values()):
-            my_critical_error(f"Could not find any large language model APIs. Choices are: {', '.join(self.found_llms.keys())}\nExiting.")
+        # Create legacy clients for available SDKs
+        for llm_name, ok in self.found_llms.items():
+            if not ok:
+                continue
+            if   llm_name == "OpenAI":
+                self.clients[llm_name] = self.llm_modules[llm_name].OpenAI()
+            elif llm_name == "Anthropic":
+                self.clients[llm_name] = self.llm_modules[llm_name].Anthropic()
 
-        # 3. Create clients for all successfully imported LLMs.
-        self.clients: dict[str, Any] = {}
-        for llm in self.found_llms:
-            if self.found_llms[llm]:
-                # ADD NEW COMPANY LLMs HERE.
-                if   llm == "OpenAI":
-                    self.clients[llm] = self.llm_modules[llm].OpenAI()
-                elif llm == "Anthropic":
-                    self.clients[llm] = self.llm_modules[llm].Anthropic()
+        self._legacy_available = any(self.found_llms.values())
+
+    # ---------- config application ----------
+    def apply_config(self, config: LLMConfig) -> None:
+        """
+        Store config, hydrate defaults, compute candidates, select a model,
+        then set self.model/self.company for back-compat.
+        """
+        cfg = self._resolve_config(config)
+        self._config = cfg
+
+        if cfg.use_local_model:
+            entry = self.model_info.get(cfg.local_model_name, {})
+            if not entry.get("local", False):
+                raise RuntimeError(f"cfg.use_local_model is {cfg.use_local_model} but '{cfg.local_model_name}' is not marked as local in the registry.")
+            if entry.get("local") is True:
+                provider = entry.get("provider", "Local")
+                if not self._is_provider_available(provider, cfg.local_model_name):
+                    raise RuntimeError(
+                        f"Local model '{cfg.local_model_name}' is not available on runtime "
+                        f"'{entry.get('runtime','unknown')}'. Ensure the runtime is up "
+                        f"(Ollama: {cfg.ollama_base_url}) and that the model is pulled."
+                    )
+
+        # Forced-local short-circuit preserved
+        if cfg.use_local_model:
+            chosen                        = self._build_model_info(cfg.local_model_name, cfg)
+            self._selected                = chosen
+            self._candidates_after_filter = [chosen]
+            self.model                    = chosen.name
+            self.company                  = chosen.provider
+            self._after_selection(self.model, self.company)
+            return
+
+        # Build + base filter
+        raw_candidates = [self._build_model_info(m, cfg) for m in cfg.candidate_models]
+        ctx = SelectionContext(
+            tokens_in=cfg.assumed_prompt_tokens,
+            tokens_out=cfg.assumed_output_tokens,
+            min_context_tokens=cfg.min_context_tokens,
+            require_local=False,   # "prefer_local" handled in scoring, not filtering
+        )
+        filtered, reasons_map = self._filter_candidates(raw_candidates, ctx)
+
+        # Optional: attempt hard filters for cost/speed only if it won't nuke the pool
+        eff = filtered if filtered else raw_candidates
+        if cfg.max_estimated_cost is not None:
+            tmp = [m for m in eff if m.estimate_cost(cfg.assumed_prompt_tokens,
+                                                     cfg.assumed_output_tokens) <= cfg.max_estimated_cost]
+            if tmp:  # only keep if we still have choices
+                eff = tmp
+        if cfg.speed_floor is not None:
+            tmp = [m for m in eff if (m.speed is not None and m.speed >= cfg.speed_floor)]
+            if tmp:
+                eff = tmp
+
+        self._candidates_after_filter = eff
+        if not self._candidates_after_filter:
+            raise RuntimeError(
+                "No candidates available after filtering. "
+                "Check allow_local_models, min_context_tokens, candidate_models, and provider availability."
+            )
+
+        # attach reasons to the models we keep
+        for mi in self._candidates_after_filter:
+            mi.meta["filter_reasons"] = reasons_map.get(mi.name, [])
+
+        # Choose strategy: if user signaled multi-objective prefs, prefer the composite strategy
+        if isinstance(cfg.selection_strategy, SelectionStrategy):
+            strategy_name = cfg.selection_strategy.value
+        else:
+            strategy_name = str(cfg.selection_strategy)
+
+        wants_multi = any([
+            cfg.prefer_code, cfg.prefer_low_TTFT, cfg.prefer_local,
+            cfg.max_estimated_cost is not None, cfg.speed_floor is not None,
+            cfg.weight_code_skill > 0.0, cfg.weight_general_skill > 0.0,
+            cfg.weight_TTFT > 0.0, cfg.weight_speed > 0.0, cfg.weight_nonlocal_penalty > 0.0,
+        ])
+        if wants_multi and strategy_name == SelectionStrategy.CHEAPEST.value:
+            strategy_name = "multi_objective"
+        
+        strategy_fn = self._strategies.get(strategy_name)
+        if strategy_fn is None:
+            strategy_name = SelectionStrategy.CHEAPEST.value
+            strategy_fn = self._strategies[strategy_name]
+        self._last_strategy = strategy_name
+        
+        winner         = strategy_fn(self._candidates_after_filter, ctx)
+        self._selected = winner
+        self.model     = winner.name
+        self.company   = winner.provider
+
+        for mi in raw_candidates:
+            if mi.name in reasons_map:
+                mi.meta.setdefault("filter_reasons", reasons_map[mi.name])
+
+        self._after_selection(self.model, self.company)
+
+    def refresh_selection(self) -> None:
+        """Re-run selection using the current LLMConfig."""
+        if self._config is None:
+            my_critical_error("refresh_selection() called before apply_config().")
+        self.apply_config(self._config)
+
+    def get_config(self) -> LLMConfig:
+        """Return a copy of the current config (or default if none applied yet)."""
+        if self._config is None:
+            # Return a default config if none applied yet.
+            return LLMConfig()
+        return replace(self._config)
+
+    # ---------- strategy registry ----------
+    def register_strategy(self, name: str, fn: StrategyFn) -> None:
+        """Register a custom strategy for model selection."""
+        self._strategies[name] = fn
+
+    def _register_builtin_strategies(self) -> None:
+        """Define built-in strategies for model selection."""
+
+        def cheapest(cands: Sequence[ModelInfo], ctx: SelectionContext) -> ModelInfo:
+            """Cheapest model among candidates, ignoring any other factors."""
+            return min(cands, key=lambda m: m.estimate_cost(ctx.tokens_in, ctx.tokens_out))
+
+        def context_then_price(cands: Sequence[ModelInfo], ctx: SelectionContext) -> ModelInfo:
+            """Context-aware selection, then price."""
+            # cands already filtered by context; cheapest among them
+            return min(cands, key=lambda m: m.estimate_cost(ctx.tokens_in, ctx.tokens_out))
+
+        def code_skill_then_price(cands: Sequence[ModelInfo], ctx: SelectionContext) -> ModelInfo:
+            """Highest code skill, then cheapest among those."""
+            def key(m: ModelInfo) -> tuple[float, float]:
+                """Key function for code_skill-then-price strategy."""
+                return (-m.code_skill, m.estimate_cost(ctx.tokens_in, ctx.tokens_out))
+            return min(cands, key=key)
+
+        def general_skill_then_price(cands: Sequence[ModelInfo], ctx: SelectionContext) -> ModelInfo:
+            """Highest general skill, then cheapest among those."""
+            def key(m: ModelInfo) -> tuple[float, float]:
+                """Key function for general_skill-then-price strategy."""
+                return (-m.general_skill, m.estimate_cost(ctx.tokens_in, ctx.tokens_out))
+            return min(cands, key=key)
+
+        def lowest_TTFT(cands: Sequence[ModelInfo], ctx: SelectionContext) -> ModelInfo:
+            """Lowest TTFT (Time To First Token) among candidates."""
+            # Treat unknown TTFT as worst; tie-break by price
+            def key(m: ModelInfo):
+                TTFT = m.TTFT if m.TTFT is not None else float("inf")
+                return (TTFT, m.estimate_cost(ctx.tokens_in, ctx.tokens_out))
+            return min(cands, key=key)
+
+        def fastest(cands: Sequence[ModelInfo], ctx: SelectionContext) -> ModelInfo:
+            """Fastest model among candidates."""
+            # Highest speed is best; unknown speed is worst; tie-break by price
+            def key(m: ModelInfo):
+                sp = m.speed if m.speed is not None else -1.0
+                # We invert for max; min() will prefer higher speed by sorting negative
+                return (-sp, m.estimate_cost(ctx.tokens_in, ctx.tokens_out))
+            return min(cands, key=key)
+
+        def smallest(cands: Sequence[ModelInfo], ctx: SelectionContext) -> ModelInfo:
+            """Model with fewest parameters among candidates."""
+            return min(cands, key=lambda m: m.parameters)
+
+        def multi_objective(cands: Sequence[ModelInfo], ctx: SelectionContext) -> ModelInfo:
+            """Using multiple preferences and weights, choose the best-fit model."""
+            cfg = self._config or LLMConfig()
+
+            # Group stats for normalization
+            costs     = [m.estimate_cost(cfg.assumed_prompt_tokens,
+                                         cfg.assumed_output_tokens) for m in cands]
+            max_cost  = max(costs) if costs else 1.0
+
+            TTFTs     = [m.TTFT for m in cands if m.TTFT is not None]
+            max_TTFT  = max(TTFTs) if TTFTs else 1.0
+
+            speeds    = [m.speed for m in cands if m.speed is not None]
+            max_speed = max(speeds) if speeds else 1.0
+
+            def key(m: ModelInfo) -> float:
+                """Key function for multi-objective optimization."""
+                # Hard caps first: if user set max cost, filter; if all filtered, caller will fallback
+                est_cost = m.estimate_cost(cfg.assumed_prompt_tokens, cfg.assumed_output_tokens)
+                if cfg.max_estimated_cost is not None and est_cost > cfg.max_estimated_cost:
+                    return float("inf")
+
+                # Normalized penalties (0=best)
+                cost_pen = est_cost / max_cost if max_cost > 0 else 0.0
+
+                if m.TTFT is not None and max_TTFT > 0:
+                    TTFT_pen = m.TTFT / max_TTFT
                 else:
-                    print(f"Can't create client for unknown LLM: {llm}")
-                    sys.exit()
+                    TTFT_pen = 1.0  # unknown => mild penalty if weighted
 
+                if m.speed is not None and max_speed > 0:
+                    speed_pen = 1.0 - (m.speed / max_speed)  # higher speed => lower penalty
+                else:
+                    speed_pen = 1.0  # unknown speed
+
+                code_pen = 1.0 - (m.code_skill    if m.code_skill    is not None else _DEFAULT_MODEL_SKILL)
+                gen_pen  = 1.0 - (m.general_skill if m.general_skill is not None else _DEFAULT_MODEL_SKILL)
+                nonlocal_pen = 0.0 if m.is_local else 1.0
+
+                # Optional floor on speed (soft penalty, not exclusion)
+                if cfg.speed_floor is not None:
+                    if (m.speed is None) or (m.speed < cfg.speed_floor):
+                        speed_pen += 1.0
+
+                score = (  cfg.weight_price            * cost_pen
+                         + cfg.weight_TTFT             * TTFT_pen
+                         + cfg.weight_speed            * speed_pen
+                         + cfg.weight_code_skill       * code_pen
+                         + cfg.weight_general_skill    * gen_pen
+                         + cfg.weight_nonlocal_penalty * nonlocal_pen)
+                return score
+
+            return min(cands, key=key)
+
+        self._strategies[SelectionStrategy.CHEAPEST.value]                 = cheapest
+        self._strategies[SelectionStrategy.CONTEXT_THEN_PRICE.value]       = context_then_price
+        self._strategies[SelectionStrategy.CODE_SKILL_THEN_PRICE.value]    = code_skill_then_price
+        self._strategies[SelectionStrategy.GENERAL_SKILL_THEN_PRICE.value] = general_skill_then_price
+        self._strategies[SelectionStrategy.LOWEST_TTFT.value]              = lowest_TTFT
+        self._strategies[SelectionStrategy.FASTEST.value]                  = fastest
+        self._strategies[SelectionStrategy.SMALLEST.value]                 = smallest
+        self._strategies["multi_objective"]                                = multi_objective
+
+    # ---------- selection introspection ----------
+    def list_candidates(self, with_reasons: bool = False) -> list[ModelInfo]:
+        """
+        Return the candidate list after filtering (or just the selected if forced local).
+        If with_reasons=True, include 'filter_reasons' in meta where applicable.
+        """
+        res = [replace(mi, meta=dict(mi.meta)) for mi in self._candidates_after_filter]  # deep-copy meta
+        if not with_reasons:
+            for mi in res:
+                mi.meta.pop("filter_reasons", None)
+        return res
+
+    def describe_selection(self) -> dict[str, Any]:
+        """Describe the current model selection."""
+        chosen = self._selected
+        cfg = self._config or LLMConfig()
+        if chosen is None:
+            return {
+                "chosen_model" : None,
+                "provider"     : None,
+                "strategy"     : getattr(self, "_last_strategy", str(cfg.selection_strategy)),
+                "explanation"  : "No selection computed yet. Call apply_config().",
+            }
+        considered = []
+        for mi in self._candidates_after_filter:
+            considered.append({
+                "name"                  : mi.name,
+                "provider"              : mi.provider,
+                "context_window"        : mi.context_window,
+                "input_cost_per_token"  : mi.input_cost_per_token,
+                "output_cost_per_token" : mi.output_cost_per_token,
+                "code_skill"            : mi.code_skill,
+                "general_skill"         : mi.general_skill,
+                "TTFT"                  : mi.TTFT,
+                "speed"                 : mi.speed,
+                "estimated_cost"        : mi.estimate_cost(cfg.assumed_prompt_tokens,
+                                                           cfg.assumed_output_tokens),
+                "available"             : mi.available,
+                "local"                 : mi.is_local,
+                "runtime"               : mi.runtime,
+            })
+        return {
+            "chosen_model"   : chosen.name,
+            "provider"       : chosen.provider,
+            "context_window" : chosen.context_window,
+            "estimated_cost" : chosen.estimate_cost(cfg.assumed_prompt_tokens,
+                                                    cfg.assumed_output_tokens),
+            "strategy"       : getattr(self, "_last_strategy", str(cfg.selection_strategy)),
+            "weights"        : {
+                "price"                  : cfg.weight_price,
+                "code_skill"             : cfg.weight_code_skill,
+                "general_skill"          : cfg.weight_general_skill,
+                "TTFT"                   : cfg.weight_TTFT,
+                "speed"                  : cfg.weight_speed,
+                "nonlocal_penalty"       : cfg.weight_nonlocal_penalty,
+            },
+            "prefs": {
+                "prefer_code"            : cfg.prefer_code,
+                "prefer_low_TTFT"        : cfg.prefer_low_TTFT,
+                "prefer_local"           : cfg.prefer_local,
+                "max_estimated_cost"     : cfg.max_estimated_cost,
+                "speed_floor"            : cfg.speed_floor,
+            },
+            "considered": considered,
+        }
+
+    # ---------- core send method (stable) ----------
     def send_prompt(self, prompt: str, system_message: str,
                     model: str, company: str, temperature: float,
                     max_tokens: int = 1000) -> str:
-        """Call the chosen LLM's API and return the text response."""
-        # ADD NEW COMPANY LLMs HERE.
+        """
+        If config.use_litellm: route via LiteLLM (company ignored for transport).
+        Else: use legacy vendor client keyed by 'company'.
+        Returns text content.
+        """
+        cfg = self._config or LLMConfig()
+        if cfg.use_litellm:
+            self._ensure_litellm()
+            litellm = self._litellm_mod  # type: ignore
+
+            extra = self._extra_litellm_args_for(model)
+            try:
+                resp = litellm.completion(
+                    model=model,
+                    messages=[{"role": "system", "content": system_message},
+                              {"role": "user",   "content": prompt}],
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    **extra
+                )
+            except Exception as e:
+                my_critical_error(f"LiteLLM request failed for model '{model}': {e}")
+
+            return self._extract_text_from_openai_like(resp)
+
+        # --- Legacy vendor paths preserved as before ---
         if company == "OpenAI":
-            response_obj = self.clients[company].chat.completions.create(
+            if "OpenAI" not in self.clients:
+                my_critical_error("OpenAI client not initialized or OPENAI_API_KEY not set.")
+            response_obj = self.clients["OpenAI"].chat.completions.create(
                 model=model,
                 temperature=temperature,
                 messages=[{"role": "system", "content": system_message},
-                          {"role": "user",   "content": prompt}]
+                          {"role": "user",   "content": prompt}],
             )
             return response_obj.choices[0].message.content
         elif company == "Anthropic":
-            response_obj = self.clients[company].messages.create(
+            if "Anthropic" not in self.clients:
+                my_critical_error("Anthropic client not initialized or ANTHROPIC_API_KEY not set.")
+            response_obj = self.clients["Anthropic"].messages.create(
                 model=model,
                 max_tokens=max_tokens,
                 temperature=temperature,
@@ -294,6 +1081,477 @@ class LLMs:
             return response_obj.content[0].text
         else:
             my_critical_error(f"Unknown company: {company}")
+            return ""  # unreachable
+
+    # ====================================================
+    # overridable hooks (tiny, intentional)
+    # ====================================================
+    def _default_candidate_models(self) -> list[str]:
+        """Return a sane default list combining remote + local names."""
+        return list(self.model_info.keys())
+
+    def _extra_litellm_args_for(self, model: str) -> dict[str, Any]:
+        """
+        Per-model transport args for LiteLLM (e.g., {'api_base': self.ollama_base_url}
+        for "runtime == "Ollama"). Default returns {}.
+        """
+        cfg   = self._config or LLMConfig()
+        entry = self.model_info.get(model, {})
+        runtime = (entry.get("runtime") or "").strip().casefold()
+        if entry.get("local") is True and runtime:
+            if runtime == "ollama":
+                base = (cfg.ollama_base_url or "").rstrip("/")
+                return {"api_base": base} if base else {}
+            if runtime in self._vllm_aliases:
+                base = (cfg.vllm_base_url or "").rstrip("/")
+                return {"api_base": base} if base else {}
+        return {}
+
+    def _after_selection(self, model: str, provider: str) -> None:
+        """Optional hook for telemetry/logging; default no-op."""
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Selected model %s (%s)", model, provider)
+
+    # ====================================================
+    # internals
+    # ====================================================
+
+    def _resolve_config(self, config: LLMConfig) -> LLMConfig:
+        """Hydrate defaults: candidates, scores (with env JSON merge)."""
+        # Candidate models
+        cands = list(config.candidate_models) if config.candidate_models else self._default_candidate_models()
+        if not config.allow_local_models:
+            cands = [m for m in cands if not self.model_info.get(m, {}).get("local", False)]
+
+        # Merge env JSON (if present) into cfg.model_scores; allow both float and {'code','general'} forms
+        scores    = dict(config.model_scores)  # copy
+        json_path = os.getenv("LLM_MODEL_SCORES_JSON")
+        if json_path:
+            try:
+                import json
+                with open(json_path, "r", encoding=DEFAULT_ENCODING) as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    scores.update(data)
+            except Exception as e:
+                logging.warning("Failed to load LLM_MODEL_SCORES_JSON from %s: %s", json_path, e)
+
+        if not config.use_litellm:
+            cands = [m for m in cands if not self.model_info.get(m, {}).get("local", False)]
+
+        hydrated = replace(config, candidate_models=cands, model_scores=scores)
+
+        # If user flipped prefs but left weights at 0, inject reasonable defaults.
+        # Price stays at 1.0 unless user overrides.
+        if hydrated.prefer_code and hydrated.weight_code_skill == 0.0:
+            hydrated = replace(hydrated, weight_code_skill=0.60)
+        if hydrated.prefer_low_TTFT and hydrated.weight_TTFT == 0.0:
+            hydrated = replace(hydrated, weight_TTFT=0.40)
+        if hydrated.prefer_local and hydrated.weight_nonlocal_penalty == 0.0:
+            hydrated = replace(hydrated, weight_nonlocal_penalty=0.30)
+        # You can optionally bias throughput when TTFT isn't critical
+        if hydrated.weight_speed == 0.0 and not hydrated.prefer_low_TTFT and hydrated.speed_floor:
+            hydrated = replace(hydrated, weight_speed=0.20)
+
+        return hydrated
+
+    def _filter_candidates(self, candidates: list[ModelInfo],
+                           ctx: SelectionContext) -> tuple[list[ModelInfo], dict[str, list[str]]]:
+        """Filter by availability, context, and optional locality. Return filtered list and reasons per model name."""
+        filtered: list[ModelInfo] = []
+        reasons: dict[str, list[str]] = {}
+        for mi in candidates:
+            r: list[str] = []
+            if not mi.available:
+                r.append("provider_not_available")
+            if mi.context_window < ctx.min_context_tokens:
+                r.append(f"context_too_small({mi.context_window}<{ctx.min_context_tokens})")
+            if ctx.require_local and not mi.is_local:
+                r.append("requires_local")
+            if r:
+                reasons[mi.name] = r
+            else:
+                filtered.append(mi)
+                reasons[mi.name] = []  # << capture “no reasons” for included models
+        return filtered, reasons
+
+    def _is_provider_available(self, provider: str, model: str) -> bool:
+        """Check if a model provider is available."""
+        entry = self.model_info.get(model, {})
+        if entry.get("local") is True:
+            runtime = (entry.get("runtime") or "").strip().casefold()
+
+            if runtime == "ollama":
+                cfg = self._config or LLMConfig()
+                base = (cfg.ollama_base_url or "").rstrip("/")
+                if not base:
+                    return False
+
+                # Ping /api/tags to ensure server is up and to list pulled models
+                data = self._http_get_json(f"{base}/api/tags", timeout=2.0)
+                if not isinstance(data, dict):
+                    return False
+
+                models = data.get("models", [])
+                if not isinstance(models, list):
+                    return False
+
+                # Build installed set
+                installed = set()
+                for m in models:
+                    name = (m.get("name") or m.get("model"))
+                    if isinstance(name, str):
+                        installed.add(name.strip().lower())
+
+                # Derive the tag from the registry key (no extra fields required)
+                target = self._derive_ollama_tag(model, runtime)
+                if not target:
+                    return False  # runtime mismatch or empty tag
+
+                # Match directly; (optional) also accept ':latest' normalization
+                if target in installed:
+                    return True
+                if not target.endswith(":latest") and f"{target}:latest" in installed:
+                    return True
+                return False
+
+            # ---- vLLM: (not implemented yet) ----
+            if runtime in self._vllm_aliases:
+                return False
+
+            # Unknown local runtime → not available
+            return False
+
+        # Non-local: require env var only if we know one for that provider
+        env_var = self._provider_env.get(provider)
+        if not env_var:
+            return True
+        return env_var in os.environ
+
+    def _build_model_info(self, model: str, cfg: LLMConfig) -> ModelInfo:
+        """Build ModelInfo for a given model name, using config and defaults as needed."""
+        entry     = self.model_info.get(model, {})
+        provider  = entry.get("provider", "Unknown")
+        available = self._is_provider_available(provider, model)
+        in_cost, out_cost, ctx = self._get_model_pricing_and_context(model)
+
+        # ---- pull skills / speed from defaults if present; fallback safely ----
+        code_skill = self._score_override(cfg, model, "code")
+        if code_skill is None:
+            code_skill = float(entry.get("code_skill", _DEFAULT_MODEL_SKILL))
+        general_skill = self._score_override(cfg, model, "general")
+        if general_skill is None:
+            general_skill = float(entry.get("general_skill", _DEFAULT_MODEL_SKILL))
+        TTFT       = entry.get("TTFT")
+        speed      = entry.get("speed")
+        parameters = entry.get("parameters", _DEFAULT_MODEL_PARAMETERS)
+        is_local   = bool(entry.get("local", False))
+        runtime    = entry.get("runtime")
+
+        meta: dict[str, Any] = {"pricing_source": "cache_or_litellm_or_fallback"}
+
+        return ModelInfo(
+            name=model,
+            provider=provider,
+            context_window=ctx,
+            input_cost_per_token=in_cost,
+            output_cost_per_token=out_cost,
+            available=available,
+            is_local=is_local,
+            parameters=parameters,
+            runtime=runtime,
+            code_skill=float(code_skill),
+            general_skill=float(general_skill),
+            TTFT=TTFT,
+            speed=speed,
+            meta=meta,
+        )
+
+    def _ensure_litellm(self) -> None:
+        """Ensure LiteLLM is imported and ready to use."""
+        if self._litellm_ready:
+            return
+        try:
+            import litellm  # type: ignore
+            self._litellm_mod   = litellm
+            self._litellm_ready = True
+        except ImportError as e:
+            my_critical_error(f"LiteLLM is enabled but not installed. `pip install litellm` Error: {e}")
+
+    def _http_get_json(self, url: str, timeout: float = 2.0) -> dict[str, Any] | None:
+        """Helper to GET a URL and parse JSON, returning None on any failure."""
+        from urllib import request, error
+        req = request.Request(url, headers={"Accept": "application/json"})
+        try:
+            with request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read()
+        except (error.URLError, error.HTTPError, TimeoutError):
+            return None
+        try:
+            import json
+            return json.loads(raw.decode(DEFAULT_ENCODING))
+        except Exception:
+            return None
+
+    def _derive_ollama_tag(self, model: str, runtime: str | None) -> str:
+        """
+        Map your registry key to an Ollama tag without needing extra registry fields.
+        Rules:
+        - If the model key starts with 'ollama/', strip that prefix and use the rest.
+        - Else, if runtime is ollama, assume the key itself is the tag.
+        - Normalize to lowercase for matching against /api/tags results.
+        """
+        r = (runtime or "").strip().casefold()
+        tag = model
+        if model.startswith("ollama/"):
+            tag = model[len("ollama/") :]
+        return tag.strip().lower() if r == "ollama" else ""
+
+    # Pricing/context helpers with caching
+
+    def _get_model_pricing_and_context(self, model: str) -> tuple[float, float, int]:
+        """
+        Returns (input_cost_per_token, output_cost_per_token, context_window).
+        Prices normalized to $/token (not per-1k). Unknown remote prices get a very high sentinel;
+        local models always return 0 for both.
+        """
+        if model in self._pricing_cache:
+            return self._pricing_cache[model]
+
+        entry = self.model_info.get(model, {})
+
+        # Local models: $0 and registry context
+        if entry.get("local") is True:
+            ctx = int(entry.get("context", _DEFAULT_MODEL_CONTEXT))
+            in_cost = out_cost = 0.0
+            self._pricing_cache[model] = (in_cost, out_cost, ctx)
+            return self._pricing_cache[model]
+
+        # ---- non-local path ----
+        in_cost  = None
+        out_cost = None
+        context  = int(entry.get("context", _DEFAULT_MODEL_CONTEXT))
+
+        try:
+            import litellm  # type: ignore
+            info_fn = getattr(litellm, "get_model_info", None)
+            md = {}
+            if callable(info_fn):
+                try:
+                    md = info_fn(model) or {}
+                except Exception:
+                    md = {}
+
+            cpit    = self._deep_get(md, ["input_cost_per_token"])
+            cppt    = self._deep_get(md, ["output_cost_per_token"])
+            cpik    = self._deep_get(md, ["input_cost_per_1k_tokens"])
+            cpok    = self._deep_get(md, ["output_cost_per_1k_tokens"])
+            max_ctx = self._deep_get(md, ["max_input_tokens"]) or self._deep_get(md, ["max_tokens"])
+
+            if max_ctx:
+                try:
+                    context = int(max_ctx)
+                except Exception:
+                    pass
+
+            if cpit is not None and cppt is not None:
+                in_cost, out_cost = float(cpit), float(cppt)
+            elif cpik is not None and cpok is not None:
+                in_cost, out_cost = float(cpik) / 1000.0, float(cpok) / 1000.0
+
+            if in_cost is None or out_cost is None:
+                cost_map = getattr(litellm, "model_cost", None) or getattr(litellm, "litellm_model_cost", None)
+                if isinstance(cost_map, dict) and model in cost_map:
+                    row = cost_map[model]
+                    if in_cost is None:
+                        if "input_cost_per_token" in row:
+                            in_cost = float(row["input_cost_per_token"])
+                        elif "input_cost_per_1k_tokens" in row:
+                            in_cost = float(row["input_cost_per_1k_tokens"]) / 1000.0
+                    if out_cost is None:
+                        if "output_cost_per_token" in row:
+                            out_cost = float(row["output_cost_per_token"])
+                        elif "output_cost_per_1k_tokens" in row:
+                            out_cost = float(row["output_cost_per_1k_tokens"]) / 1000.0
+
+        except Exception as e:
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+                "LiteLLM pricing/context lookup failed for %s: %s", model, e
+            )
+
+        if in_cost is None:
+            in_cost = 9e9
+        if out_cost is None:
+            out_cost = 9e9
+
+        self._pricing_cache[model] = (float(in_cost), float(out_cost), int(context))
+        return self._pricing_cache[model]
+
+    @staticmethod
+    def _deep_get(d: dict[str, Any], path: list[str]) -> Any:
+        cur: Any = d
+        for key in path:
+            if not isinstance(cur, dict) or key not in cur:
+                return None
+            cur = cur[key]
+        return cur
+
+    @staticmethod
+    def _extract_text_from_openai_like(resp: Any) -> str:
+        """Normalize content extraction across dict/object forms."""
+        # pydantic-like / attribute
+        try:
+            return resp.choices[0].message.content  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        # dict-like
+        try:
+            return resp["choices"][0]["message"]["content"]  # type: ignore[index]
+        except Exception:
+            pass
+        # object-like with dict message
+        try:
+            return resp.choices[0].message["content"]  # type: ignore[index]
+        except Exception:
+            pass
+        # As last resort, stringify
+        return str(resp)
+
+    def _score_override(self, cfg: LLMConfig, model: str, which: str) -> float | None:
+        """
+        which: 'code' or 'general'
+        Accepts cfg.model_scores[model] as float (code only) or dict with keys 'code'/'general'.
+        """
+        if not cfg.model_scores:
+            return None
+        val = cfg.model_scores.get(model)
+        if val is None:
+            return None
+        if isinstance(val, (int, float)):
+            return float(val) if which == "code" else None
+        if isinstance(val, dict):
+            v = val.get(which)
+            return float(v) if v is not None else None
+        return None
+
+    def tokenize(self, text: str, model: str | None = None) -> int:
+        """
+        Return the number of tokens in `text` under the tokenizer best-suited to `model`.
+
+        Preference order:
+        1) Local Ollama runtime -> call /api/tokenize
+        2) LiteLLM's token counters (if importable)
+        3) tiktoken with OpenAI-family heuristics (o200k_base vs cl100k_base)
+        4) Rough heuristic fallback
+
+        Args:
+            text: The input text to tokenize.
+            model: The model to use for tokenization (optional).
+
+        Returns:
+            The number of tokens in the input text.
+
+        Raises:
+            ValueError: If tokenization fails.
+        """
+        if not text:
+            return 0
+
+        if model is None:
+            model = getattr(self, "model", None) or ""
+
+        entry    = self.model_info.get(model, {})
+        runtime  = (entry.get("runtime") or "").strip().casefold()
+        is_local = bool(entry.get("local", False))
+        provider = (entry.get("provider") or "").strip()
+
+        # --- 1) Local Ollama: ask the server's tokenizer directly ---
+        if is_local and runtime == "ollama":
+            cfg  = self._config or LLMConfig()
+            base = (cfg.ollama_base_url or "").rstrip("/")
+            tag  = self._derive_ollama_tag(model, "ollama")
+            if base and tag:
+                try:
+                    import json
+                    from urllib import request
+                    payload = json.dumps({"model": tag, "prompt": text}).encode("utf-8")
+                    req = request.Request(f"{base}/api/tokenize",
+                                        data=payload,
+                                        headers={"Content-Type": "application/json"})
+                    with request.urlopen(req, timeout=2.0) as resp:
+                        raw = resp.read()
+                    data = json.loads(raw.decode("utf-8", "replace"))
+                    toks = data.get("tokens")
+                    if isinstance(toks, list):
+                        return len(toks)
+                except Exception:
+                    # fall through to other methods
+                    pass
+
+        # --- 2) LiteLLM counters (if the library is available) ---
+        try:
+            import importlib
+            litellm = importlib.import_module("litellm")  # type: ignore
+
+            # Preferred: get_num_tokens(model=..., text=...)
+            get_num_tokens = getattr(litellm, "get_num_tokens", None)
+            if callable(get_num_tokens):
+                try:
+                    return int(get_num_tokens(model=model, text=text))
+                except Exception:
+                    pass
+
+            # Fallbacks: token_counter APIs across versions
+            token_counter = getattr(litellm, "token_counter", None)
+            if token_counter:
+                # Some versions accept raw text
+                try:
+                    out = token_counter(model=model, text=text)
+                    if isinstance(out, int):
+                        return int(out)
+                except Exception:
+                    pass
+                # Others want chat messages, returning a dict
+                try:
+                    out = token_counter(model=model, messages=[{"role": "user", "content": text}])
+                    if isinstance(out, dict):
+                        for k in ("input_tokens", "total_tokens", "num_tokens"):
+                            v = out.get(k)
+                            if isinstance(v, (int, float)):
+                                return int(v)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # --- 3) tiktoken heuristics (works well for OpenAI families) ---
+        try:
+            import tiktoken  # type: ignore
+
+            enc_name = "cl100k_base"
+            m = model.lower()
+
+            # Use o200k_base for OpenAI's o*/4o/4.1/5 families (long-context tokenization)
+            if provider == "OpenAI" or m.startswith(("gpt", "o")):
+                if any(x in m for x in ("gpt-4.1", "gpt-4o", "gpt-5", "o1", "o3", "o4", "4.1", "4o")):
+                    enc_name = "o200k_base"
+
+            try:
+                enc = tiktoken.get_encoding(enc_name)
+            except Exception:
+                enc = tiktoken.get_encoding("cl100k_base")
+
+            return len(enc.encode(text))
+        except Exception:
+            pass
+
+        # --- 4) Rough heuristic fallback (no libs / no server tokenizer) ---
+        import math, re
+        s = text if isinstance(text, str) else str(text)
+        # Count word-like + punctuation chunks; ensure at least 1
+        rough = len(re.findall(r"\w+|[^\s\w]", s, flags=re.UNICODE))
+        if rough == 0:
+            rough = math.ceil(len(s) / 4.0) or 1
+        return int(rough)
 
 
 class MemoryHandler(logging.Handler):
@@ -342,10 +1600,6 @@ def fallback_logging_config(log_level: int | str = logging.INFO, rawlog: bool = 
         level  : The logging level to set. Defaults to logging.INFO.
         rawlog : If True, use a simple log format without timestamps or levels.
     """
-    root = logging.getLogger()
-    for h in root.handlers:
-        print(h, h.level, getattr(h.formatter, "_fmt", None))
-
     if not logging.getLogger().handlers:
         if not rawlog:  # Use a full logging format with timestamps and levels.
             logging.basicConfig(level=log_level,
@@ -581,27 +1835,27 @@ def my_fopen(file_path: str | os.PathLike[str], suppress_errors: bool = False,
         return False
     # Does the file end with any of these (non-text) extensions?
     # Join all suffixes because some listed extensions look like ".tar.gz"
-    if "".join(file_path.suffixes).casefold() in video_extensions:
+    if "".join(file_path.suffixes).casefold() in VIDEO_EXTENSIONS:
         if not rawlog:
             if not suppress_errors: logging.error("Skipping video file %s", file_path)
             else:                   logging.info( "Skipping video file %s", file_path)
         return False
-    if "".join(file_path.suffixes).casefold() in audio_extensions:
+    if "".join(file_path.suffixes).casefold() in AUDIO_EXTENSIONS:
         if not rawlog:
             if not suppress_errors: logging.error("Skipping audio file %s", file_path)
             else:                   logging.info( "Skipping audio file %s", file_path)
         return False
-    if "".join(file_path.suffixes).casefold() in image_extensions:
+    if "".join(file_path.suffixes).casefold() in IMAGE_EXTENSIONS:
         if not rawlog:
             if not suppress_errors: logging.error("Skipping image file %s", file_path)
             else:                   logging.info( "Skipping image file %s", file_path)
         return False
-    if "".join(file_path.suffixes).casefold() in archive_extensions:
+    if "".join(file_path.suffixes).casefold() in ARCHIVE_EXTENSIONS:
         if not rawlog:
             if not suppress_errors: logging.error("Skipping archive file %s", file_path)
             else:                   logging.info( "Skipping archive file %s", file_path)
         return False
-    for encoding in text_encodings:
+    for encoding in TEXT_ENCODINGS:
         try:
             with open(file_path, 'r', encoding=encoding) as file:
                 if numlines is None:
@@ -886,7 +2140,7 @@ def get_hostname_subprocess_hostname(rawlog: bool = False) -> str | None:
 
 def get_hostname_subprocess_scutil(rawlog: bool = False) -> str | None:
     """Retrieves the hostname using the 'scutil --get ComputerName' command on macOS via subprocess."""
-    if sys.platform == 'darwin':
+    if sys.platform == "darwin":
         try:
             import subprocess
             result = subprocess.run(['scutil', '--get', 'ComputerName'],
@@ -919,7 +2173,7 @@ def get_computer_name(rawlog: bool = False) -> str:
         'subprocess_hostname': get_hostname_subprocess_hostname,
     }
 
-    if sys.platform == 'darwin':  # This next method is macOS-specific
+    if sys.platform == "darwin":  # This next method is macOS-specific
         methods['subprocess_scutil_computername'] = get_hostname_subprocess_scutil
 
     results = {}
@@ -983,6 +2237,516 @@ def analyze_computer_name_results(results: dict[str, str], rawlog: bool = False)
             logging.warning(the_string)
 
         return primary_name
+
+
+#########################################
+# Internals for is_internet_available():
+#########################################
+
+# Numeric IPs (no DNS required) on common ports to check raw connectivity.
+# Keep these very stable, globally reachable, and from different operators.
+IPV4_TARGETS: list[tuple[str, int]] = [
+    ("1.1.1.1",        443),  # Cloudflare
+    ("8.8.8.8",        853),  # Google Public DNS over TLS (TCP)
+    ("9.9.9.9",        443),  # Quad9
+    ("208.67.222.222", 443),  # Cisco OpenDNS
+]
+
+IPV6_TARGETS: list[tuple[str, int]] = [
+    ("2606:4700:4700::1111", 443),  # Cloudflare
+    ("2001:4860:4860::8888",  53),  # Google Public DNS (TCP)
+]
+
+# HTTP(S) probes:
+# - gstatic 204 endpoints are explicitly designed for connectivity checks.
+# - msftconnecttest verifies plain HTTP reachability and expected content.
+HTTP_PROBES: list[dict[str, Any]] = [
+    {
+        "url"    : "https://www.gstatic.com/generate_204",
+        "method" : "GET",
+        "expect" : {"status": 204},
+        "note"   : "Android/gstatic 204 probe",
+    },
+    {
+        "url"    : "http://www.gstatic.com/generate_204",
+        "method" : "GET",
+        "expect" : {"status": 204, "length_max": 0},
+        "note"   : "HTTP 204 (checks for captive portal redirects)",
+    },
+    {
+        "url"     : "http://www.msftconnecttest.com/connecttest.txt",
+        "method"  : "GET",
+        "expect"  : {"status": 200, "substr": "Microsoft Connect Test"},
+        "note"    : "Microsoft connect test",
+    },
+]
+
+# DNS names to resolve (if DNS is healthy, at least one should work).
+DNS_TEST_NAMES: list[str] = [
+    "example.com",      # IANA
+    "cloudflare.com",   # Cloudflare
+    "google.com",       # Google
+    "one.one.one.one",  # Cloudflare DNS name (usually uncached locally)
+    "dns.google",       # Google DNS name
+]
+
+
+def _tcp_connect(host: str, port: int, timeout: float) -> bool:
+    """
+    Attempt a TCP connection to a numeric IP address.
+
+    Args:
+        host:    Numeric IP address (IPv4/IPv6) as a string.
+        port:    Destination TCP port number.
+        timeout: Per-attempt timeout (seconds).
+
+    Returns:
+        True if TCP connection is successfully established, otherwise False.
+
+    Raises:
+        None (errors are caught and logged at DEBUG level).
+    """
+    try:
+        import socket
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("TCP: connecting to %s:%d (timeout=%f)", host, port, timeout)
+        with socket.create_connection((host, port), timeout=timeout):
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("TCP: success %s:%d", host, port)
+            return True
+    except OSError as exc:
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("TCP: failure %s:%d (%s)", host, port, exc)
+        return False
+
+
+def _dns_resolve(name: str, timeout: float) -> bool:
+    """
+    Try resolving a hostname using the system resolver.
+
+    Args:
+        name:    Hostname to resolve.
+        timeout: Per-attempt timeout (seconds).
+
+    Returns:
+        True if resolution returns at least one address, else False.
+
+    Raises:
+        None.
+    """
+    # socket has no per-call DNS timeout, so use global default temporarily.
+    import socket
+    default_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(timeout)
+    try:
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("DNS: resolving %s (timeout=%f)", name, timeout)
+        res = socket.getaddrinfo(name, None, type=socket.SOCK_STREAM)
+        ok  = len(res) > 0
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("DNS: %s for %s", 'success' if ok else 'empty result', name)
+        return ok
+    except OSError as exc:
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("DNS: failure for %s (%s)", name, exc)
+        return False
+    finally:
+        socket.setdefaulttimeout(default_timeout)
+
+
+def _build_http_opener(ignore_proxies: bool) -> urllib.request.OpenerDirector:
+    """
+    Build a URL opener honoring or ignoring proxies, with a bound TLS context.
+
+    Args:
+        ignore_proxies: Whether to bypass environment proxy settings.
+
+    Returns:
+        Configured opener with HTTPSHandler(context=...).
+    """
+    import ssl
+    import urllib.request
+    context:  ssl.SSLContext = ssl.create_default_context()
+    handlers: list[Any]      = [
+        urllib.request.ProxyHandler({} if ignore_proxies else None),  # {} = bypass; None = from env
+        urllib.request.HTTPSHandler(context=context),
+    ]
+    return urllib.request.build_opener(*handlers)
+
+
+def _http_probe(url: str, method: str, timeout: float,
+                opener: urllib.request.OpenerDirector) -> tuple[bool, int | None, bytes | None, str | None]:
+    """
+    Perform an HTTP(S) probe (HEAD/GET) to a known endpoint.
+
+    Args:
+        url:     Target URL.
+        method:  HTTP method ('HEAD' or 'GET').
+        timeout: Timeout in seconds.
+        opener:  Pre-configured opener (proxy/no-proxy).
+
+    Returns:
+        (success, status_code, body_bytes_or_None, final_url_if_redirected)
+
+    Raises:
+        None.
+    """
+    import urllib.request
+    import urllib.error
+    req = urllib.request.Request(url=url, method=method)
+    # Add a small UA header to reduce the chance of odd blocks:
+    req.add_header("User-Agent", f"{Path(sys.argv[0]).stem}/{__version__} (+python-urllib)")
+
+    try:
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("HTTP: %s %s (timeout=%f)", method, url, timeout)
+        with opener.open(req, timeout=timeout) as resp:
+            status = getattr(resp, "status", None) or resp.getcode()
+            data   = b""
+            final_url = resp.geturl()
+            # For HEAD we don't generally read a body; for GET, read up to a ceiling.
+            if method.upper() == "GET":
+                # Cap read size to avoid hanging on big captive pages.
+                data = resp.read(2048)
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("HTTP: %s %s -> %d, final_url=%s", method, url, status, final_url)
+            return True, int(status), data, final_url
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read(2048) if hasattr(exc, "read") else None
+        except Exception:
+            body = None
+        final_url = exc.geturl() if hasattr(exc, "geturl") else None  # ← keep this
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("HTTP: HTTPError %s %s -> %d", method, url, exc.code)
+        return False, int(exc.code), body, final_url
+    except Exception as exc:
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("HTTP: failure %s %s (%s)", method, url, exc)
+        return False, None, None, None
+
+
+def _http_meets_expectations(status: int | None, body: bytes | None, expect: dict[str, Any]) -> bool:
+    """
+    Validate HTTP response against expectations.
+
+    Args:
+        status: HTTP status code (or None on failure).
+        body:   Response body (None for HEAD or on failure).
+        expect: Dict of constraints, e.g.:
+                {
+                    "status"     : 204,
+                    "length_max" : 0,
+                    "substr"     : "Microsoft Connect Test",
+                }
+
+    Returns:
+        True if all applicable expectations are met, else False.
+
+    Raises:
+        None.
+    """
+    if status is None:
+        return False
+
+    if "status" in expect and status != int(expect["status"]):
+        return False
+
+    if "length_max" in expect and body is not None:
+        if len(body) > int(expect["length_max"]):
+            return False
+
+    if "substr" in expect and body is not None:
+        try:
+            text = body.decode("utf-8", errors="ignore")
+        except Exception:
+            text = ""
+        if str(expect["substr"]) not in text:
+            return False
+
+    return True
+
+
+def _looks_like_captive(status: int | None, final_url: str | None, body: bytes | None) -> bool:
+    """
+    Heuristic to detect captive portals:
+      - Unexpected 200/30x with HTML body where 204 is expected.
+      - Status 511 (Network Authentication Required).
+      - Redirects to login/portal-like URLs.
+
+    Args:
+        status:    HTTP status (or None).
+        final_url: Final URL after redirects (or None).
+        body:      Response body (or None).
+
+    Returns:
+        True if it appears to be a captive portal, else False.
+
+    Raises:
+        None.
+    """
+    if status is None:
+        return False
+    if status == 511:   # Network Authentication Required
+        return True
+    if status in (301, 302, 303, 307, 308):
+        return True
+    b = (body or b"")[:256].lower()
+    if status == 204 and b:
+        return True
+    if status == 200 and b:
+        if b"<html" in b or b"login" in b or b"captive" in b or b"portal" in b:
+            return True
+    if final_url:
+        fu = final_url.lower()
+        if any(k in fu for k in ("login", "captive", "portal", "hotspot", "walledgarden")):
+            return True
+    return False
+
+
+def _should_use_proc_cap() -> bool:
+    """
+    Return True only on POSIX systems where RLIMIT_NPROC is available.
+    Avoids calling into Unix-only modules on Windows.
+    """
+    try:
+        import os, resource  # type: ignore
+        return os.name == "posix" and hasattr(resource, "RLIMIT_NPROC")
+    except Exception:
+        return False
+
+
+def _advisory_user_proc_limit_cap(current_cap: int) -> int:
+    """
+    Softly cap workers to ~75% of the per-user process limit (where applicable).
+    Threads usually don't count as separate "processes" everywhere, so treat this
+    as an advisory upper bound, not a guarantee.
+    """
+    try:
+        import resource  # type: ignore
+        soft, _hard = resource.getrlimit(resource.RLIMIT_NPROC)
+        inf         = getattr(resource, "RLIM_INFINITY", -1)
+        # If unlimited or nonsensical, do nothing.
+        if soft in (inf, -1) or soft is None or soft <= 0:
+            return current_cap
+        cap         = max(1, int(soft * 0.75))
+        return min(current_cap, cap)
+    except Exception:
+        return current_cap
+
+
+def _effective_workers(requested: int, num_tasks: int, io_bound: bool = True) -> int:
+    """
+    Choose a sensible max_workers value.
+
+    Args:
+        requested: Desired worker count from CLI.
+        num_tasks: Number of concurrent tasks you will submit.
+        io_bound:  Whether the workload is primarily I/O bound.
+
+    Returns:
+        A worker count >= 1 and no larger than the task count and a heuristic cap.
+
+    Raises:
+        None
+    """
+    cpu:       int = os.cpu_count() or 1
+    # Heuristic caps: generous for I/O, conservative for CPU-bound.
+    cap:       int = 64 if io_bound else max(1, cpu)
+    n:         int = min(requested, num_tasks, cap)
+    if _should_use_proc_cap():
+        n = _advisory_user_proc_limit_cap(n)
+    return max(1, n)
+
+
+def _run_tcp_checks_with_pool(tcp_targets: list[tuple[str, int]],
+                              timeout: float, requested_workers: int) -> bool:
+    """
+    Run the TCP checks using a thread pool with safe sizing and backoff.
+
+    Args:
+        tcp_targets:       (host, port) pairs to probe.
+        timeout:           Per-connection timeout in seconds.
+        requested_workers: CLI-requested max worker count.
+
+    Returns:
+        True if any TCP connection succeeded, else False.
+
+    Raises:
+        None (creation failures are handled with backoff and logging).
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    # 1) Never spawn more workers than concurrent tasks; pick a safe cap.
+    n_workers: int = _effective_workers(requested=requested_workers,
+                                        num_tasks=len(tcp_targets),
+                                        io_bound=True)
+
+    # 2) Backoff plan if the OS refuses to create that many threads.
+    #    Try n, then n//2, then 1.
+    backoff_plan: list[int] = [n_workers, max(1, n_workers // 2), 1]
+
+    for n in backoff_plan:
+        try:
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("ThreadPool: attempting max_workers=%d", n)
+            with ThreadPoolExecutor(max_workers=n) as pool:
+                futures = {pool.submit(_tcp_connect, h, p, timeout): (h, p) for (h, p) in tcp_targets}
+                for fut in as_completed(futures):
+                    try:
+                        if fut.result():
+                            try:  # Optional: stop launching/awaiting more work asap
+                                pool.shutdown(cancel_futures=True)
+                            except TypeError:  # Python < 3.9 doesn’t support cancel_futures
+                                pass
+                            return True
+                    except Exception as exc:
+                        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("TCP: unexpected exception: %s", exc)
+            return False
+        except (RuntimeError, OSError, MemoryError) as exc:
+            logging.warning("Could not start thread pool with %d workers (%s). Trying fewer.", n, exc)
+            continue
+
+    # If even 1 worker fails, consider TCP unreachable.
+    return False
+
+
+@dataclass
+class CheckResult:
+    """Aggregate results from the multi-strategy connectivity check."""
+    tcp_ok:           bool
+    dns_ok:           bool
+    http_ok:          bool
+    captive_detected: bool
+
+
+def _check_once(timeout: float, workers: int,
+                include_ipv6: bool, ignore_proxies: bool) -> CheckResult:
+    """
+    Perform one pass of the connectivity checks.
+
+    Args:
+        timeout:        Per-attempt timeout in seconds.
+        workers:        Thread pool size for parallel network attempts.
+        include_ipv6:   Whether to include IPv6 TCP targets.
+        ignore_proxies: If True, bypass env proxies for HTTP probes.
+
+    Returns:
+        CheckResult with booleans for TCP, DNS, HTTP, and captive portal detection.
+
+    Raises:
+        None.
+    """
+    import socket
+    tcp_targets: list[tuple[str, int]] = IPV4_TARGETS.copy()
+    if include_ipv6 and getattr(socket, "has_ipv6", False):
+        tcp_targets.extend(IPV6_TARGETS)
+
+    dns_ok:           bool = False
+    http_ok:          bool = False
+    captive_detected: bool = False
+
+    # --- TCP connectivity to numeric IPs (with safe sizing & backoff) ---
+    tcp_ok: bool = _run_tcp_checks_with_pool(tcp_targets=tcp_targets,
+                                            timeout=timeout,
+                                            requested_workers=workers)
+
+    # --- DNS resolution (sequential with quick bail-out) ---
+    for name in DNS_TEST_NAMES:
+        if _dns_resolve(name, timeout=timeout):
+            dns_ok = True
+            break
+
+    # --- HTTP probes (sequential, quick bail-outs) ---
+    opener = _build_http_opener(ignore_proxies=ignore_proxies)
+    for probe in HTTP_PROBES:
+        ok, status, body, final_url = _http_probe(
+            url=probe["url"],
+            method=probe["method"],
+            timeout=timeout,
+            opener=opener,
+        )
+        if ok and _http_meets_expectations(status, body, probe["expect"]):
+            http_ok = True
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("HTTP probe OK: %s", probe['note'])
+            break
+        # Any strong hints of a captive portal?
+        if _looks_like_captive(status, final_url, body):
+            captive_detected = True
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Captive portal suspected at %s (status=%d, final_url=%s)", probe['url'], status, final_url)
+            # We can stop early—being behind a captive portal ≠ usable internet.
+            break
+
+    return CheckResult(
+        tcp_ok=tcp_ok,
+        dns_ok=dns_ok,
+        http_ok=http_ok,
+        captive_detected=captive_detected,
+    )
+
+
+def is_internet_available(timeout_per_step: float = 2.5,
+                          retries:            int = 1,
+                          workers:            int = 6,
+                          include_ipv6:      bool = False,
+                          strict:            bool = False,
+                          ignore_proxies:    bool = False) -> bool:
+    """
+    Determine if the internet is available using multiple methods.
+
+    Strategy (per attempt):
+        1) TCP to multiple well-known numeric IPs (no DNS).
+        2) DNS resolution of common hostnames.
+        3) HTTP(S) probes with expectations and captive-portal detection.
+
+    Aggregation logic:
+        - If captive portal is detected -> return False immediately.
+        - If any HTTP probe passes expectations -> return True.
+        - Else if TCP OK and DNS OK -> return True.
+        - Else:
+            * If strict is False and TCP OK alone -> return False
+              (raw TCP alone is not considered sufficient for "internet usable").
+            * If strict is True -> still False.
+
+    Args:
+        timeout_per_step: Timeout (seconds) per individual network attempt.
+        retries:          Number of times to repeat the full check if the result is False.
+        workers:          Thread pool size for TCP checks.
+        include_ipv6:     Whether to include IPv6 targets.
+        strict:           Require stronger evidence of connectivity.
+        ignore_proxies:   Disable env proxies for HTTP probes.
+
+    Returns:
+        True if the internet appears reachable and usable, else False.
+
+    Raises:
+        None.
+    """
+    attempts: int = max(1, retries + 1)
+    for attempt in range(1, attempts + 1):
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(f"Connectivity attempt {attempt}/{attempts}")
+        res = _check_once(
+            timeout=timeout_per_step,
+            workers=workers,
+            include_ipv6=include_ipv6,
+            ignore_proxies=ignore_proxies,
+        )
+
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            "Result(tcp_ok=%s, dns_ok=%s, http_ok=%s, captive=%s)",
+            res.tcp_ok, res.dns_ok, res.http_ok, res.captive_detected
+        )
+
+        if res.captive_detected:
+            return False
+
+        # HTTP probe success is the strongest positive signal (works with proxies too).
+        if res.http_ok:
+            return True
+
+        # TCP + DNS (e.g., raw connectivity plus name resolution).
+        if res.tcp_ok and res.dns_ok:
+            return True
+
+        # Only allow raw TCP success when NOT strict:
+        if not strict and res.tcp_ok:
+            return True
+
+        # Otherwise, not enough evidence; possibly retry due to transient hiccups.
+        if attempt < attempts:
+            import time
+            import random
+            delay: float = 0.10 + 0.05 * attempt + random.uniform(0.0, 0.05)
+            time.sleep(delay)
+    return False
 
 
 def detect_shell(options: Options) -> None:
@@ -1086,12 +2850,13 @@ def find_additional_alias_files(options: Options) -> None:
     options.additional_alias_files = valid_files
 
 
-def ensure_path_is_a_file(path: str | os.PathLike[str]) -> Path:
+def ensure_path_is_a_file(path: str | os.PathLike[str], raise_on_empty: bool = False) -> Path:
     """
     Ensure that the given path is an existing file and return it as a Path object.
     
     Args:
-        path: The path to check.
+        path:           The path to check.
+        raise_on_empty: If True, raise an exception if the file is empty.
 
     Returns:
         A Path object representing the file.
@@ -1103,7 +2868,10 @@ def ensure_path_is_a_file(path: str | os.PathLike[str]) -> Path:
     if not p.is_file():
         raise IsADirectoryError(f"Expected a file, got directory: {p}")
     if p.stat().st_size == 0:
-        logging.warning("File is empty: %s", p)
+        if raise_on_empty:
+            raise ValueError(f"File is empty: {p}")
+        else:
+            logging.warning("File is empty: %s", p)
     return p
 
 
@@ -2407,7 +4175,7 @@ def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
     Turn arbitrary text into an ASCII-only, filesystem‐safe base filename.
     WARNING: Do not include an extension in the text, because this function
     might remove the dot which separates the filename from the extension.
-    It attempts to recognize and remove extensions listed in all_known_extensions
+    It attempts to recognize and remove extensions listed in ALL_KNOWN_EXTENSIONS
     but this list is not exhaustive.
 
     Steps:
@@ -2445,7 +4213,7 @@ def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
 
     # List of common extensions to recognize and (temporarily) remove
     removed_ext = ""
-    for ext in all_known_extensions:
+    for ext in ALL_KNOWN_EXTENSIONS:
         if text.casefold().endswith(ext):
             text = text[:-len(ext)]
             removed_ext = ext
@@ -2456,7 +4224,7 @@ def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
     #    e.g. "hello.world--foo_bar" → "hello world--foo bar"
     text = re.sub(r"[._\s]+", sep, text)
 
-    # Remove anything but dashes, a–z, 0–9, or our sep
+    # Remove anything but dashes, A-Z, a–z, 0–9, or our sep
     allowed = f"-A-Za-z0-9{re.escape(sep)}"
     text = re.sub(fr"[^{allowed}]+", "", text)
 
@@ -2488,7 +4256,8 @@ def if_filepath_then_read(input_string_or_filepath: str | os.PathLike[str],
 
     Args:
         input_string_or_filepath: The source can be a file path or a string.
-        force_string:             If True, treat 'input_string_or_filepath' as a string even if it looks like a file path.
+        force_string:             If True, treat 'input_string_or_filepath' as a string even if
+                                  it looks like a file path.
 
     Returns:
         str : The contents of the file if input_string_or_filepath is a file path,
@@ -2502,6 +4271,9 @@ def if_filepath_then_read(input_string_or_filepath: str | os.PathLike[str],
     # If so, read the file contents.
     if force_string and isinstance(input_string_or_filepath, os.PathLike):
         raise TypeError(f"'input_string_or_filepath' was given as a file path ({input_string_or_filepath!r}) but 'force_string' is True, so it cannot be treated as a file path.")
+    # Heuristics: if it contains newlines or is ridiculously long, it's source.
+    if isinstance(input_string_or_filepath, str) and ("\n" in input_string_or_filepath or len(input_string_or_filepath) > 4096):
+        return input_string_or_filepath
     if not force_string and Path(input_string_or_filepath).is_file():
         file_path = Path(input_string_or_filepath)
         try:
@@ -2706,7 +4478,7 @@ def _make_format_checker() -> Type[Any]:
                 # "NumPy"              : self._check_numpy_docstring,
                 # "reStructuredText" : self._check_rst_docstring,
             }.get(self.doc_style)
-
+            logging.warning("Consider adding an exception to the docstring checker: if the function is less than 5(?) lines, allow a single line docstring without the required sections.")
             if checker is not None:
                 checker(node, who)
 
@@ -2848,6 +4620,8 @@ def check_python_formatting(path: str | os.PathLike[str], diff_choice: int = 1) 
     RDQUOTE             = "\u201D"  # U+201D "RIGHT DOUBLE QUOTATION MARK"
     HORIZONTAL_ELLIPSIS = "\u2026"  # U+2026 "HORIZONTAL ELLIPSIS" (three closely spaced periods)
 
+    logging.warning("LOOK FOR logging.debug STATEMENTS THAT USE F-STRINGS OR THAT DON'T HAVE GUARDS!!")
+    
     if BACKTICK in src:
         logging.warning("File %s contains the backtick character (%r). Use straight quotation marks (') instead.", path, BACKTICK)
         if not ask_and_replace(old_str=BACKTICK, new_str="'", path=path, label='backtick',
@@ -3311,7 +5085,7 @@ def is_python_script(path: str | os.PathLike[str]) -> bool:
         return False
 
     # Common extensions
-    if path.suffix.casefold() in python_extensions:
+    if path.suffix.casefold() in PYTHON_EXTENSIONS:
         return True
 
     # No-extension scripts: check for executable bit + python shebang
@@ -3377,7 +5151,7 @@ def diff_and_confirm(orig_text: str, changed_text: str, path: str | os.PathLike[
     if ans in ("y", "yes"):
         # If the user hasn't chosen to skip compilation and this is a Python script,
         # try to compile the changed text before writing it. If compilation fails, abort the write.
-        if not skip_compile and is_python_script(path) and not compile_code(changed_text):
+        if not skip_compile and is_python_script(path) and not compile_code(changed_text, force_source=True):
             logging.error(f"{ANSI_RED}Failed to compile the changed python script. Aborting write.{ANSI_RESET}")
             return False  # Don't write if it won't compile, and don't continue.
         path.write_text(changed_text, encoding=DEFAULT_ENCODING)
@@ -3677,8 +5451,8 @@ class Options:
 def parse_arguments(options: Options) -> None:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Diff two files using ud.my_diff().")
-    parser.add_argument("orig_path", type=str, help="Path to original file.")
-    parser.add_argument("changed_path", type=str, help="Path to changed file.")
+    parser.add_argument("orig_path", type=Path, help="Path to original file.")
+    parser.add_argument("changed_path", type=Path, help="Path to changed file.")
     parser.add_argument("--diff_choice", type=int, default=1,
                         help="0 = old-style diff, 1 = unified diff with 0 context lines, "
                              "2+ = unified diff with 'diff_choice - 1' context lines")
@@ -3750,7 +5524,7 @@ class Options:
 def parse_arguments(options: Options) -> None:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Check Python formatting in a file.")
-    parser.add_argument("filepath", type=str, help="Path to the Python file to check")
+    parser.add_argument("filepath", type=Path, help="Path to the Python file to check")
     parser.add_argument("--diff_choice", type=int, default=1,
                         help="0 = old-style diff, 1 = unified diff with 0 context lines, "
                              "2+ = unified diff with 'diff_choice - 1' context lines")
@@ -3819,11 +5593,11 @@ def parse_arguments(options: Options) -> None:
                         help="The text to be replaced in the files.")
     parser.add_argument("new_str",
                         help="The text to replace the old_str.")
-    parser.add_argument("glob_pattern", nargs="?", default=options.default_glob_pattern,
+    parser.add_argument("glob_pattern", nargs="?", default=options.default_glob_pattern, metavar="GLOB",
                         help=f'Glob pattern of files to edit (default: "{options.default_glob_pattern}"). Example: "*.py"')
-    parser.add_argument("-dir", "-d", default=options.default_dir,
+    parser.add_argument("--dir", "-d", type=Path, default=options.default_dir, metavar="DIR",
                         help=f"Directory to search in (defaults to current working directory: {options.default_dir}).")
-    parser.add_argument("-recursive", "-r", action="store_true",
+    parser.add_argument("--recursive", "-r", action="store_true",
                         help="Search recursively in subdirectories.")
     parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("-debug", "--debug", action="store_true",
@@ -3848,6 +5622,8 @@ if __name__ == "__main__":
     main()
 '''
 
+DEFAULT_EXCLUDE_DIRS: set[str] = {".git", "__pycache__", ".venv", "venv", "build", "dist"}
+
 TREEVIEW_SCRIPT: str = r'''#!/usr/bin/env python3
 from __future__ import annotations
 
@@ -3859,7 +5635,7 @@ from pathlib import Path
 import univ_defs_sys_path_script  # Appends sys.path with the location of univ_defs.py
 import univ_defs as ud
 
-__version__: str = "0.1.0"
+__version__: str = "0.1.1"
 
 
 class Options:
@@ -3867,23 +5643,27 @@ class Options:
 
     def __init__(self) -> None:
         """Initialize the Options class with default values."""
-        self.my_name:  str = Path(sys.argv[0]).stem  # The invoked name of this script without the .py extension
-        self.log_mode: int = logging.INFO  # Use the -debug command line argument to change to DEBUG.
+        self.my_name:                    str = Path(sys.argv[0]).stem  # The invoked name of this script without the .py extension
+        self.default_exclude_dirs:  set[str] = set(ud.DEFAULT_EXCLUDE_DIRS)
+        self.default_dir:               Path = Path.cwd()  # Default to current working directory
+        self.log_mode:                   int = logging.INFO  # Use the -debug command line argument to change to DEBUG.
         self.args: argparse.Namespace | None = None
-        self.default_dir: Path = Path.cwd()  # Default to current working directory
 
 
 def parse_arguments(options: Options) -> None:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Print a tree view of the specified directory.")
-    parser.add_argument("dir", default=options.default_dir, nargs="?",
+    parser.add_argument("directory", type=Path, nargs="?", default=options.default_dir,
                         help=f"Directory to search in (defaults to current working directory: {options.default_dir}).")
-    parser.add_argument("-no_colors", action="store_true",
+    parser.add_argument("--no-colors", action="store_true",
                         help="Do not use colors in the output.")
+    parser.add_argument("--exclude-dirs", action="extend", nargs="+", default=None,
+                        help=f"Directory name to exclude (can be given multiple times). Any directories given will be added to the default set: {sorted(options.default_exclude_dirs)}")
     parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("-debug", "--debug", action="store_true",
                         help="Enable DEBUG logging.")
     options.args = parser.parse_args()
+    options.args.exclude_dirs = set(ud.DEFAULT_EXCLUDE_DIRS) | set(options.args.exclude_dirs or [])
     if options.args.debug:
         options.log_mode = logging.DEBUG
 
@@ -3894,8 +5674,13 @@ def main() -> None:
     parse_arguments(options)
     memory_handler = ud.configure_logging(options.my_name, log_level=options.log_mode,
                                           rawlog=True)
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Directory: %s", options.args.dir)
-    ud.treeview_new_files(options.args.dir, use_colors=not options.args.no_colors)
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Directory: %s", options.args.directory)
+    state = {
+        "excluded_dirs"   : options.args.exclude_dirs,
+        "already_printed" : set(),
+        "my_filepath"     : Path(__file__).expanduser().resolve(),
+    }
+    ud.treeview_new_files(options.args.directory, use_colors=not options.args.no_colors, state=state)
     ud.print_all_errors(memory_handler)
     logging.shutdown()
 
@@ -3917,7 +5702,10 @@ from typing import Iterable
 
 import tokenize  # stdlib
 
-__version__: str = "0.1.0"
+import univ_defs_sys_path_script  # Appends sys.path with the location of univ_defs.py
+import univ_defs as ud
+
+__version__: str = "0.1.1"
 
 
 class Options():
@@ -3925,9 +5713,9 @@ class Options():
 
     def __init__(self) -> None:
         """Initialize the Options class with default values."""
-        self.my_name:  str = Path(sys.argv[0]).stem  # The invoked name of this script without the extension
-        self.default_exclude_dirs: list[str] = [".git", "__pycache__", ".venv", "venv", "build", "dist"]
-        self.log_mode: int = logging.INFO  # Use -debug to change to logging.DEBUG.
+        self.my_name:                    str = Path(sys.argv[0]).stem  # The invoked name of this script without the extension
+        self.default_exclude_dirs:  set[str] = set(ud.DEFAULT_EXCLUDE_DIRS)
+        self.log_mode:                   int = logging.INFO  # Use -debug to change to logging.DEBUG.
         self.args: argparse.Namespace | None = None
 
 
@@ -3935,24 +5723,24 @@ def parse_arguments(options: Options) -> None:
     """
     Parse command-line arguments.
     """
-    p = argparse.ArgumentParser(description="Search Python files and print full logical statements that match a pattern.")
-    p.add_argument("paths", nargs="+", type=Path,  # parse as Path at the boundary
-                   help="Files and/or directories to search.")
-    p.add_argument("-p", "--pattern", required=True, help="Search pattern (string or regex).")
-    p.add_argument("-E", "--regex", action="store_true",
-                   help="Treat the pattern as a regular expression.")
-    p.add_argument("-i", "--ignore-case", action="store_true", help="Case-insensitive match.")
-    p.add_argument("-n", "--line-numbers", action="store_true",
-                   help="Show line numbers in output blocks.")
-    p.add_argument("-r", "--recursive", action="store_true", help="Recurse into directories.")
-    p.add_argument("--no-glob", action="store_true",
-                   help="Do not automatically filter for *.py inside directories.")
-    p.add_argument("--exclude-dir", action="append",
-                   default=options.default_exclude_dirs,
-                   help=f"Directory name to exclude (can be given multiple times). Default: {options.default_exclude_dirs}")
-    p.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
-    p.add_argument("-debug", "--debug", action="store_true", help="Enable debug logging.")
-    options.args = p.parse_args()
+    parser = argparse.ArgumentParser(description="Search Python files and print full logical statements that match a pattern.")
+    parser.add_argument("paths", nargs="+", type=Path,  # parse as Path at the boundary
+                        help="Files and/or directories to search.")
+    parser.add_argument("-p", "--pattern", required=True, help="Search pattern (string or regex).")
+    parser.add_argument("-E", "--regex", action="store_true",
+                        help="Treat the pattern as a regular expression.")
+    parser.add_argument("-i", "--ignore-case", action="store_true", help="Case-insensitive match.")
+    parser.add_argument("-n", "--line-numbers", action="store_true",
+                        help="Show line numbers in output blocks.")
+    parser.add_argument("-r", "--recursive", action="store_true", help="Recurse into directories.")
+    parser.add_argument("--no-glob", action="store_true",
+                        help="Do not automatically filter for *.py inside directories.")
+    parser.add_argument("--exclude-dirs", action="extend", nargs="+", default=None,
+                        help=f"Directory name to exclude (can be given multiple times). Any directories given will be added to the default set: {sorted(options.default_exclude_dirs)}")
+    parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument("-debug", "--debug", action="store_true", help="Enable debug logging.")
+    options.args = parser.parse_args()
+    options.args.exclude_dirs = set(ud.DEFAULT_EXCLUDE_DIRS) | set(options.args.exclude_dirs or [])
     if options.args.debug:
         options.log_mode = logging.DEBUG
 
@@ -3965,7 +5753,7 @@ def _is_excluded(path: Path, excluded: set[str]) -> bool:
 
 def iter_files(paths: Iterable[str | os.PathLike[str]],
                recursive: bool,
-               exclude_dirs: list[str],
+               excluded: set[str],
                only_py: bool) -> Iterable[Path]:
     """
     Yield files from given paths, respecting recursion and directory excludes.
@@ -3973,7 +5761,6 @@ def iter_files(paths: Iterable[str | os.PathLike[str]],
     Parameters that represent paths accept str | os.PathLike[str] at the boundary.
     Returned paths are pathlib.Path instances.
     """
-    excluded = set(exclude_dirs)
     pattern = "*.py" if only_py else "*"
 
     for raw in paths:
@@ -4095,7 +5882,7 @@ def search_file(path: str | os.PathLike[str],
     """Return matching blocks for a single file."""
     p = Path(path)
     try:
-        text = p.read_text(encoding="utf-8")
+        text = p.read_text(encoding=ud.DEFAULT_ENCODING)
     except UnicodeDecodeError:
         text = p.read_text(encoding="latin-1")
     except Exception as ex:
@@ -4146,7 +5933,7 @@ def main() -> None:
     any_hits = False
 
     for file in iter_files(options.args.paths, options.args.recursive,
-                           options.args.exclude_dir, only_py=not options.args.no_glob):
+                           options.args.exclude_dirs, only_py=not options.args.no_glob):
         results = search_file(file, options.args.pattern, regex=options.args.regex,
                               ignore_case=options.args.ignore_case,
                               show_line_numbers=options.args.line_numbers)
@@ -4199,7 +5986,7 @@ def verify_script(options: Options, thepath: str | os.PathLike[str], thescript: 
             return
         thepath.write_text(thescript, encoding=DEFAULT_ENCODING)
         if not options.rawlog:
-            logging.info("Creating %s with the audit script.", thepath)
+            logging.info("Creating %s with the specified script.", thepath)
         return
 
     # It is a file: read and compare
@@ -4207,9 +5994,9 @@ def verify_script(options: Options, thepath: str | os.PathLike[str], thescript: 
     # Overwrite if different
     if existing != thescript:
         if not options.rawlog:
-            logging.info("Contents of %s differ from the audit script in %s as follows:", thepath, __file__)
+            logging.info("Contents of %s differ from the specified script in %s as follows:", thepath, __file__)
             my_diff(existing, thescript, thepath, diff_choice=1)
-            logging.info("Overwriting %s with the audit script.", thepath)
+            logging.info("Overwriting %s with the specified script.", thepath)
         thepath.write_text(thescript, encoding=DEFAULT_ENCODING)
 
 
@@ -4596,7 +6383,7 @@ def treeview_new_files(directory:      str | os.PathLike[str],
             if subdir.name not in excluded_dirs and subdir.expanduser().resolve() not in already_printed:
                 treeview_new_files(subdir, last_file_path=last_file_path, last_mtime=last_mtime,
                                    maxlines=maxlines, use_colors=use_colors, prefix=child_prefix,
-                                   is_last=is_sub_last, level=level + 1)
+                                   is_last=is_sub_last, level=level + 1, state=state)
 
         # Print relevant files next
         for i, file_entry in enumerate(relevant_entries):
@@ -4649,10 +6436,13 @@ def open_terminal_and_run_command(the_command: str, close_after: bool = False,
     import subprocess
     fallback_logging_config()
     logging.info("Opening terminal and running '%s'...", the_command)
-    terminal_args = ['gnome-terminal']
-    if maximize_window:
-        # either of these works; here we use both for clarity
-        terminal_args += ['--window', '--maximize']
+    if sys.platform.startswith("linux"):
+        terminal_args = ['gnome-terminal']
+    else:
+        raise NotImplementedError(f"The function {return_method_name()} is only implemented for Linux, not for {sys.platform}")
+    # if maximize_window:  # Disabled because in Ubuntu this causes the title bar to disappear.
+    #     # either of these works; here we use both for clarity
+    #     terminal_args += ['--window', '--maximize']
     # Now tell bash to run the command, then exit or hand off to an interactive shell
     if close_after:
         bash_cmd = f'{the_command}; exit'
@@ -4660,6 +6450,40 @@ def open_terminal_and_run_command(the_command: str, close_after: bool = False,
         bash_cmd = f'{the_command}; exec bash'
     terminal_args += ['--', 'bash', '-ic', bash_cmd]
     subprocess.Popen(terminal_args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+# FIX PROBLEM WITH MAXIMIZING: https://chatgpt.com/share/68bcd45e-a2fc-8006-aeba-50dd177f1da6
+# ALSO, ON STARTUP, TERMINAL WINDOWS CLOSE IMMEDIATELY AFTER I CTRL-C THEM EVEN IF close_after=False
+# POSSIBLY RELATED: https://askubuntu.com/questions/1409826/gnome
+# def open_terminal_and_run_command(cmd, close_after=False, keep_titlebar=True):
+#     import subprocess, time
+#     bash_cmd = f'{cmd}; exit' if close_after else f'{cmd}; exec bash'
+#     # Start *not* maximized:
+#     p = subprocess.Popen(['gnome-terminal', '--class=myterm', '--', 'bash', '-ic', bash_cmd])
+#     if keep_titlebar:
+#         time.sleep(0.3)  # small delay so the window exists
+#         # On X11: maximize after mapping (keeps decorations)
+#         subprocess.run(['wmctrl', '-x', '-r', 'myterm', '-b', 'add,maximized_vert,maximized_horz'], check=False)
+
+
+def get_effective_free_memory() -> float:
+    """Return the "effective" free memory in bytes: free memory plus buffers plus cache."""
+    if sys.platform.startswith("linux"):
+        # NOTE: If your kernel supports MemAvailable, you could use that instead for a more accurate measure of usable memory
+        info = {}
+        with open("/proc/meminfo", "r") as f:
+            for line in f:
+                parts     = line.split()
+                key       = parts[0].rstrip(":")
+                value_kb  = int(parts[1])
+                info[key] = value_kb
+
+        mem_free_kb = info.get("MemFree", 0)
+        buffers_kb  = info.get("Buffers", 0)
+        cached_kb   = info.get("Cached",  0)
+
+        effective_free_memory = (mem_free_kb + buffers_kb + cached_kb) * 1024
+    else:
+        raise NotImplementedError(f"The function {return_method_name()} is only implemented for Linux, not for {sys.platform}")
+    return effective_free_memory
 
 
 def kill_process(pname: str) -> None:
@@ -4736,8 +6560,10 @@ def open_filemanager_with_dirs(directories: list[str | os.PathLike[str]]) -> Non
     import subprocess
     import time
     fallback_logging_config()
-    if not sys.platform.startswith('linux'):
-        logging.error(f"The function {return_method_name()} is only implemented for Linux systems.")
+    if sys.platform.startswith('linux'):
+        filemanager_command = "nemo"
+    else:
+        logging.error(f"The function {return_method_name()} is only implemented for Linux systems, not for {sys.platform}")
         return
     logging.info("Opening file manager with specified directories...")
     for directory in directories:
@@ -4751,7 +6577,8 @@ def open_filemanager_with_dirs(directories: list[str | os.PathLike[str]]) -> Non
         if not directory.exists():
             logging.error(f"Directory {directory} does not exist. Skipping.")
             continue
-        subprocess.Popen(['nemo', directory], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.Popen([filemanager_command, directory], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
         # Optional: Wait briefly between opening directories
         time.sleep(0.5)
 
@@ -5128,143 +6955,277 @@ def combine_html_files(file_paths: list[str | os.PathLike[str]],
     logging.info("Saved combined HTML to '%s'.", output_file_path)
 
 
-def check_list_for_duplicates(the_list: list) -> bool:
-    """Check a list for duplicate elements and return True if duplicates are found."""
+# Map these to spaces (treat like separators)
+characters_to_space = '._-'
+replace_with_space = ' ' * len(characters_to_space)
+# Delete these outright (quotes of various kinds)
+# Include double quote, apostrophe, backtick. Thanks to unidecode(),
+# curly/angle quotes become ASCII quotes and will be removed too.
+quotes_to_delete = "\"'`"
+translation_table = str.maketrans(characters_to_space, replace_with_space, quotes_to_delete)
+def normalize_for_search(text: str) -> str:
+    """Convert text to ASCII and lowercase for case- and diacritic-insensitive comparison. Also treat some characters such as ._- the same as spaces. Remove quotes (', ", ` and their unicode variants)."""
+    from unidecode import unidecode
+    return unidecode(text).casefold().translate(translation_table)
+
+
+def calculate_checksum(file_path: str | os.PathLike[str]) -> str:
+    """Calculate the SHA256 checksum of a file."""
+    import hashlib
+    sha256_hash = hashlib.sha256()
+    with file_path.open("rb") as f:
+        for byte_block in iter(lambda: f.read(4096), b""):
+            sha256_hash.update(byte_block)
+    return sha256_hash.hexdigest()
+
+
+def check_list_for_duplicates(the_list: list) -> None:
+    """Check a list for duplicate elements."""
     duplicates = [ext for ext in set(the_list) if the_list.count(ext) > 1]
-    print("Duplicates:", duplicates)
-    return len(duplicates) > 0
+    if duplicates:
+        print("Duplicates:", duplicates)
 
 
 # A comprehensive list of encodings to try when reading files, with most likely encodings first.
-text_encodings: list[str] = [
-    'utf-8',        'latin-1',      'ascii',          'iso-8859-1',      'big5',         'utf-8-sig',
-    'utf-16',       'utf-16-be',    'utf-16-le',      'utf-32',          'utf-32-be',    'utf-32-le',
-    'cp1252',       'cp1251',       'cp1250',         'cp1253',          'cp1254',       'cp1255',
-    'cp1256',       'cp1257',       'cp1258',         'iso-8859-2',      'iso-8859-3',   'iso-8859-4',
-    'iso-8859-5',   'iso-8859-6',   'iso-8859-7',     'iso-8859-8',      'iso-8859-9',   'iso-8859-10',
-    'iso-8859-11',  'iso-8859-13',  'iso-8859-14',    'iso-8859-15',     'iso-8859-16',  'cp437',
-    'cp850',        'cp852',        'cp855',          'cp857',           'cp858',        'cp860',
-    'cp861',        'cp862',        'cp863',          'cp864',           'cp865',        'cp866',
-    'cp869',        'cp037',        'cp424',          'cp500',           'cp720',        'cp737',
-    'cp775',        'cp874',        'cp875',          'cp932',           'cp949',        'cp950',
-    'cp1006',       'cp1026',       'cp1125',         'cp1140',          'big5hkscs',    'gb2312',
-    'gbk',          'gb18030',      'euc-jp',         'euc-jis-2004',    'euc-jisx0213', 'euc-kr',
-    'iso2022-jp',   'iso2022-jp-1', 'iso2022-jp-2',   'iso2022-jp-2004', 'iso2022-jp-3', 'iso2022-jp-ext',
-    'iso2022-kr',   'johab',        'koi8-r',         'koi8-t',          'koi8-u',       'kz1048',
-    'mac-cyrillic', 'mac-greek',    'mac-iceland',    'mac-latin2',      'mac-roman',    'mac-turkish',
-    'ptcp154',      'shift-jis',    'shift-jis-2004', 'shift-jisx0213',  'hz',           'tis-620',
-    'euc-tw',       'iso2022-tw'
+TEXT_ENCODINGS: list[str] = [
+    "utf-8",           "latin-1",        "ascii",           "iso-8859-1",         "big5",
+    "utf-8-sig",       "utf-16",         "utf-16-be",       "utf-16-le",          "utf-32",
+    "utf-32-be",       "utf-32-le",      "cp1252",          "cp1251",             "cp1250",
+    "cp1253",          "cp1254",         "cp1255",          "cp1256",             "cp1257",
+    "cp1258",          "iso-8859-2",     "iso-8859-3",      "iso-8859-4",         "iso-8859-5",
+    "iso-8859-6",      "iso-8859-7",     "iso-8859-8",      "iso-8859-9",         "iso-8859-10",
+    "iso-8859-11",     "iso-8859-13",    "iso-8859-14",     "iso-8859-15",        "iso-8859-16",
+    "cp437",           "cp850",          "cp852",           "cp855",              "cp857",
+    "cp858",           "cp860",          "cp861",           "cp862",              "cp863",
+    "cp864",           "cp865",          "cp866",           "cp869",              "cp037",
+    "cp424",           "cp500",          "cp720",           "cp737",              "cp775",
+    "cp874",           "cp875",          "cp932",           "cp949",              "cp950",
+    "cp1006",          "cp1026",         "cp1125",          "cp1140",             "big5hkscs",
+    "gb2312",          "gbk",            "gb18030",         "euc-jp",             "euc-jis-2004",
+    "euc-jisx0213",    "euc-kr",         "iso2022-jp",      "iso2022-jp-1",       "iso2022-jp-2",
+    "iso2022-jp-2004", "iso2022-jp-3",   "iso2022-jp-ext",  "iso2022-kr",         "johab",
+    "koi8-r",          "koi8-t",         "koi8-u",          "kz1048",             "mac-cyrillic",
+    "mac-greek",       "mac-iceland",    "mac-latin2",      "mac-roman",          "mac-turkish",
+    "ptcp154",         "shift-jis",      "shift-jis-2004",  "shift-jisx0213",     "hz",
+    "tis-620",         "utf-7",          "base64",          "bz2",                "charmap",
+    "cp273",           "cp856",          "euc_jis_2004",    "euc_jisx0213",       "euc_jp",
+    "euc_kr",          "hex",            "hp-roman8",       "idna",               "iso2022_jp",
+    "iso2022_jp_1",    "iso2022_jp_2",   "iso2022_jp_2004", "iso2022_jp_3",       "iso2022_jp_ext",
+    "iso2022_kr",      "iso8859-1",      "iso8859-10",      "iso8859-11",         "iso8859-13",
+    "iso8859-14",      "iso8859-15",     "iso8859-16",      "iso8859-2",          "iso8859-3",
+    "iso8859-4",       "iso8859-5",      "iso8859-6",       "iso8859-7",          "iso8859-8",
+    "iso8859-9",       "mac-arabic",     "mac-croatian",    "mac-farsi",          "mac-romanian",
+    "palmos",          "punycode",       "quopri",          "raw-unicode-escape", "rot-13",
+    "shift_jis",       "shift_jis_2004", "shift_jisx0213",  "unicode-escape",     "uu",
+    "zlib",
 ]
-text_encodings = [e.casefold() for e in text_encodings]  # Just in... case.
-# check_list_for_duplicates(text_encodings) # Run this after adding new extensions to ensure there are no duplicates.
+# # Examine encodings for any uppercase characters.
+# for enc in TEXT_ENCODINGS:
+#     if any(c.isupper() for c in enc):
+#         raise ValueError(f"Encoding '{enc}' contains uppercase characters. All encodings should be lowercase.")
+# check_list_for_duplicates(TEXT_ENCODINGS) # Run this after adding new encodings to ensure there are no duplicates.
+# def all_encodings() -> list[str]:
+#     """Return a sorted list of all known Python text encodings."""
+#     import pkgutil, encodings, codecs
+#     from encodings.aliases import aliases as alias_map
+#     names = set()
+#     # 1) Try every module under encodings/
+#     for m in pkgutil.iter_modules(encodings.__path__):
+#         try:
+#             names.add(codecs.lookup(m.name).name)
+#         except LookupError:
+#             # Skip helpers like 'aliases' or any non-codec modules
+#             pass
+#     # 2) Try all alias keys and targets
+#     for n in set(alias_map) | set(alias_map.values()):
+#         try:
+#             names.add(codecs.lookup(n).name)
+#         except LookupError:
+#             # Skip platform-specific codecs not present here (e.g., 'mbcs' on Linux/macOS)
+#             pass
+#     return sorted(names)
+# # Example usage
+# encs = all_encodings()
+# print(len(encs), "encodings found")
+# print(encs[:25])  # peek
+# def invalid_encodings(names: list[str]) -> list[str]:
+#     """Return a list of invalid encoding names from the given list."""
+#     import codecs
+#     bad = []
+#     for n in names:
+#         try:
+#             codecs.lookup(n)
+#         except LookupError:
+#             bad.append(n)
+#     return bad
+# bad = invalid_encodings(TEXT_ENCODINGS)
+# print("Invalid encodings:", bad)
+# missing_encodings = []
+# for enc in encs:
+#     if enc not in TEXT_ENCODINGS:
+#         missing_encodings.append(enc)
+# print(f"{len(missing_encodings)} encodings are missing from TEXT_ENCODINGS: {missing_encodings}")
 
 # A comprehensive list of python extensions.
-python_extensions: list[str] = ['.py', '.pyw']
-python_extensions = [e.casefold() for e in python_extensions]  # Just in... case.
+PYTHON_EXTENSIONS: list[str] = [".py", ".pyw"]
 
 # A comprehensive list of text file extensions.
-text_extensions: list[str] = [
-    '.txt',  '.html',     '.htm',      '.csv',        '.json', '.xml'
-    '.adoc', '.asciidoc', '.bib',      '.cfg',        '.conf', '.ini',
-    '.log',  '.md',       '.markdown', '.properties', '.rtf',  '.rst',
-    '.sgm',  '.sgml',     '.tex',      '.toml',       '.tsv',  '.xhtml',
-    '.yaml', '.yml',
+TEXT_EXTENSIONS: list[str] = [
+    ".txt",          ".html",     ".htm",      ".csv",        ".json",       ".xml",
+    ".adoc",         ".asciidoc", ".bib",      ".cfg",        ".conf",       ".ini",
+    ".log",          ".md",       ".markdown", ".properties", ".rtf",        ".rst",
+    ".sgm",          ".sgml",     ".tex",      ".toml",       ".tsv",        ".xhtml",
+    ".yaml",         ".yml",      ".svg",      ".rss",        ".atom",       ".opml",
+    ".xsd",          ".dtd",      ".xsl",      ".xslt",       ".xaml",       ".kml",
+    ".gpx",          ".mml",      ".jsonl",    ".ndjson",     ".geojson",    ".topojson",
+    ".ipynb",        ".gltf",     ".mdx",      ".rmd",        ".org",        ".textile",
+    ".wiki",         ".mkd",      ".mkdn",     ".mdown",      ".mmd",        ".ltx",
+    ".sty",          ".cls",      ".dtx",      ".aux",        ".toc",        ".env",
+    ".editorconfig", ".desktop",  ".service",  ".hcl",        ".tf",         ".tfvars",
+    ".proto",        ".graphql",  ".gql",      ".cue",        ".rego",       ".edn",
+    ".cff",          ".tab",      ".psv",      ".ltsv",       ".css",        ".js",
+    ".mjs",          ".cjs",      ".ts",       ".tsx",        ".jsx",        ".ejs",
+    ".erb",          ".pug",      ".mustache", ".hbs",        ".handlebars", ".jinja",
+    ".jinja2",       ".njk",      ".twig",     ".liquid",     ".sh",         ".bash",
+    ".zsh",          ".fish",     ".bat",      ".cmd",        ".ps1",        ".c",
+    ".h",            ".cpp",      ".hpp",      ".java",       ".kt",         ".kts",
+    ".cs",           ".go",       ".rs",       ".swift",      ".py",         ".rb",
+    ".php",          ".pl",       ".lua",      ".r",          ".jl",         ".m",
+    ".diff",         ".patch",    ".err",      ".out",        ".po",         ".pot",
+    ".ics",          ".vcf",      ".vcard",    ".srt",        ".vtt",        ".ass",
+    ".ssa",          ".lrc",      ".dot",      ".gv",         ".mermaid",    ".sgf",
+    ".pgn",          ".sfv",      ".md5",      ".sha1",       ".sha256",
 ]
-text_extensions = [e.casefold() for e in text_extensions]  # Just in... case.
-# check_list_for_duplicates(text_extensions) # Run this after adding new extensions to ensure there are no duplicates.
+# check_list_for_duplicates(TEXT_EXTENSIONS) # Run this after adding new extensions to ensure there are no duplicates.
 
 # A comprehensive list of video file extensions.
-video_extensions: list[str] = [
-    '.mp4',   '.mkv',   '.mov',   '.avi',  '.mpg',  '.mpeg',
-    '.wmv',   '.m4v',   '.flv',   '.divx', '.vob',  '.iso',
-    '.3gp',   '.webm',  '.mts',   '.m2ts', '.ts',   '.ogv',
-    '.rm',    '.rmvb',  '.asf',   '.f4v',  '.mxf',  '.dv',
-    '.swf',   '.m2v',   '.svi',   '.mpe',  '.ogm',  '.bik',
-    '.xvid',  '.yuv',   '.qt',    '.gvi',  '.viv',  '.fli',
-    '.mjpg',  '.mjpeg', '.amv',   '.drc',  '.flc',  '.wve',
-    '.avchd', '.vp6',   '.ivf',   '.mps',  '.vro',  '.ssf',
-    '.hevc',  '.h265',  '.264',   '.str',  '.evo',  '.3g2',
-    '.h264',  '.av1',   '.ogx',   '.mlv',  '.ps',   '.tsx',
-    '.mp2v',  '.dvs',   '.gxf',   '.m4p',  '.webp', '.vp8',
-    '.trp',   '.f4p',   '.f4b',   '.f4m',  '.mk3d', '.3mm',
-    '.3gpp',  '.mod',   '.tod',   '.cine', '.arf',  '.wrf',
-    '.braw',  '.jmf',   '.r3d',   '.dpx',  '.mpv',  '.tsv',
-    '.rmx',   '.smk',   '.mkd',   '.mj2',  '.scm',  '.ivr',
-    '.xesc',  '.wtv',   '.dcr',   '.mpl',  '.pds',  '.ismv',
-    '.vc1',   '.vcd',   '.mpcpl', '.bin',  '.sfd',  '.qtz',
-    '.vdat',  '.vft',
+VIDEO_EXTENSIONS: list[str] = [
+    ".mp4",   ".mkv",   ".mov",   ".avi",    ".mpg",   ".mpeg", 
+    ".wmv",   ".m4v",   ".flv",   ".divx",   ".vob",   ".iso",  
+    ".3gp",   ".webm",  ".mts",   ".m2ts",   ".ts",    ".ogv",  
+    ".rm",    ".rmvb",  ".asf",   ".f4v",    ".mxf",   ".dv",   
+    ".swf",   ".m2v",   ".svi",   ".mpe",    ".ogm",   ".bik",  
+    ".xvid",  ".yuv",   ".qt",    ".gvi",    ".viv",   ".fli",  
+    ".mjpg",  ".mjpeg", ".amv",   ".drc",    ".flc",   ".vp6",  
+    ".ivf",   ".mps",   ".vro",   ".hevc",   ".h265",  ".264",  
+    ".str",   ".evo",   ".3g2",   ".h264",   ".av1",   ".ogx",  
+    ".mlv",   ".ps",    ".mp2v",  ".dvs",    ".gxf",   ".webp", 
+    ".vp8",   ".trp",   ".f4p",   ".mk3d",   ".3gpp",  ".mod",  
+    ".tod",   ".cine",  ".arf",   ".wrf",    ".braw",  ".jmf",  
+    ".r3d",   ".dpx",   ".mpv",   ".rmx",    ".smk",   ".mj2",  
+    ".scm",   ".ivr",   ".xesc",  ".wtv",    ".dcr",   ".ismv", 
+    ".vc1",   ".vcd",   ".bin",   ".sfd",    ".m2t",   ".m2p",
+    ".m1v",   ".y4m",   ".dif",   ".dvr-ms", ".tivo",  ".nuv",
+    ".nsv",   ".nut",   ".bk2",   ".usm",    ".xmv",   ".thp",
+    ".pmf",   ".h263",  ".h261",  ".vp9",
 ]
-video_extensions = [e.casefold() for e in video_extensions]  # Just in... case.
-# check_list_for_duplicates(video_extensions) # Run this after adding new extensions to ensure there are no duplicates.
+# check_list_for_duplicates(VIDEO_EXTENSIONS) # Run this after adding new extensions to ensure there are no duplicates.
 
 # A comprehensive list of audio file extensions.
-audio_extensions: list[str] = [
-    '.mp3',   '.wav',   '.flac',  '.aac',   '.ogg',   '.wma',
-    '.m4a',   '.alac',  '.aiff',  '.opus',  '.amr',   '.pcm',
-    '.au',    '.raw',   '.dts',   '.ac3',   '.mka',   '.mpc',
-    '.vqf',   '.ape',   '.shn',   '.ra',    '.rm',    '.oga',
-    '.spx',   '.caf',   '.snd',   '.mid',   '.midi',  '.kar',
-    '.rmi',   '.m3u',   '.pls',   '.xspf',  '.asf',   '.wv',
-    '.aa',    '.aax',   '.dsf',   '.dff',   '.sf2',   '.g721',
-    '.voc',   '.swa',   '.bwf',   '.ivs',   '.smp',   '.htk',
-    '.sds',   '.brstm', '.adx',   '.hca',   '.ast',   '.psf',
-    '.psf2',  '.qsf',   '.ssf',   '.usf',   '.gsf',   '.flp',
-    '.dsm',   '.dmf',   '.mod',   '.s3m',   '.it',    '.xm',
-    '.mt2',   '.mo3',   '.umx',   '.tt',    '.tak',   '.trk',
-    '.669',   '.abc',   '.ts',    '.ym',    '.hsq',   '.mpa',
+AUDIO_EXTENSIONS: list[str] = [
+    ".mp3",   ".wav",   ".flac",  ".aac",   ".ogg",   ".wma",
+    ".m4a",   ".alac",  ".aiff",  ".opus",  ".amr",   ".pcm",
+    ".au",    ".raw",   ".dts",   ".ac3",   ".mka",   ".mpc",
+    ".vqf",   ".ape",   ".shn",   ".ra",    ".rm",    ".oga",
+    ".spx",   ".caf",   ".snd",   ".mid",   ".midi",  ".kar",
+    ".rmi",   ".asf",   ".wv",    ".mp4",   ".wave",  ".webm",
+    ".aa",    ".aax",   ".dsf",   ".dff",   ".sf2",   ".g721",
+    ".voc",   ".swa",   ".bwf",   ".ivs",   ".smp",   ".weba",
+    ".sds",   ".brstm", ".adx",   ".hca",   ".ast",   ".psf",
+    ".psf2",  ".qsf",   ".ssf",   ".usf",   ".gsf",   ".tta", 
+    ".dsm",   ".dmf",   ".mod",   ".s3m",   ".it",    ".xm",
+    ".mt2",   ".mo3",   ".umx",   ".mogg",  ".tak",   ".trk",
+    ".669",   ".abc",   ".ts",    ".ym",    ".hsq",   ".mpa",
+    ".m4b",   ".m4p",   ".mp2",   ".mp1",   ".aif",   ".aifc",
+    ".m4r",   ".adts",  ".eac3",  ".rf64",  ".w64",   ".sd2",
+    ".sph",   ".3gp",   ".3g2",   ".3ga",   ".ofr",   ".ofs",
+    ".la",    ".pac",   ".mlp",   ".thd",   ".aaxc",  ".dss",
+    ".ds2",   ".awb",   ".bcstm", ".bfstm", ".bcwav", ".bfwav",
+    ".fsb",   ".wem",   ".xwm",   ".lopus",
 ]
-audio_extensions = [e.casefold() for e in audio_extensions]  # Just in... case.
-# check_list_for_duplicates(audio_extensions) # Run this after adding new extensions to ensure there are no duplicates.
+# check_list_for_duplicates(AUDIO_EXTENSIONS) # Run this after adding new extensions to ensure there are no duplicates.
 
 # A comprehensive list of subtitle file extensions.
-subtitle_extensions: list[str] = [
-    '.srt',   '.sub',    '.idx',   '.ass',   '.ssa',   '.vtt',
-    '.ttml',  '.dfxp',   '.smi',   '.smil',  '.usf',   '.psb',
-    '.mks',   '.lrc',    '.stl',   '.pjs',   '.rt',    '.aqt',
-    '.gsub',  '.jss',    '.dks',   '.mpl2',  '.tmp',   '.vsf',
-    '.zeg',   '.webvtt', '.scc',   '.cap',   '.asc',   '.qt.txt',  # match .qt.txt before .txt
-    '.sbv',   '.ebu',    '.sami',  '.xml',   '.itt',   '.txt',
+SUBTITLE_EXTENSIONS: list[str] = [
+    ".srt",   ".sub",    ".idx",   ".ass",   ".ssa",   ".vtt",
+    ".ttml",  ".dfxp",   ".smi",   ".smil",  ".usf",   ".psb",
+    ".mks",   ".lrc",    ".stl",   ".pjs",   ".rt",    ".aqt",
+    ".gsub",  ".jss",    ".dks",   ".mpl2",  ".sbt",   ".vsf",
+    ".zeg",   ".webvtt", ".scc",   ".cap",   ".asc",   ".sbv",
+    ".ebu",   ".sami",   ".xml",   ".itt",   ".txt",   ".sup",
+    ".sst",   ".son",    ".mcc",   ".pac",   ".890",   ".mpl",
+    ".onl",   ".cin",    ".tds",   ".ult",   ".ttxt",
 ]
-subtitle_extensions = [e.casefold() for e in subtitle_extensions]  # Just in... case.
-# check_list_for_duplicates(subtitle_extensions) # Run this after adding new extensions to ensure there are no duplicates.
+# check_list_for_duplicates(SUBTITLE_EXTENSIONS) # Run this after adding new extensions to ensure there are no duplicates.
 
 # A comprehensive list of image file extensions.
-image_extensions: list[str] = [
-    '.bmp',   '.dib',   '.gif',   '.jpeg',  '.jpg',   '.jpe',
-    '.jfif',  '.pjpeg', '.pjp',   '.png',   '.pbm',   '.pgm',
-    '.ppm',   '.pnm',   '.pam',   '.tif',   '.tiff',  '.sgi',
-    '.rgb',   '.tga',   '.hdr',   '.exr',   '.webp',  '.apng',
-    '.heic',  '.heif',  '.avif',  '.jp2',   '.j2k',   '.j2c',
-    '.jxr',   '.svg',   '.svgz',  '.eps',   '.ai',    '.pdf',
-    '.cdr',   '.emf',   '.wmf',   '.dxf',   '.dwg',   '.mng',
-    '.raw',   '.arw',   '.cr2',   '.cr3',   '.dng',   '.erf',
-    '.raf',   '.orf',   '.pef',   '.rw2',   '.rwl',   '.sr2',
-    '.srw',   '.3fr',   '.kdc',   '.mrw',   '.mos',   '.nrw',
-    '.pcx',   '.pcd',   '.pic',   '.pct',   '.xcf',   '.psd',
-    '.psb',   '.kra',   '.fit',   '.fits',  '.fpx',   '.djvu',
-    '.djv',   '.lbm',   '.iff',
+IMAGE_EXTENSIONS: list[str] = [
+    ".bmp",  ".dib",   ".gif",    ".jpeg", ".jpg",  ".jpe",
+    ".jfif", ".pjpeg", ".pjp",    ".png",  ".pbm",  ".pgm",
+    ".ppm",  ".pnm",   ".pam",    ".tif",  ".tiff", ".sgi",
+    ".rgb",  ".tga",   ".hdr",    ".exr",  ".webp", ".apng",
+    ".heic", ".heif",  ".avif",   ".jp2",  ".j2k",  ".j2c",
+    ".jxr",  ".svg",   ".svgz",   ".eps",  ".ai",   ".pdf",
+    ".cdr",  ".emf",   ".wmf",    ".dxf",  ".dwg",  ".mng",
+    ".raw",  ".arw",   ".cr2",    ".cr3",  ".dng",  ".erf",
+    ".raf",  ".orf",   ".pef",    ".rw2",  ".rwl",  ".sr2",
+    ".srw",  ".3fr",   ".kdc",    ".mrw",  ".mos",  ".nrw",
+    ".pcx",  ".pcd",   ".pic",    ".pct",  ".xcf",  ".psd",
+    ".psb",  ".kra",   ".fit",    ".fits", ".fpx",  ".djvu",
+    ".djv",  ".lbm",   ".iff",    ".ico",  ".icns", ".dds",
+    ".jxl",  ".xbm",   ".xpm",    ".ras",  ".jpf",  ".jpx",
+    ".jpm",  ".qoi",   ".bpg",    ".flif", ".cgm",  ".ktx",
+    ".ktx2", ".pvr",   ".basis",  ".nef",  ".crw",  ".dcr",
+    ".k25",  ".iiq",   ".fff",    ".mef",  ".x3f",  ".hif",
+    ".dcm",  ".nii",   ".gz",     ".nrrd", ".mha",  ".mhd",       # ".gz" matches ".nii.gz"
+    ".mrc",  ".sid",   ".ecw",    ".bil",  ".bip",  ".aseprite",
+    ".g3",   ".g4",    ".fax",    ".sff",  ".wsq",  ".pspimage",
+    ".pdn",  ".psp",   ".ps",     ".ase",  ".clip", ".afphoto",
+    ".bsq",
 ]
-image_extensions = [e.casefold() for e in image_extensions]  # Just in... case.
-# check_list_for_duplicates(image_extensions) # Run this after adding new extensions to ensure there are no duplicates.
+# check_list_for_duplicates(IMAGE_EXTENSIONS) # Run this after adding new extensions to ensure there are no duplicates.
+
+# A comprehensive list of playlist file extensions.
+PLAYLIST_EXTENSIONS: list[str] = [
+    ".m3u",    ".m3u8",    ".pls",  ".xspf",  ".asx",    ".wpl",
+    ".zpl",    ".b4s",     ".cue",  ".smil",  ".smi",    ".ram",
+    ".wax",    ".wmx",     ".wvx",  ".fpl",   ".mpcpl",  ".dpl",
+    ".aimppl", ".aimppl4", ".pla",  ".xml",
+]
+# check_list_for_duplicates(PLAYLIST_EXTENSIONS) # Run this after adding new extensions to ensure there are no duplicates.
 
 # A comprehensive list of archive file extensions.
-archive_extensions: list[str] = [
-    '.zip',     '.rar',    '.7z',    '.tar.gz', '.tar.bz2', '.tar.xz',  # match .tar.(gz,bz2,xz) before (.gz,.bz2,.xz)
-    '.tar.zst', '.tar',    '.gz',    '.tgz',    '.bz2',     '.xz',
-    '.tbz2',    '.tz2',    '.lzma',  '.lz',     '.xpi',     '.crx',
-    '.zst',     '.cab',    '.arj',   '.ace',    '.uue',     '.zoo',
-    '.jar',     '.war',    '.ear',   '.iso',    '.img',     '.dmg',
-    '.lzh',     '.lha',    '.cpio',  '.deb',    '.rpm',     '.apk',
-    '.pak',     '.arc',    '.a',     '.mar',    '.b1',      '.wim',
-    '.shar',    '.run',    '.shk',   '.sit',    '.sitx',    '.zpaq',
-    '.br', 
+ARCHIVE_EXTENSIONS: list[str] = [
+    ".zip",     ".rar",    ".7z",    ".tar",    ".gz",      ".tgz",
+    ".bz2",     ".xz",     ".tbz2",  ".tz2",    ".lzma",    ".lz",
+    ".xpi",     ".crx",    ".zst",   ".cab",    ".arj",     ".ace",
+    ".uue",     ".zoo",    ".jar",   ".war",    ".ear",     ".iso",
+    ".img",     ".dmg",    ".lzh",   ".lha",    ".cpio",    ".deb",
+    ".rpm",     ".apk",    ".pak",   ".arc",    ".a",       ".mar",
+    ".b1",      ".wim",    ".shar",  ".run",    ".shk",     ".sit",
+    ".sitx",    ".zpaq",   ".br",    ".zipx",   ".xar",     ".dar",
+    ".ar",      ".tbz",    ".tb2",   ".txz",    ".tlz",     ".taz",
+    ".tzo",     ".tzst",   ".lzo",   ".lz4",    ".phar",    ".asar",
+    ".whl",     ".nupkg",  ".gem",   ".crate",  ".conda",   ".ipa",
+    ".cbz",     ".cbr",    ".cb7",   ".kmz",    ".warc",    ".pk3",
+    ".pk4",     ".alz",    ".cpt",   ".ha",     ".sqx",     ".z01",
+    ".r00",     ".001",  
 ]
-archive_extensions = [e.casefold() for e in archive_extensions]  # Just in... case.
-# check_list_for_duplicates(archive_extensions) # Run this after adding new extensions to ensure there are no duplicates.
+# Technically this list should include .z02... and .r01... and .002...
+ARCHIVE_EXTENSIONS.extend([f".z{num:02d}" for num in range(2, 100)])
+ARCHIVE_EXTENSIONS.extend([f".r{num:02d}" for num in range(1, 100)])
+ARCHIVE_EXTENSIONS.extend([f".{num:03d}"  for num in range(2, 100)])
+# check_list_for_duplicates(ARCHIVE_EXTENSIONS) # Run this after adding new extensions to ensure there are no duplicates.
 
-# Put subtitle_ext before text_ext so .qt.txt matches before .txt
-all_known_extensions: list[str] = python_extensions + subtitle_extensions + \
-                                  text_extensions   + video_extensions    + \
-                                  audio_extensions  + image_extensions    + \
-                                  archive_extensions  
-# check_list_for_duplicates(all_extensions) # Run this after adding new extensions to ensure there are no duplicates. But in this case there WILL be because subtitle_extensions and text_extensions overlap.
+ALL_KNOWN_EXTENSIONS: list[str] = PYTHON_EXTENSIONS   + TEXT_EXTENSIONS  + \
+                                  SUBTITLE_EXTENSIONS + VIDEO_EXTENSIONS + \
+                                  AUDIO_EXTENSIONS    + IMAGE_EXTENSIONS + \
+                                  PLAYLIST_EXTENSIONS + ARCHIVE_EXTENSIONS
+# print(f"{len(ALL_KNOWN_EXTENSIONS)} total known extensions.")
+ALL_KNOWN_EXTENSIONS = list(set(ALL_KNOWN_EXTENSIONS))  # Remove duplicates
+# print(f"{len(ALL_KNOWN_EXTENSIONS)} total known extensions.")
+# for ext in ALL_KNOWN_EXTENSIONS:
+#     if any(c.isupper() for c in ext):
+#         raise ValueError(f"Extension '{ext}' in ALL_KNOWN_EXTENSIONS contains uppercase characters.")
+#     if ext.count('.') > 1:
+#         raise ValueError(f"Extension '{ext}' in ALL_KNOWN_EXTENSIONS contains multiple periods.")

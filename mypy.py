@@ -2460,7 +2460,7 @@ def main() -> None:
         if options.bad_imports:
             logging.warning("Bad imports: %s", options.bad_imports)
         if options.samedir_files:
-            logging.info("Imported files in the same directory as the script: %s", options.samedir_files)
+            logging.info("Imported files in the same directory as the script: %s", list(map(os.fspath, options.samedir_files)))
         if options.subfolders:
             logging.info("Imported subfolders: %s", options.subfolders)
 
@@ -5623,7 +5623,7 @@ def dict_of_custom_modules(options: Options) -> dict[str, Path]:
             logging.error("Falling back to regenerating the custom modules dictionary from sys.path.")
 
     custom_modules: dict[str, Path] = {}
-    exts_tuple  = tuple(ud.python_extensions)
+    exts_tuple  = tuple(ud.PYTHON_EXTENSIONS)
     package_dirs: set[Path] = set()  # directories confirmed to be packages
 
     # Use lru_cache to speed up repeated calls to is_standard_path()
