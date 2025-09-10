@@ -2754,6 +2754,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         """Visit Call nodes to find file operations."""
+        return
         logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("FileVisiting Call node: %s", ast.dump(node))
         if self._process_open(        node): return
         if self._process_pathlib(     node): return
@@ -3484,6 +3485,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
     
     def visit_Call(self, node: ast.Call) -> None:
         """Visit Call nodes to find network operations."""
+        return
         logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("NetworkVisiting Call node: %s", ast.dump(node))
         if self._process_requests(       node): return
         if self._process_urllib(         node): return
@@ -4317,10 +4319,10 @@ class ModuleInfo:
 
     def __init__(self, module_name: str) -> None:
         """Initialize the module information."""
-        self.module_name                                = module_name
-        self.top_level_imports: set[str]                = set()
+        self.module_name:                           str = module_name
+        self.top_level_imports:                set[str] = set()
         self.functions:         dict[str, FunctionInfo] = {}
-        self.top_level_calls:   set[str]                = set()
+        self.top_level_calls:                  set[str] = set()
         self.aliases:           dict[str, str]          = {}
         self.classes:           set[str]                = set()
 
@@ -4331,7 +4333,7 @@ class ImportFunctionCollector(ast.NodeVisitor):
     def __init__(self, module_name: str, options: Options,
                  file_path: str) -> None:
         """Initialize the import function collector."""
-        self.module_info = ModuleInfo(module_name)
+        self.module_info      = ModuleInfo(module_name)
         self.current_function = None
         self.current_class    = None
         self.aliases          = {}
@@ -4416,6 +4418,39 @@ class ImportFunctionCollector(ast.NodeVisitor):
             logging.error(f"No arguments provided to __import__(): {ast.unparse(node)}")
             return None
 
+    def _record_call(self, qualified: str) -> None:
+        """Record a function call, either in the current function or at the top level."""
+        if self.current_function:
+            self.module_info.functions[self.current_function].function_calls.add(qualified)
+        else:
+            self.module_info.top_level_calls.add(qualified)
+
+    def _maybe_alias(self, name: str) -> str:
+        """Replace the first part of `name` with its alias if it exists."""
+        parts = name.split('.')
+        if parts and parts[0] in self.aliases:
+            parts[0] = self.aliases[parts[0]]
+        return '.'.join(parts)
+
+    def _maybe_record_func_ref(self, node: ast.AST) -> None:
+        """If `node` looks like a reference to a function, record it as a call."""
+        ref = self.get_full_name(node)
+        if not ref:
+            return
+        # Case 1: plain name referring to a function defined in this module
+        if '.' not in ref and ref in self.module_info.functions:
+            self._record_call(ref)
+            return
+        # Case 2: class defined here passed as a constructor -> treat as __init__
+        if '.' not in ref and ref in self.module_info.classes:
+            self._record_call(f"{self.module_info.module_name}.{ref}.__init__")
+            return
+        # Case 3: qualified like other_module.func
+        if '.' in ref:
+            qualified = self._maybe_alias(ref)
+            self._record_call(qualified)
+            return
+
     def visit_Call(self, node: ast.Call) -> None:
         """Visit a function call and add it to the function's list of calls."""
         func_name = self.get_full_name(node.func)
@@ -4458,19 +4493,15 @@ class ImportFunctionCollector(ast.NodeVisitor):
                     if base_classes:
                         base_class = base_classes[0]  # Assuming single inheritance
                         func_name = f"{base_class}.{method_name}"
-                # Record super calls
-                if self.current_function:
-                    self.module_info.functions[self.current_function].function_calls.add(func_name)
-                    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Adding to %s.function_calls: %s", self.current_function, func_name)
-                else:
-                    self.module_info.top_level_calls.add(func_name)
-                    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Adding to top_level_calls: %s", func_name)
+                self._record_call(func_name)
             else:
                 # Normal calls
-                if self.current_function:
-                    self.module_info.functions[self.current_function].function_calls.add(func_name)
-                else:
-                    self.module_info.top_level_calls.add(func_name)
+                self._record_call(func_name)
+        for a in node.args:
+            self._maybe_record_func_ref(a)
+        for kw in node.keywords:
+            if kw.value is not None:
+                self._maybe_record_func_ref(kw.value)
         self.generic_visit(node)
         logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Call found: original func_name=%s, resolved func_name=%s", original_func_name, func_name)
         if self.current_function:

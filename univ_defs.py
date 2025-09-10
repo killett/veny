@@ -3084,6 +3084,67 @@ def ensure_even_dimensions(image_path: str | os.PathLike[str]) -> None:
             logging.info("Image already has even dimensions: width = %d, height = %d", width, height)
 
 
+def find_ffmpeg() -> str | None:
+    """
+    Return a full path to an ffmpeg executable if found, else None.
+    Tries: env vars, PATH, common Conda and Windows/Cygwin/MSYS installs,
+    and (optionally) imageio-ffmpeg if available.
+
+    Args:
+        None
+
+    Returns:
+        The path to the ffmpeg executable or None if not found.
+
+    Raises:
+        None
+    """
+    import shutil
+    # 1) Explicit env vars (user can set one of these)
+    for env_key in ("FFMPEG", "FFMPEG_PATH", "IMAGEIO_FFMPEG_EXE"):
+        p = os.environ.get(env_key)
+        if p and Path(p).exists():
+            return str(Path(p))
+
+    # 2) On PATH (handles .exe on Windows automatically)
+    for name in ("ffmpeg", "ffmpeg.exe"):
+        p = shutil.which(name)
+        if p:
+            return p
+
+    # 3) Typical Conda/Miniconda/Mambaforge locations
+    sp = Path(sys.prefix)  # current Python env prefix
+    candidates = [
+        sp / "bin" / "ffmpeg",                 # Unix-like
+        sp / "Library" / "bin" / "ffmpeg.exe", # Windows (Conda)
+        sp / "Scripts" / "ffmpeg.exe",         # Windows (alt)
+    ]
+
+    # 4) Common Windows installs (adjust or extend as you like)
+    candidates += [
+        Path(r"C:\Program Files\ffmpeg\bin\ffmpeg.exe"),
+        Path(r"C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe"),
+        Path(r"C:\ffmpeg\bin\ffmpeg.exe"),
+        Path(r"C:\cygwin64\bin\ffmpeg.exe"),
+        Path(r"C:\msys64\usr\bin\ffmpeg.exe"),
+    ]
+
+    # 5) Optional: imageio-ffmpeg packaged binary if user has it
+    try:
+        import imageio_ffmpeg  # type: ignore
+        p = imageio_ffmpeg.get_ffmpeg_exe()
+        if p and Path(p).exists():
+            return str(Path(p))
+    except Exception:
+        pass
+
+    for c in candidates:
+        if c.exists():
+            return str(c)
+
+    return None
+
+
 def human_bytesize(num: float | int, *, suffix: str = "B", si: bool = False, precision: int = 1,
                    space: bool = True, trim_trailing_zeros: bool = False, long_units: bool = False) -> str:
     """
@@ -4621,7 +4682,7 @@ def check_python_formatting(path: str | os.PathLike[str], diff_choice: int = 1) 
     HORIZONTAL_ELLIPSIS = "\u2026"  # U+2026 "HORIZONTAL ELLIPSIS" (three closely spaced periods)
 
     logging.warning("LOOK FOR logging.debug STATEMENTS THAT USE F-STRINGS OR THAT DON'T HAVE GUARDS!!")
-    
+
     if BACKTICK in src:
         logging.warning("File %s contains the backtick character (%r). Use straight quotation marks (') instead.", path, BACKTICK)
         if not ask_and_replace(old_str=BACKTICK, new_str="'", path=path, label='backtick',
@@ -4920,8 +4981,10 @@ def highlight_changes(orig: str, new: str, unchanged_color: str,
 
 def my_diff(orig_text: str, changed_text: str, orig_path: str | os.PathLike[str],
             changed_path: str | os.PathLike[str] | None = None,
-            diff_choice: int = 1, changed_color: str = ANSI_CYAN,
-            deleted_color: str = ANSI_RED, added_color: str = ANSI_YELLOW) -> None:
+            diff_choice: int = 1,
+            changed_color: str = ANSI_CYAN,
+            deleted_color: str = ANSI_RED,
+            added_color:   str = ANSI_YELLOW) -> None:
     """
     Show a diff between 'orig_text' and 'changed_text' in the console,
     highlighting character-level changes within changed lines.
@@ -5105,10 +5168,13 @@ def is_python_script(path: str | os.PathLike[str]) -> bool:
     return bool(re.match(r'#!.*\bpython[0-9.]*\b', first_line))
 
 
-def diff_and_confirm(orig_text: str, changed_text: str, path: str | os.PathLike[str], label: str = "",
+def diff_and_confirm(orig_text: str, changed_text: str,
+                     path: str | os.PathLike[str], label: str = "",
                      skip_compile: bool = False, diff_choice: int = 1,
-                     changed_color: str = ANSI_CYAN, deleted_color: str = ANSI_RED,
-                     added_color: str = ANSI_YELLOW, the_fix: str = "", description: str = "") -> bool:
+                     changed_color: str = ANSI_CYAN,
+                     deleted_color: str = ANSI_RED,
+                     added_color:   str = ANSI_YELLOW,
+                     the_fix: str = "", description: str = "") -> bool:
     """
     Show a unified diff of orig_text → changed_text with a number of context lines
     (determined by 'diff_choice') around each hunk, log using 'label' and 'description', then prompt.
@@ -5169,8 +5235,9 @@ def diff_and_confirm(orig_text: str, changed_text: str, path: str | os.PathLike[
 
 def ask_and_autopep8(path: str | os.PathLike[str], code: str,
                      description: str = "", diff_choice: int = 1,
-                     changed_color: str = ANSI_CYAN, deleted_color: str = ANSI_RED,
-                     added_color: str = ANSI_YELLOW) -> bool:
+                     changed_color: str = ANSI_CYAN,
+                     deleted_color: str = ANSI_RED,
+                     added_color:   str = ANSI_YELLOW) -> bool:
     """
     Prompt the user about fixing ALL occurrences of 'code' in 'path',
     and if yes, apply autopep8.fix_file with --select=code.
@@ -5232,10 +5299,13 @@ def ask_and_autopep8(path: str | os.PathLike[str], code: str,
                             the_fix=the_fix, description=description)
 
 
-def ask_and_replace(old_str: str, new_str: str, path: str | os.PathLike[str],  label: str = "",
+def ask_and_replace(old_str: str, new_str: str,
+                    path: str | os.PathLike[str],  label: str = "",
                     diff_choice: int = 1, description: str = "",
-                    changed_color: str = ANSI_CYAN, deleted_color: str = ANSI_RED,
-                    added_color: str = ANSI_YELLOW, skip_compile: bool = False) -> bool:
+                    changed_color: str = ANSI_CYAN,
+                    deleted_color: str = ANSI_RED,
+                    added_color:   str = ANSI_YELLOW,
+                    skip_compile: bool = False) -> bool:
     """
     Read 'path', do orig.replace(old, new), then show a diff and ask to confirm.
 
@@ -5374,8 +5444,9 @@ def multireplace(options: Options) -> None:
 
 def interactive_flake8(path: str | os.PathLike[str], diff_choice: int = 1,
                        ignore_codes: list[str] = [], max_line_length: int = 100,
-                       changed_color: str = ANSI_CYAN, deleted_color: str = ANSI_RED,
-                       added_color: str = ANSI_YELLOW) -> None:
+                       changed_color: str = ANSI_CYAN,
+                       deleted_color: str = ANSI_RED,
+                       added_color:   str = ANSI_YELLOW) -> None:
     """
     1) Run the flake8 API for summary counts.
     2) Shell out to flake8 CLI once to harvest one description per code.
@@ -6956,17 +7027,25 @@ def combine_html_files(file_paths: list[str | os.PathLike[str]],
 
 
 # Map these to spaces (treat like separators)
-characters_to_space = '._-'
-replace_with_space = ' ' * len(characters_to_space)
+CHARACTERS_TO_SPACE = '._-'
+REPLACE_WITH_SPACE = ' ' * len(CHARACTERS_TO_SPACE)
 # Delete these outright (quotes of various kinds)
 # Include double quote, apostrophe, backtick. Thanks to unidecode(),
 # curly/angle quotes become ASCII quotes and will be removed too.
-quotes_to_delete = "\"'`"
-translation_table = str.maketrans(characters_to_space, replace_with_space, quotes_to_delete)
+QUOTES_TO_DELETE = "\"'`"
+TRANSLATION_TABLE = str.maketrans(CHARACTERS_TO_SPACE, REPLACE_WITH_SPACE, QUOTES_TO_DELETE)
+
+
 def normalize_for_search(text: str) -> str:
     """Convert text to ASCII and lowercase for case- and diacritic-insensitive comparison. Also treat some characters such as ._- the same as spaces. Remove quotes (', ", ` and their unicode variants)."""
-    from unidecode import unidecode
-    return unidecode(text).casefold().translate(translation_table)
+    fallback_logging_config()
+    try:
+        from unidecode import unidecode
+        decoded_text = unidecode(text)
+    except (ImportError, ModuleNotFoundError):
+        logging.warning("unidecode module not installed; diacritics will not be removed.")
+        decoded_text = text
+    return decoded_text.casefold().translate(TRANSLATION_TABLE)
 
 
 def calculate_checksum(file_path: str | os.PathLike[str]) -> str:
