@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 
-# Written by Emmy Killett (she/her), ChatGPT 4o (it/its), ChatGPT o1-preview (it/its), ChatGPT o3-mini-high (it/its), ChatGPT o4-mini-high (it/its), ChatGPT 5 (it/its), and GitHub Copilot (it/its).
+# Written by Emmy Killett (she/her), ChatGPT 4o (it/its), ChatGPT o1-preview (it/its), ChatGPT o3-mini-high (it/its), ChatGPT o4-mini-high (it/its), ChatGPT 5 Thinking (it/its), and GitHub Copilot (it/its).
 from __future__ import annotations  # For Python 3.7+ compatibility with type annotations
 import os
 import sys
 from pathlib import Path  # Preferred over os.path for path manipulations.
 import logging
-from types import ModuleType
 from collections.abc import Iterator, Sequence
 from typing import TextIO, Any, TypeAlias, Type, Literal, Protocol
 import re  # Used to precompile regexes for performance
@@ -14,7 +13,7 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 
 # Version of univ_defs.py:
-__version__: str = "0.1.7"
+__version__: str = "0.2.0"
 
 # Version of python which should be used in scripts that import this module.
 # Python 3.12 is supported until 2028-10. https://devguide.python.org/versions/
@@ -50,18 +49,17 @@ IGNORED_CODES: list[str] = [
     "E271",  # multiple spaces  after keyword
     "E272",  # multiple spaces before keyword
     "E701",  # multiple statements on one line (colon)
+    "E702",  # multiple statements on one line (semicolon)
 ]
 
-
-def parent_unused_function() -> None:
-    """This function is not used in the test.py script."""
-    unused_function()
-
-
-def unused_function() -> None:
-    """This function is not used in the test.py script."""
-    print("This function is not used in the test.py script.")
-    import numpy as np
+# Check for some characters that I personally dislike in Python source code:
+BACKTICK            = "\u0060"  # U+0060 "GRAVE ACCENT" (the backtick)
+LSQUOTE             = "\u2018"  # U+2018 "LEFT  SINGLE QUOTATION MARK" (curly apostrophe)
+RSQUOTE             = "\u2019"  # U+2019 "RIGHT SINGLE QUOTATION MARK" (curly apostrophe)
+LDQUOTE             = "\u201C"  # U+201C "LEFT  DOUBLE QUOTATION MARK"
+RDQUOTE             = "\u201D"  # U+201D "RIGHT DOUBLE QUOTATION MARK"
+HORIZONTAL_ELLIPSIS = "\u2026"  # U+2026 "HORIZONTAL ELLIPSIS" (three closely spaced periods)
+EM_DASH             = "\u2014"  # U+2014 "EM DASH"
 
 
 class Options:
@@ -83,11 +81,11 @@ class PlotOptions(Options):
         self.myfigsize   = (16, 9)
         self.fsize       = 24
         self.dpi_choice  = 300
-        # keep immutable “base” palettes so we can recompute safely
-        self._base_colors      = ['black', 'red',    'blue',      'green',      'purple']
-        self._base_lightcolors = ['grey',  'pink',   'lightblue', 'lightgreen', 'lightpurple']
-        self.markers           = ['o',     's',      '^',         'v',          '<',          '>']
-        self.linestyles        = ['solid', 'dashed', 'dashdot',   'dotted']
+        # keep immutable "base" palettes so we can recompute safely
+        self._base_colors      = ["black", "red",    "blue",      "green",      "purple"]
+        self._base_lightcolors = ["grey",  "pink",   "lightblue", "lightgreen", "lightpurple"]
+        self.markers           = ["o",     "s",      "^",         "v",          "<",          ">"]
+        self.linestyles        = ["solid", "dashed", "dashdot",   "dotted"]
 
         self._dark_mode = False   # backing store
         self._apply_theme()       # derive palettes/background/text from _dark_mode
@@ -106,126 +104,16 @@ class PlotOptions(Options):
     def _apply_theme(self) -> None:
         """Apply the current theme (light or dark) to the plot options."""
         if self._dark_mode:
-            self.background_color = '#000000'
-            self.text_color       = '#FFFFFF'
-            # recompute “view” palettes from the bases
-            self.colors      = [ ('darkgrey' if  c == 'black' else c) for c in self._base_colors ]
-            self.lightcolors = [ ('lightgrey' if c == 'grey'  else c) for c in self._base_lightcolors ]
+            self.background_color = "#000000"
+            self.text_color       = "#FFFFFF"
+            # recompute "view" palettes from the bases
+            self.colors      = [ ("darkgrey" if  c == "black" else c) for c in self._base_colors ]
+            self.lightcolors = [ ("lightgrey" if c == "grey"  else c) for c in self._base_lightcolors ]
         else:
-            self.background_color = '#FFFFFF'
-            self.text_color       = '#000000'
+            self.background_color = "#FFFFFF"
+            self.text_color       = "#000000"
             self.colors      = list(self._base_colors)
             self.lightcolors = list(self._base_lightcolors)
-
-
-class UnivClass:
-    """Class that handles the import and operation of large language model APIs."""
-
-    def __init__(self) -> None:
-        """Initialize the class and import the necessary modules."""
-        self.import_test()
-
-    def import_test(self) -> None:
-        """ Test the import of this module by printing a message and the version of Python being used."""
-        import openai
-
-
-def return_method_name(levels_up: int = 1) -> str:
-    """
-    Return the caller's qualified method/function name.
-
-    - For instance methods: ClassName.method
-    - For classmethods:     ClassName.method
-    - For staticmethods:    ClassName.method on Python >= 3.11 (via co_qualname),
-                            otherwise just 'method' (class is not recoverable without heuristics)
-    - For functions:        function
-
-    Args:
-        levels_up: How many frames up to inspect (1 = caller). If greater than
-                   the stack depth, the highest available frame is used.
-    
-    Returns:
-        The current method name as a string, formatted as 'ClassName.method' or 'function'.
-    
-    Raises:
-        None: This function does not raise exceptions, but it may log warnings
-              if sys._getframe or inspect fails.
-    """
-    fallback_logging_config()
-    try:
-        levels = int(levels_up)
-    except Exception:
-        levels = 1
-    if levels < 1:
-        levels = 1
-    name = "<unknown>"
-    fr   = None
-    # Try sys._getframe first
-    try:
-        fr = sys._getframe(levels)  # Get the frame at the specified level
-    except Exception as e1:
-        logging.warning("return_method_name(): sys._getframe(%s) failed. Falling back to inspect...", levels, exc_info=e1)
-        try:
-            import inspect
-            frame = inspect.currentframe()
-            try:
-                fr = frame
-                climbed = 0
-                for _ in range(levels):
-                    if fr is None or fr.f_back is None:
-                        break
-                    fr = fr.f_back
-                    climbed += 1
-                if climbed < levels:
-                    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("return_method_name(): truncated at top of stack (requested levels_up=%s but only climbed=%s)", levels, climbed)
-            finally:
-                if frame is not None:
-                    try:
-                        frame.clear()
-                    except Exception:
-                        pass
-                    del frame
-        except Exception as e2:
-            logging.warning("return_method_name(): inspect fallback failed", exc_info=e2)
-            fr = None
-    if fr is not None:
-        # Python 3.11+: co_qualname gives 'Class.method' (or 'outer.<locals>.inner')
-        qual = getattr(fr.f_code, "co_qualname", None)
-        if isinstance(qual, str) and qual:
-            # Remove all occurrences of '.<locals>.' from the qualified name.
-            name = qual.replace(".<locals>.", ".")
-        else:
-            func     = fr.f_code.co_name
-            self_obj = fr.f_locals.get("self")
-            cls_obj  = fr.f_locals.get("cls")
-            if self_obj is not None:
-                name = f"{type(self_obj).__qualname__}.{func}"
-            elif isinstance(cls_obj, type):
-                name = f"{cls_obj.__qualname__}.{func}"
-            else:
-                argc = getattr(fr.f_code, "co_posonlyargcount", 0) + fr.f_code.co_argcount
-                if argc:
-                    for a in fr.f_code.co_varnames[:argc]:
-                        obj = fr.f_locals.get(a)
-                        if obj is not None:
-                            t = obj if isinstance(obj, type) else type(obj)
-                            attr = getattr(t, func, None)
-                            if attr is not None:
-                                name = f"{getattr(t, '__qualname__', t.__name__)}.{func}"
-                                break
-                    else:
-                        name = func
-                else:
-                    name = func
-    else:
-        logging.warning("return_method_name(): no frame available.")
-    if fr is not None:
-        if name == "<module>":
-            mod = fr.f_globals.get("__name__")
-            if isinstance(mod, str) and mod:
-                name = mod
-    fr = None  # Clear the frame reference to free memory.
-    return name
 
 
 class SelectionStrategy(str, Enum):
@@ -293,6 +181,7 @@ class LLMConfig:
 _DEFAULT_MODEL_SKILL:      float =  0.5  # default skill level for models without specific default skill
 _DEFAULT_MODEL_CONTEXT:      int = 8192  # default context window for models without specific context
 _DEFAULT_MODEL_PARAMETERS: float = 9E99  # default number of parameters for models without specific parameter count
+
 
 @dataclass
 class ModelInfo:
@@ -395,7 +284,7 @@ class LLMs:
         "gpt-4.1-mini": {
             "provider"   : "OpenAI",
             "context"    : 1_000_000,  # [S6] (OpenAI says 4.1 family supports up to 1M)
-            "code_skill" : 0.82,       # “beats 4o on many evals”; keep slightly above 4o-mini [S6]
+            "code_skill" : 0.82,       # "beats 4o on many evals"; keep slightly above 4o-mini [S6]
             "speed"      : 75.8,       # AA aggregate (time-varying)
             "local"      : False,
             "parameters" : _DEFAULT_MODEL_PARAMETERS,
@@ -405,7 +294,7 @@ class LLMs:
             "provider"   : "OpenAI",
             "context"    : 1_000_000,  # [S6]
             "code_skill" : 0.65,       # small, but 1M ctx and better than 4o-mini on some evals [S6]
-            "TTFT"       : 5.0,        # “often <5s” for 128k inputs (OpenAI) [S7]
+            "TTFT"       : 5.0,        # "often <5s" for 128k inputs (OpenAI) [S7]
             "local"      : False,
             "parameters" : _DEFAULT_MODEL_PARAMETERS,
         },
@@ -440,7 +329,7 @@ class LLMs:
         "gpt-5": {
             "provider"      : "OpenAI",
             "context"       : 400_000,  # API total context, 128k max output (OpenAI) [S1]
-            "code_skill"    : 0.96,     # frontier; AA shows top “intelligence index” class [S1,S21]
+            "code_skill"    : 0.96,     # frontier; AA shows top "intelligence index" class [S1,S21]
             "general_skill" : 0.95,     # AA Intelligence Index leader tier [S1,S21]
             "local"         : False,
             "parameters"    : _DEFAULT_MODEL_PARAMETERS,
@@ -609,50 +498,50 @@ class LLMs:
     ##################################
     # References
     ##################################
-    #  S1 — OpenAI: Introducing GPT-5 for developers — https://openai.com/index/introducing-gpt-5-for-developers/  
-    #  S2 — Artificial Analysis: GPT-4.1 (speed/latency/TPS aggregates) — https://artificialanalysis.ai/models/gpt-4-1  
-    #  S3 — Aider LLM Leaderboards (Polyglot code-editing benchmark) — https://aider.chat/docs/leaderboards/  
-    #  S4 — OpenAI: Introducing GPT-5 (overview/benchmarks) — https://openai.com/index/introducing-gpt-5/  
-    #  S5 — OpenAI: Introducing GPT-4.1 in the API (capabilities & SWE-bench Verified) — https://openai.com/index/gpt-4-1/  
-    #  S6 — OpenAI: GPT-4.1 long-context details (up to 1M tokens) — https://openai.com/index/gpt-4-1/#long-context  
-    #  S7 — Artificial Analysis: GPT-4.1 (Providers view; TTFT/output speed) — https://artificialanalysis.ai/models/gpt-4-1/providers  
-    #  S8 — Mistral Docs: Models Overview (incl. mistral-medium-2505/2508, codestral-2508) — https://docs.mistral.ai/getting-started/models/models_overview/  
-    #  S9 — Mistral Blog: “Large Enough” (Mistral Large 2; 128k context, positioning) — https://mistral.ai/news/mistral-large-2407  
-    # S10 — Mistral Blog: Codestral 25.01 announcement — https://mistral.ai/news/codestral-2501  
-    # S11 — Artificial Analysis: Mistral Large 2 (quality/price/speed aggregates) — https://artificialanalysis.ai/models/mistral-large-2  
-    # S12 — Artificial Analysis: o3-mini (speed/latency metrics) — https://artificialanalysis.ai/models/o3-mini  
-    # S13 — OpenAI: Introducing o3 and o4-mini (reasoning series) — https://openai.com/index/introducing-o3-and-o4-mini/  
-    # S14 — TextCortex review: o3-mini vs o1-mini (relative response speed) — https://textcortex.com/post/openai-o3-mini-review  
-    # S15 — Mistral Docs: Codestral 2508 (latest Codestral release entry) — https://docs.mistral.ai/getting-started/models/models_overview/#codestral-2508  
-    # S16 — Anthropic News: Claude 3.7 Sonnet launch/overview — https://www.anthropic.com/news/claude-3-7-sonnet  
-    # S17 — AWS Blog: Mistral Large 2 now in Bedrock (confirms 128k context) — https://aws.amazon.com/blogs/machine-learning/mistral-large-2-is-now-available-in-amazon-bedrock/  
-    # S18 — IBM Granite-3B-Code-Instruct model card (context/perf references) — https://huggingface.co/ibm-granite/granite-3b-code-instruct  
-    # S19 — OpenAI: New tools & features in the Responses API (o3/o4-mini integration; 2025) — https://openai.com/index/new-tools-and-features-in-the-responses-api/  
-    # S20 — Anthropic News: Claude Opus 4.1 (SWE-bench Verified 74.5%) — https://www.anthropic.com/news/claude-opus-4-1  
-    # S21 — OpenAI: GPT-5 (coding focus; SWE-bench methodology note) — https://openai.com/index/introducing-gpt-5/  
-    # S22 — The Verge: GPT-4.1 in ChatGPT (rollout; context & coding improvements) — https://www.theverge.com/news/667507/openai-chatgpt-gpt-4-1-ai-model-general-availability  
-    # S23 — NVIDIA NIM Ref: Mistral Large 2 Instruct (128k context confirmation) — https://docs.api.nvidia.com/nim/reference/mistralai-mistral-large-2-instruct  
-    # S24 — OpenAI Blog: GPT-4o mini (128k context & pricing) — https://openai.com/index/gpt-4o-mini-advancing-cost-efficient-intelligence/  
-    # S25 — OpenAI Docs: o4-mini model page — https://platform.openai.com/docs/models/o4-mini  
-    # S26 — Qwen2.5-Coder technical report (benchmarks overview) — https://arxiv.org/abs/2501.03012  
-    # S27 — HF Model Card: Qwen2.5-Coder-3B-Base — https://huggingface.co/Qwen/Qwen2.5-Coder-3B  
-    # S28 — OpenAI Help: o3 & o4-mini context (200k) — https://help.openai.com/en/articles/9855712-openai-o1-models-faq-chatgpt-enterprise-and-edu  
-    # S29 — StarCoder2 paper (model details; evals) — https://arxiv.org/abs/2402.19173  
-    # S30 — HF Model Card: BigCode/StarCoder2-3B — https://huggingface.co/bigcode/starcoder2-3b  
-    # S31 — Phi-3 Technical Report (MMLU 69% etc.) — https://arxiv.org/abs/2404.14219  
-    # S32 — Meta Llama 3 models overview (general capability references) — https://www.llama.com/models/llama-3/  
-    # S33 — HF Model Card: microsoft/Phi-3-mini-128k-instruct (3.8B; 128k ctx) — https://huggingface.co/microsoft/Phi-3-mini-128k-instruct  
-    # S34 — NVIDIA NIM / HF: Phi-3.5-MoE (128k ctx; MoE details) — https://docs.api.nvidia.com/nim/reference/microsoft-phi-3_5-moe  
-    # S35 — HF Model Card: meta-llama/Meta-Llama-3-8B (8k ctx; base references) — https://huggingface.co/meta-llama/Meta-Llama-3-8B  
+    #  S1 — OpenAI: Introducing GPT-5 for developers — https://openai.com/index/introducing-gpt-5-for-developers/
+    #  S2 — Artificial Analysis: GPT-4.1 (speed/latency/TPS aggregates) — https://artificialanalysis.ai/models/gpt-4-1
+    #  S3 — Aider LLM Leaderboards (Polyglot code-editing benchmark) — https://aider.chat/docs/leaderboards/
+    #  S4 — OpenAI: Introducing GPT-5 (overview/benchmarks) — https://openai.com/index/introducing-gpt-5/
+    #  S5 — OpenAI: Introducing GPT-4.1 in the API (capabilities & SWE-bench Verified) — https://openai.com/index/gpt-4-1/
+    #  S6 — OpenAI: GPT-4.1 long-context details (up to 1M tokens) — https://openai.com/index/gpt-4-1/#long-context
+    #  S7 — Artificial Analysis: GPT-4.1 (Providers view; TTFT/output speed) — https://artificialanalysis.ai/models/gpt-4-1/providers
+    #  S8 — Mistral Docs: Models Overview (incl. mistral-medium-2505/2508, codestral-2508) — https://docs.mistral.ai/getting-started/models/models_overview/
+    #  S9 — Mistral Blog: "Large Enough" (Mistral Large 2; 128k context, positioning) — https://mistral.ai/news/mistral-large-2407
+    # S10 — Mistral Blog: Codestral 25.01 announcement — https://mistral.ai/news/codestral-2501
+    # S11 — Artificial Analysis: Mistral Large 2 (quality/price/speed aggregates) — https://artificialanalysis.ai/models/mistral-large-2
+    # S12 — Artificial Analysis: o3-mini (speed/latency metrics) — https://artificialanalysis.ai/models/o3-mini
+    # S13 — OpenAI: Introducing o3 and o4-mini (reasoning series) — https://openai.com/index/introducing-o3-and-o4-mini/
+    # S14 — TextCortex review: o3-mini vs o1-mini (relative response speed) — https://textcortex.com/post/openai-o3-mini-review
+    # S15 — Mistral Docs: Codestral 2508 (latest Codestral release entry) — https://docs.mistral.ai/getting-started/models/models_overview/#codestral-2508
+    # S16 — Anthropic News: Claude 3.7 Sonnet launch/overview — https://www.anthropic.com/news/claude-3-7-sonnet
+    # S17 — AWS Blog: Mistral Large 2 now in Bedrock (confirms 128k context) — https://aws.amazon.com/blogs/machine-learning/mistral-large-2-is-now-available-in-amazon-bedrock/
+    # S18 — IBM Granite-3B-Code-Instruct model card (context/perf references) — https://huggingface.co/ibm-granite/granite-3b-code-instruct
+    # S19 — OpenAI: New tools & features in the Responses API (o3/o4-mini integration; 2025) — https://openai.com/index/new-tools-and-features-in-the-responses-api/
+    # S20 — Anthropic News: Claude Opus 4.1 (SWE-bench Verified 74.5%) — https://www.anthropic.com/news/claude-opus-4-1
+    # S21 — OpenAI: GPT-5 (coding focus; SWE-bench methodology note) — https://openai.com/index/introducing-gpt-5/
+    # S22 — The Verge: GPT-4.1 in ChatGPT (rollout; context & coding improvements) — https://www.theverge.com/news/667507/openai-chatgpt-gpt-4-1-ai-model-general-availability
+    # S23 — NVIDIA NIM Ref: Mistral Large 2 Instruct (128k context confirmation) — https://docs.api.nvidia.com/nim/reference/mistralai-mistral-large-2-instruct
+    # S24 — OpenAI Blog: GPT-4o mini (128k context & pricing) — https://openai.com/index/gpt-4o-mini-advancing-cost-efficient-intelligence/
+    # S25 — OpenAI Docs: o4-mini model page — https://platform.openai.com/docs/models/o4-mini
+    # S26 — Qwen2.5-Coder technical report (benchmarks overview) — https://arxiv.org/abs/2501.03012
+    # S27 — HF Model Card: Qwen2.5-Coder-3B-Base — https://huggingface.co/Qwen/Qwen2.5-Coder-3B
+    # S28 — OpenAI Help: o3 & o4-mini context (200k) — https://help.openai.com/en/articles/9855712-openai-o1-models-faq-chatgpt-enterprise-and-edu
+    # S29 — StarCoder2 paper (model details; evals) — https://arxiv.org/abs/2402.19173
+    # S30 — HF Model Card: BigCode/StarCoder2-3B — https://huggingface.co/bigcode/starcoder2-3b
+    # S31 — Phi-3 Technical Report (MMLU 69% etc.) — https://arxiv.org/abs/2404.14219
+    # S32 — Meta Llama 3 models overview (general capability references) — https://www.llama.com/models/llama-3/
+    # S33 — HF Model Card: microsoft/Phi-3-mini-128k-instruct (3.8B; 128k ctx) — https://huggingface.co/microsoft/Phi-3-mini-128k-instruct
+    # S34 — NVIDIA NIM / HF: Phi-3.5-MoE (128k ctx; MoE details) — https://docs.api.nvidia.com/nim/reference/microsoft-phi-3_5-moe
+    # S35 — HF Model Card: meta-llama/Meta-Llama-3-8B (8k ctx; base references) — https://huggingface.co/meta-llama/Meta-Llama-3-8B
     # S36 — Artificial Analysis: Claude 3.7 Sonnet (standard/thinking; TTFT & TPS) — https://artificialanalysis.ai/models/claude-3-7-sonnet / https://artificialanalysis.ai/models/claude-3-7-sonnet-thinking
     # S37 — OpenAI Community - https://community.openai.com/t/what-is-the-token-context-window-size-of-the-gpt-4-o1-preview-model/954321
     # S38 - https://huggingface.co/google/codegemma-2b
     # S39 - https://arxiv.org/pdf/2406.11409
     # S40 - https://huggingface.co/ibm-granite/granite-3b-code-instruct-128k/blame/main/README.md
     # S41 - https://www.ibm.com/docs/en/watsonx/w-and-w/2.2.0?topic=models-granite-3b-code-instruct-v2-model-card
-    # S42 - MMLU-CF leaderboard — row “Mistral-7B-instruct-v0.3” (MMLU 5-shot 60.3; MMLU-CF 5-shot 50.7; also 0-shot values) - https://github.com/microsoft/MMLU-CF
+    # S42 - MMLU-CF leaderboard — row "Mistral-7B-instruct-v0.3" (MMLU 5-shot 60.3; MMLU-CF 5-shot 50.7; also 0-shot values) - https://github.com/microsoft/MMLU-CF
     # S43 - Evaluating Code Quality from Quantized LLMs — reports Mistral Instruct 7B HumanEval+ pass@1 ≈ 25% (notes the EvalPlus variant) - https://arxiv.org/pdf/2411.10656
-    # S44 - Mistral 7B announcement — qualitative coding claim “approaches CodeLlama 7B performance on code” - https://mistral.ai/news/announcing-mistral-7b
+    # S44 - Mistral 7B announcement — qualitative coding claim "approaches CodeLlama 7B performance on code" - https://mistral.ai/news/announcing-mistral-7b
     # S45 - Meta Llama 3.1 8B Instruct model card — instruction-tuned benchmarks incl. MMLU 69.4, HumanEval 72.6, MBPP++ 72.8 - https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct
     # S46 - Llama 3.1 8B Instruct eval details dataset — per-task results backing the model card table - https://huggingface.co/datasets/meta-llama/Llama-3.1-8B-Instruct-evals
 
@@ -671,16 +560,7 @@ class LLMs:
         Initialize legacy vendors immediately (keeps backward compat).
         LiteLLM is lazy-initialized when/if config.use_litellm is True.
         """
-        # Legacy direct API access:
-        self.llms: list[dict[str, str]] = [
-            {"name": "OpenAI",    "module": "openai",    "env_var": "OPENAI_API_KEY"},
-            {"name": "Anthropic", "module": "anthropic", "env_var": "ANTHROPIC_API_KEY"},
-        ]
-        self.found_llms:                         dict[str, bool] = {}
-        self.llm_modules:                  dict[str, ModuleType] = {}
-        self.clients:                             dict[str, Any] = {}
-
-        # New LiteLLM configuration:
+        # LiteLLM configuration:
         self._config:                           LLMConfig | None = None
         self._selected:                         ModelInfo | None = None
         self._candidates_after_filter:           list[ModelInfo] = []
@@ -690,11 +570,18 @@ class LLMs:
         self._litellm_ready:                                bool = False
         self._litellm_mod:                            Any | None = None
         self._legacy_available:                             bool = False
-
         self._register_builtin_strategies()
         self.init_llms()  # sets up legacy clients
 
-        # Keep public fields for back-compat with existing call sites.
+        # Legacy direct API access:
+        from types import ModuleType
+        self.llms: list[dict[str, str]] = [
+            {"name": "OpenAI",    "module": "openai",    "env_var": "OPENAI_API_KEY"},
+            {"name": "Anthropic", "module": "anthropic", "env_var": "ANTHROPIC_API_KEY"},
+        ]
+        self.found_llms:                         dict[str, bool] = {}
+        self.llm_modules:                  dict[str, ModuleType] = {}
+        self.clients:                             dict[str, Any] = {}
         self.model:   str = "gpt-3.5-turbo"
         self.company: str = "OpenAI"
 
@@ -816,13 +703,13 @@ class LLMs:
         ])
         if wants_multi and strategy_name == SelectionStrategy.CHEAPEST.value:
             strategy_name = "multi_objective"
-        
+
         strategy_fn = self._strategies.get(strategy_name)
         if strategy_fn is None:
             strategy_name = SelectionStrategy.CHEAPEST.value
             strategy_fn = self._strategies[strategy_name]
         self._last_strategy = strategy_name
-        
+
         winner         = strategy_fn(self._candidates_after_filter, ctx)
         self._selected = winner
         self.model     = winner.name
@@ -879,17 +766,23 @@ class LLMs:
             return min(cands, key=key)
 
         def lowest_TTFT(cands: Sequence[ModelInfo], ctx: SelectionContext) -> ModelInfo:
-            """Lowest TTFT (Time To First Token) among candidates."""
-            # Treat unknown TTFT as worst; tie-break by price
-            def key(m: ModelInfo):
+            """
+            Lowest TTFT (Time To First Token) among candidates.
+            Treat unknown TTFT as worst; tie-break by price.
+            """
+            def key(m: ModelInfo) -> tuple[float, float]:
+                """Key function for lowest_TTFT strategy."""
                 TTFT = m.TTFT if m.TTFT is not None else float("inf")
                 return (TTFT, m.estimate_cost(ctx.tokens_in, ctx.tokens_out))
             return min(cands, key=key)
 
         def fastest(cands: Sequence[ModelInfo], ctx: SelectionContext) -> ModelInfo:
-            """Fastest model among candidates."""
-            # Highest speed is best; unknown speed is worst; tie-break by price
-            def key(m: ModelInfo):
+            """
+            Fastest model among candidates.
+            Highest speed is best; unknown speed is worst; tie-break by price.
+            """
+            def key(m: ModelInfo) -> tuple[float, float]:
+                """Key function for fastest strategy."""
                 sp = m.speed if m.speed is not None else -1.0
                 # We invert for max; min() will prefer higher speed by sorting negative
                 return (-sp, m.estimate_cost(ctx.tokens_in, ctx.tokens_out))
@@ -1171,7 +1064,7 @@ class LLMs:
                 reasons[mi.name] = r
             else:
                 filtered.append(mi)
-                reasons[mi.name] = []  # << capture “no reasons” for included models
+                reasons[mi.name] = []  # << capture "no reasons" for included models
         return filtered, reasons
 
     def _is_provider_available(self, provider: str, model: str) -> bool:
@@ -1275,7 +1168,7 @@ class LLMs:
             self._litellm_mod   = litellm
             self._litellm_ready = True
         except ImportError as e:
-            my_critical_error(f"LiteLLM is enabled but not installed. `pip install litellm` Error: {e}")
+            my_critical_error(f"LiteLLM is enabled but not installed. 'pip install litellm' Error: {e}")
 
     def _http_get_json(self, url: str, timeout: float = 2.0) -> dict[str, Any] | None:
         """Helper to GET a URL and parse JSON, returning None on any failure."""
@@ -1388,6 +1281,7 @@ class LLMs:
 
     @staticmethod
     def _deep_get(d: dict[str, Any], path: list[str]) -> Any:
+        """Safely get a nested value from a dict."""
         cur: Any = d
         for key in path:
             if not isinstance(cur, dict) or key not in cur:
@@ -1435,7 +1329,7 @@ class LLMs:
 
     def tokenize(self, text: str, model: str | None = None) -> int:
         """
-        Return the number of tokens in `text` under the tokenizer best-suited to `model`.
+        Return the number of tokens in 'text' under the tokenizer best-suited to 'model'.
 
         Preference order:
         1) Local Ollama runtime -> call /api/tokenize
@@ -1545,7 +1439,8 @@ class LLMs:
             pass
 
         # --- 4) Rough heuristic fallback (no libs / no server tokenizer) ---
-        import math, re
+        import math
+        import re
         s = text if isinstance(text, str) else str(text)
         # Count word-like + punctuation chunks; ensure at least 1
         rough = len(re.findall(r"\w+|[^\s\w]", s, flags=re.UNICODE))
@@ -1610,7 +1505,7 @@ def fallback_logging_config(log_level: int | str = logging.INFO, rawlog: bool = 
 
 
 def configure_logging(basename: str, log_level: int | str = logging.INFO,
-                      rawlog: bool = False, logdir: str | os.PathLike[str] = '') -> MemoryHandler:
+                      rawlog: bool = False, logdir: str | os.PathLike[str] = "") -> MemoryHandler:
     """Configure logging to write to files and stdout/stderr, and return a MemoryHandler to capture ERROR logs for later (duplicate) printing."""
     import datetime as dt
 
@@ -1626,7 +1521,7 @@ def configure_logging(basename: str, log_level: int | str = logging.INFO,
     if not logdir:  # Default to the current working directory if no logdir is provided.
         logdir = Path.cwd() / "logs"
     else:
-        logdir = Path(logdir).expanduser().resolve()
+        logdir = ensure_path(logdir)
     logdir.mkdir(parents=True, exist_ok=True)
 
     now = dt.datetime.now()
@@ -1659,9 +1554,9 @@ def configure_logging(basename: str, log_level: int | str = logging.INFO,
 
     # Define the formatter based on the no_prefix parameter
     if rawlog:
-        log_format = logging.Formatter('%(message)s')
+        log_format = logging.Formatter("%(message)s")
     else:
-        log_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        log_format = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 
     debug_info_handler.setFormatter(    log_format)
     warning_error_handler.setFormatter( log_format)
@@ -1730,7 +1625,7 @@ def my_popen(command_list: list, suppress_info: bool = False,
     import shlex
     fallback_logging_config(log_level=logging.INFO if not suppress_info else logging.ERROR)
     command_list_str = [str(item) for item in command_list]
-    the_statement = "Executing command: " + ' '.join(shlex.quote(os.fspath(arg)) for arg in command_list_str)
+    the_statement = "Executing command: " + " ".join(shlex.quote(os.fspath(arg)) for arg in command_list_str)
     if not suppress_info:
         logging.info(the_statement)
     else:
@@ -1781,8 +1676,8 @@ def my_popen(command_list: list, suppress_info: bool = False,
         stdout_thread.join()
         stderr_thread.join()
 
-        stdout = ''.join(stdout_lines)
-        stderr = ''.join(stderr_lines)
+        stdout = "".join(stdout_lines)
+        stderr = "".join(stderr_lines)
 
         return MyPopenResult(stdout=stdout, stderr=stderr, returncode=process.returncode)
 
@@ -1814,7 +1709,7 @@ def my_fopen(file_path: str | os.PathLike[str], suppress_errors: bool = False,
     """
     fallback_logging_config(log_level=logging.INFO if not suppress_errors else logging.CRITICAL,
                             rawlog=rawlog)
-    file_path = Path(file_path).expanduser().resolve()
+    file_path = ensure_path(file_path)
     if not file_path.exists():
         this_message = f"File does not exist: {file_path}"
         if not rawlog:
@@ -1835,33 +1730,33 @@ def my_fopen(file_path: str | os.PathLike[str], suppress_errors: bool = False,
         return False
     # Does the file end with any of these (non-text) extensions?
     # Join all suffixes because some listed extensions look like ".tar.gz"
-    if "".join(file_path.suffixes).casefold() in VIDEO_EXTENSIONS:
+    if "".join(file_path.suffixes).casefold() in VIDEO_EXTENSIONS_SET:
         if not rawlog:
             if not suppress_errors: logging.error("Skipping video file %s", file_path)
             else:                   logging.info( "Skipping video file %s", file_path)
         return False
-    if "".join(file_path.suffixes).casefold() in AUDIO_EXTENSIONS:
+    if "".join(file_path.suffixes).casefold() in AUDIO_EXTENSIONS_SET:
         if not rawlog:
             if not suppress_errors: logging.error("Skipping audio file %s", file_path)
             else:                   logging.info( "Skipping audio file %s", file_path)
         return False
-    if "".join(file_path.suffixes).casefold() in IMAGE_EXTENSIONS:
+    if "".join(file_path.suffixes).casefold() in IMAGE_EXTENSIONS_SET:
         if not rawlog:
             if not suppress_errors: logging.error("Skipping image file %s", file_path)
             else:                   logging.info( "Skipping image file %s", file_path)
         return False
-    if "".join(file_path.suffixes).casefold() in ARCHIVE_EXTENSIONS:
+    if "".join(file_path.suffixes).casefold() in ARCHIVE_EXTENSIONS_SET:
         if not rawlog:
             if not suppress_errors: logging.error("Skipping archive file %s", file_path)
             else:                   logging.info( "Skipping archive file %s", file_path)
         return False
-    for encoding in TEXT_ENCODINGS:
+    for encoding in TEXT_ENCODINGS:  # use the (ordered) list so more commonly used encodings are tried first.
         try:
-            with open(file_path, 'r', encoding=encoding) as file:
+            with open(file_path, "r", encoding=encoding) as file:
                 if numlines is None:
                     file_content = file.read()
                 else:
-                    file_content = ''.join(file.readline() for _ in range(numlines))
+                    file_content = "".join(file.readline() for _ in range(numlines))
             logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Successfully read %s with encoding %s", file_path, encoding)
             return file_content  # Exit the function if reading is successful
         except UnicodeDecodeError:
@@ -1869,7 +1764,7 @@ def my_fopen(file_path: str | os.PathLike[str], suppress_errors: bool = False,
             if not suppress_errors: logging.warning(this_message, exc_info=True)
             else:                   logging.info(   this_message, exc_info=True)
             continue
-        except Exception: # Catch any other exceptions that might occur, but don't crash.
+        except Exception:  # Catch any other exceptions that might occur, but don't crash.
             this_message = f"Error reading file {file_path} with encoding {encoding}."
             if not rawlog:
                 if not suppress_errors: logging.error(this_message, exc_info=True)
@@ -1930,13 +1825,13 @@ def load_ast_var(var_name: str, script_path: str | os.PathLike[str],
 def _sanitize_text_signature(sig: str | None) -> str:
     """
     Clean up a __text_signature__ string for display.
-    
+
     Args:
         sig: The __text_signature__ string to clean up.
-    
+
     Returns:
         A cleaned-up version of the signature string.
-    
+
     Raises:
         None.
     """
@@ -1955,13 +1850,13 @@ def _sanitize_text_signature(sig: str | None) -> str:
 def _builtin_stub(obj: object) -> str:
     """
     Return a stub definition for a built-in or C-extension function.
-    
+
     Args:
         obj: The built-in function or method object.
-    
+
     Returns:
         A string representing a stub definition of the function.
-    
+
     Raises:
         None.
     """
@@ -1984,12 +1879,12 @@ def _builtin_stub(obj: object) -> str:
 
     doc = inspect.getdoc(obj) or "Built-in function; Python source unavailable."
     doc = doc.replace('"""', '\\"""')  # keep our triple quotes intact
-    doc = indent(doc, '    ')
+    doc = indent(doc, "    ")
     return f"{header}def {def_name}{sig}:\n    \"\"\"\n{doc}\n    \"\"\"\n    ...\n"
 
 
 def show_function_source(target: object | str, *, unwrap: bool = True,
-                         file: TextIO | None = None) -> str:
+                         output: str | os.PathLike[str] | TextIO | None = None) -> str:
     """
     Print the full source text of a Python function (including comments,
     docstrings, decorators, and type hints).
@@ -2000,7 +1895,22 @@ def show_function_source(target: object | str, *, unwrap: bool = True,
                 in builtins, then as a dotted path via pydoc.locate (e.g. 'pkg.mod.func').
         unwrap: If True, attempt to unwrap decorated functions to show
                 the original implementation. Defaults to True.
-        file:   A file-like object to write to (defaults to sys.stdout).
+        output: A file-like object to write to (optional, defaults to sys.stdout). More details:
+    
+    Details on the "output" argument:
+    - None -> sys.stdout
+    - TextIO (e.g., sys.stdout, an open text file, StringIO) -> used as-is
+             (must be opened in *text* mode; binary streams are rejected)
+    - str | os.PathLike[str] -> treated as a path:
+             * '~' is expanded
+             * parent directories are created (parents=True, exist_ok=True)
+             * file is opened in append mode ('a', UTF-8)
+             * a one-line note is written indicating whether we created or appended
+    Notes:
+    - A trailing newline is added if the source text doesn't already end with one.
+    - If you pass the string "-" as the output path, it is treated as stdout.
+    - If the given path is an existing directory, an IsADirectoryError is raised.
+    - If you pass a binary stream, a TypeError is raised.
 
     Returns:
         str: The source text that was printed.
@@ -2014,7 +1924,9 @@ def show_function_source(target: object | str, *, unwrap: bool = True,
     import functools
     import inspect
     import pydoc
-    # Resolve the object if `target` is a string
+    import io
+    from collections.abc import Callable
+    # Resolve the object if 'target' is a string
     if isinstance(target, str):
         name = target
         frame = inspect.currentframe().f_back  # caller's frame
@@ -2065,15 +1977,65 @@ def show_function_source(target: object | str, *, unwrap: bool = True,
         if call and (inspect.isfunction(call) or inspect.ismethod(call)):
             obj = call
 
-    # Built-ins / C-extensions don’t have retrievable Python source
+    # Built-ins / C-extensions don't have retrievable Python source
     if inspect.isbuiltin(obj) or inspect.ismethoddescriptor(obj):
         src = _builtin_stub(obj)
     else:
         src = inspect.getsource(obj)
 
-    out = file or sys.stdout
-    # Preserve the exact text (including trailing newline if missing)
-    print(src, file=out, end="" if src.endswith("\n") else "\n")
+    # Decide where to write
+    out: TextIO
+    closer: Callable[[], None] | None = None  # callable to close if *we* open a file
+    note: str | None = None
+    if output is None:
+        out = sys.stdout
+    # Accept known text-mode IO bases directly
+    elif isinstance(output, (io.TextIOBase, io.StringIO)):
+        out = output
+    # Accept "-" as a common alias for stdout
+    elif isinstance(output, (str, os.PathLike)) and str(output) == "-":
+        out = sys.stdout
+    # Path-like or string path
+    elif isinstance(output, (str, os.PathLike)):
+        path = ensure_path(output, resolve=False)
+        # Fail fast if it's a directory
+        if path.exists() and path.is_dir():
+            raise IsADirectoryError(f"Output path is a directory: {path!s}")
+        # Ensure parents exist ('.' is fine to call mkdir() on with exist_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        existed = path.exists()
+        note = (f"# Appending to existing file: {path.resolve()}"
+                if existed
+                else f"# Creating new file: {path.resolve()}")
+        # Try atomic write helper if available; fall back on any failure.
+        _maw = globals().get("my_atomic_write")
+        if callable(_maw):
+            try:
+                # newline hygiene: one newline after note; ensure src ends with exactly one
+                payload = (note + "\n") + (src if src.endswith("\n") else src + "\n")
+                _maw(path, payload, "a", encoding="utf-8")
+                return src
+            except Exception:
+                # Non-atomic fallback below
+                pass
+        # newline="" lets print() manage newlines consistently across platforms
+        out = path.open("a", encoding="utf-8", newline="")
+        closer = out.close
+    # Last chance: duck-typed "file-like" with a text write() method.
+    # Reject binary streams explicitly.
+    elif hasattr(output, "write"):
+        if isinstance(output, (io.BufferedIOBase, io.RawIOBase)):
+            raise TypeError("Binary streams are not supported; provide a text-mode stream.")
+        out = output  # type: ignore[assignment]
+    else:
+        raise TypeError("output must be None, a path (str/os.PathLike), or a text-mode TextIO.")
+    try:
+        if note:
+            print(note, file=out)
+        print(src, file=out, end="" if src.endswith("\n") else "\n")
+    finally:
+        if closer is not None:
+            closer()
     return src
 
 
@@ -2096,6 +2058,104 @@ def normalize_to_dict(value: Any, var_name: str, script_path: str | os.PathLike[
     else:
         logging.warning("Variable %r in %s is of type %s, expected dict or JSON string.", var_name, script_path, type(value).__name__)
     return {}
+
+
+def return_method_name(levels_up: int = 1) -> str:
+    """
+    Return the caller's qualified method/function name.
+
+    - For instance methods: ClassName.method
+    - For classmethods:     ClassName.method
+    - For staticmethods:    ClassName.method on Python >= 3.11 (via co_qualname),
+                            otherwise just 'method' (class is not recoverable without heuristics)
+    - For functions:        function
+
+    Args:
+        levels_up: How many frames up to inspect (1 = caller). If greater than
+                   the stack depth, the highest available frame is used.
+
+    Returns:
+        The current method name as a string, formatted as 'ClassName.method' or 'function'.
+
+    Raises:
+        None: This function does not raise exceptions, but it may log warnings
+              if sys._getframe or inspect fails.
+    """
+    fallback_logging_config()
+    try:
+        levels = int(levels_up)
+    except Exception:
+        levels = 1
+    if levels < 1:
+        levels = 1
+    name = "<unknown>"
+    fr   = None
+    # Try sys._getframe first
+    try:
+        fr = sys._getframe(levels)  # Get the frame at the specified level
+    except Exception as e1:
+        logging.warning("return_method_name(): sys._getframe(%s) failed. Falling back to inspect...", levels, exc_info=e1)
+        try:
+            import inspect
+            frame = inspect.currentframe()
+            try:
+                fr = frame
+                climbed = 0
+                for _ in range(levels):
+                    if fr is None or fr.f_back is None:
+                        break
+                    fr = fr.f_back
+                    climbed += 1
+                if climbed < levels:
+                    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("return_method_name(): truncated at top of stack (requested levels_up=%s but only climbed=%s)", levels, climbed)
+            finally:
+                if frame is not None:
+                    try:
+                        frame.clear()
+                    except Exception:
+                        pass
+                    del frame
+        except Exception as e2:
+            logging.warning("return_method_name(): inspect fallback failed", exc_info=e2)
+            fr = None
+    if fr is not None:
+        # Python 3.11+: co_qualname gives 'Class.method' (or 'outer.<locals>.inner')
+        qual = getattr(fr.f_code, "co_qualname", None)
+        if isinstance(qual, str) and qual:
+            # Remove all occurrences of '.<locals>.' from the qualified name.
+            name = qual.replace(".<locals>.", ".")
+        else:
+            func     = fr.f_code.co_name
+            self_obj = fr.f_locals.get("self")
+            cls_obj  = fr.f_locals.get("cls")
+            if self_obj is not None:
+                name = f"{type(self_obj).__qualname__}.{func}"
+            elif isinstance(cls_obj, type):
+                name = f"{cls_obj.__qualname__}.{func}"
+            else:
+                argc = getattr(fr.f_code, "co_posonlyargcount", 0) + fr.f_code.co_argcount
+                if argc:
+                    for a in fr.f_code.co_varnames[:argc]:
+                        obj = fr.f_locals.get(a)
+                        if obj is not None:
+                            t = obj if isinstance(obj, type) else type(obj)
+                            attr = getattr(t, func, None)
+                            if attr is not None:
+                                name = f"{getattr(t, '__qualname__', t.__name__)}.{func}"
+                                break
+                    else:
+                        name = func
+                else:
+                    name = func
+    else:
+        logging.warning("return_method_name(): no frame available.")
+    if fr is not None:
+        if name == "<module>":
+            mod = fr.f_globals.get("__name__")
+            if isinstance(mod, str) and mod:
+                name = mod
+    fr = None  # Clear the frame reference to free memory.
+    return name
 
 
 def get_hostname_socket(rawlog: bool = False) -> str | None:
@@ -2131,7 +2191,7 @@ def get_hostname_subprocess_hostname(rawlog: bool = False) -> str | None:
     """Retrieves the hostname using the 'hostname' system command via subprocess."""
     try:
         import subprocess
-        result = subprocess.run(['hostname'], capture_output=True, text=True)
+        result = subprocess.run(["hostname"], capture_output=True, text=True)
         return result.stdout.strip()
     except Exception as e:
         if not rawlog: logging.warning("Failed to retrieve hostname using %s: %s", return_method_name(), e)
@@ -2143,7 +2203,7 @@ def get_hostname_subprocess_scutil(rawlog: bool = False) -> str | None:
     if sys.platform == "darwin":
         try:
             import subprocess
-            result = subprocess.run(['scutil', '--get', 'ComputerName'],
+            result = subprocess.run(["scutil", "--get", "ComputerName"],
                                     capture_output=True, text=True)
             return result.stdout.strip()
         except Exception as e:
@@ -2157,24 +2217,24 @@ def get_computer_name(rawlog: bool = False) -> str:
 
     Args:
         rawlog: If True, print statements are disabled.
-    
+
     Returns:
         A string representing the most common computer name obtained from the methods.
         If no names were retrieved, returns "ERROR-NO-NAME".
-    
+
     Raises:
         None: This function does not raise exceptions, but it may log warnings if no names are retrieved.
     """
     fallback_logging_config(rawlog=rawlog)
     methods = {
-        'socket_gethostname':  get_hostname_socket,
-        'platform_node':       get_hostname_platform,
-        'os_uname_nodename':   get_hostname_os_uname,
-        'subprocess_hostname': get_hostname_subprocess_hostname,
+        "socket_gethostname"  : get_hostname_socket,
+        "platform_node"       : get_hostname_platform,
+        "os_uname_nodename"   : get_hostname_os_uname,
+        "subprocess_hostname" : get_hostname_subprocess_hostname,
     }
 
     if sys.platform == "darwin":  # This next method is macOS-specific
-        methods['subprocess_scutil_computername'] = get_hostname_subprocess_scutil
+        methods["subprocess_scutil_computername"] = get_hostname_subprocess_scutil
 
     results = {}
 
@@ -2182,7 +2242,7 @@ def get_computer_name(rawlog: bool = False) -> str:
         try:
             name = method_func(rawlog=rawlog)
             if name:
-              results[method_name] = name
+                results[method_name] = name
         except Exception:  # Ignore all exceptions for individual methods
             if not rawlog: logging.exception("Method %s failed.", method_name)
             pass  # Skip methods that fail
@@ -2203,7 +2263,7 @@ def analyze_computer_name_results(results: dict[str, str], rawlog: bool = False)
     Returns:
         A string representing the most common computer name obtained from the methods.
         If no names were retrieved, returns "ERROR-NO-NAME".
-    
+
     Raises:
         None: This function does not raise exceptions, but it may log errors or warnings if
               no names (or differing names) are retrieved.
@@ -2229,10 +2289,10 @@ def analyze_computer_name_results(results: dict[str, str], rawlog: bool = False)
         differing = {name: count for name, count in most_common if name != primary_name}
 
         if not rawlog:
-            the_string = f"Multiple computer names detected:\n"
+            the_string =   "Multiple computer names detected:\n"
             the_string += f" - Most common name: {primary_name} (appeared {primary_count} times)\n"
             the_string += f" - Other names: {', '.join(f'{name} ({count} times)' for name, count in differing.items())}\n"
-            detailed_results_str = '\n'.join(f'     - {method}: {name}' for method, name in results.items())
+            detailed_results_str = "\n".join(f"     - {method}: {name}" for method, name in results.items())
             the_string += f" - Detailed method outputs:\n{detailed_results_str}"
             logging.warning(the_string)
 
@@ -2339,7 +2399,7 @@ def _dns_resolve(name: str, timeout: float) -> bool:
         logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("DNS: resolving %s (timeout=%f)", name, timeout)
         res = socket.getaddrinfo(name, None, type=socket.SOCK_STREAM)
         ok  = len(res) > 0
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("DNS: %s for %s", 'success' if ok else 'empty result', name)
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("DNS: %s for %s", "success" if ok else "empty result", name)
         return ok
     except OSError as exc:
         logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("DNS: failure for %s (%s)", name, exc)
@@ -2500,7 +2560,8 @@ def _should_use_proc_cap() -> bool:
     Avoids calling into Unix-only modules on Windows.
     """
     try:
-        import os, resource  # type: ignore
+        import os
+        import resource  # type: ignore
         return os.name == "posix" and hasattr(resource, "RLIMIT_NPROC")
     except Exception:
         return False
@@ -2585,7 +2646,7 @@ def _run_tcp_checks_with_pool(tcp_targets: list[tuple[str, int]],
                         if fut.result():
                             try:  # Optional: stop launching/awaiting more work asap
                                 pool.shutdown(cancel_futures=True)
-                            except TypeError:  # Python < 3.9 doesn’t support cancel_futures
+                            except TypeError:  # Python < 3.9 doesn't support cancel_futures
                                 pass
                             return True
                     except Exception as exc:
@@ -2608,7 +2669,7 @@ class CheckResult:
     captive_detected: bool
 
 
-def _check_once(timeout: float, workers: int,
+def _check_once(timeout:     float, workers: int,
                 include_ipv6: bool, ignore_proxies: bool) -> CheckResult:
     """
     Perform one pass of the connectivity checks.
@@ -2713,12 +2774,10 @@ def is_internet_available(timeout_per_step: float = 2.5,
     attempts: int = max(1, retries + 1)
     for attempt in range(1, attempts + 1):
         logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(f"Connectivity attempt {attempt}/{attempts}")
-        res = _check_once(
-            timeout=timeout_per_step,
-            workers=workers,
-            include_ipv6=include_ipv6,
-            ignore_proxies=ignore_proxies,
-        )
+        res = _check_once(timeout=timeout_per_step,
+                          workers=workers,
+                          include_ipv6=include_ipv6,
+                          ignore_proxies=ignore_proxies)
 
         logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
             "Result(tcp_ok=%s, dns_ok=%s, http_ok=%s, captive=%s)",
@@ -2743,7 +2802,7 @@ def is_internet_available(timeout_per_step: float = 2.5,
         # Otherwise, not enough evidence; possibly retry due to transient hiccups.
         if attempt < attempts:
             import time
-            import random
+            import random  # Jitter retries slightly.
             delay: float = 0.10 + 0.05 * attempt + random.uniform(0.0, 0.05)
             time.sleep(delay)
     return False
@@ -2758,14 +2817,14 @@ def detect_shell(options: Options) -> None:
 
     Returns:
         None, but updates options.shell with the detected shell name.
-    
+
     Raises:
         None, but logs an error if the shell cannot be detected via
         subprocess.CalledProcessError or FileNotFoundError.
     """
     import subprocess
     shell_path = os.getenv("SHELL")
-    if not shell_path: # If shell_path is None or empty (""), try to get the parent process name
+    if not shell_path:  # If shell_path is None or empty (""), try to get the parent process name
         try:
             logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("SHELL environment variable not set, trying to detect shell from parent process.")
             ppid   = os.getppid()
@@ -2775,7 +2834,7 @@ def detect_shell(options: Options) -> None:
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             logging.error(f"Error detecting shell via ps: {e}")
     if shell_path:
-        options.shell = Path(shell_path).resolve().name.lstrip("-")
+        options.shell = ensure_path(shell_path).name.lstrip("-")
     else:
         logging.error("Could not detect shell from SHELL environment variable or parent process.")
         options.shell = None
@@ -2784,14 +2843,14 @@ def detect_shell(options: Options) -> None:
 def find_shell_rc_file(options: Options) -> None:
     """
     Find the shell configuration file for the current user, store in options.rc_file.
-    For bash/zsh, also consider login‐shell files if the usual rc isn’t present.
+    For bash/zsh, also consider login‐shell files if the usual rc isn't present.
 
     Args:
         options: Options object containing the shell type and rc_file attribute.
 
     Returns:
         None, but updates options.rc_file with the path to the shell configuration file.
-    
+
     Raises:
         None, but logs an error if the shell is unsupported or if no rc file is found
         for the specified shell.
@@ -2823,7 +2882,7 @@ def find_shell_rc_file(options: Options) -> None:
     else:
         options.rc_file = None
         logging.error("No existing rc file found for %s shell in %s. Tried: %s.",
-                      options.shell, options.home, ', '.join(candidates))
+                      options.shell, options.home, ", ".join(candidates))
 
 
 def find_additional_alias_files(options: Options) -> None:
@@ -2850,29 +2909,160 @@ def find_additional_alias_files(options: Options) -> None:
     options.additional_alias_files = valid_files
 
 
-def ensure_path_is_a_file(path: str | os.PathLike[str], raise_on_empty: bool = False) -> Path:
+def ensure_path(path: str | os.PathLike[str],
+                resolve: bool = True,
+                expand:  bool = True,
+                strict:  bool = False) -> Path:
     """
-    Ensure that the given path is an existing file and return it as a Path object.
+    Ensure that the path is a Path. If not, make it a Path.
     
     Args:
-        path:           The path to check.
-        raise_on_empty: If True, raise an exception if the file is empty.
+        path:    The path to ensure is a Path object.
+        resolve: If True, resolve the path to its absolute form (following symlinks).
+        expand:  If True, expand user directories (e.g., ~) in the path.
+        strict:  If True, raise an error if the path does not exist. If False, return a Path object that may not exist.
+                 If resolve = False but strict = True, only check existence without following symlinks.
+
+    Returns:
+        A Path object representing the ensured path.
+
+    Raises:
+        FileNotFoundError:               If the path does not exist.
+        RuntimeError or OSError (ELOOP): If resolve(strict=True) and the symlink loops
+    """
+    p = path if isinstance(path, Path) else Path(path)
+    if not expand and not resolve and not strict:
+        return p
+    p = p.expanduser() if  expand else p
+    if strict and not resolve:
+        fallback_logging_config()
+        logging.getLogger().isEnabledFor(logging.WARNING) and logging.warning(
+            "%s: since resolve=False, strict=True only checks existence. "
+            "It doesn't follow symlinks.", return_method_name())
+        if not os.path.lexists(os.fspath(p)):  # Doesn't follow symlinks
+            raise FileNotFoundError(p)
+    return p.resolve(strict=strict) if resolve else p
+
+
+def _exists(p: Path, *, follow_symlinks: bool) -> bool:
+    """
+    Like Path.exists(), but if follow_symlinks=False it treats a symlink
+    as 'existing' even if its target is broken.
+    """
+    if follow_symlinks:
+        return p.exists()
+    try:
+        p.lstat()                # existence of the link itself
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def _is_file(p: Path, *, follow_symlinks: bool) -> bool:
+    """
+    Version-proof 'is regular file?' that can avoid following symlinks.
+    """
+    if sys.version_info >= (3, 13):  # 3.13+ supports follow_symlinks
+        return p.is_file(follow_symlinks=follow_symlinks)
+    if follow_symlinks:
+        return p.is_file()
+    try:
+        import stat
+        return stat.S_ISREG(p.lstat().st_mode)
+    except FileNotFoundError:
+        return False
+
+
+def _is_dir(p: Path, *, follow_symlinks: bool) -> bool:
+    """
+    Version-proof 'is directory?' that can avoid following symlinks.
+    """
+    if sys.version_info >= (3, 13):  # 3.13+ supports follow_symlinks
+        return p.is_dir(follow_symlinks=follow_symlinks)
+    if follow_symlinks:
+        return p.is_dir()
+    try:
+        import stat
+        return stat.S_ISDIR(p.lstat().st_mode)
+    except FileNotFoundError:
+        return False
+
+
+def ensure_file(path: str | os.PathLike[str],
+                *,
+                raise_on_empty:  bool = False,
+                allow_symlink:   bool = True,
+                follow_symlinks: bool = True,
+                return_resolved: bool = False) -> Path:
+    """
+    Ensure that the given path is an existing file and return it as a Path object.
+
+    Args:
+        path:            The path to check.
+        raise_on_empty:  If True, raise an exception if the file is empty.
+        allow_symlink:   If False, raise an exception if the path is a symlink.
+        follow_symlinks: If False, do not follow symlinks when checking if it's a file.
+        return_resolved: If True, return the fully resolved real path.
 
     Returns:
         A Path object representing the file.
 
     Raises:
         FileNotFoundError: If the file does not exist.
+        IsADirectoryError: If the path exists but is a directory.
+        ValueError:        If the path exists but is not a regular file, or if symlinks are not allowed.
+        ValueError:        If raise_on_empty is True and the file is empty.
     """
-    p = Path(path).resolve(strict=True)
-    if not p.is_file():
-        raise IsADirectoryError(f"Expected a file, got directory: {p}")
-    if p.stat().st_size == 0:
-        if raise_on_empty:
-            raise ValueError(f"File is empty: {p}")
-        else:
-            logging.warning("File is empty: %s", p)
-    return p
+    p = ensure_path(path, resolve=False)
+    if not _exists(p, follow_symlinks=follow_symlinks):
+        raise FileNotFoundError(f"No such file: {p}")
+    if not _is_file(p, follow_symlinks=follow_symlinks):
+        if _is_dir( p, follow_symlinks=follow_symlinks):
+            raise IsADirectoryError(f"Expected a file, got directory: {p}")
+        raise ValueError(f"Path exists but is not a regular file: {p}")
+    if not allow_symlink and p.is_symlink():
+        raise ValueError(f"Symlinks not allowed: {p}")
+    try:
+        size = p.stat().st_size  # follows symlinks to check the target
+    except FileNotFoundError:
+        # Broken symlink while follow_symlinks=False
+        raise FileNotFoundError(f"No such file (broken symlink?): {p}") from None
+    if raise_on_empty and size == 0:
+        raise ValueError(f"File is empty: {p}")
+    elif size == 0:
+        logging.warning("File is empty: %s", p)
+    return p.resolve(strict=True) if return_resolved else p.absolute()
+
+
+def ensure_dir(path: str | os.PathLike[str],
+               *,
+               allow_symlink:   bool = True,
+               follow_symlinks: bool = True,
+               return_resolved: bool = False) -> Path:
+    """
+    Ensure that the given path is an existing directory and return it as a Path object.
+    
+    Args:
+        path:            The path to check.
+        allow_symlink:   If False, raise an exception if the path is a symlink.
+        follow_symlinks: If False, do not follow symlinks when checking if it's a directory.
+        return_resolved: If True, return the fully resolved real path.
+
+    Returns:
+        A Path object representing the directory.
+
+    Raises:
+        FileNotFoundError:  If the directory does not exist.
+        NotADirectoryError: If the path exists but is not a directory.
+    """
+    p = ensure_path(path, resolve=False)
+    if not _exists(p, follow_symlinks=follow_symlinks):
+        raise FileNotFoundError(f"No such directory: {p}")
+    if not _is_dir(p, follow_symlinks=follow_symlinks):
+        raise NotADirectoryError(f"Expected a directory, got file: {p}")
+    if not allow_symlink and p.is_symlink():
+        raise ValueError(f"Symlinks not allowed: {p}")
+    return p.resolve(strict=True) if return_resolved else p.absolute()
 
 
 def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
@@ -2905,12 +3095,12 @@ def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
     import socket
 
     fallback_logging_config()
-    dest = Path(dest).resolve()
+    dest = ensure_path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     temp = dest.with_suffix(dest.suffix + ".part")
 
     base_headers = {"Accept-Encoding" : "identity",
-                    "User-Agent"      : "python-download/1.0",}
+                    "User-Agent"      : "python-download/1.0", }
     eff_headers  = {**base_headers, **(headers or {})}
 
     succeeded = False  # Track if download succeeded
@@ -2988,7 +3178,7 @@ def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
                             bucket = pct // 10
                             # Log just once every ~10% but not at 0%
                             if pct and pct % 10 == 0 and bucket != last_bucket:
-                                logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("… %d%% (%s out of %s)", pct, human_bytesize(downloaded), human_bytesize(total_i))
+                                logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("... %d%% (%s out of %s)", pct, human_bytesize(downloaded), human_bytesize(total_i))
                                 last_bucket = bucket
                     f.flush()
                     os.fsync(f.fileno())
@@ -3009,7 +3199,7 @@ def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
                 break
             sleep_s = backoff
             backoff = min(backoff * 2, 30.0)  # cap backoff
-            logging.info("Retrying in %.1f seconds…", sleep_s)
+            logging.info("Retrying in %.1f seconds...", sleep_s)
             time.sleep(sleep_s)
         except Exception as e:
             # Unexpected errors: don't loop indefinitely
@@ -3029,20 +3219,20 @@ def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
 def query_free_space(path: str | os.PathLike[str]) -> int:
     """
     Return the free space (in bytes) available to the current user on the
-    filesystem that contains `path`. Works for files or directories, and
+    filesystem that contains 'path'. Works for files or directories, and
     for paths that don't yet exist (it climbs to the nearest existing parent).
 
     Args:
         path: A file or directory path.
-    
+
     Returns:
         Free space in bytes available to the current user on the filesystem.
-    
+
     Raises:
         FileNotFoundError: If no existing parent directory is found.
         OSError:           If the filesystem information cannot be retrieved.
     """
-    p = Path(path)
+    p = ensure_path(path)
 
     # Use the path itself if it's an existing directory; otherwise use its parent.
     base = p if (p.exists() and p.is_dir()) else p.parent
@@ -3067,7 +3257,7 @@ def ensure_even_dimensions(image_path: str | os.PathLike[str]) -> None:
     """Ensure the image at 'image_path' has dimensions divisible by 2, by resizing if necessary."""
     from PIL import Image
     fallback_logging_config()
-    image_path = ensure_path_is_a_file(image_path)
+    image_path = ensure_file(image_path)
     with Image.open(image_path) as img:
         width, height = img.size
         new_width  = width  if width  % 2 == 0 else width  - 1
@@ -3104,7 +3294,7 @@ def find_ffmpeg() -> str | None:
     for env_key in ("FFMPEG", "FFMPEG_PATH", "IMAGEIO_FFMPEG_EXE"):
         p = os.environ.get(env_key)
         if p and Path(p).exists():
-            return str(Path(p))
+            return os.fspath(Path(p))
 
     # 2) On PATH (handles .exe on Windows automatically)
     for name in ("ffmpeg", "ffmpeg.exe"):
@@ -3115,9 +3305,9 @@ def find_ffmpeg() -> str | None:
     # 3) Typical Conda/Miniconda/Mambaforge locations
     sp = Path(sys.prefix)  # current Python env prefix
     candidates = [
-        sp / "bin" / "ffmpeg",                 # Unix-like
-        sp / "Library" / "bin" / "ffmpeg.exe", # Windows (Conda)
-        sp / "Scripts" / "ffmpeg.exe",         # Windows (alt)
+        sp / "bin"     / "ffmpeg",              # Unix-like
+        sp / "Library" / "bin" / "ffmpeg.exe",  # Windows (Conda)
+        sp / "Scripts" / "ffmpeg.exe",          # Windows (alt)
     ]
 
     # 4) Common Windows installs (adjust or extend as you like)
@@ -3134,7 +3324,7 @@ def find_ffmpeg() -> str | None:
         import imageio_ffmpeg  # type: ignore
         p = imageio_ffmpeg.get_ffmpeg_exe()
         if p and Path(p).exists():
-            return str(Path(p))
+            return os.fspath(Path(p))
     except Exception:
         pass
 
@@ -3154,12 +3344,12 @@ def human_bytesize(num: float | int, *, suffix: str = "B", si: bool = False, pre
         num:                 Size in bytes. Negative values are preserved with a leading minus.
         suffix:              Unit suffix appended after the prefix (defaults to "B"). If long_units is True and
                              suffix is "B", "bytes" is appended in the output. Otherwise, the suffix is appended to the long name.
-        si:                  If True, use powers of 1000 with SI prefixes (k, M, G, … up to R, Q).
-                             If False, use powers of 1024 with IEC prefixes (Ki, Mi, Gi, … up to Ri, Qi).
+        si:                  If True, use powers of 1000 with SI prefixes (k, M, G, ... up to R, Q).
+                             If False, use powers of 1024 with IEC prefixes (Ki, Mi, Gi, ... up to Ri, Qi).
         precision:           Digits to show after the decimal point.
         space:               If True, inserts a space between the number and the unit (ignored when long_units is True).
         trim_trailing_zeros: If True, removes trailing zeros and any dangling decimal point.
-        long_units:          If True, spell out unit names ("bytes", "kibibytes", … "quebibytes"/"quettabytes").
+        long_units:          If True, spell out unit names ("bytes", "kibibytes", ... "quebibytes"/"quettabytes").
 
     Returns:
         A concise string such as "1.5KiB", "1.5 kB", or "1.5 megabytes" depending on options.
@@ -3202,10 +3392,10 @@ def human_bytesize(num: float | int, *, suffix: str = "B", si: bool = False, pre
 
 def my_plural(n: int, word: str) -> str:
     """
-    Return a pluralized version of `word` preceded by `n`.
+    Return a pluralized version of 'word' preceded by 'n'.
 
     Behavior:
-    - If the open-source `inflect` library is available, use it for pluralization.
+    - If the open-source 'inflect' library is available, use it for pluralization.
     - Otherwise, fall back to a casefold()-based irregulars table, some uncountables,
       and a small set of morphological rules.
 
@@ -3293,7 +3483,7 @@ def my_plural(n: int, word: str) -> str:
     }
 
     def _preserve_simple_case(src: str, target: str) -> str:
-        """Match ALLCAPS or Titlecase of `src` onto `target`."""
+        """Match ALLCAPS or Titlecase of 'src' onto 'target'."""
         if src.isupper():
             return target.upper()
         if src.istitle():
@@ -3347,12 +3537,12 @@ def human_timespan(timespan: int | float) -> str:
 
     Args:
         timespan: A float or int representing the time span in seconds.
-    
+
     Returns:
         A human-readable string describing the time span, such as
         "1 year, 2 weeks, 3 days, 4 hours, 5 minutes and 6.789 seconds".
         If the timespan is zero, returns "0 seconds".
-    
+
     Raises:
         None.
     """
@@ -3409,9 +3599,9 @@ def format_date_range(date1: dt.datetime, date2: dt.datetime | None = None) -> s
     import datetime as dt
 
     month_names = {
-        1: 'Jan',  2: 'Feb',  3: 'Mar',  4: 'Apr',
-        5: 'May',  6: 'Jun',  7: 'Jul',  8: 'Aug',
-        9: 'Sep', 10: 'Oct', 11: 'Nov', 12: 'Dec'
+        1: "Jan",  2: "Feb",  3: "Mar",  4: "Apr",
+        5: "May",  6: "Jun",  7: "Jul",  8: "Aug",
+        9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
     }
 
     # If date2 is not provided, set date2 to date1
@@ -3453,47 +3643,47 @@ def extract_timestamp(the_string: str) -> str | None:
 
 # Mapping of unit aliases (all in lowercase) to their equivalent in seconds
 _UNIT_SECONDS = {
-    **dict.fromkeys(['year', 'years', 'yr', 'yrs', 'calendar year', 'calendar years'],    31_556_952),  # Average calender year = 365.2425 days (accounting for leap years)
-    **dict.fromkeys(['solar year', 'solar years', 'tropical year', 'tropical years'],     31_556_925.216),  # Average solar/tropical year = 365.24219 solar days = time for Earth to orbit the Sun once relative to the Sun/equinoxes
-    **dict.fromkeys(['sidereal year', 'sidereal years'],                                  31_558_149.54),  # Sidereal year = 365.25636 days = time for Earth to orbit the Sun once relative to the "fixed" stars
-    **dict.fromkeys(['month', 'months', 'mo', 'mos', 'calendar month', 'calendar months'], 2_629_746.0),  # Average calendar month = 30.436875 solar days
-    **dict.fromkeys(['lunar month', 'lunar months', 'synodic month', 'synodic months'],    2_551_442.9),  # Average lunar month (synodic month) = 29.53 solar days
-    **dict.fromkeys(['week', 'weeks', 'wk', 'wks'],                                          604_800.0),  # 7 solar days
-    **dict.fromkeys(['day', 'days', 'd', 'solar day', 'solar days', 'ephemeris day', 'ephemeris days'], 86_400),  # 24 hours = time for Earth to rotate once relative to the Sun
-    **dict.fromkeys(['sidereal day', 'sidereal days'],                                                  86_164.0905),  # 23 hours, 56 minutes, 4.1 seconds = time for Earth to rotate once relative to the "fixed" stars
-    **dict.fromkeys(['hour',         'hours',   'hr',  'hrs'],          3600),
-    **dict.fromkeys(['minute',       'minutes', 'min', 'mins'],           60),
-    **dict.fromkeys(['second',       'seconds', 'sec', 'secs', 's'],    1.00),
-    **dict.fromkeys(['decisecond',   'deciseconds',  'ds'],            1E-01),
-    **dict.fromkeys(['centisecond',  'centiseconds', 'cs'],            1E-02),
-    **dict.fromkeys(['millisecond',  'milliseconds', 'ms'],            1E-03),
-    **dict.fromkeys(['microsecond',  'microseconds', 'us', 'μs'],      1E-06),
-    **dict.fromkeys(['nanosecond',   'nanoseconds',  'ns'],            1E-09),
-    **dict.fromkeys(['picosecond',   'picoseconds',  'ps'],            1E-12),
-    **dict.fromkeys(['femtosecond',  'femtoseconds', 'fs'],            1E-15),
-    **dict.fromkeys(['attosecond',   'attoseconds',  'as'],            1E-18),
-    **dict.fromkeys(['zeptosecond',  'zeptoseconds', 'zs'],            1E-21),
-    **dict.fromkeys(['yoctosecond',  'yoctoseconds', 'ys'],            1E-24),
-    **dict.fromkeys(['planck time',  'planck times', 'planck', 'plancks', 'pt'], 5.391_247E-44),  # Planck time
-    **dict.fromkeys(['decade',       'decades'],                                315_569_252.16),  #   10 solar years
-    **dict.fromkeys(['century',      'centuries'],                            3_155_692_521.60),  #  100 solar years
-    **dict.fromkeys(['millennium',   'millennia'],                           31_556_925_216.00),  # 1000 solar years
-    **dict.fromkeys(['megayear',     'megayears', 'mya', 'myr'],         31_556_925_216_000.00),  # 1E06 solar years
-    **dict.fromkeys(['gigayear',     'gigayears', 'gya', 'gyr'],     31_556_925_216_000_000.00),  # 1E09 solar years
-    **dict.fromkeys(['terayear',     'terayears', 'tya', 'tyr'], 31_556_925_216_000_000_000.00),  # 1E12 solar years
-    **dict.fromkeys(['fortnight',    'fortnights'],                               1_209_600.00),  # 2 weeks = 604_800 * 2 seconds
-    **dict.fromkeys(['decasecond',   'decaseconds',   'das'], 1E01),
-    **dict.fromkeys(['hectosecond',  'hectoseconds',  'hs'],  1E02),
-    **dict.fromkeys(['kilosecond',   'kiloseconds',   'ks'],  1E03),
-    **dict.fromkeys(['megasecond',   'megaseconds'],          1E06),  # no Ms because .casefold() would convert it to ms
-    **dict.fromkeys(['gigasecond',   'gigaseconds',   'gs'],  1E09),
-    **dict.fromkeys(['terasecond',   'teraseconds',   'ts'],  1E12),
-    **dict.fromkeys(['petasecond',   'petaseconds'],          1E15),  # no Ps because .casefold() would convert it to ps
-    **dict.fromkeys(['exasecond',    'exaseconds',    'es'],  1E18),
-    **dict.fromkeys(['zettasecond',  'zettaseconds'],         1E21),  # no Zs because .casefold() would convert it to zs
-    **dict.fromkeys(['yottasecond',  'yottaseconds'],         1E24),  # no Ys because .casefold() would convert it to ys
-    **dict.fromkeys(['ronnasecond',  'ronnaseconds',  'rs'],  1E27),
-    **dict.fromkeys(['quettasecond', 'quettaseconds', 'qs'],  1E30),
+    **dict.fromkeys(["year", "years", "yr", "yrs", "calendar year", "calendar years"],    31_556_952),  # Average calender year = 365.2425 days (accounting for leap years)
+    **dict.fromkeys(["solar year", "solar years", "tropical year", "tropical years"],     31_556_925.216),  # Average solar/tropical year = 365.24219 solar days = time for Earth to orbit the Sun once relative to the Sun/equinoxes
+    **dict.fromkeys(["sidereal year", "sidereal years"],                                  31_558_149.54),  # Sidereal year = 365.25636 days = time for Earth to orbit the Sun once relative to the "fixed" stars
+    **dict.fromkeys(["month", "months", "mo", "mos", "calendar month", "calendar months"], 2_629_746.0),  # Average calendar month = 30.436875 solar days
+    **dict.fromkeys(["lunar month", "lunar months", "synodic month", "synodic months"],    2_551_442.9),  # Average lunar month (synodic month) = 29.53 solar days
+    **dict.fromkeys(["week", "weeks", "wk", "wks"],                                          604_800.0),  # 7 solar days
+    **dict.fromkeys(["day", "days", "d", "solar day", "solar days", "ephemeris day", "ephemeris days"], 86_400),  # 24 hours = time for Earth to rotate once relative to the Sun
+    **dict.fromkeys(["sidereal day", "sidereal days"],                                                  86_164.0905),  # 23 hours, 56 minutes, 4.1 seconds = time for Earth to rotate once relative to the "fixed" stars
+    **dict.fromkeys(["hour",         "hours",   "hr",  "hrs"],          3600),
+    **dict.fromkeys(["minute",       "minutes", "min", "mins"],           60),
+    **dict.fromkeys(["second",       "seconds", "sec", "secs", "s"],    1.00),
+    **dict.fromkeys(["decisecond",   "deciseconds",  "ds"],            1E-01),
+    **dict.fromkeys(["centisecond",  "centiseconds", "cs"],            1E-02),
+    **dict.fromkeys(["millisecond",  "milliseconds", "ms"],            1E-03),
+    **dict.fromkeys(["microsecond",  "microseconds", "us", "μs"],      1E-06),
+    **dict.fromkeys(["nanosecond",   "nanoseconds",  "ns"],            1E-09),
+    **dict.fromkeys(["picosecond",   "picoseconds",  "ps"],            1E-12),
+    **dict.fromkeys(["femtosecond",  "femtoseconds", "fs"],            1E-15),
+    **dict.fromkeys(["attosecond",   "attoseconds",  "as"],            1E-18),
+    **dict.fromkeys(["zeptosecond",  "zeptoseconds", "zs"],            1E-21),
+    **dict.fromkeys(["yoctosecond",  "yoctoseconds", "ys"],            1E-24),
+    **dict.fromkeys(["planck time",  "planck times", "planck", "plancks", "pt"], 5.391_247E-44),  # Planck time
+    **dict.fromkeys(["decade",       "decades"],                                315_569_252.16),  #   10 solar years
+    **dict.fromkeys(["century",      "centuries"],                            3_155_692_521.60),  #  100 solar years
+    **dict.fromkeys(["millennium",   "millennia"],                           31_556_925_216.00),  # 1000 solar years
+    **dict.fromkeys(["megayear",     "megayears", "mya", "myr"],         31_556_925_216_000.00),  # 1E06 solar years
+    **dict.fromkeys(["gigayear",     "gigayears", "gya", "gyr"],     31_556_925_216_000_000.00),  # 1E09 solar years
+    **dict.fromkeys(["terayear",     "terayears", "tya", "tyr"], 31_556_925_216_000_000_000.00),  # 1E12 solar years
+    **dict.fromkeys(["fortnight",    "fortnights"],                               1_209_600.00),  # 2 weeks = 604_800 * 2 seconds
+    **dict.fromkeys(["decasecond",   "decaseconds",   "das"], 1E01),
+    **dict.fromkeys(["hectosecond",  "hectoseconds",  "hs"],  1E02),
+    **dict.fromkeys(["kilosecond",   "kiloseconds",   "ks"],  1E03),
+    **dict.fromkeys(["megasecond",   "megaseconds"],          1E06),  # no Ms because .casefold() would convert it to ms
+    **dict.fromkeys(["gigasecond",   "gigaseconds",   "gs"],  1E09),
+    **dict.fromkeys(["terasecond",   "teraseconds",   "ts"],  1E12),
+    **dict.fromkeys(["petasecond",   "petaseconds"],          1E15),  # no Ps because .casefold() would convert it to ps
+    **dict.fromkeys(["exasecond",    "exaseconds",    "es"],  1E18),
+    **dict.fromkeys(["zettasecond",  "zettaseconds"],         1E21),  # no Zs because .casefold() would convert it to zs
+    **dict.fromkeys(["yottasecond",  "yottaseconds"],         1E24),  # no Ys because .casefold() would convert it to ys
+    **dict.fromkeys(["ronnasecond",  "ronnaseconds",  "rs"],  1E27),
+    **dict.fromkeys(["quettasecond", "quettaseconds", "qs"],  1E30),
 }
 
 
@@ -3545,7 +3735,7 @@ _TZ_ABBREV_TO_ZONE: dict[str, str] = {
     "NZDT" : "Pacific/Auckland",     # New Zealand Daylight Time
     "WET"  : "Europe/Lisbon",        # Western European Time
     "WEST" : "Europe/Lisbon",        # Western European Summer Time
-    # …add any others you need
+    # ...add any others you need
 }
 
 # Pre‐compile once for all calls.
@@ -3577,7 +3767,7 @@ def parse_timezone(tz_arg: str | dt.tzinfo | None = None) -> dt.tzinfo | str:
 
     Args:
         tz_arg : A timezone string, a datetime.tzinfo object, or None.
-    
+
     Returns:
         A datetime.tzinfo object representing the parsed timezone, or a string "Naive"
         if the input was "Naive".
@@ -3606,35 +3796,35 @@ def parse_timezone(tz_arg: str | dt.tzinfo | None = None) -> dt.tzinfo | str:
             return tz_arg
 
         # Bare UTC/GMT/Z
-        if up in ('Z', 'UTC', 'GMT') and len(s) <= 3:
+        if up in ("Z", "UTC", "GMT") and len(s) <= 3:
             return dt.timezone.utc
 
         # Strip leading "UTC" or "GMT" prefix
-        if up.startswith(('UTC', 'GMT')):
+        if up.startswith(("UTC", "GMT")):
             rest = s[3:].strip()
-            if rest == '':
+            if rest == "":
                 return dt.timezone.utc
             s = rest  # now s begins with + or -
 
         # Try fixed-offset patterns
         m = _TZ_OFFSET_RE.fullmatch(s)
         if m:
-            sign = 1 if m.group('sign') == '+' else -1
+            sign = 1 if m.group("sign") == "+" else -1
 
-            if m.group('hours1') is not None:
-                hours = int(m.group('hours1'))
-                minutes = int(m.group('mins1'))
-            elif m.group('hours1_only') is not None:
-                hours = int(m.group('hours1_only'))
+            if m.group("hours1") is not None:
+                hours   = int(m.group("hours1"))
+                minutes = int(m.group("mins1"))
+            elif m.group("hours1_only") is not None:
+                hours   = int(m.group("hours1_only"))
                 minutes = 0
-            elif m.group('hours2') is not None:
-                hours = int(m.group('hours2'))
-                minutes = int(m.group('mins2'))
-            elif m.group('hours3') is not None:
-                hours = int(m.group('hours3'))
-                minutes = int(m.group('mins3'))
+            elif m.group("hours2") is not None:
+                hours   = int(m.group("hours2"))
+                minutes = int(m.group("mins2"))
+            elif m.group("hours3") is not None:
+                hours   = int(m.group("hours3"))
+                minutes = int(m.group("mins3"))
             else:
-                hours = int(m.group('hours4'))
+                hours   = int(m.group("hours4"))
                 minutes = 0
 
             offset = dt.timedelta(hours=hours, minutes=minutes) * sign
@@ -3672,7 +3862,7 @@ def decimal_year_to_datetime(dec: float, use_astropy: bool = False) -> dt.dateti
             from astropy.time import Time
         except ImportError as e:
             raise ValueError(f"'use_astropy=True' requires the astropy package: {e}") from e
-        t = Time(dec, format='jyear', scale='utc')
+        t = Time(dec, format="jyear", scale="utc")
         return t.to_datetime().replace(tzinfo=dt.timezone.utc)
 
     try:
@@ -3727,10 +3917,10 @@ def _should_convert(given_date: AnyDateTimeType, format_str: str | None = None) 
         return True
     if isinstance(given_date, str):
         u = given_date.strip().upper()
-        if u in ('J2000', 'UNIX', 'NOW'):
+        if u in ("J2000", "UNIX", "NOW"):
             logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Given date is a special keyword: %s, so it will be converted by shifting the clock", u)
             return True
-        if format_str and format_str.upper() in ('JD', 'MJD'):
+        if format_str and format_str.upper() in ("JD", "MJD"):
             logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Given date has a format_str: %s, so it will be converted by shifting the clock", format_str)
             return True
         if _JD_MJD_SIMPLE_RE.fullmatch(given_date):
@@ -3774,7 +3964,7 @@ def _finalize_datetime(parsed_dt: dt.datetime, original_input: AnyDateTimeType,
         ValueError: If the tz_arg is not a valid timezone string or tzinfo object.
         TypeError:  If the parsed_dt is not a datetime.datetime object.
     """
-    if isinstance(tz_arg, str) and tz_arg.strip().upper() == 'NAIVE':
+    if isinstance(tz_arg, str) and tz_arg.strip().upper() == "NAIVE":
         logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Naive timezone requested, returning datetime %s without any timezone info", parsed_dt)
         return parsed_dt.replace(tzinfo=None)
     target_tz = parse_timezone(tz_arg)
@@ -3831,7 +4021,7 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
                         timezone by shifting the clock (True) or just attaching the timezone
                         without shifting (False). If None, the function will determine this
                         based on the type of given_date and format_str.
-    
+
     Returns:
         datetime.datetime object in the specified timezone.
         Note that datetime.datetime objects cannot represent dates before 1 January 1, 0001 or after 31 December 9999.
@@ -3852,10 +4042,10 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
 
     # Handle special cases:
     if isinstance(given_date, str):
-        if given_date.strip().upper() == 'J2000':
+        if given_date.strip().upper() == "J2000":
             # J2000 is January 1, 2000, 11:58:55.816 UTC
             parsed_dt = dt.datetime(2000, 1, 1, 11, 58, 55, 816_000, tzinfo=dt.timezone.utc)
-        if given_date.strip().upper() == 'UNIX':
+        if given_date.strip().upper() == "UNIX":
             # UNIX epoch is January 1, 1970, 00:00:00 UTC
             parsed_dt = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
         if given_date.strip().upper() == "NOW":
@@ -3867,10 +4057,10 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
     if parsed_dt is None and isinstance(given_date, str):
         m = _JD_MJD_CAPTURE_RE.fullmatch(given_date)
         if m:
-            prefix = m.group('prefix')
+            prefix = m.group("prefix")
 
     # Trigger JD/MJD branch only if format_str equals "JD" or "MJD", or prefix was provided
-    if parsed_dt is None and (prefix is not None or (format_str and (format_str.upper() == 'JD' or format_str.upper() == 'MJD'))):
+    if parsed_dt is None and (prefix is not None or (format_str and (format_str.upper() == "JD" or format_str.upper() == "MJD"))):
 
         try:
             import jdcal
@@ -3881,28 +4071,28 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
         if isinstance(given_date, (int, float)):
             value = float(given_date)
         else:
-            value = float(m.group('value'))
+            value = float(m.group("value"))
 
         # Determine if MJD conversion needed
-        use_mjd = bool((format_str and format_str.upper() == 'MJD') or (prefix and prefix.upper() == 'MJD'))
+        use_mjd = bool((format_str and format_str.upper() == "MJD") or (prefix and prefix.upper() == "MJD"))
 
         # Convert MJD to JD if necessary
         jd_val = value + (2_400_000.5 if use_mjd else 0.0)
 
         # Split into integer day and fraction
-        int_part = int(jd_val)
-        frac_part = jd_val - int_part
+        int_part                   = int(jd_val)
+        frac_part                  = jd_val - int_part
         year, month, day, day_frac = jdcal.jd2gcal(int_part, frac_part)
 
         # Convert day fraction to hours, minutes, seconds, microseconds
-        day_int = int(day)
+        day_int     = int(day)
         frac_of_day = (day + day_frac) - day_int
-        hours = int(frac_of_day * 24)
-        mins = int((frac_of_day * 24 - hours) * 60)
-        secs_frac = (frac_of_day * 24 - hours) * 60 - mins
-        secs = int(secs_frac * 60)
-        micros = int((secs_frac * 60 - secs) * 1e6)
-        parsed_dt = dt.datetime(year, month, day_int, hours, mins, secs, micros, tzinfo=dt.timezone.utc)
+        hours       = int(frac_of_day * 24)
+        mins        = int((frac_of_day * 24 - hours) * 60)
+        secs_frac   = (frac_of_day * 24 - hours) * 60 - mins
+        secs        = int(secs_frac * 60)
+        micros      = int((secs_frac * 60 - secs) * 1e6)
+        parsed_dt   = dt.datetime(year, month, day_int, hours, mins, secs, micros, tzinfo=dt.timezone.utc)
 
     # Check if the given_date is a string that can be parsed as a float
     if parsed_dt is None and isinstance(given_date, str) and is_float(given_date):
@@ -3924,7 +4114,7 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
                 raise ValueError(f"Invalid format string: '{format_str}'. Expected at most three parts: 'units', 'since/after', and 'epoch'.")
             # The first part should be acceptable by seconds_in_unit():
             try:
-                units = format_parts[0].strip()
+                units      = format_parts[0].strip()
                 multiplier = seconds_in_unit(units)  # This will raise ValueError if the unit is unknown
             except ValueError as e:
                 raise ValueError(f"Invalid time unit '{units}' in format string '{format_str}': {e}") from e
@@ -3932,7 +4122,7 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
             if len(format_parts) == 1:
                 # If the format_parts list has only one part, it means the format is just "units" (e.g. "days", "weeks", etc.)
                 # In this case, we assume the epoch is the Unix epoch (1970-01-01T00:00:00Z).
-                epoch_str = '1970-01-01T00:00:00Z'
+                epoch_str = "1970-01-01T00:00:00Z"
             else:
                 # If the format_parts list has three parts, the third part is the epoch.
                 epoch_str = format_parts[2].strip()
@@ -3954,7 +4144,7 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
         except ImportError:
             np = None
         if np is not None and isinstance(given_date, np.datetime64):
-            ts_ns = given_date.astype('datetime64[ns]').astype('int64')
+            ts_ns     = given_date.astype("datetime64[ns]").astype("int64")
             parsed_dt = dt.datetime.fromtimestamp(ts_ns/1e9, tz=parsed_tz)
 
     if parsed_dt is None:
@@ -4014,6 +4204,213 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
     raise ValueError(error_message + "\n".join(map(str, errors)) + "\nPlease check the input format and try again.")
 
 
+def to_jsonable(obj: Any, *, roundtrip: bool = True) -> Any:
+    """
+    Convert arbitrary Python objects into JSON-serializable primitives.
+    If roundtrip=True, non-JSON types are wrapped with a small type tag so they can be reconstructed.
+    """
+    return _to_jsonable(obj, roundtrip=roundtrip, _seen=set())
+
+
+def _to_jsonable(obj: Any, *, roundtrip: bool, _seen: set[int]) -> Any:
+    """
+    Internal helper to convert arbitrary Python objects into JSON-serializable primitives.
+    If roundtrip=True, non-JSON types are wrapped with a small type tag so they can be reconstructed.
+    (Helper exists to avoid exposing the _seen set in the public API.)
+    """
+    # Fast-path primitives
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        return obj
+    # Dict
+    if isinstance(obj, dict):
+        oid = id(obj)
+        if oid in _seen:
+            return {"__type__": "recursion"}
+        _seen.add(oid)
+        try:
+            return {str(k): _to_jsonable(v, roundtrip=roundtrip, _seen=_seen) for k, v in obj.items()}
+        finally:
+            _seen.discard(oid)
+    # List
+    if isinstance(obj, list):
+        oid = id(obj)
+        if oid in _seen:
+            return {"__type__": "recursion"}
+        _seen.add(oid)
+        try:
+            return [_to_jsonable(x, roundtrip=roundtrip, _seen=_seen) for x in obj]
+        finally:
+            _seen.discard(oid)
+    # Tuple
+    if isinstance(obj, tuple):
+        oid = id(obj)
+        if oid in _seen:
+            return {"__type__": "recursion"}
+        _seen.add(oid)
+        try:
+            seq = [_to_jsonable(x, roundtrip=roundtrip, _seen=_seen) for x in obj]
+        finally:
+            _seen.discard(oid)
+        return {"__type__": "tuple", "value": seq} if roundtrip else list(seq)
+    # Set / Frozenset
+    if isinstance(obj, (set, frozenset)):
+        oid = id(obj)
+        if oid in _seen:
+            return {"__type__": "recursion"}
+        _seen.add(oid)
+        try:
+            seq = [_to_jsonable(x, roundtrip=roundtrip, _seen=_seen) for x in obj]
+        finally:
+            _seen.discard(oid)
+        tag = "frozenset" if isinstance(obj, frozenset) else "set"
+        return {"__type__": tag, "value": seq} if roundtrip else list(seq)
+    # Path
+    if isinstance(obj, Path):
+        s = obj.as_posix()
+        return {"__type__": "path", "value": s} if roundtrip else s
+    # Enum
+    if isinstance(obj, Enum):
+        # Store module+qualname so we *can* reconstruct if the Enum is importable.
+        cls = obj.__class__
+        return {
+            "__type__" : "enum",
+            "module"   : cls.__module__,
+            "qualname" : getattr(cls, "__qualname__", cls.__name__),
+            "name"     : obj.name,
+        } if roundtrip else (obj.value if isinstance(obj.value, (str, int, float, bool, type(None))) else obj.name)
+    # argparse.Namespace
+    try:
+        import argparse
+        if isinstance(obj, argparse.Namespace):
+            return {"__type__" : "namespace",
+                    "value"    : _to_jsonable(vars(obj), roundtrip=roundtrip, _seen=_seen)} if roundtrip else vars(obj)
+    except Exception:
+        pass
+    # datetime / date / time
+    try:
+        import datetime as dt
+        if isinstance(obj, (dt.datetime, dt.date, dt.time)):
+            iso = obj.isoformat()
+            which = "datetime" if isinstance(obj, dt.datetime) else ("date" if isinstance(obj, dt.date) else "time")
+            return {"__type__": which, "value": iso} if roundtrip else iso
+    except Exception:
+        pass
+    # Decimal
+    try:
+        from decimal import Decimal
+        if isinstance(obj, Decimal):
+            return {"__type__": "decimal", "value": str(obj)} if roundtrip else float(obj)
+    except Exception:
+        pass
+    # bytes-like
+    if isinstance(obj, (bytes, bytearray, memoryview)):
+        try:
+            import base64
+            b64  = base64.b64encode(bytes(obj)).decode("ascii")
+            kind = "bytes" if isinstance(obj, bytes) else ("bytearray" if isinstance(obj, bytearray) else "memoryview")
+            return {"__type__": kind, "value": b64} if roundtrip else b64
+        except Exception:
+            return str(obj)
+    # re.Pattern (compiled regex)
+    try:
+        import re
+        if isinstance(obj, re.Pattern):
+            return {"__type__": "re_pattern", "pattern": obj.pattern, "flags": obj.flags} if roundtrip else obj.pattern
+    except Exception:
+        pass
+    # Fallback
+    stringified = str(obj)
+    logging.warning(f"Object of type {type(obj).__name__} is not JSON serializable; converting to string: {stringified}")
+    return stringified if not roundtrip else {"__type__": "object", "value": stringified}
+
+
+def from_jsonable(obj: Any) -> Any:
+    """
+    Reconstruct objects encoded with to_jsonable(..., roundtrip=True).
+    If input was produced with roundtrip=False, this mostly passes values through.
+    """
+    # Lists first
+    if isinstance(obj, list):
+        return [from_jsonable(x) for x in obj]
+    # Primitives / not dict
+    if not isinstance(obj, dict):
+        return obj
+
+    t = obj.get("__type__")
+    if not t:
+        return {k: from_jsonable(v) for k, v in obj.items()}
+
+    # Known tags
+    if t == "path":
+        return Path(obj["value"])
+    if t == "tuple":
+        return tuple(from_jsonable(x) for x in obj.get("value", []))
+    if t == "set":
+        return set(from_jsonable(x) for x in obj.get("value", []))
+    if t == "frozenset":
+        return frozenset(from_jsonable(x) for x in obj.get("value", []))
+    if t == "namespace":
+        try:
+            import argparse
+            return argparse.Namespace(**from_jsonable(obj.get("value", {})))
+        except Exception:
+            return from_jsonable(obj.get("value", {}))
+    if t == "enum":
+        # Best effort: import the Enum class and get member by name; else return the name.
+        try:
+            import importlib
+            mod   = importlib.import_module(obj["module"])
+            parts = obj["qualname"].split(".")
+            cls   = mod
+            for p in parts:
+                cls = getattr(cls, p)
+            return getattr(cls, obj["name"])
+        except Exception:
+            return obj.get("name")
+    if t == "datetime":
+        import datetime as dt
+        return dt.datetime.fromisoformat(obj.get("value"))
+    if t == "date":
+        import datetime as dt
+        return dt.date.fromisoformat(obj.get("value"))
+    if t == "time":
+        import datetime as dt
+        return dt.time.fromisoformat(obj.get("value"))
+    if t == "decimal":
+        try:
+            from decimal import Decimal
+            return Decimal(obj.get("value", "0"))
+        except Exception:
+            return obj.get("value")
+    if t == "bytes":
+        try:
+            import base64
+            return base64.b64decode(obj.get("value", "").encode("ascii"))
+        except Exception:
+            return obj.get("value")
+    if t == "bytearray":
+        try:
+            import base64
+            return bytearray(base64.b64decode(obj.get("value", "").encode("ascii")))
+        except Exception:
+            return obj.get("value")
+    if t == "memoryview":
+        try:
+            import base64
+            return memoryview(base64.b64decode(obj.get("value", "").encode("ascii")))
+        except Exception:
+            return obj.get("value")
+    if t == "recursion":
+        return "<recursion>"
+    if t == "object":
+        return obj.get("value")
+    if t == "re_pattern":
+        import re
+        return re.compile(obj.get("pattern", ""), obj.get("flags", 0))
+    # Unknown tag → decode inner content if any
+    return {k: from_jsonable(v) for k, v in obj.items()}
+
+
 def _coerce_log_mode(value: Any) -> int:
     """Accept old string values like 'INFO' (or '20') and return an int."""
     if isinstance(value, int):
@@ -4026,12 +4423,12 @@ def _coerce_log_mode(value: Any) -> int:
         except ValueError:
             pass
         # Handle level names like "INFO", "debug", etc. (case-insensitive)
-        value_map = {'INFO'    : logging.INFO,
-                    'DEBUG'    : logging.DEBUG,
-                    'WARNING'  : logging.WARNING,
-                    'WARN'     : logging.WARNING,
-                    'ERROR'    : logging.ERROR,
-                    'CRITICAL' : logging.CRITICAL}
+        value_map = {"INFO"     : logging.INFO,
+                     "DEBUG"    : logging.DEBUG,
+                     "WARNING"  : logging.WARNING,
+                     "WARN"     : logging.WARNING,
+                     "ERROR"    : logging.ERROR,
+                     "CRITICAL" : logging.CRITICAL}
         lvl = value_map.get(s.upper())
         # lvl = logging.getLevelName(s.upper())  # deprecated
         if isinstance(lvl, int):
@@ -4040,36 +4437,10 @@ def _coerce_log_mode(value: Any) -> int:
     return logging.INFO
 
 
-def _json_default(o: object) -> dict[str, str | list[Any] | dict[str, Any]]:
-    """Custom JSON serializer for non-serializable objects."""
-    if isinstance(o, Path):
-        return {"__type__": "path", "value": str(o)}
-    if isinstance(o, set):
-        return {"__type__": "set", "value": list(o)}
-    import argparse
-    if isinstance(o, argparse.Namespace):
-        return {"__type__": "namespace", "value": vars(o)}
-    # Let json raise for anything else you haven't handled
-    raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
-
-
-def _json_object_hook(d: dict[str, Any]) -> object:
-    """Custom JSON deserializer for non-serializable objects. Converts JSON objects back to their original types."""
-    t = d.get("__type__")
-    if t == "path":
-        return Path(d["value"])  # Don't resolve() here; leave it to the caller
-    if t == "set":
-        return set(d["value"])
-    if t == "namespace":
-        import argparse
-        return argparse.Namespace(**d["value"])
-    return d
-
-
 def save_options_to_json(options: Options) -> None:
     """
     Save the options object to a JSON file.
-    
+
     Args:
         options: Options object containing:
             - script_dir:    Directory where the JSON file will be saved.
@@ -4079,47 +4450,47 @@ def save_options_to_json(options: Options) -> None:
 
     Returns:
         None - writes the options to a JSON file.
-    
+
     Raises:
         IOError:    If there is an error writing to the file.
         ValueError: If the options object is invalid.
     """
     import json
     options.options_json_filepath = options.script_dir / f".{options.python_script.name}-{options.my_name}-last-used-on-{options.timestamp}.json"
-
-    # Convert options to a dictionary and handle sets
-    options_dict = options.__dict__.copy()
-
-    # Ensure directory exists
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Ensuring directory exists: %s", options.options_json_filepath.parent)
     options.options_json_filepath.parent.mkdir(parents=True, exist_ok=True)
 
+    options_dict = options.__dict__.copy()  # Convert options to a dictionary and handle sets
+    payload      = to_jsonable(options_dict, roundtrip=True)  # tag for safe round-trip
+
     # Write the dictionary to a JSON file (ensure_ascii=False to preserve non-ASCII characters)
-    with open(options.options_json_filepath, 'w', encoding=DEFAULT_ENCODING) as json_file:
-        json.dump(options_dict, json_file, indent=4, ensure_ascii=False, default=_json_default)
+    with open(options.options_json_filepath, "w", encoding=DEFAULT_ENCODING) as json_file:
+        json.dump(payload, json_file, indent=4, ensure_ascii=False)
+
     logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Options saved to JSON file: %s", options.options_json_filepath)
 
 
 def load_options_from_json(options: Options, json_file: str | os.PathLike[str]) -> Options | None:
     """
     Load the options object from a JSON file.
-    
+
     Args:
         options:    An existing Options object (used for logging purposes).
         json_file:  Path to the JSON file to load.
-    
+
     Returns:
         Options object loaded from the JSON file, or None if the file does not exist or cannot be read.
-    
+
     Raises:
         IOError:    If there is an error reading the file.
         ValueError: If the JSON file is invalid or cannot be parsed.
     """
     import json
     import copy
-    json_file = ensure_path_is_a_file(json_file)
-    with open(json_file, 'r', encoding=DEFAULT_ENCODING) as file:
-        options_dict = json.load(file, object_hook=_json_object_hook)
+    json_file = ensure_file(json_file)
+    with open(json_file, "r", encoding=DEFAULT_ENCODING) as file:
+        raw = json.load(file)
+
+    options_dict = from_jsonable(raw)  # reconstruct tagged types
 
     # Backwards compatibility: coerce old string log levels to ints
     if "log_mode" in options_dict:
@@ -4176,7 +4547,7 @@ def round_out(x: float, round_digits: int = 3, max_digits: int = 15) -> float:
 def prompt_then_confirm(prompt: str) -> bool:
     """Prompt the user with the given message and return True if the user enters 'yes', False otherwise."""
     confirmation = input(prompt)
-    return confirmation.casefold() == 'yes' or confirmation.casefold() == 'y'
+    return confirmation.casefold() == "yes" or confirmation.casefold() == "y"
 
 
 def prompt_then_choose(prompt: str, choices: list[str], default: str = None) -> str:
@@ -4190,7 +4561,7 @@ def prompt_then_choose(prompt: str, choices: list[str], default: str = None) -> 
 
     Returns:
         str : The selected choice from the list (or the default if provided).
-    
+
     Raises:
         None: If the user input is invalid, it will keep prompting until a valid choice is made.
     """
@@ -4228,7 +4599,7 @@ def my_title_case(the_title: str) -> str:
     words = the_title.split()
     capitalized_words = [word if any(letter.isupper() for letter in word)
                          else word.title() for word in words]
-    return ' '.join(capitalized_words)
+    return " ".join(capitalized_words)
 
 
 def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
@@ -4236,7 +4607,7 @@ def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
     Turn arbitrary text into an ASCII-only, filesystem‐safe base filename.
     WARNING: Do not include an extension in the text, because this function
     might remove the dot which separates the filename from the extension.
-    It attempts to recognize and remove extensions listed in ALL_KNOWN_EXTENSIONS
+    It attempts to recognize and remove extensions listed in ALL_KNOWN_EXTENSIONS_SET
     but this list is not exhaustive.
 
     Steps:
@@ -4256,7 +4627,7 @@ def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
 
     Returns:
         A clean, filename-safe string.
-    
+
     Raises:
         None: If the input text is None, it will return an empty string.
     """
@@ -4270,11 +4641,11 @@ def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
     except ImportError:
         logging.warning("unidecode package not found, falling back to ASCII encoding.")
         # Fallback: encode to ASCII, ignore errors
-        text = text.encode('ascii', 'ignore').decode('ascii')
+        text = text.encode("ascii", "ignore").decode("ascii")
 
     # List of common extensions to recognize and (temporarily) remove
     removed_ext = ""
-    for ext in ALL_KNOWN_EXTENSIONS:
+    for ext in ALL_KNOWN_EXTENSIONS_SET:
         if text.casefold().endswith(ext):
             text = text[:-len(ext)]
             removed_ext = ext
@@ -4335,19 +4706,18 @@ def if_filepath_then_read(input_string_or_filepath: str | os.PathLike[str],
     # Heuristics: if it contains newlines or is ridiculously long, it's source.
     if isinstance(input_string_or_filepath, str) and ("\n" in input_string_or_filepath or len(input_string_or_filepath) > 4096):
         return input_string_or_filepath
-    if not force_string and Path(input_string_or_filepath).is_file():
-        file_path = Path(input_string_or_filepath)
+    if not force_string and (file_path := ensure_path(input_string_or_filepath)).is_file():
         try:
             contents = my_fopen(file_path, suppress_errors=True)
             if not contents:
                 logging.error("Could not read file: %s", file_path)
                 return ""
             return contents
-        except FileNotFoundError as e:
+        except FileNotFoundError:
             logging.exception("File not found: %s", file_path)
-        except PermissionError as e:
+        except PermissionError:
             logging.exception("Permission denied: %s", file_path)
-        except UnicodeDecodeError as e:
+        except UnicodeDecodeError:
             logging.exception("Could not decode %r.", file_path)
     else:  # Otherwise, treat "input_string" as a string.
         if not isinstance(input_string_or_filepath, str):
@@ -4376,7 +4746,7 @@ def compile_code(source_or_filepath: str | os.PathLike[str],
     # Read from file if source is a file path
     source = if_filepath_then_read(source_or_filepath, force_string=force_source)
     if source != source_or_filepath:
-        file_path = Path(source_or_filepath).expanduser().resolve()
+        file_path = ensure_path(source_or_filepath)
     else:
         # If it's a string, we need to provide a dummy file path for the compiler.
         # This is just to satisfy the compiler, it won't be used.
@@ -4385,10 +4755,10 @@ def compile_code(source_or_filepath: str | os.PathLike[str],
         compile(source, file_path, "exec")
     except SyntaxError as e:
         # protect against None offsets
-        lineno = e.lineno or '?'
+        lineno = e.lineno or "?"
         offset = e.offset or 0
-        line = (e.text or '').rstrip('\n')
-        pointer = ' ' * (offset - 1) + '^' if offset else ''
+        line = (e.text or "").rstrip("\n")
+        pointer = " " * (offset - 1) + "^" if offset else ""
         logging.error(f"Syntax error in {e.filename!r}, line {lineno}, column {offset}:\n"
                       f"    {line}\n"
                       f"    {pointer}\n"
@@ -4431,7 +4801,7 @@ def _make_format_checker() -> Type[Any]:
         def __init__(self, source: str, doc_style: str = "None") -> None:
             """Initialize the FormatChecker with the source code string."""
             self.source = source
-            self.doc_style = doc_style # "None", "NumPy", "Google", "reStructuredText"
+            self.doc_style = doc_style  # "None", "NumPy", "Google", "reStructuredText"
             self.errors: list[tuple[str, str, str, int]] = []
             self._seen_funcs: set[int] = set()  # keep track of which FunctionDef/AsyncFunctionDef nodes we've already checked
 
@@ -4511,7 +4881,7 @@ def _make_format_checker() -> Type[Any]:
             first_line = literal.strip().splitlines()[0]
             if first_line.startswith("'''"):
                 self.errors.append((node.__class__.__name__.casefold(), who,
-                                    'docstring should use triple double quotes ("""…""")',
+                                    'docstring should use triple double quotes ("""...""")',
                                     node.lineno))
 
             # Now scan for any extra standalone triple‐quoted strings
@@ -4522,7 +4892,7 @@ def _make_format_checker() -> Type[Any]:
                 and isinstance(extra.value.value, str):
                     literal = ast.get_source_segment(self.source, extra.value) or ""
                     first = literal.strip().splitlines()[0]
-                    # If it starts with triple quotes, it’s an extra docstring
+                    # If it starts with triple quotes, it's an extra docstring
                     if first.startswith(('"""', "'''")):
                         self.errors.append((node.__class__.__name__.casefold(),
                                             who, "extra docstring", extra.lineno))
@@ -4539,7 +4909,7 @@ def _make_format_checker() -> Type[Any]:
                 # "NumPy"              : self._check_numpy_docstring,
                 # "reStructuredText" : self._check_rst_docstring,
             }.get(self.doc_style)
-            logging.warning("Consider adding an exception to the docstring checker: if the function is less than 5(?) lines, allow a single line docstring without the required sections.")
+            logging.warning("Consider adding an exception to the docstring checker: if the function is less than 5(?) lines, allow a single line docstring without the required sections. Also, if there are no args or no return value or it doesn't raise exceptions.")
             if checker is not None:
                 checker(node, who)
 
@@ -4590,7 +4960,6 @@ def _make_format_checker() -> Type[Any]:
             if missing:
                 self.errors.append((node.__class__.__name__.casefold(), who,
                                     f"{doctype} docstring missing parameter(s): " + ", ".join(missing), node.lineno))
-
 
         def _check_numpy_docstring(self, node: ast.AST, who: str) -> None:
             """
@@ -4655,16 +5024,16 @@ def check_python_formatting(path: str | os.PathLike[str], diff_choice: int = 1) 
     Args:
         path:        The path to the Python file to check.
         diff_choice: How many context lines to show in the diff (0 = old-style diff, 1 = unified diff with 0 context lines, 2+ = unified diff with 'diff_choice - 1' context lines).
-    
+
     Returns:
         bool: False if the user chose to quit during any replacement prompts, True otherwise.
-    
+
     Raises:
         FileNotFoundError: If the specified file does not exist.
     """
     import ast
     fallback_logging_config()
-    path = ensure_path_is_a_file(path)
+    path = ensure_file(path)
     src = my_fopen(path)
     if src is False:
         logging.error("❌ Failed to open file: %s", path)
@@ -4673,47 +5042,39 @@ def check_python_formatting(path: str | os.PathLike[str], diff_choice: int = 1) 
     if compile_code(src):
         logging.info("✅ %s compiled successfully.", path)
 
-    # Check for some characters that I personally dislike in Python source code:
-    BACKTICK            = "\u0060"  # U+0060 "GRAVE ACCENT" (the backtick)
-    LSQUOTE             = "\u2018"  # U+2018 "LEFT  SINGLE QUOTATION MARK" (curly apostrophe)
-    RSQUOTE             = "\u2019"  # U+2019 "RIGHT SINGLE QUOTATION MARK" (curly apostrophe)
-    LDQUOTE             = "\u201C"  # U+201C "LEFT  DOUBLE QUOTATION MARK"
-    RDQUOTE             = "\u201D"  # U+201D "RIGHT DOUBLE QUOTATION MARK"
-    HORIZONTAL_ELLIPSIS = "\u2026"  # U+2026 "HORIZONTAL ELLIPSIS" (three closely spaced periods)
-
     logging.warning("LOOK FOR logging.debug STATEMENTS THAT USE F-STRINGS OR THAT DON'T HAVE GUARDS!!")
 
     if BACKTICK in src:
         logging.warning("File %s contains the backtick character (%r). Use straight quotation marks (') instead.", path, BACKTICK)
-        if not ask_and_replace(old_str=BACKTICK, new_str="'", path=path, label='backtick',
+        if not ask_and_replace(old_str=BACKTICK, new_str="'", path=path, label="backtick",
                                diff_choice=diff_choice,
                                description=f"Replace backtick ({BACKTICK}) with straight apostrophe (')"):
             return False
     if LSQUOTE in src or RSQUOTE in src:
         logging.warning("File %s contains curly single quotation marks (%r or %r). Use straight apostrophes (') instead.", path, LSQUOTE, RSQUOTE)
-        if not ask_and_replace(old_str=LSQUOTE, new_str="'", path=path, label='left-curly-apostrophe',
+        if not ask_and_replace(old_str=LSQUOTE, new_str="'", path=path, label="left-curly-apostrophe",
                                diff_choice=diff_choice,
                                description=f"Replace left curly apostrophe ({LSQUOTE}) with straight apostrophe (')"):
             return False
-        if not ask_and_replace(old_str=RSQUOTE, new_str="'", path=path, label='right-curly-apostrophe',
+        if not ask_and_replace(old_str=RSQUOTE, new_str="'", path=path, label="right-curly-apostrophe",
                                diff_choice=diff_choice,
                                description=f"Replace right curly apostrophe ({RSQUOTE}) with straight apostrophe (')"):
             return False
     if LDQUOTE in src or RDQUOTE in src:
-        logging.warning('File %s contains curly double quotation marks (%r or %r). Use straight quotation marks (") instead.', path, LDQUOTE, RDQUOTE)
+        logging.warning("File %s contains curly double quotation marks (%r or %r). Use straight quotation marks (\") instead.", path, LDQUOTE, RDQUOTE)
         if not ask_and_replace(old_str=LDQUOTE, new_str='"', path=path,
-                               label='left-curly-quotation-mark',
+                               label="left-curly-quotation-mark",
                                diff_choice=diff_choice,
                                description=f'Replace left curly double quotation mark ({LDQUOTE}) with straight double quotation mark (")'):
             return False
-        if not ask_and_replace(old_str=RDQUOTE, new_str='"', path=path, label='right-curly-quotation-mark',
+        if not ask_and_replace(old_str=RDQUOTE, new_str='"', path=path, label="right-curly-quotation-mark",
                                diff_choice=diff_choice,
                                description=f'Replace right curly double quotation mark ({RDQUOTE}) with straight double quotation mark (")'):
             return False
     if HORIZONTAL_ELLIPSIS in src:
         logging.warning("File %s contains the horizontal ellipsis character (%r). Use three periods (...) instead.", path, HORIZONTAL_ELLIPSIS)
-        if not ask_and_replace(old_str=HORIZONTAL_ELLIPSIS, new_str='...', path=path,
-                               label='horizontal-ellipsis', diff_choice=diff_choice,
+        if not ask_and_replace(old_str=HORIZONTAL_ELLIPSIS, new_str="...", path=path,
+                               label="horizontal-ellipsis", diff_choice=diff_choice,
                                description=f"Replace horizontal ellipsis ({HORIZONTAL_ELLIPSIS}) with three periods (...)"):
             return False
 
@@ -4748,18 +5109,16 @@ def run_flake8(path: str | os.PathLike[str], ignore_codes: list[str] = [],
         path:            The path to the Python file to check.
         ignore_codes:    A list of Flake8 error/warning codes to ignore.
         max_line_length: The (custom) maximum allowed line length for E501 checks.
-    
+
     Returns:
         flake8.Report : The Flake8 report object containing the results.
-    
+
     Raises:
         FileNotFoundError: If the specified file does not exist.
     """
-    import io
-    from collections import defaultdict
     from flake8.api import legacy as flake8
     fallback_logging_config()
-    path = ensure_path_is_a_file(path)
+    path = ensure_file(path)
     style_guide = flake8.get_style_guide(max_line_length=max_line_length, ignore=ignore_codes)
     report = style_guide.check_files([path])
     if report.total_errors == 0:
@@ -4768,42 +5127,6 @@ def run_flake8(path: str | os.PathLike[str], ignore_codes: list[str] = [],
     logging.error("Found %d total violations in %s:", report.total_errors, path)
     for stat in report.get_statistics(""):
         logging.error("  %s", stat)
-
-    # This section was SUPPOSED to print a grouped summary of violations by code with line numbers.
-    # However, it CORRUPTS THE FILE IT IS EXAMINING! https://chatgpt.com/share/688ba75b-7860-8006-bc9f-1bce8cb01359
-    # BEWARE: DO NOT USE THIS CODE!
-    # # Create a StringIO and tell flake8 to write its output there
-    # buf = io.StringIO()
-    # style = flake8.get_style_guide(max_line_length=max_line_length, ignore=ignore_codes, output_file=buf)
-
-    # # Run the checks
-    # report = style.check_files([path])  # path is your filename or list of files
-    # # now force every violation to be written into our StringIO
-    # formatter = style._application.formatter
-    # for violation in style._application.file_checker_manager.results:
-    #     formatter.handle(violation)
-    # formatter.stop()
-
-    # # Rewind and parse each line of the report
-    # buf.seek(0)
-    # logging.info("\n" + buf.getvalue())
-    # buf.seek(0)
-    # by_code = defaultdict(list)
-    # for line in buf:
-    #     # Each line looks like: "univ_defs.py:1501:9: F841 local variable 'e' is assigned to but never used"
-    #     parts = line.strip().split(":", 3)
-    #     if len(parts) < 4:
-    #         continue
-    #     _, lineno_str, _, rest = parts
-    #     code = rest.strip().split()[0]      # e.g. "F841"
-    #     by_code[code].append(int(lineno_str))
-
-    # # Print a grouped summary
-    # breakpoint()
-    # for code, lines in sorted(by_code.items()):
-    #     lines = sorted(set(lines))
-    #     print(f"{code}: line{'s' if len(lines)>1 else ''} {', '.join(map(str, lines))}")
-
     return report
 
 
@@ -4825,14 +5148,14 @@ def _gather_via_cli(path: str | os.PathLike[str], max_line_length: int,
                     ignore_codes: list[str]) -> dict[str, str]:
     """Use the flake8 CLI to gather codes and descriptions."""
     import subprocess
-    path = ensure_path_is_a_file(path)
+    path = ensure_file(path)
     fmt = "%(row)d:%(col)d: %(code)s %(text)s"
     args = [
         "flake8",
         f"--max-line-length={max_line_length}",
         f"--ignore={','.join(ignore_codes)}",
         f"--format={fmt}",
-        path,
+        os.fspath(path),
     ]
     proc = subprocess.run(args, capture_output=True, text=True)
     codes: dict[str, str] = {}
@@ -4851,9 +5174,9 @@ def _gather_via_app(path: str | os.PathLike[str], max_line_length: int,
                     ignore_codes: list[str]) -> dict[str, str]:
     """Use the flake8 Application API to gather codes and descriptions."""
     from flake8.main.application import Application
-    from flake8.formatting.base import BaseFormatter
-    from flake8.violation import Violation
-    path = ensure_path_is_a_file(path)
+    from flake8.formatting.base  import BaseFormatter
+    from flake8.violation        import Violation
+    path = ensure_file(path)
 
     class CodeDictFormatter(BaseFormatter):
         """Custom formatter that collects codes and their first descriptions."""
@@ -4879,7 +5202,7 @@ def _gather_via_app(path: str | os.PathLike[str], max_line_length: int,
 
     app = CodeDictApp()
     # supply exactly the same CLI settings in-process
-    cli_args = [f"--max-line-length={max_line_length}", f"--ignore={','.join(ignore_codes)}", path]
+    cli_args = [f"--max-line-length={max_line_length}", f"--ignore={','.join(ignore_codes)}", os.fspath(path)]
     # this will parse, run checks, and invoke our formatter behind the scenes
     app.run(cli_args)
     # the formatter collected everything into .codes
@@ -4890,7 +5213,7 @@ def get_autopep8_fixable_codes() -> set[str]:
     """
     Run 'autopep8 --list-fixes' (via subprocess) to discover exactly
     which Flake8 error‐codes autopep8 knows how to fix.
-    Returns a set like {"E101","E111", …}.
+    Returns a set like {"E101","E111", ...}.
     """
     import subprocess
     fallback_logging_config()
@@ -4940,14 +5263,14 @@ def highlight_changes(orig: str, new: str, unchanged_color: str,
     - old_highlighted has parts present only in 'orig' wrapped in deleted_color.
     - new_highlighted has parts present only in 'new' wrapped in added_color
       and unchanged parts in unchanged_color.
-    
+
     Args:
         orig:            The original string.
         new:             The modified string.
         unchanged_color: The color to use for unchanged parts.
         added_color:     The color to use for added parts.
         deleted_color:   The color to use for deleted parts.
-    
+
     Returns:
         A tuple of (old_highlighted, new_highlighted) strings.
 
@@ -4961,27 +5284,28 @@ def highlight_changes(orig: str, new: str, unchanged_color: str,
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         old_segment = orig[i1:i2]
         new_segment =  new[j1:j2]
-        if tag == 'equal':
+        if tag == "equal":
             new_out.append(f"{unchanged_color}{new_segment}{ANSI_RESET}")
             old_out.append(old_segment)
-        elif tag == 'replace':  # segments changed: mark old text as deleted, new text as added
+        elif tag == "replace":  # segments changed: mark old text as deleted, new text as added
             new_out.append(f"{added_color}{new_segment}{ANSI_RESET}")
             old_out.append(f"{deleted_color}{old_segment}{ANSI_RESET}")
-        elif tag == 'delete':  # text removed: mark in old, nothing in new
+        elif tag == "delete":  # text removed: mark in old, nothing in new
             old_out.append(f"{deleted_color}{old_segment}{ANSI_RESET}")
-        elif tag == 'insert':  # text added: mark in new, nothing in old
+        elif tag == "insert":  # text added: mark in new, nothing in old
             # text added: if it's *only* whitespace, render it visibly
-            if set(new_segment) <= {' ', '\t'}:
+            if set(new_segment) <= {" ", "\t"}:
                 visible = _vis_all_ws(new_segment)
             else:
                 visible = new_segment
             new_out.append(f"{added_color}{visible}{ANSI_RESET}")
-    return ''.join(old_out), ''.join(new_out)
+    return "".join(old_out), "".join(new_out)
 
 
-def my_diff(orig_text: str, changed_text: str, orig_path: str | os.PathLike[str],
+def my_diff(orig_text: str, changed_text: str,
+            orig_path:    str | os.PathLike[str],
             changed_path: str | os.PathLike[str] | None = None,
-            diff_choice: int = 1,
+            diff_choice:   int = 1,
             changed_color: str = ANSI_CYAN,
             deleted_color: str = ANSI_RED,
             added_color:   str = ANSI_YELLOW) -> None:
@@ -4994,27 +5318,28 @@ def my_diff(orig_text: str, changed_text: str, orig_path: str | os.PathLike[str]
         changed_text:   Proposed changes to the original text.
         orig_path:      Path to the original file.
         changed_path:   Optional path to the changed file (if different).
-        diff_choice:    How many context lines to show in the diff (0 = old-style diff, 1 = unified diff with 0 context lines, 2+ = unified diff with 'diff_choice - 1' context lines).
+        diff_choice:    How many context lines to show in the diff ( 0 = old-style diff, 1 = unified diff with 0 context lines,
+                                                                    2+ = unified diff with 'diff_choice - 1' context lines).
         changed_color:  Color to use for unchanged characters in the changed lines in the diff (default ANSI_CYAN).
         deleted_color:  Color to use for the deleted characters in orig lines (default ANSI_YELLOW).
         added_color:    Color to use for the added characters in changed lines (default ANSI_RED).
-    
+
     Returns:
         None: Prints the diff to the console.
-    
+
     Raises:
         None.
     """
     import difflib
     fallback_logging_config(rawlog=True)
-    orig_path = Path(orig_path).expanduser().resolve()
+    orig_path = ensure_path(orig_path)
     if not changed_path:
         changed_path = orig_path
     logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("At the top of the function %s(), diff_choice=%s", return_method_name(), diff_choice)
     orig_lines    =    orig_text.splitlines(keepends=True)
     changed_lines = changed_text.splitlines(keepends=True)
-    the_digits = max(len(str(len(orig_lines))), len(str(len(changed_lines))))
-    last_removed = None  # there is no last removed line initially
+    the_digits    = max(len(str(len(orig_lines))), len(str(len(changed_lines))))
+    last_removed  = None  # there is no last removed line initially
     # shared buffer for the current hunk's deletes/inserts
     hunk_entries: list[tuple[str, str, int, int]] = []
     # each entry is (tag, text, orig_lineno, new_lineno)
@@ -5130,7 +5455,7 @@ def is_python_script(path: str | os.PathLike[str]) -> bool:
     Return True if 'path' looks like a Python script:
       1. It's a file which ends in .py or .pyw
       2. Or it is executable AND its first line is a python shebang
-    
+
     Args:
         path: The file path to check.
 
@@ -5143,12 +5468,12 @@ def is_python_script(path: str | os.PathLike[str]) -> bool:
         PermissionError:   If the file is not accessible due to permission issues.
     """
     import stat
-    path = Path(path)
+    path = ensure_path(path)
     if not path.is_file():
         return False
 
     # Common extensions
-    if path.suffix.casefold() in PYTHON_EXTENSIONS:
+    if path.suffix.casefold() in PYTHON_EXTENSIONS_SET:
         return True
 
     # No-extension scripts: check for executable bit + python shebang
@@ -5196,14 +5521,14 @@ def diff_and_confirm(orig_text: str, changed_text: str,
 
     Returns:
         bool: False if the user chose to quit; True otherwise.
-    
+
     Raises:
         FileNotFoundError: If the specified file does not exist.
         ValueError: If the specified path is not a file. The function which raises this exception is my_fopen().
     """
     fallback_logging_config()
     logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("At the top of the function %s(), diff_choice=%s", return_method_name(), diff_choice)
-    path = ensure_path_is_a_file(path)
+    path = ensure_file(path)
     my_diff(orig_text, changed_text, path, diff_choice=diff_choice,
             changed_color=changed_color, deleted_color=deleted_color, added_color=added_color)
     label_str = f"{ANSI_RED}{label}{ANSI_RESET}" if label     else ""
@@ -5255,28 +5580,28 @@ def ask_and_autopep8(path: str | os.PathLike[str], code: str,
 
     Returns:
         bool: True if the user wants to continue, False if they want to quit.
-    
+
     Raises:
         FileNotFoundError: If the specified file does not exist.
         ValueError: If the specified path is not a file. The function which raises this exception is autopep8.fix_file().
     """
     import autopep8
     fallback_logging_config()
-    path = ensure_path_is_a_file(path)
+    path = ensure_file(path)
     logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("At the top of the function %s(), diff_choice=%s", return_method_name(), diff_choice)
     # The number of blank lines expected in various contexts.
     blank_line_overrides = {
-        'E301': 1,  # expected 1 blank line, found 0
-        'E302': 2,  # expected 2 blank lines, found 1
-        'E303': 5,  # too many blank lines (give a lot of context to see what is around the blank lines)
-        'E305': 2,  # expected 2 blank lines after class/method
+        "E301" : 1,  # expected 1 blank line, found 0
+        "E302" : 2,  # expected 2 blank lines, found 1
+        "E303" : 5,  # too many blank lines (give a lot of context to see what is around the blank lines)
+        "E305" : 2,  # expected 2 blank lines after class/method
     }
     orig_text = my_fopen(path)
     changed_text = orig_text
     for level in (0, 1, 2):  # try with 0, 1, then 2 "-a" flags
-        flags = ['-a'] * level
+        flags = ["-a"] * level
         the_fix = f"autopep8 {' '.join(flags)} --select={code}"
-        args = [f"--select={code}", "--in-place"] + flags + [path]
+        args = [f"--select={code}", "--in-place"] + flags + [os.fspath(path)]
         opts      = autopep8.parse_args(args)
         candidate = autopep8.fix_code(orig_text, options=opts)
         if candidate != orig_text:
@@ -5331,7 +5656,7 @@ def ask_and_replace(old_str: str, new_str: str,
         PermissionError: If the file is not accessible due to permission issues.
     """
     fallback_logging_config()
-    path = ensure_path_is_a_file(path)
+    path = ensure_file(path)
     orig_text = my_fopen(path)
     changed_text = orig_text.replace(old_str, new_str)
     if changed_text == orig_text:
@@ -5355,7 +5680,7 @@ def _validate_glob_pattern(pattern: str) -> None:
 def _resolve_dir(dir_arg: str | None) -> Path:
     """Resolve the directory from the command line argument."""
     if dir_arg:
-        p = Path(dir_arg).expanduser().resolve()
+        p = ensure_path(dir_arg)
     else:
         p = Path.cwd()
     if not p.exists():
@@ -5464,7 +5789,7 @@ def interactive_flake8(path: str | os.PathLike[str], diff_choice: int = 1,
         added_color:     Color for added characters in changed lines (default: ANSI_YELLOW).
     """
     fallback_logging_config()
-    path = ensure_path_is_a_file(path)
+    path = ensure_file(path)
     logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("At the top of the function %s(), diff_choice=%s", return_method_name(), diff_choice)
     if not run_flake8(path, ignore_codes=ignore_codes, max_line_length=max_line_length):
         logging.info("No flake8 errors—nothing to do.")
@@ -5485,7 +5810,7 @@ def interactive_flake8(path: str | os.PathLike[str], diff_choice: int = 1,
 
 
 # - Use {str(univ_defs_dir)!r} so Windows backslashes are safely escaped in the string literal.
-# - Double the braces around `univ_defs_dir` in the f-string to keep them literal in the written file.
+# - Double the braces around 'univ_defs_dir' in the f-string to keep them literal in the written file.
 UNIV_DEFS_SYS_PATH_SCRIPT: str = f'''# Auto-generated helper: ensure the univ_defs directory is on sys.path
 import sys
 from pathlib import Path
@@ -6036,20 +6361,21 @@ ax.add_feature(cartopy.feature.OCEAN)  # Example color; adjust as needed
 ax.add_feature(cartopy.feature.LAND)   # Example color; adjust as needed
 
 # Force feature download
-plt.savefig('cartopy_test_map.png')
-os.remove('cartopy_test_map.png')
+temp_filename = "cartopy_test_map.png"
+plt.savefig(temp_filename)
+os.remove(  temp_filename)
 '''
 
 
 def verify_script(options: Options, thepath: str | os.PathLike[str], thescript: str) -> None:
     """
-    Ensure that `thepath` exists and contains exactly `thescript`.
-    - If `thepath` does not exist or is not a file, it will be created and populated.
+    Ensure that 'thepath' exists and contains exactly 'thescript'.
+    - If 'thepath' does not exist or is not a file, it will be created and populated.
     - If it exists but its contents differ, it will be overwritten.
     - Otherwise, nothing happens.
     """
     # Check if it exists and is a file
-    thepath = Path(thepath).expanduser().resolve()
+    thepath = ensure_path(thepath)
     if not thepath.is_file():
         if thepath.is_dir():
             if not options.rawlog:
@@ -6073,12 +6399,12 @@ def verify_script(options: Options, thepath: str | os.PathLike[str], thescript: 
 
 def decode_utf8(raw_bytes: bytes, path: str = "input string") -> str | None:
     """
-    If the file at `path` is valid UTF-8 without lone C1 controls,
+    If the file at 'path' is valid UTF-8 without lone C1 controls,
     return the decoded string. Otherwise, return None.
     """
     fallback_logging_config()
     try:
-        text = raw_bytes.decode('utf-8', errors='strict')
+        text = raw_bytes.decode("utf-8", errors="strict")
     except UnicodeDecodeError:
         logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s failed to decode as UTF‑8.", path)
         return None
@@ -6096,7 +6422,7 @@ def decode_cp1252(raw_bytes: bytes, path: str = "input string") -> str | None:
     """
     fallback_logging_config()
     try:
-        text = raw_bytes.decode('cp1252', errors='strict')
+        text = raw_bytes.decode("cp1252", errors="strict")
         logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s decoded as valid CP1252.", path)
         return text
     except UnicodeDecodeError:
@@ -6110,7 +6436,7 @@ def contains_mojibake(text: str) -> bool:
     fallback_logging_config()
     try:
         mojibake_present = ftfy.badness.is_bad(text)
-    except Exception: # Catch any unexpected errors from ftfy without crashing
+    except Exception:  # Catch any unexpected errors from ftfy without crashing
         logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Failed to check for mojibake.", exc_info=True)
         mojibake_present = False
     logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Mojibake present: %s", mojibake_present)
@@ -6125,7 +6451,7 @@ def fix_text(current_text: str, path: str | os.PathLike[str], raw_bytes: bytes) 
     """
     import ftfy
     fallback_logging_config()
-    path = ensure_path_is_a_file(path)
+    path = ensure_file(path)
     logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Checking %s for mojibake.", path)
     if not contains_mojibake(current_text):
         return None
@@ -6138,7 +6464,7 @@ def fix_text(current_text: str, path: str | os.PathLike[str], raw_bytes: bytes) 
     if logging.getLogger().isEnabledFor(logging.DEBUG):
         try:
             # Mangle the original string to simulate browser encoding issues:
-            mangled_original = raw_bytes.decode('cp1252', errors='replace')
+            mangled_original = raw_bytes.decode("cp1252", errors="replace")
             my_diff(mangled_original, fixed, path)
         except Exception:  # Catch any unexpected errors from decoding but don't crash.
             logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Could not simulate browser mangling in %s.", path, exc_info=True)
@@ -6163,7 +6489,7 @@ def ensure_utf8_meta(html: str) -> str:
         """
         # Always produce exactly: <meta charset="utf-8">
         return '<meta charset="utf-8">'
-    
+
     # Pattern A: <meta ... charset=XYZ ...>
     pattern_a = r'<meta\b[^>]*\bcharset=["\']?[^"\'>\s]+["\']?[^>]*>'
     # Pattern B: <meta ... http-equiv=["\']Content-Type["\'] ... content="...; charset=XYZ"...>
@@ -6185,20 +6511,20 @@ def ensure_utf8_meta(html: str) -> str:
 
 
 def my_atomic_write(filepath: str | Path | os.PathLike[str], data: str | bytes | bytearray,
-                    write_mode: Literal['w', 'a'], encoding: str = DEFAULT_ENCODING,
+                    write_mode: Literal["w", "a"], encoding: str = DEFAULT_ENCODING,
                     lock_timeout: float = None,  # seconds to wait for lock (None = forever)
-                   ) -> None:
+                    ) -> None:
     """
-    Atomically write `data` to `filepath` with an advisory lock.
+    Atomically write 'data' to 'filepath' with an advisory lock.
 
-    - If write_mode='a' and file exists, data is appended.
-    - If write_mode='a' and file does *not* exist, file is created.
-    - A `.lock` file beside `filepath` prevents concurrent writers.
+    - If write_mode="a" and file exists, data is appended.
+    - If write_mode="a" and file does *not* exist, file is created.
+    - A '.lock' file beside 'filepath' prevents concurrent writers.
 
     Args:
         filepath:     Path to the file to write.
         data:         Data to write (str or bytes).
-        write_mode:   'w' for overwrite, 'a' for append.
+        write_mode:   "w" for overwrite, "a" for append.
         encoding:     Encoding to use for text data (default: DEFAULT_ENCODING).
         lock_timeout: Maximum time to wait for the lock (default: None, meaning wait indefinitely).
 
@@ -6210,20 +6536,20 @@ def my_atomic_write(filepath: str | Path | os.PathLike[str], data: str | bytes |
     """
     from atomicwrites import atomic_write
     from filelock import FileLock, Timeout
-    path = Path(filepath)
+    path = ensure_path(filepath)
     # ensure parent directory exists
     path.parent.mkdir(parents=True, exist_ok=True)
     # choose text or binary mode
     is_bytes = isinstance(data, (bytes, bytearray))
-    mode     = write_mode + ('b' if is_bytes else '')
+    mode     = write_mode + ("b" if is_bytes else "")
     text_enc = None if is_bytes else encoding
-    lock_path = str(path) + '.lock'
+    lock_path = str(path) + ".lock"
     lock = FileLock(lock_path, timeout=lock_timeout)
     try:
         with lock:
             # atomicwrites will write to a temp file in the same dir then os.replace()
-            # overwrite=(write_mode=='w') means "w" replaces, "a" appends
-            with atomic_write(path, mode=mode, overwrite=(write_mode == 'w'),
+            # overwrite=(write_mode=="w") means "w" replaces, "a" appends
+            with atomic_write(path, mode=mode, overwrite=(write_mode == "w"),
                               encoding=text_enc, preserve_mode=True) as f:
                 f.write(data)
     except Timeout:
@@ -6238,13 +6564,13 @@ def fix_mojibake(filepath: str | os.PathLike[str], make_backup: bool = True,
     """
     import datetime as dt
     fallback_logging_config()
-    filepath = Path(filepath)
+    filepath = ensure_file(filepath)
     if not filepath.is_file():
         logging.error(f"{filepath} is not a file")
         return
 
     try:
-        with open(filepath, 'rb') as f:
+        with open(filepath, "rb") as f:
             raw_bytes = f.read()
     except Exception:  # Catch any unexpected errors from reading the file without crashing.
         logging.error(f"Failed to read {filepath}.", exc_info=True)
@@ -6265,7 +6591,7 @@ def fix_mojibake(filepath: str | os.PathLike[str], make_backup: bool = True,
         logging.info("✔ Fixed mojibake: %s", filepath)
 
     # If the text is from an HTML file, ensure it has a UTF-8 meta tag
-    if filepath.suffix.casefold() in ('.html','.htm'):
+    if filepath.suffix.casefold() in (".html", ".htm"):
         current_text = ensure_utf8_meta(current_text)
 
     # If we have fixed the text, write it back
@@ -6282,7 +6608,7 @@ def fix_mojibake(filepath: str | os.PathLike[str], make_backup: bool = True,
                 except OSError:
                     logging.exception("Failed to create backup for %s.", filepath)
                     return
-            my_atomic_write(filepath, current_text, 'w', encoding='utf-8')
+            my_atomic_write(filepath, current_text, "w", encoding="utf-8")
             logging.info("✔ Successfully fixed mojibake in %s", filepath)
 
 
@@ -6290,7 +6616,7 @@ def treeview_new_files(directory:      str | os.PathLike[str],
                        last_file_path: str | os.PathLike[str] | None = None,
                        last_mtime: float | None = None, maxlines: int = 0,
                        use_colors: bool = True, print_root: bool = True,
-                       prefix: str = '', is_last: bool = True, level: int = 0,
+                       prefix: str = "", is_last: bool = True, level: int = 0,
                        state: dict = None, probe_only: bool = False) -> bool:
     """
     Recursively scan the directory, print the contents of files newer than last_file_path (if provided- if so store its modification date in last_mtime). Return True if any relevant files are found.
@@ -6322,7 +6648,7 @@ def treeview_new_files(directory:      str | os.PathLike[str],
     import datetime as dt
     fallback_logging_config(rawlog=True)
 
-    directory = Path(directory).resolve()
+    directory = ensure_path(directory)
     if not directory.exists():
         logging.error(f"{prefix}└── [Directory does not exist: {directory}]")
         return False
@@ -6334,36 +6660,36 @@ def treeview_new_files(directory:      str | os.PathLike[str],
         last_mtime = 0
         logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%sNo last file path provided, considering all files.", prefix)
     else:
-        last_file_path = Path(last_file_path).expanduser().resolve()
+        last_file_path = ensure_path(last_file_path)
         if not last_file_path.exists():
             logging.error("%s└── [Last file path does not exist: %s]", prefix, last_file_path)
             return False
-        last_mtime = last_file_path.stat().st_mtime
-        last_mtime_readable = dt.datetime.fromtimestamp(last_mtime).strftime('%Y-%m-%d %H:%M:%S')
+        last_mtime          = last_file_path.stat().st_mtime
+        last_mtime_readable = dt.datetime.fromtimestamp(last_mtime).strftime("%Y-%m-%d %H:%M:%S")
         logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%sLast file path: %s (mtime: %s)", prefix, last_file_path, last_mtime_readable)
 
     if use_colors:
         reset_color = ANSI_RESET
         dir_color   = ANSI_CYAN
     else:
-        reset_color = ''
-        dir_color   = ''    
+        reset_color = ""
+        dir_color   = ""
 
     # Get the modification time of the directory itself
     dir_mtime = directory.stat().st_mtime
     current_is_new = dir_mtime > (last_mtime or 0)
 
     if state is None:
-        state = {'excluded_dirs'   : {'__pycache__'},
-                 'already_printed' : set(),
-                 'my_filepath'     : Path(__file__).expanduser().resolve()}
+        state = {"excluded_dirs"   : {"__pycache__"},
+                 "already_printed" : set(),
+                 "my_filepath"     : ensure_path(__file__)}
     already_printed = state['already_printed']
     excluded_dirs   = state['excluded_dirs']
     my_filepath     = state['my_filepath']
 
     if not probe_only:
         already_printed.add(directory)
-    
+
     has_relevant_files = False  # Flag to indicate if current directory has relevant files
 
     try:
@@ -6379,7 +6705,7 @@ def treeview_new_files(directory:      str | os.PathLike[str],
             (entry.is_file() and (
                 entry == last_file_path or
                 entry == my_filepath    or
-                entry.name.startswith('.')
+                entry.name.startswith(".")
             )) or
             (entry.is_dir() and entry.name in excluded_dirs) or
             (entry.is_dir() and entry.expanduser().resolve() in already_printed)
@@ -6406,13 +6732,13 @@ def treeview_new_files(directory:      str | os.PathLike[str],
                 last_mtime=last_mtime,
                 maxlines=maxlines,
                 use_colors=use_colors,      # use_colors doesn't matter in probe mode
-                prefix=prefix,              # prefix doesn’t matter in probe mode
+                prefix=prefix,              # prefix doesn't matter in probe mode
                 is_last=False,              # ignored in probe mode
                 level=level + 1,
                 state=state,
                 probe_only=True             # probe mode: do not print contents
             )
-            # Consider the subdirectory’s own mtime
+            # Consider the subdirectory's own mtime
             sub_is_new = entry.stat().st_mtime > last_mtime
             if sub_has_relevant or sub_is_new:
                 subdirectories.append(entry)
@@ -6430,18 +6756,17 @@ def treeview_new_files(directory:      str | os.PathLike[str],
     if should_show:
         if level > 0:
             # Print the directory name with a connector only if it's not the root directory
-            connector = '└── ' if is_last else '├── '
+            connector = "└── " if is_last else "├── "
             logging.info(f"{prefix}{connector}{dir_color}{directory.name}/{reset_color}")
 
             # Update the prefix for child entries
-            child_prefix = prefix + ('    ' if is_last else '│   ')
+            child_prefix = prefix + ("    " if is_last else "│   ")
         else:
             # For root level, do not print the directory name unless print_root is True
             child_prefix = prefix
             if print_root:
                 # Print the root directory name with a connector
                 logging.info(f"{dir_color}{directory.name}/{reset_color}")
-
 
         # Print subdirectories first
         printable_subdirs = [
@@ -6460,12 +6785,12 @@ def treeview_new_files(directory:      str | os.PathLike[str],
         for i, file_entry in enumerate(relevant_entries):
             # Determine if this is the last file to adjust connector
             is_file_last = (i == len(relevant_entries) - 1)
-            file_connector = '└── ' if is_file_last else '├── '
+            file_connector = "└── " if is_file_last else "├── "
             contents_str = f"{file_entry.name} contents:" if maxlines != 0 else f"{file_entry.name}"
             logging.info(f"{child_prefix}{file_connector}{contents_str}")
             try:
                 if maxlines != 0:  # Only open if not disabled
-                    with open(file_entry, 'r', encoding=DEFAULT_ENCODING) as f:
+                    with open(file_entry, "r", encoding=DEFAULT_ENCODING) as f:
                         if maxlines > 0:
                             # Read only up to maxlines
                             lines = []
@@ -6476,7 +6801,7 @@ def treeview_new_files(directory:      str | os.PathLike[str],
                         else:  # maxlines == -1 → read all
                             lines = [line.rstrip("\n") for line in f]
                     # Indent file contents for better readability
-                    indented_contents = '\n'.join(f"{child_prefix}    {line}" for line in lines)
+                    indented_contents = "\n".join(f"{child_prefix}    {line}" for line in lines)
                     logging.info(indented_contents)
             except Exception:  # Catch any unexpected errors from reading the file without crashing.
                 logging.exception(f"{child_prefix}    Error reading '{file_entry}'.")
@@ -6489,15 +6814,15 @@ def treeview_new_files(directory:      str | os.PathLike[str],
 def check_if_command_exists(command: str) -> bool:
     """
     Check if a command exists on the system.
-    
+
     Args:
         command: The command to check.
-    
+
     Returns:
         bool: True if the command exists, False otherwise.
     """
     import subprocess
-    return subprocess.run(['which', command], capture_output=True).returncode == 0
+    return subprocess.run(["which", command], capture_output=True).returncode == 0
 
 
 def open_terminal_and_run_command(the_command: str, close_after: bool = False,
@@ -6508,31 +6833,31 @@ def open_terminal_and_run_command(the_command: str, close_after: bool = False,
     fallback_logging_config()
     logging.info("Opening terminal and running '%s'...", the_command)
     if sys.platform.startswith("linux"):
-        terminal_args = ['gnome-terminal']
+        terminal_args = ["gnome-terminal"]
     else:
         raise NotImplementedError(f"The function {return_method_name()} is only implemented for Linux, not for {sys.platform}")
     # if maximize_window:  # Disabled because in Ubuntu this causes the title bar to disappear.
     #     # either of these works; here we use both for clarity
-    #     terminal_args += ['--window', '--maximize']
+    #     terminal_args += ["--window", "--maximize"]
     # Now tell bash to run the command, then exit or hand off to an interactive shell
     if close_after:
-        bash_cmd = f'{the_command}; exit'
+        bash_cmd = f"{the_command}; exit"
     else:
-        bash_cmd = f'{the_command}; exec bash'
-    terminal_args += ['--', 'bash', '-ic', bash_cmd]
+        bash_cmd = f"{the_command}; exec bash"
+    terminal_args += ["--", "bash", "-ic", bash_cmd]
     subprocess.Popen(terminal_args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 # FIX PROBLEM WITH MAXIMIZING: https://chatgpt.com/share/68bcd45e-a2fc-8006-aeba-50dd177f1da6
 # ALSO, ON STARTUP, TERMINAL WINDOWS CLOSE IMMEDIATELY AFTER I CTRL-C THEM EVEN IF close_after=False
 # POSSIBLY RELATED: https://askubuntu.com/questions/1409826/gnome
 # def open_terminal_and_run_command(cmd, close_after=False, keep_titlebar=True):
 #     import subprocess, time
-#     bash_cmd = f'{cmd}; exit' if close_after else f'{cmd}; exec bash'
+#     bash_cmd = f"{cmd}; exit" if close_after else f"{cmd}; exec bash"
 #     # Start *not* maximized:
-#     p = subprocess.Popen(['gnome-terminal', '--class=myterm', '--', 'bash', '-ic', bash_cmd])
+#     p = subprocess.Popen(["gnome-terminal", "--class=myterm", "--", "bash", "-ic", bash_cmd])
 #     if keep_titlebar:
 #         time.sleep(0.3)  # small delay so the window exists
 #         # On X11: maximize after mapping (keeps decorations)
-#         subprocess.run(['wmctrl', '-x', '-r', 'myterm', '-b', 'add,maximized_vert,maximized_horz'], check=False)
+#         subprocess.run(["wmctrl", "-x", "-r", "myterm", "-b", "add,maximized_vert,maximized_horz"], check=False)
 
 
 def get_effective_free_memory() -> float:
@@ -6599,7 +6924,7 @@ def is_process_running(process_name: str) -> bool:
     import subprocess
     fallback_logging_config()
     try:
-        the_command = ['pgrep', '-f', process_name]
+        the_command = ["pgrep", "-f", process_name]
         results = subprocess.run(the_command, capture_output=True, text=True)
         if results.returncode != 0:
             return False
@@ -6631,14 +6956,14 @@ def open_filemanager_with_dirs(directories: list[str | os.PathLike[str]]) -> Non
     import subprocess
     import time
     fallback_logging_config()
-    if sys.platform.startswith('linux'):
+    if sys.platform.startswith("linux"):
         filemanager_command = "nemo"
     else:
         logging.error(f"The function {return_method_name()} is only implemented for Linux systems, not for {sys.platform}")
         return
     logging.info("Opening file manager with specified directories...")
     for directory in directories:
-        directory = Path(directory)
+        directory = ensure_path(directory)
         if not directory.is_absolute():
             logging.error(f"Directory {directory} is not an absolute path. Skipping.")
             continue
@@ -6661,10 +6986,10 @@ def detect_country(force_wtfismyip: bool = False) -> str | None:
 
     Args:
         force_wtfismyip: If True, always use wtfismyip.com
-    
+
     Returns:
         The country name as a string, or None if detection fails.
-    
+
     Raises:
         ValueError: If the IPINFO_API_TOKEN environment variable is not set.
     """
@@ -6675,7 +7000,7 @@ def detect_country(force_wtfismyip: bool = False) -> str | None:
     if not force_wtfismyip:
         logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("force_wtfismyip=%s.", force_wtfismyip)
         try:
-            if 'IPINFO_API_TOKEN' in os.environ:
+            if "IPINFO_API_TOKEN" in os.environ:
                 ipinfo_access_token = os.environ['IPINFO_API_TOKEN']
             else:
                 raise ValueError("IPINFO_API_TOKEN environment variable is not set. If you don't have one, you can sign up for a free account here: https://ipinfo.io/signup")
@@ -6684,12 +7009,12 @@ def detect_country(force_wtfismyip: bool = False) -> str | None:
             # Uncomment the following lines if you want to use the ipinfo library instead of curl
             # import ipinfo
             # handler = ipinfo.getHandler(ipinfo_access_token,
-            #                             request_options={'timeout': ipinfo_timeout_seconds})
+            #                             request_options={"timeout": ipinfo_timeout_seconds})
             # details = handler.getDetails()
             # logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("IPinfo DETAILS:\n%s", details)
             # thecountryname = details.country
             the_command = ["curl", f"https://api.ipinfo.io/lite/8.8.8.8?token={ipinfo_access_token}"]
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Running command: %s", ' '.join(the_command))
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Running command: %s", " ".join(the_command))
             result = subprocess.run(the_command, capture_output=True,
                                     text=True, timeout=5)
             if result.returncode != 0:
@@ -6697,7 +7022,7 @@ def detect_country(force_wtfismyip: bool = False) -> str | None:
                 raise Exception("Curl command failed")
             logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("curl output: %s", result.stdout)
             dct = json.loads(result.stdout)
-            thecountryname = dct.get('country', '')
+            thecountryname = dct.get("country", "")
             logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Detected country from curl: %s", thecountryname)
         except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception) as e:
             logging.warning("IPinfo exception: %s\nFalling back to wtfismyip.com.", e)
@@ -6720,12 +7045,12 @@ def detect_country(force_wtfismyip: bool = False) -> str | None:
 
 
 def set_system_volume(percent: int, tolerance: int = 1,
-                      change_mute: Literal['mute', 'unmute'] | None = None,
+                      change_mute: Literal["mute", "unmute"] | None = None,
                       force_pactl: bool = False) -> None:
     """
     Set the system volume to a specific level.
     On Linux, this function will:
-    Try to set the PulseAudio default sink volume to `percent`% via pulsectl,
+    Try to set the PulseAudio default sink volume to 'percent'% via pulsectl,
     verify it, and if that fails, fall back to pactl.
 
     Args:
@@ -6745,7 +7070,7 @@ def set_system_volume(percent: int, tolerance: int = 1,
     import subprocess
     import logging
     fallback_logging_config()
-    if not sys.platform.startswith('linux'):
+    if not sys.platform.startswith("linux"):
         raise RuntimeError("This set_system_volume() function is only intended to run on Linux systems.")
     fraction = percent / 100.0
     mute_arg = None
@@ -6762,10 +7087,10 @@ def set_system_volume(percent: int, tolerance: int = 1,
         try:
             from pulsectl import Pulse, PulseError
             logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pulsectl] Attempting to set the volume to %d%% using pulsectl...", percent)
-            with Pulse('volume-setter') as pulse:
+            with Pulse("volume-setter") as pulse:
                 default_name = pulse.server_info().default_sink_name
                 sink = pulse.get_sink_by_name(default_name)
-                pulse.sink_suspend(sink.index, False)  # <— wake it up if it’s suspended
+                pulse.sink_suspend(sink.index, False)  # <— wake it up if it's suspended
                 pulse.volume_set_all_chans(sink, fraction)
                 # Optionally set mute
                 if mute_arg is not None:
@@ -6790,36 +7115,36 @@ def set_system_volume(percent: int, tolerance: int = 1,
                 logging.info("[pulsectl] Volume set to %d%%, %s", actual, state)
                 return  # Successfully set volume and verified
         except (ImportError, ModuleNotFoundError):
-            logging.warning("[pulsectl] Not installed; falling back to pactl…")
+            logging.warning("[pulsectl] Not installed; falling back to pactl...")
         except PulseError as e:
-            logging.error("[pulsectl] PulseError: %s; falling back to pactl…", e)
+            logging.error("[pulsectl] PulseError: %s; falling back to pactl...", e)
         except RuntimeError as e:
-            logging.error("%s; falling back to pactl…", e)
+            logging.error("%s; falling back to pactl...", e)
         except Exception as e:
-            logging.error("[pulsectl] Unexpected error: %s; falling back to pactl…", e)
+            logging.error("[pulsectl] Unexpected error: %s; falling back to pactl...", e)
 
     # Fallback to pactl if pulsectl is not available or fails
     logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pactl] Attempting to set the volume to %d%% using pactl...", percent)
     the_command = ["pactl", "suspend-sink", "@DEFAULT_SINK@", "0"]
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pactl] Running command: %s", ' '.join(the_command))
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pactl] Running command: %s", " ".join(the_command))
     result = subprocess.run(the_command, check=True, capture_output=True, text=True)
     if result.stderr:
         raise RuntimeError(f"[pactl] Error waking up sink from suspension: {result.stderr.strip()}")
     the_command = ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{percent}%"]
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pactl] Running command: %s", ' '.join(the_command))
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pactl] Running command: %s", " ".join(the_command))
     result = subprocess.run(the_command, check=True, capture_output=True, text=True)
     if result.stderr:
         raise RuntimeError(f"[pactl] Error setting volume: {result.stderr.strip()}")
     # Set mute if requested
     if mute_arg is not None:
         cmd = ["pactl", "set-sink-mute", "@DEFAULT_SINK@", str(mute_arg)]
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pactl] %s", ' '.join(cmd))
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pactl] %s", " ".join(cmd))
         mute_result = subprocess.run(cmd, check=True, capture_output=True, text=True)
         if mute_result.stderr:
             raise RuntimeError(f"[pactl] Error setting mute: {mute_result.stderr.strip()}")
         # Verify mute state
         mute_check_cmd = ["pactl", "get-sink-mute", "@DEFAULT_SINK@"]
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pactl] Running command: %s", ' '.join(mute_check_cmd))
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pactl] Running command: %s", " ".join(mute_check_cmd))
         mute_result = subprocess.run(mute_check_cmd, check=True, capture_output=True, text=True)
         if mute_result.stderr:
             raise RuntimeError(f"[pactl] Error getting mute state: {mute_result.stderr.strip()}")
@@ -6831,16 +7156,16 @@ def set_system_volume(percent: int, tolerance: int = 1,
         logging.info("[pactl] Audio %s", 'muted' if mute_arg else 'unmuted')
     # Verify volume setting with pactl
     the_command = ["pactl", "get-sink-volume", "@DEFAULT_SINK@"]
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pactl] Running command: %s", ' '.join(the_command))
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pactl] Running command: %s", " ".join(the_command))
     result = subprocess.run(the_command, check=True, capture_output=True, text=True)
     if result.stderr:
         raise RuntimeError(f"[pactl] Error getting volume: {result.stderr.strip()}")
     output = result.stdout.strip()
     # Example output: "Volume: front-left: 32768 / 100% / 32768 / 100%"
-    parts = output.split('/')
+    parts = output.split("/")
     if len(parts) < 2:
         raise RuntimeError(f"[pactl] Unexpected pactl output: {output}")
-    actual = int(parts[1].strip().replace('%', ''))
+    actual = int(parts[1].strip().replace("%", ""))
     if abs(actual - percent) > tolerance:
         raise RuntimeError(f"[pactl] Expected {percent}%, but got {actual}%")
     logging.info("[pactl] Volume set to %d%%", percent)
@@ -6849,7 +7174,7 @@ def set_system_volume(percent: int, tolerance: int = 1,
 def open_playlist_in_VLC(playlist: str | os.PathLike[str], no_start:  bool = False) -> None:
     """Open a playlist in VLC. If no_start is True, don't start playback in VLC."""
     import subprocess
-    playlist = ensure_path_is_a_file(playlist)
+    playlist = ensure_file(playlist)
     if no_start: command_list = ["vlc", "--no-playlist-autostart", os.fspath(playlist)]
     else:        command_list = ["vlc",                            os.fspath(playlist)]
     subprocess.Popen(command_list, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -6859,21 +7184,20 @@ def open_dir_in_VLC(the_dir: str | os.PathLike[str], sort_choice: str = "sort_by
                     recursive: bool = False, no_start:  bool = False) -> None:
     """Create a playlist of the files in the specified directory, then play that playlist in VLC. By default, don't search the directory recursively and sort the files by name. Optional arguments allow recursive loading or sorting by modification time. If no_start is True, don't start playback in VLC."""
     import subprocess
+    the_dir = ensure_dir(the_dir)
     if the_dir is None:
         raise ValueError("The directory path cannot be None.")
-    the_dir = Path(the_dir).expanduser().resolve(strict=True)
-    if not the_dir.is_dir():
-        raise ValueError(f"The specified path '{the_dir}' is not a valid directory.")
+    the_dir = ensure_dir(the_dir)
     # start_flag = "--start-paused" if no_start else False # The "--start-paused" flag forces you to press play in VLC EACH TIME YOU GO TO A NEW PLAYLIST ENTRY!
     start_flag = "--no-playlist-autostart" if no_start else False
     # List to store files with their modification times
     files_with_times: list[tuple[float, Path]] = []
     dirs_with_times:  list[tuple[float, Path]] = []  # Only used if not recursive
-    entries: Iterator[Path] = the_dir.rglob("*") if recursive else the_dir.iterdir()
+    entries:                    Iterator[Path] = the_dir.rglob("*") if recursive else the_dir.iterdir()
     for p in entries:
         if p.is_file():
-            # Exclude .m3u or .m3u8 playlist files
-            if p.suffix.casefold() in (".m3u", ".m3u8"):
+            # Exclude playlist files
+            if p.suffix.casefold() in PLAYLIST_EXTENSIONS_SET:
                 continue
             files_with_times.append((p.stat().st_mtime, p))
         elif not recursive and p.is_dir():
@@ -6909,7 +7233,7 @@ def remove_prefix_from_filename(filepath: str | os.PathLike[str], prefix: str) -
     If the given filepath's base filename starts with the given prefix:
       1. Remove the prefix (and any " _-" immediately following it).
       2. Move the file (but only if that doesn't cause errors).
-    
+
     Args:
         filepath: The path to the file whose name may need to be changed.
         prefix:   The prefix to remove from the filename.
@@ -6923,7 +7247,7 @@ def remove_prefix_from_filename(filepath: str | os.PathLike[str], prefix: str) -
         OSError: If the rename operation fails due to an OS error (e.g., permission denied).
     """
     fallback_logging_config()
-    filepath = Path(filepath).expanduser().resolve()
+    filepath = ensure_path(filepath)
     if not filepath.exists():
         logging.warning("File or directory '%s' does not exist.", filepath)
         return False
@@ -6951,16 +7275,16 @@ def remove_prefix_from_filename(filepath: str | os.PathLike[str], prefix: str) -
 def remove_prefix_from_html_title(filepath: str | os.PathLike[str], prefix: str) -> bool:
     """If the given filepath is an HTML file and its title starts with the given prefix, remove the prefix from the title and save the file, then return True. Otherwise, return False."""
     fallback_logging_config()
-    filepath = Path(filepath)
+    filepath = ensure_path(filepath)
     if not filepath.is_file():
         logging.warning("File '%s' does not exist or is not a file.", filepath)
         return False
-    if filepath.suffix.casefold() not in ('.html', '.htm'):
+    if filepath.suffix.casefold() not in (".html", ".htm"):
         logging.warning("File '%s' is not an HTML or HTM file.", filepath)
         return False
     html = my_fopen(filepath)
-    title_start = html.find('<title>') + len('<title>')
-    title_end   = html.find('</title>', title_start)
+    title_start = html.find("<title>") + len("<title>")
+    title_end   = html.find("</title>", title_start)
     if title_start == -1 or title_end == -1:
         logging.warning("Could not find the title in the HTML file '%s'.", filepath)
         return False
@@ -6975,7 +7299,7 @@ def remove_prefix_from_html_title(filepath: str | os.PathLike[str], prefix: str)
         return False
 
 
-def combine_html_files(file_paths: list[str | os.PathLike[str]],
+def combine_html_files(file_paths:  list[str | os.PathLike[str]],
                        output_file_path: str | os.PathLike[str]) -> None:
     """
     Combine multiple HTML files into a single HTML file.
@@ -6998,17 +7322,17 @@ def combine_html_files(file_paths: list[str | os.PathLike[str]],
     """
     from bs4 import BeautifulSoup
     fallback_logging_config()
-    combined_body = ''
-    head_content = ''
+    combined_body = ""
+    head_content  = ""
     first_file_processed = False
     for file_path in file_paths:
         file = my_fopen(file_path)
         try:
-            soup = BeautifulSoup(file, 'html.parser')
+            soup = BeautifulSoup(file, "html.parser")
             # Extract <head> from the first Chapter1.html
             if not first_file_processed:
                 head_content = str(soup.head)
-                first_file_processed = True            
+                first_file_processed = True
             # Extract <body> content
             body_content = soup.body
             combined_body += str(body_content)
@@ -7018,7 +7342,7 @@ def combine_html_files(file_paths: list[str | os.PathLike[str]],
     combined_html = f"<!DOCTYPE html>\n<html>\n{head_content}\n<body>\n{combined_body}\n</body>\n</html>"
     # Save to the output file path
     try:
-        output_file_path = Path(output_file_path).expanduser().resolve()
+        output_file_path = ensure_path(output_file_path)
         output_file_path.parent.mkdir(parents=True, exist_ok=True)
         output_file_path.write_text(combined_html, encoding=DEFAULT_ENCODING)
     except Exception:  # Catch any unexpected errors from writing the file without crashing.
@@ -7027,17 +7351,18 @@ def combine_html_files(file_paths: list[str | os.PathLike[str]],
 
 
 # Map these to spaces (treat like separators)
-CHARACTERS_TO_SPACE = '._-'
-REPLACE_WITH_SPACE = ' ' * len(CHARACTERS_TO_SPACE)
+CHARACTERS_TO_SPACE = f"._-{EM_DASH}{HORIZONTAL_ELLIPSIS}"
+REPLACE_WITH_SPACE  = " " * len(CHARACTERS_TO_SPACE)
 # Delete these outright (quotes of various kinds)
 # Include double quote, apostrophe, backtick. Thanks to unidecode(),
-# curly/angle quotes become ASCII quotes and will be removed too.
-QUOTES_TO_DELETE = "\"'`"
+# curly/angle quotes become ASCII quotes and will be removed too. However,
+# just in case unidecode can't be imported, those are explicitly deleted too.
+QUOTES_TO_DELETE  = f"\"'{BACKTICK}{LSQUOTE}{RSQUOTE}{LDQUOTE}{RDQUOTE}"
 TRANSLATION_TABLE = str.maketrans(CHARACTERS_TO_SPACE, REPLACE_WITH_SPACE, QUOTES_TO_DELETE)
 
 
 def normalize_for_search(text: str) -> str:
-    """Convert text to ASCII and lowercase for case- and diacritic-insensitive comparison. Also treat some characters such as ._- the same as spaces. Remove quotes (', ", ` and their unicode variants)."""
+    """Convert text to ASCII and lowercase for case- and diacritic-insensitive comparison. Also treat some characters such as ._- the same as spaces. Remove quotes (', ", ' and their unicode variants)."""
     fallback_logging_config()
     try:
         from unidecode import unidecode
@@ -7098,7 +7423,8 @@ TEXT_ENCODINGS: list[str] = [
     "shift_jis",       "shift_jis_2004", "shift_jisx0213",  "unicode-escape",     "uu",
     "zlib",
 ]
-# # Examine encodings for any uppercase characters.
+TEXT_ENCODINGS_SET: set[str] = set(TEXT_ENCODINGS)  # sets are faster
+# # Quality control: examine encodings for any uppercase characters.
 # for enc in TEXT_ENCODINGS:
 #     if any(c.isupper() for c in enc):
 #         raise ValueError(f"Encoding '{enc}' contains uppercase characters. All encodings should be lowercase.")
@@ -7146,7 +7472,8 @@ TEXT_ENCODINGS: list[str] = [
 # print(f"{len(missing_encodings)} encodings are missing from TEXT_ENCODINGS: {missing_encodings}")
 
 # A comprehensive list of python extensions.
-PYTHON_EXTENSIONS: list[str] = [".py", ".pyw"]
+PYTHON_EXTENSIONS:    list[str] = [".py", ".pyw"]
+PYTHON_EXTENSIONS_SET: set[str] = set(PYTHON_EXTENSIONS)  # sets are faster
 
 # A comprehensive list of text file extensions.
 TEXT_EXTENSIONS: list[str] = [
@@ -7175,29 +7502,31 @@ TEXT_EXTENSIONS: list[str] = [
     ".ssa",          ".lrc",      ".dot",      ".gv",         ".mermaid",    ".sgf",
     ".pgn",          ".sfv",      ".md5",      ".sha1",       ".sha256",
 ]
+TEXT_EXTENSIONS_SET: set[str] = set(TEXT_EXTENSIONS)  # sets are faster
 # check_list_for_duplicates(TEXT_EXTENSIONS) # Run this after adding new extensions to ensure there are no duplicates.
 
 # A comprehensive list of video file extensions.
 VIDEO_EXTENSIONS: list[str] = [
-    ".mp4",   ".mkv",   ".mov",   ".avi",    ".mpg",   ".mpeg", 
-    ".wmv",   ".m4v",   ".flv",   ".divx",   ".vob",   ".iso",  
-    ".3gp",   ".webm",  ".mts",   ".m2ts",   ".ts",    ".ogv",  
-    ".rm",    ".rmvb",  ".asf",   ".f4v",    ".mxf",   ".dv",   
-    ".swf",   ".m2v",   ".svi",   ".mpe",    ".ogm",   ".bik",  
-    ".xvid",  ".yuv",   ".qt",    ".gvi",    ".viv",   ".fli",  
-    ".mjpg",  ".mjpeg", ".amv",   ".drc",    ".flc",   ".vp6",  
-    ".ivf",   ".mps",   ".vro",   ".hevc",   ".h265",  ".264",  
-    ".str",   ".evo",   ".3g2",   ".h264",   ".av1",   ".ogx",  
-    ".mlv",   ".ps",    ".mp2v",  ".dvs",    ".gxf",   ".webp", 
-    ".vp8",   ".trp",   ".f4p",   ".mk3d",   ".3gpp",  ".mod",  
-    ".tod",   ".cine",  ".arf",   ".wrf",    ".braw",  ".jmf",  
-    ".r3d",   ".dpx",   ".mpv",   ".rmx",    ".smk",   ".mj2",  
-    ".scm",   ".ivr",   ".xesc",  ".wtv",    ".dcr",   ".ismv", 
+    ".mp4",   ".mkv",   ".mov",   ".avi",    ".mpg",   ".mpeg",
+    ".wmv",   ".m4v",   ".flv",   ".divx",   ".vob",   ".iso",
+    ".3gp",   ".webm",  ".mts",   ".m2ts",   ".ts",    ".ogv",
+    ".rm",    ".rmvb",  ".asf",   ".f4v",    ".mxf",   ".dv",
+    ".swf",   ".m2v",   ".svi",   ".mpe",    ".ogm",   ".bik",
+    ".xvid",  ".yuv",   ".qt",    ".gvi",    ".viv",   ".fli",
+    ".mjpg",  ".mjpeg", ".amv",   ".drc",    ".flc",   ".vp6",
+    ".ivf",   ".mps",   ".vro",   ".hevc",   ".h265",  ".264",
+    ".str",   ".evo",   ".3g2",   ".h264",   ".av1",   ".ogx",
+    ".mlv",   ".ps",    ".mp2v",  ".dvs",    ".gxf",   ".webp",
+    ".vp8",   ".trp",   ".f4p",   ".mk3d",   ".3gpp",  ".mod",
+    ".tod",   ".cine",  ".arf",   ".wrf",    ".braw",  ".jmf",
+    ".r3d",   ".dpx",   ".mpv",   ".rmx",    ".smk",   ".mj2",
+    ".scm",   ".ivr",   ".xesc",  ".wtv",    ".dcr",   ".ismv",
     ".vc1",   ".vcd",   ".bin",   ".sfd",    ".m2t",   ".m2p",
     ".m1v",   ".y4m",   ".dif",   ".dvr-ms", ".tivo",  ".nuv",
     ".nsv",   ".nut",   ".bk2",   ".usm",    ".xmv",   ".thp",
     ".pmf",   ".h263",  ".h261",  ".vp9",
 ]
+VIDEO_EXTENSIONS_SET: set[str] = set(VIDEO_EXTENSIONS)  # sets are faster
 # check_list_for_duplicates(VIDEO_EXTENSIONS) # Run this after adding new extensions to ensure there are no duplicates.
 
 # A comprehensive list of audio file extensions.
@@ -7211,7 +7540,7 @@ AUDIO_EXTENSIONS: list[str] = [
     ".aa",    ".aax",   ".dsf",   ".dff",   ".sf2",   ".g721",
     ".voc",   ".swa",   ".bwf",   ".ivs",   ".smp",   ".weba",
     ".sds",   ".brstm", ".adx",   ".hca",   ".ast",   ".psf",
-    ".psf2",  ".qsf",   ".ssf",   ".usf",   ".gsf",   ".tta", 
+    ".psf2",  ".qsf",   ".ssf",   ".usf",   ".gsf",   ".tta",
     ".dsm",   ".dmf",   ".mod",   ".s3m",   ".it",    ".xm",
     ".mt2",   ".mo3",   ".umx",   ".mogg",  ".tak",   ".trk",
     ".669",   ".abc",   ".ts",    ".ym",    ".hsq",   ".mpa",
@@ -7222,6 +7551,7 @@ AUDIO_EXTENSIONS: list[str] = [
     ".ds2",   ".awb",   ".bcstm", ".bfstm", ".bcwav", ".bfwav",
     ".fsb",   ".wem",   ".xwm",   ".lopus",
 ]
+AUDIO_EXTENSIONS_SET: set[str] = set(AUDIO_EXTENSIONS)  # sets are faster
 # check_list_for_duplicates(AUDIO_EXTENSIONS) # Run this after adding new extensions to ensure there are no duplicates.
 
 # A comprehensive list of subtitle file extensions.
@@ -7235,6 +7565,7 @@ SUBTITLE_EXTENSIONS: list[str] = [
     ".sst",   ".son",    ".mcc",   ".pac",   ".890",   ".mpl",
     ".onl",   ".cin",    ".tds",   ".ult",   ".ttxt",
 ]
+SUBTITLE_EXTENSIONS_SET: set[str] = set(SUBTITLE_EXTENSIONS)  # sets are faster
 # check_list_for_duplicates(SUBTITLE_EXTENSIONS) # Run this after adding new extensions to ensure there are no duplicates.
 
 # A comprehensive list of image file extensions.
@@ -7262,6 +7593,7 @@ IMAGE_EXTENSIONS: list[str] = [
     ".pdn",  ".psp",   ".ps",     ".ase",  ".clip", ".afphoto",
     ".bsq",
 ]
+IMAGE_EXTENSIONS_SET: set[str] = set(IMAGE_EXTENSIONS)  # sets are faster
 # check_list_for_duplicates(IMAGE_EXTENSIONS) # Run this after adding new extensions to ensure there are no duplicates.
 
 # A comprehensive list of playlist file extensions.
@@ -7271,6 +7603,7 @@ PLAYLIST_EXTENSIONS: list[str] = [
     ".wax",    ".wmx",     ".wvx",  ".fpl",   ".mpcpl",  ".dpl",
     ".aimppl", ".aimppl4", ".pla",  ".xml",
 ]
+PLAYLIST_EXTENSIONS_SET: set[str] = set(PLAYLIST_EXTENSIONS)  # sets are faster
 # check_list_for_duplicates(PLAYLIST_EXTENSIONS) # Run this after adding new extensions to ensure there are no duplicates.
 
 # A comprehensive list of archive file extensions.
@@ -7288,12 +7621,13 @@ ARCHIVE_EXTENSIONS: list[str] = [
     ".whl",     ".nupkg",  ".gem",   ".crate",  ".conda",   ".ipa",
     ".cbz",     ".cbr",    ".cb7",   ".kmz",    ".warc",    ".pk3",
     ".pk4",     ".alz",    ".cpt",   ".ha",     ".sqx",     ".z01",
-    ".r00",     ".001",  
+    ".r00",     ".001",
 ]
 # Technically this list should include .z02... and .r01... and .002...
 ARCHIVE_EXTENSIONS.extend([f".z{num:02d}" for num in range(2, 100)])
 ARCHIVE_EXTENSIONS.extend([f".r{num:02d}" for num in range(1, 100)])
 ARCHIVE_EXTENSIONS.extend([f".{num:03d}"  for num in range(2, 100)])
+ARCHIVE_EXTENSIONS_SET: set[str] = set(ARCHIVE_EXTENSIONS)  # sets are faster
 # check_list_for_duplicates(ARCHIVE_EXTENSIONS) # Run this after adding new extensions to ensure there are no duplicates.
 
 ALL_KNOWN_EXTENSIONS: list[str] = PYTHON_EXTENSIONS   + TEXT_EXTENSIONS  + \
@@ -7301,7 +7635,9 @@ ALL_KNOWN_EXTENSIONS: list[str] = PYTHON_EXTENSIONS   + TEXT_EXTENSIONS  + \
                                   AUDIO_EXTENSIONS    + IMAGE_EXTENSIONS + \
                                   PLAYLIST_EXTENSIONS + ARCHIVE_EXTENSIONS
 # print(f"{len(ALL_KNOWN_EXTENSIONS)} total known extensions.")
-ALL_KNOWN_EXTENSIONS = list(set(ALL_KNOWN_EXTENSIONS))  # Remove duplicates
+ALL_KNOWN_EXTENSIONS_SET: set[str] =  set(ALL_KNOWN_EXTENSIONS)      # sets are faster
+ALL_KNOWN_EXTENSIONS               = list(ALL_KNOWN_EXTENSIONS_SET)  # Remove duplicates
+# Quality control: search for uppercase characters and extensions like .tar.gz
 # print(f"{len(ALL_KNOWN_EXTENSIONS)} total known extensions.")
 # for ext in ALL_KNOWN_EXTENSIONS:
 #     if any(c.isupper() for c in ext):

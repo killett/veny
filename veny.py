@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# Written by Emmy Killett (she/her), ChatGPT 4o (it/its), ChatGPT o1-preview (it/its), ChatGPT o3-mini-high (it/its), ChatGPT o4-mini-high (it/its), ChatGPT 5 (it/its), and GitHub Copilot (it/its).
+# Written by Emmy Killett (she/her), ChatGPT 4o (it/its), ChatGPT o1-preview (it/its), ChatGPT o3-mini-high (it/its), ChatGPT o4-mini-high (it/its), ChatGPT 5 Thinking (it/its), and GitHub Copilot (it/its).
 from __future__ import annotations  # For Python 3.7+ compatibility with type annotations
 import os
 import sys
@@ -30,9 +30,9 @@ class Options():
 
     def __init__(self) -> None:
         """Initialize the Options class with default values."""
-        self.log_mode:                      int = logging.INFO  # Use -debug to change to logging.DEBUG.
+        self.log_mode:                      int = logging.INFO  # Use --debug to change to logging.DEBUG.
         self.search_above_this_dir:        bool = True
-        self.my_filepath:                  Path = Path(sys.argv[0]).expanduser().resolve()  # Full (invoked) path to this script
+        self.my_filepath:                  Path = ud.ensure_path(sys.argv[0])  # Full (invoked) path to this script
         self.my_name:                       str = self.my_filepath.stem  # The base name of this script without the .py extension
         self.home:                         Path = Path.home()  # User's home directory
         # The "my_dir" is NOT the directory where this script is located.
@@ -82,7 +82,7 @@ class Options():
         self.check_interval:                int = 5  # Number of seconds to wait between checks.
         self.rawlog:                       bool = False
         self.pipreqs_available:            bool = False
-        self.univ_defs_path:               Path = Path(ud.__file__).expanduser().resolve()  # Full path to univ_defs.py
+        self.univ_defs_path:               Path = ud.ensure_path(ud.__file__)  # Full path to univ_defs.py
         self.univ_defs_sys_path_script:    Path = self.my_dir / "univ_defs_sys_path_script.py"
         self.mydiff_path:                  Path = self.my_dir / "mydiff.py"
         self.myaudit_path:                 Path = self.my_dir / "myaudit.py"
@@ -98,7 +98,7 @@ class Options():
         self.manual_instructions:           str = f"""
 This program acts as a wrapper around Python to automate the creation of virtual environments and the installation of any required packages. Instead of typing "python3 script.py", you can type "{self.my_name} script.py" to run script.py in a virtual environment which has all the required packages.
 
-It's convenient to add an alias to the shell configuration file so that typing ALIAS anywhere runs this program. This can either be done by running this program with the "-alias ALIAS" command line argument (for example: "python3 {self.my_name}.py -alias {self.my_name}") or by following the manual instructions below. The following steps assume this program is saved as {self.my_name}.py in your home directory (~), but you can adjust the path and filename to match your setup.
+It's convenient to add an alias to the shell configuration file so that typing ALIAS anywhere runs this program. This can either be done by running this program with the "--alias ALIAS" command line argument (for example: "python3 {self.my_name}.py --alias {self.my_name}") or by following the manual instructions below. The following steps assume this program is saved as {self.my_name}.py in your home directory (~), but you can adjust the path and filename to match your setup.
 
 If you're on a Mac you're probably using the zsh shell, so follow these steps to add the alias manually:
 1. Open your zsh configuration file (~/.zshrc) in a text editor. For example:
@@ -2237,7 +2237,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
 
     def set_venv_dir(self, venv_dir: str | os.PathLike[str]) -> None:
         """Set the directory for the virtual environment."""
-        p = Path(venv_dir).expanduser()  # Don't resolve() yet because the path might not exist yet.
+        p = ud.ensure_path(venv_dir, resolve=False)  # Don't resolve() yet because the path might not exist yet.
         self.venv_dir             = p
         self.venv_python          = p / "bin" / "python"  # Do NOT resolve() this symlink path
         self.venv_pip             = p / "bin" / "pip"     # Do NOT resolve() this symlink path
@@ -2266,37 +2266,37 @@ def parse_arguments(options: Options) -> None:
     """
     parser = argparse.ArgumentParser(description="Run a python script with optional flags.")
     parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
-    parser.add_argument("-manual", "--manual", action="store_true",
+    parser.add_argument("--manual", action="store_true",
                         help="Print instructions for manually adding the alias to the shell configuration file.")
-    parser.add_argument("-feeling-lucky", "--feeling-lucky", action="store_true",
+    parser.add_argument("--feeling-lucky", action="store_true",
                         help="NOT FINISHED!!! Don't analyze imports, just try to run the script with the last used virtual environment. If that fails, try the latest virtual environment which has all the packages needed now.")
-    parser.add_argument("-debug", "--debug", action="store_true",
+    parser.add_argument("-d", "--debug", action="store_true",
                         help="Run this program in debug mode, which prints additional debug messages.")
-    parser.add_argument("-blank-slate", "--blank-slate", action="store_true",
+    parser.add_argument("--blank-slate", action="store_true",
                         help=f"Delete ~/{options.my_name}/ and all {options.my_name} .out and .err and .json and .pkl files in the current directory.")
-    parser.add_argument("-full", "--full", action="store_true",
+    parser.add_argument("--full", action="store_true",
                         help="Build a virtual environment (venv) that can run every python script in the current directory. Cannot be used with a python script argument.")
     parser.add_argument("-y", "--yes", action="store_true",
                         help="Automatically say yes to any prompts to allow this program to run without the need for user interaction.")
-    parser.add_argument("-no-cache", "--no-cache", action="store_true",
+    parser.add_argument("--no-cache", action="store_true",
                         help="Don't search the cache. Instead, create a new virtual environment. Also, refresh the custom modules cache and the pip list.")
-    parser.add_argument("-latest", "--latest", action="store_true",
+    parser.add_argument("--latest", action="store_true",
                         help="Load the latest cached venv which has all the packages needed now.")
-    parser.add_argument("-oldest", "--oldest", action="store_true",
+    parser.add_argument("--oldest", action="store_true",
                         help="Load the oldest cached venv which has all the packages needed now.")
-    parser.add_argument("-last-used", "--last-used", action="store_true",
+    parser.add_argument("--last-used", action="store_true",
                         help="Load the last used cached venv, but if that fails try the latest cached venv which has all the packages needed now.")
-    parser.add_argument("-smallest", "--smallest", action="store_true",
+    parser.add_argument("--smallest", action="store_true",
                         help="Load the smallest cached venv (with the fewest packages) which has all the packages needed now.")
-    parser.add_argument("-rc", "--rc", action="store_true",
+    parser.add_argument("--rc", action="store_true",
                         help="Refresh the custom modules cache and the pip list.")
-    parser.add_argument("-reqs", "--reqs", action="store_true",
+    parser.add_argument("--reqs", action="store_true",
                         help="Read the extra_requirements.txt file in the current directory and install the packages listed there (with specific versions if present in the file) into the venv (along with the other packages needed to run the script as determined elsewhere in this program).")
-    parser.add_argument("-alias", "--alias", type=str,
+    parser.add_argument("--alias", type=str,
                         help="Add an alias to the shell configuration file so that typing ALIAS anywhere runs this program.")
-    parser.add_argument("-rawlog", "--rawlog", action="store_true",
+    parser.add_argument("--rawlog", action="store_true",
                         help=f"Do not add timestamps or INFO level to log messages, and do not add extra INFO level log statements. Just produce the same output that would be seen when running the program without {options.my_name}.")
-    parser.add_argument("-justprint", "--justprint", action="store_true",
+    parser.add_argument("--justprint", action="store_true",
                         help="Don't run the script, just print its package requirements.")
     parser.add_argument("script", nargs="?",
                         help="The script to run.")
@@ -2364,6 +2364,13 @@ def main() -> None:
     else:
         logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Python %s is not available.", ud.PY_VERSION)
 
+    if not options.my_dir.is_dir():
+        if not options.rawlog: logging.info("Directory %s does not exist yet, so it is being created.", options.my_dir)
+        options.my_dir.mkdir(parents=True, exist_ok=True)
+    if not options.packages_dir.is_dir():
+        if not options.rawlog: logging.info("Directory %s does not exist yet, so it is being created.", options.packages_dir)
+        options.packages_dir.mkdir(parents=True, exist_ok=True)
+
     ud.verify_script(options, options.univ_defs_sys_path_script, ud.UNIV_DEFS_SYS_PATH_SCRIPT)
     ud.verify_script(options, options.mydiff_path,               ud.MYDIFF_SCRIPT)
     ud.verify_script(options, options.myaudit_path,              ud.MYAUDIT_SCRIPT)
@@ -2415,13 +2422,6 @@ def main() -> None:
         if not options.rawlog:
             logging.info("Loaded extra requirements from ./%s: %s", options.extra_requirements_file, options.extra_requirements)
 
-    if not options.my_dir.is_dir():
-        if not options.rawlog: logging.info("Directory %s does not exist yet, so it is being created.", options.my_dir)
-        options.my_dir.mkdir(parents=True, exist_ok=True)
-    if not options.packages_dir.is_dir():
-        if not options.rawlog: logging.info("Directory %s does not exist yet, so it is being created.", options.packages_dir)
-        options.packages_dir.mkdir(parents=True, exist_ok=True)
-
     time1 = dt.datetime.now()
     options.custom_modules = dict_of_custom_modules(options)
     time2 = dt.datetime.now()
@@ -2432,7 +2432,7 @@ def main() -> None:
     options.pip_list = []
     pip_list_files = sorted([f for f in options.my_dir.iterdir() if f.name.startswith("pip_list")], reverse=True)
     logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("pip_list_files = %s", " ".join(os.fspath(f) for f in pip_list_files))
-    # If -rc was not specified, look for a text file with the pip list the last time this script was run.
+    # If --rc was not specified, look for a text file with the pip list the last time this script was run.
     if not getattr(options.args, "rc", False) and pip_list_files:
         try:
             with open(options.my_dir / pip_list_files[0], "r") as file:
@@ -4099,7 +4099,7 @@ def transform_call(node: ast.Call, pathlib_aliases: set[str]) -> str | None:
                 base = _safe_eval_node(inner.args[0])
                 parts = [_safe_eval_node(a) for a in node.args]
                 if isinstance(base, str) and all(isinstance(p, str) for p in parts):
-                    return str(Path(base).joinpath(*parts))
+                    return os.fspath(Path(base).joinpath(*parts))
 
     return None
 
@@ -4121,7 +4121,7 @@ def _safe_eval_node(node: ast.AST) -> Any:
         # accept strings or any PathLike (Path, etc.)
         if isinstance(left, (str, os.PathLike)) and isinstance(right, (str, os.PathLike)):
             # Path(left) / right → Path; str(...) to get the string path
-            return str(Path(left) / right)
+            return os.fspath(Path(left) / right)
         raise ValueError(f"Unsupported path division: {ast.unparse(node)}")
 
     # --- literals ---
@@ -4180,7 +4180,7 @@ def _safe_eval_node(node: ast.AST) -> Any:
                     arg = _safe_eval_node(inner.args[0])
                     if isinstance(arg, str):
                         # Recompute using canonical 'Path' and same method name
-                        return str(getattr(Path(arg), func.attr)())
+                        return os.fspath(getattr(Path(arg), func.attr)())
 
         # pathlib.Path(...).joinpath(...)
         if isinstance(node.func, ast.Attribute) and node.func.attr == "joinpath":
@@ -4191,7 +4191,7 @@ def _safe_eval_node(node: ast.AST) -> Any:
                     base = _safe_eval_node(inner.args[0])
                     parts = [_safe_eval_node(a) for a in node.args]
                     if isinstance(base, str) and all(isinstance(p, str) for p in parts):
-                        return str(Path(base).joinpath(*parts))
+                        return os.fspath(Path(base).joinpath(*parts))
 
         # unsupported call
         raise ValueError(f"Unsupported call: {ast.unparse(node)}")
@@ -4260,11 +4260,11 @@ def process_import(options: Options, module_name: str, file_path: str | os.PathL
         logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Skipping standard library import: %s", module_name)
         return False
 
-    file_path = Path(file_path).expanduser().resolve()
+    file_path = ud.ensure_path(file_path)
 
     logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Processing import: %s from file %s", module_name, file_path)
 
-    base_dir = file_path.parent
+    base_dir        = file_path.parent
     module_path_str = module_name.replace(".", os.sep)
 
     # Avoid loopback to the same file
@@ -4618,7 +4618,7 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
     Raises:
         None, but logs errors if the provided path is not a valid Python script or if parsing fails.
     """
-    first_path = Path(first_path).expanduser().resolve()
+    first_path = ud.ensure_path(first_path)
     if not first_path.is_file():
         logging.error(f"Provided first_path is not a file: {first_path}")
         return
@@ -4853,7 +4853,7 @@ def check_packages_in_venv(options: Options, package: str | None = None,
     if not venv_dir:
         venv_dir = options.venv_dir
     else:
-        venv_dir = Path(venv_dir).expanduser().resolve()
+        venv_dir = ud.ensure_path(venv_dir)
     if sys.platform == "win32":
         venv_python = (venv_dir / "Scripts" / "python.exe").absolute()
     else:  # Do NOT use resolve() here because this is a symlink and resolve() would break it
@@ -4962,7 +4962,7 @@ def list_packages(options: Options) -> None:
         if not options.rawlog: logging.info("Building a virtual environment that can run every python script in %s", options.script_dir)
 
     if isinstance(options.python_script, (str, Path)):
-        options.python_script = Path(options.python_script).expanduser().resolve()
+        options.python_script = ud.ensure_path(options.python_script)
         options.loaded_custom_modules = set()
         if options.python_script.is_file():
             if ud.is_python_script(options.python_script):
@@ -5002,7 +5002,7 @@ def stayed_out_dir(options: Options, p: Path) -> bool:
 
 def get_all_imports(options: Options, directory: str | os.PathLike[str]) -> None:
     """Get all imports from all Python scripts in a directory."""
-    directory = Path(directory).expanduser().resolve()
+    directory = ud.ensure_path(directory)
     options.all_imports = set()
     # Build one iterator of candidate files (recursive)
     candidates = (p for p in directory.rglob("*") if p.is_file() and not stayed_out_dir(options, p))
@@ -5169,8 +5169,8 @@ def pretty_packages_list(options: Options) -> str:
 
 
 def use_pip_list(options: Options) -> None:
-    """Use the pip list command to find all installed packages and use that pip list to modify the uninstalled and installed imports. Add packages from the options.extra_requirements dictionary if "-reqs" is specified as a runtime argument."""
-    # Add packages from the options.extra_requirements dictionary if "-reqs" is specified as a runtime argument.
+    """Use the pip list command to find all installed packages and use that pip list to modify the uninstalled and installed imports. Add packages from the options.extra_requirements dictionary if "--reqs" is specified as a runtime argument."""
+    # Add packages from the options.extra_requirements dictionary if "--reqs" is specified as a runtime argument.
     if getattr(options.args, "reqs", False):
         options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
     if len(options.pip_list) == 0:
@@ -5224,7 +5224,7 @@ print("\\n".join(installed_packages + available_modules + list(builtin_modules))
     if options.uninstalled_imports:
         logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("new_uninstalled_imports = %s", new_uninstalled_imports)
     options.installed_imports = options.installed_imports - new_uninstalled_imports
-    # Once again, add packages from the options.extra_requirements dictionary if "-reqs" is specified as a runtime argument. (Do this again, just in case they got removed from the uninstalled_imports set above.)
+    # Once again, add packages from the options.extra_requirements dictionary if "--reqs" is specified as a runtime argument. (Do this again, just in case they got removed from the uninstalled_imports set above.)
     if getattr(options.args, "reqs", False):
         options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
 
@@ -5422,7 +5422,7 @@ def check_venv_dir(options: Options, options_from_cache: Options) -> bool:
     """Check if the last used venv is still valid."""
     if hasattr(options_from_cache, "venv_dir"):
         # This might be loaded from an old options file which used strings.
-        options_from_cache.venv_dir = Path(options_from_cache.venv_dir).expanduser().resolve()
+        options_from_cache.venv_dir = ud.ensure_path(options_from_cache.venv_dir)
         if options_from_cache.venv_dir.is_dir():
             if options.uninstalled_imports.issubset(options_from_cache.uninstalled_imports):
                 options_from_cache.uninstalled_imports = options.uninstalled_imports
@@ -5559,7 +5559,7 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
 
 def is_standard_path(options: Options, path: str | os.PathLike[str]) -> bool:
     """Check if the given path is a standard system path or part of a virtual environment."""
-    p = Path(path).expanduser().resolve()
+    p = ud.ensure_path(path)
     standard_paths = [Path("/") / "usr" / "lib",
                       Path("/") / "usr" / "local" / "lib"]
     # Check if path is inside standard system paths
@@ -5603,7 +5603,7 @@ def search_anywhere_path_boolean(options: Options, path: str | os.PathLike[str])
 
 def dict_of_custom_modules(options: Options) -> dict[str, Path]:
     """Create (or load) a dictionary of all local custom modules in the non-standard sys.path directories and their associated filepaths."""
-    # If -rc and -no-cache were not specified, look for a pickle file with the custom modules dictionary the last time this script was run.
+    # If --rc and --no-cache were not specified, look for a pickle file with the custom modules dictionary the last time this script was run.
 
     # I.f.f. options.search_above_this_dir is True, then search above the current directory for custom modules.
     # Either way, only load custom module pickle files that searched in the same places as requested.
@@ -5653,7 +5653,7 @@ def dict_of_custom_modules(options: Options) -> dict[str, Path]:
                                          "paths were stored as Paths (which happened on %s). Converting all paths to "
                                          "pathlib.Path objects.",
                                          most_recent_file, most_recent_timestamp, options.pathlibcutoff)
-                        custom_modules = {k: Path(v).expanduser().resolve() for k, v in custom_modules.items()}
+                        custom_modules = {k: ud.ensure_path(v) for k, v in custom_modules.items()}
                     return custom_modules
         except Exception as e:
             logging.exception("Error loading custom modules from pickle file.")
@@ -5665,18 +5665,18 @@ def dict_of_custom_modules(options: Options) -> dict[str, Path]:
 
     # Use lru_cache to speed up repeated calls to is_standard_path()
     @lru_cache(maxsize=8192)
-    def _is_std_path_cached(p_str: str) -> bool:
+    def _is_std_path_cached(p: str | os.PathLike[str]) -> bool:
         """Check if a path is a standard library path. Cached for speed."""
-        return is_standard_path(options, Path(p_str))
+        return is_standard_path(options, p)
 
     logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Generating custom modules dictionary from sys.path...")
     for path in map(Path, sys.path):
-        if not _is_std_path_cached(str(path)) and path.is_dir() and search_constraint_path_boolean(options, path):
+        if not _is_std_path_cached(path) and path.is_dir() and search_constraint_path_boolean(options, path):
             logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Checking path: %s", path)
             for root, dirs, files in os.walk(path, topdown=True):
                 root_path = Path(root)
                 # If the root itself is standard, skip the whole subtree immediately
-                if _is_std_path_cached(str(root_path)):
+                if _is_std_path_cached(root_path):
                     dirs[:] = []  # stop descending
                     continue
                 # PRUNE: remove standard subdirs in-place to avoid descending into them
@@ -5684,7 +5684,7 @@ def dict_of_custom_modules(options: Options) -> dict[str, Path]:
                 kept_dirs = []
                 for d in dirs:
                     pkg = root_path / d
-                    if _is_std_path_cached(str(pkg)):
+                    if _is_std_path_cached(pkg):
                         continue  # prune
                     kept_dirs.append(d)
                     if (pkg / "__init__.py").is_file():
@@ -5701,7 +5701,7 @@ def dict_of_custom_modules(options: Options) -> dict[str, Path]:
                     if fl == "__init__.py":
                         continue
                     fpath = root_path / fname
-                    if _is_std_path_cached(str(fpath)):
+                    if _is_std_path_cached(fpath):
                         continue
                     # if file lives inside a known package dir, skip (package already recorded)
                     if fpath.parent in package_dirs:
