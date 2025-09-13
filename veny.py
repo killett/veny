@@ -45,7 +45,7 @@ class Options():
         self.additional_alias_files: list[Path] = []
         self.alias_command:          str | None = None  # The command to run when the alias is used.
         self.computer_name:                 str = ""  # The name of this computer, retrieved from various methods.
-        self.cwd:                          Path = Path.cwd()
+        self.cwd:                          Path = Path.cwd().expanduser().resolve(strict=True)
         self.venv_name:                     str = "myenv"  # Can NOT include dashes ("-")
         self.packages_dir:                 Path = self.my_dir / "packages"
         self.test_dir:                     Path = self.my_dir / "test"
@@ -2364,10 +2364,10 @@ def main() -> None:
     else:
         logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Python %s is not available.", ud.PY_VERSION)
 
-    if not options.my_dir.is_dir():
+    if not ud.safe_is_dir(options.my_dir):
         if not options.rawlog: logging.info("Directory %s does not exist yet, so it is being created.", options.my_dir)
         options.my_dir.mkdir(parents=True, exist_ok=True)
-    if not options.packages_dir.is_dir():
+    if not ud.safe_is_dir(options.packages_dir):
         if not options.rawlog: logging.info("Directory %s does not exist yet, so it is being created.", options.packages_dir)
         options.packages_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2398,7 +2398,7 @@ def main() -> None:
         shutil.rmtree(options.my_dir, ignore_errors=True)
         for file in options.cwd.iterdir():
             logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Checking %s", file)
-            if file.is_file():
+            if ud.safe_is_file(file):
                 if (file.name.startswith(f".{options.my_name}-")                      and file.suffix.casefold() == ".out" ) or \
                    (file.name.startswith(f".{options.my_name}-")                      and file.suffix.casefold() == ".err" ) or \
                    (file.name.startswith(f".{options.my_name}_custom_modules_")       and file.suffix.casefold() == ".pkl" ) or \
@@ -4278,7 +4278,7 @@ def process_import(options: Options, module_name: str, file_path: str | os.PathL
 
     # Check if the import is a .py file in the same directory
     potential_file_path = (base_dir / f"{module_path_str}.py").expanduser().resolve()
-    if potential_file_path.is_file() and potential_file_path not in options.samedir_files:
+    if ud.safe_is_file(potential_file_path) and potential_file_path not in options.samedir_files:
         options.custom_modules[module_name] = potential_file_path
         options.loaded_custom_modules.add(module_name)
         options.samedir_files.append(potential_file_path)
@@ -4288,7 +4288,7 @@ def process_import(options: Options, module_name: str, file_path: str | os.PathL
     # Check if the import is a package (directory with __init__.py)
     potential_dir_path = (base_dir / module_path_str).expanduser().resolve()
     logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Constructed potential directory path: %s", potential_dir_path)
-    if potential_dir_path.is_dir() and (potential_dir_path / "__init__.py").is_file() and module_path_str not in options.subfolders:
+    if ud.safe_is_dir(potential_dir_path) and ud.safe_is_file(potential_dir_path / "__init__.py") and module_path_str not in options.subfolders:
         options.custom_modules[module_name] = potential_dir_path
         options.loaded_custom_modules.add(module_name)
         logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Resolved local package to: %s", potential_dir_path)
@@ -4619,7 +4619,7 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
         None, but logs errors if the provided path is not a valid Python script or if parsing fails.
     """
     first_path = ud.ensure_path(first_path)
-    if not first_path.is_file():
+    if not ud.safe_is_file(first_path):
         logging.error(f"Provided first_path is not a file: {first_path}")
         return
     if not ud.is_python_script(first_path) or not ud.compile_code(first_path):
@@ -4637,10 +4637,10 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
     while modules_to_process:
         module_path = modules_to_process.pop()
         if not options.rawlog: logging.info("Processing module: %s where %s", module_path, type(module_path))
-        if module_path.is_dir():
+        if ud.safe_is_dir(module_path):
             pkg_dir = module_path
             init_py = pkg_dir / "__init__.py"
-            if init_py.is_file():
+            if ud.safe_is_file(init_py):
                 # 1) Parse the package __init__.py
                 module_path = init_py
                 # 2) Also enqueue all other .py modules in that same folder
@@ -4964,7 +4964,7 @@ def list_packages(options: Options) -> None:
     if isinstance(options.python_script, (str, Path)):
         options.python_script = ud.ensure_path(options.python_script)
         options.loaded_custom_modules = set()
-        if options.python_script.is_file():
+        if ud.safe_is_file(options.python_script):
             if ud.is_python_script(options.python_script):
                 if not options.rawlog: logging.info("Processing a single Python script: %s", options.python_script)
                 python_file = options.python_script
@@ -4972,7 +4972,7 @@ def list_packages(options: Options) -> None:
                 find_imports_and_IO_in_script(options, python_file)
             else:
                 raise ValueError(f"'{options.python_script}' is not a valid Python script.")
-        elif options.python_script.is_dir():
+        elif ud.safe_is_dir(options.python_script):
             if not options.rawlog: logging.info("Processing an entire folder of Python scripts: %s", options.python_script)
             python_dir = options.python_script
             if options.pipreqs_available:
@@ -4994,9 +4994,10 @@ def list_packages(options: Options) -> None:
     split_imports(options)
 
 
-def stayed_out_dir(options: Options, p: Path) -> bool:
+def stayed_out_dir(options: Options, p: str | os.PathLike[str]) -> bool:
     """Check if the parent directory of path p contains any substrings from the stay_out_list."""
-    parent_str = str(p.parent)
+    p          = ud.ensure_path(p)
+    parent_str = os.fspath(p.parent)
     return any(sub in parent_str for sub in options.stay_out_list)
 
 
@@ -5005,13 +5006,13 @@ def get_all_imports(options: Options, directory: str | os.PathLike[str]) -> None
     directory = ud.ensure_path(directory)
     options.all_imports = set()
     # Build one iterator of candidate files (recursive)
-    candidates = (p for p in directory.rglob("*") if p.is_file() and not stayed_out_dir(options, p))
+    candidates = (p for p in directory.rglob("*") if ud.safe_is_file(p) and not stayed_out_dir(options, p))
     # If you want a progress denominator that matches what you'll actually process:
     total_files = sum(1 for p in candidates if ud.is_python_script(p))
     max_digits = len(str(total_files))  # For formatting progress output
     processed_files = 0
     # Recreate the iterator (generators are single-use)
-    candidates = (p for p in directory.rglob("*") if p.is_file() and not stayed_out_dir(options, p))
+    candidates = (p for p in directory.rglob("*") if ud.safe_is_file(p) and not stayed_out_dir(options, p))
     for file_path in candidates:
         if ud.is_python_script(file_path):
             find_imports_and_IO_in_script(options, file_path)
@@ -5351,7 +5352,7 @@ def load_last_used_venv_dir(options: Options) -> Path | None:
     elif last_used_options.venv_dir is None:
         if not options.rawlog: logging.info("Last used venv directory is None.")
         return None
-    elif not last_used_options.venv_dir.is_dir():
+    elif not ud.safe_is_dir(last_used_options.venv_dir):
         if not options.rawlog: logging.warning("Last used venv directory %s is no longer valid.", last_used_options.venv_dir)
         return None
     else:
@@ -5371,7 +5372,7 @@ def load_last_used_venv_python(options: Options) -> Path | None:
     elif last_used_options.venv_python is None:
         if not options.rawlog: logging.info("Last used venv_python is None.")
         return None
-    elif not last_used_options.venv_python.is_file():
+    elif not ud.safe_is_file(last_used_options.venv_python):
         if not options.rawlog: logging.warning("Last used venv_python %s is no longer valid.", last_used_options.venv_python)
         return None
     else:
@@ -5423,7 +5424,7 @@ def check_venv_dir(options: Options, options_from_cache: Options) -> bool:
     if hasattr(options_from_cache, "venv_dir"):
         # This might be loaded from an old options file which used strings.
         options_from_cache.venv_dir = ud.ensure_path(options_from_cache.venv_dir)
-        if options_from_cache.venv_dir.is_dir():
+        if ud.safe_is_dir(options_from_cache.venv_dir):
             if options.uninstalled_imports.issubset(options_from_cache.uninstalled_imports):
                 options_from_cache.uninstalled_imports = options.uninstalled_imports
                 options_from_cache.installed_imports   = options.installed_imports
@@ -5474,7 +5475,8 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
         options.args.last_used = False  # And set this to False because it failed
     if not options.rawlog: logging.info("Checking the cache for a virtual environment with all the required packages...")
     # Search for all venv_name folders in my_dir:
-    all_venv_folders = [f for f in options.my_dir.iterdir() if f.is_dir() and f.name.startswith(options.venv_name)]
+    all_venv_folders = [f for f in options.my_dir.iterdir()
+                        if ud.safe_is_dir(f) and f.name.startswith(options.venv_name)]
     # Loop through the folders and eliminate folders that clearly don't have the right packages just based on their names:
     venv_folders = []
     for folder in all_venv_folders:
@@ -5557,24 +5559,31 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
                           f"{getattr(options.args, 'smallest',  False) = }")
 
 
+STANDARD_LIB_PATHS: tuple[Path, ...] = (Path("/") / "usr" / "lib",
+                                        Path("/") / "usr" / "local" / "lib",
+                                        Path("/") / "usr" / "lib64",
+                                        Path("/") / "usr" / "local" / "lib64")
+
+STANDARD_LIB_NAMES: tuple[str, ...] = ("lib", "lib64")
+
 def is_standard_path(options: Options, path: str | os.PathLike[str]) -> bool:
     """Check if the given path is a standard system path or part of a virtual environment."""
     p = ud.ensure_path(path)
-    standard_paths = [Path("/") / "usr" / "lib",
-                      Path("/") / "usr" / "local" / "lib"]
     # Check if path is inside standard system paths
-    for std_path in standard_paths:
+    for std_path in STANDARD_LIB_PATHS:
         if p.is_relative_to(std_path):  # Python 3.9+
             return True
     # Check if path contains anything in stay_out_list
-    if any(s in str(p) for s in options.stay_out_list):
+    p_str = os.fspath(p)
+    if any(s in p_str for s in options.stay_out_list):
         return True
     # Check for Virtualenv-style paths:
     # .../lib/python*/site-packages or .../lib64/python*/site-packages
-    parts = p.parts
-    if "site-packages" in parts:
-        for i, comp in enumerate(parts[:-1]):
-            if comp in ("lib", "lib64"):
+    if "site-packages" in p_str:
+        parts = p.parts
+        for i in range(len(parts) - 1):
+            comp = parts[i]
+            if comp in STANDARD_LIB_NAMES:
                 nxt = parts[i + 1]
                 if nxt.startswith("python"):  # also matches "python"
                     return True
@@ -5617,7 +5626,8 @@ def dict_of_custom_modules(options: Options) -> dict[str, Path]:
         search_constraint_filename_boolean = only_search_here_filename_boolean
         search_constraint_path_boolean     = only_search_here_path_boolean
 
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Searching for custom modules pickle files with constraint: search_above_text_to_match = %s",
+    log = logging.getLogger()  # Prebind the logger to avoid repeated global lookups in hot loop
+    log.isEnabledFor(logging.DEBUG) and logging.debug("Searching for custom modules pickle files with constraint: search_above_text_to_match = %s",
                   search_above_text_to_match)
     if not getattr(options.args, "rc",       False) and \
        not getattr(options.args, "no_cache", False):
@@ -5649,9 +5659,10 @@ def dict_of_custom_modules(options: Options) -> dict[str, Path]:
                         custom_modules = pickle.load(f)
                     if most_recent_timestamp < options.pathlibcutoff:
                         if not options.rawlog:
-                            logging.info("Custom modules file %s is from date %s which is older than the point when "
-                                         "paths were stored as Paths (which happened on %s). Converting all paths to "
-                                         "pathlib.Path objects.",
+                            logging.info("Custom modules file %s is from date %s "
+                                         "which is older than the point when "
+                                         "paths were stored as Paths (which happened on %s). "
+                                         "Converting all paths to pathlib.Path objects.",
                                          most_recent_file, most_recent_timestamp, options.pathlibcutoff)
                         custom_modules = {k: ud.ensure_path(v) for k, v in custom_modules.items()}
                     return custom_modules
@@ -5660,8 +5671,7 @@ def dict_of_custom_modules(options: Options) -> dict[str, Path]:
             logging.error("Falling back to regenerating the custom modules dictionary from sys.path.")
 
     custom_modules: dict[str, Path] = {}
-    exts_tuple  = tuple(ud.PYTHON_EXTENSIONS)
-    package_dirs: set[Path] = set()  # directories confirmed to be packages
+    package_dirs:         set[Path] = set()  # directories confirmed to be packages
 
     # Use lru_cache to speed up repeated calls to is_standard_path()
     @lru_cache(maxsize=8192)
@@ -5669,44 +5679,57 @@ def dict_of_custom_modules(options: Options) -> dict[str, Path]:
         """Check if a path is a standard library path. Cached for speed."""
         return is_standard_path(options, p)
 
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Generating custom modules dictionary from sys.path...")
+    # Prebind a few globals/attributes to locals before os.walk to cut repeated global lookups:
+    is_std       = _is_std_path_cached
+    endswith_ext = ud.PYTHON_EXTENSIONS
+    safe_is_file = ud.safe_is_file
+    safe_is_dir  = ud.safe_is_dir
+
+    log.isEnabledFor(logging.DEBUG) and logging.debug("Generating custom modules dictionary from sys.path...")
     for path in map(Path, sys.path):
-        if not _is_std_path_cached(path) and path.is_dir() and search_constraint_path_boolean(options, path):
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Checking path: %s", path)
-            for root, dirs, files in os.walk(path, topdown=True):
+        if not is_std(path) and safe_is_dir(path) and search_constraint_path_boolean(options, path):
+            log.isEnabledFor(logging.DEBUG) and logging.debug("Checking path: %s", path)
+
+            # Prebind a few globals/attributes to locals before os.walk to cut repeated global lookups:
+            setdefault_mod   = custom_modules.setdefault
+            package_dirs_add = package_dirs.add
+            # Suppress any remaining (permissions related?) walking errors with onerror = ... None
+            for root, dirs, files in os.walk(path, topdown=True, onerror=(lambda e: None)):
                 root_path = Path(root)
                 # If the root itself is standard, skip the whole subtree immediately
-                if _is_std_path_cached(root_path):
+                if is_std(root_path):
                     dirs[:] = []  # stop descending
                     continue
                 # PRUNE: remove standard subdirs in-place to avoid descending into them
                 # Also collect package dirs (those with __init__.py) while we're here
                 kept_dirs = []
                 for d in dirs:
+                    if d == "__pycache__":
+                        continue
                     pkg = root_path / d
-                    if _is_std_path_cached(pkg):
+                    if is_std(pkg):
                         continue  # prune
                     kept_dirs.append(d)
-                    if (pkg / "__init__.py").is_file():
-                        package_dirs.add(pkg)
+                    if safe_is_file(pkg / "__init__.py"):
+                        package_dirs_add(pkg)
                         # prefer packages; first occurrence wins
-                        custom_modules.setdefault(d, pkg)
+                        setdefault_mod(d, pkg)
                 dirs[:] = kept_dirs  # apply pruning
                 # Files: skip quickly by filename; only build Path when needed
                 for fname in files:
                     fl = fname.casefold()
                     # fast extension + __init__ checks (exactly final extension)
-                    if not any(fl.endswith(ext) for ext in exts_tuple):
+                    if not fl.endswith(endswith_ext):
                         continue
                     if fl == "__init__.py":
                         continue
                     fpath = root_path / fname
-                    if _is_std_path_cached(fpath):
+                    if is_std(fpath):
                         continue
                     # if file lives inside a known package dir, skip (package already recorded)
                     if fpath.parent in package_dirs:
                         continue
-                    custom_modules.setdefault(fpath.stem, fpath)
+                    setdefault_mod(fpath.stem, fpath)
 
     # Now save to a pickle file:
     current_time = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -5735,11 +5758,13 @@ def find_preferred_python_version() -> str | None:
     """Find the command for the preferred version of python (stored in univ_defs.py as PY_VERSION)."""
     # Check if the preferred python command (only specifying integer part of the preferred version) exists and returns a valid path
     preferred_major = int(ud.PY_VERSION)
-    preferred_python_path = subprocess.run(["which", f"python{preferred_major}"], capture_output=True, text=True).stdout.strip()
+    preferred_python_path = subprocess.run(["which", f"python{preferred_major}"],
+                                           capture_output=True, text=True).stdout.strip()
     if preferred_python_path and check_python_version(f"python{preferred_major}"):
         return os.path.basename(preferred_python_path)
     # Check if the preferred python command (with complete version specified) exists and returns a valid path
-    preferred_python_path = subprocess.run(["which", f"python{ud.PY_VERSION}"], capture_output=True, text=True).stdout.strip()
+    preferred_python_path = subprocess.run(["which", f"python{ud.PY_VERSION}"],
+                                           capture_output=True, text=True).stdout.strip()
     if preferred_python_path and check_python_version(f"python{ud.PY_VERSION}"):
         return os.path.basename(preferred_python_path)
     return None

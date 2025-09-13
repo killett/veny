@@ -7,10 +7,12 @@ import sys
 from pathlib import Path  # Preferred over os.path for path manipulations.
 import logging
 from collections.abc import Iterator, Sequence
-from typing import TextIO, Any, TypeAlias, Type, Literal, Protocol
+from itertools import chain
+from typing import TextIO, Any, TypeAlias, Type, Literal, Protocol, Final
 import re  # Used to precompile regexes for performance
 from dataclasses import dataclass, field, replace
 from enum import Enum
+import errno
 
 # Version of univ_defs.py:
 __version__: str = "0.2.0"
@@ -1716,41 +1718,41 @@ def my_fopen(file_path: str | os.PathLike[str], suppress_errors: bool = False,
             if not suppress_errors: logging.error(this_message)
             else:                   logging.info(this_message)
         return False
-    if not file_path.is_file():
+    if not safe_is_file(file_path):
         this_message = f"Path is a directory, not a file: {file_path}"
         if not rawlog:
             if not suppress_errors: logging.error(this_message)
             else:                   logging.info(this_message)
         return False
-    if file_path.stat().st_size == 0:
+    if safe_size(file_path) == 0:
         this_message = f"File is empty: {file_path}"
         if not rawlog:
             if not suppress_errors: logging.error(this_message)
             else:                   logging.info(this_message)
         return False
-    # Does the file end with any of these (non-text) extensions?
-    # Join all suffixes because some listed extensions look like ".tar.gz"
-    if "".join(file_path.suffixes).casefold() in VIDEO_EXTENSIONS_SET:
+    # Does the file extension match any of these (non-text) extensions?
+    casefolded_suffix = file_path.suffix.casefold()
+    if casefolded_suffix in VIDEO_EXTENSIONS_SET:
         if not rawlog:
             if not suppress_errors: logging.error("Skipping video file %s", file_path)
             else:                   logging.info( "Skipping video file %s", file_path)
         return False
-    if "".join(file_path.suffixes).casefold() in AUDIO_EXTENSIONS_SET:
+    if casefolded_suffix in AUDIO_EXTENSIONS_SET:
         if not rawlog:
             if not suppress_errors: logging.error("Skipping audio file %s", file_path)
             else:                   logging.info( "Skipping audio file %s", file_path)
         return False
-    if "".join(file_path.suffixes).casefold() in IMAGE_EXTENSIONS_SET:
+    if casefolded_suffix in IMAGE_EXTENSIONS_SET:
         if not rawlog:
             if not suppress_errors: logging.error("Skipping image file %s", file_path)
             else:                   logging.info( "Skipping image file %s", file_path)
         return False
-    if "".join(file_path.suffixes).casefold() in ARCHIVE_EXTENSIONS_SET:
+    if casefolded_suffix in ARCHIVE_EXTENSIONS_SET:
         if not rawlog:
             if not suppress_errors: logging.error("Skipping archive file %s", file_path)
             else:                   logging.info( "Skipping archive file %s", file_path)
         return False
-    for encoding in TEXT_ENCODINGS:  # use the (ordered) list so more commonly used encodings are tried first.
+    for encoding in TEXT_ENCODINGS:  # use the (ordered) tuple so more common encodings are tried first.
         try:
             with open(file_path, "r", encoding=encoding) as file:
                 if numlines is None:
@@ -1999,7 +2001,7 @@ def show_function_source(target: object | str, *, unwrap: bool = True,
     elif isinstance(output, (str, os.PathLike)):
         path = ensure_path(output, resolve=False)
         # Fail fast if it's a directory
-        if path.exists() and path.is_dir():
+        if path.exists() and safe_is_dir(path):
             raise IsADirectoryError(f"Output path is a directory: {path!s}")
         # Ensure parents exist ('.' is fine to call mkdir() on with exist_ok=True)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -2876,7 +2878,7 @@ def find_shell_rc_file(options: Options) -> None:
     # pick the first one that actually exists
     for fname in candidates:
         path = options.home / fname
-        if path.is_file():
+        if safe_is_file(path):
             options.rc_file = path
             break
     else:
@@ -2902,7 +2904,7 @@ def find_additional_alias_files(options: Options) -> None:
         logging.error(f"Unsupported shell for additional alias files: {options.shell}")
     valid_files = []
     for this_file in options.additional_alias_files:
-        if this_file.is_file():
+        if safe_is_file(this_file):
             valid_files.append(this_file)
         else:
             logging.error(f"Additional alias file {this_file} does not exist for shell {options.shell}.")
@@ -2910,18 +2912,22 @@ def find_additional_alias_files(options: Options) -> None:
 
 
 def ensure_path(path: str | os.PathLike[str],
-                resolve: bool = True,
-                expand:  bool = True,
-                strict:  bool = False) -> Path:
+                resolve:                       bool = True,
+                expand:                        bool = True,
+                strict:                        bool = False,
+                exists_follow_symlinks: bool | None = None) -> Path:
     """
     Ensure that the path is a Path. If not, make it a Path.
-    
+
     Args:
-        path:    The path to ensure is a Path object.
-        resolve: If True, resolve the path to its absolute form (following symlinks).
-        expand:  If True, expand user directories (e.g., ~) in the path.
-        strict:  If True, raise an error if the path does not exist. If False, return a Path object that may not exist.
-                 If resolve = False but strict = True, only check existence without following symlinks.
+        path:                   The path to ensure is a Path object.
+        resolve:                If True, resolve the path to its absolute form (following symlinks).
+        expand:                 If True, expand user directories (e.g., ~) in the path.
+        strict:                 If True, raise an error if the path does not exist.
+                                If False, return a Path object that may not exist.
+        exists_follow_symlinks: If strict=True and resolve=False, choose whether the existence
+                                check should follow symlinks (True uses Path.exists()) or not
+                                (False uses os.path.lexists()). If None, defaults to not follow.
 
     Returns:
         A Path object representing the ensured path.
@@ -2936,60 +2942,22 @@ def ensure_path(path: str | os.PathLike[str],
     p = p.expanduser() if  expand else p
     if strict and not resolve:
         fallback_logging_config()
+        mode = (exists_follow_symlinks
+                if exists_follow_symlinks is not None
+                else False)  # default matches previous behavior: don't follow
         logging.getLogger().isEnabledFor(logging.WARNING) and logging.warning(
-            "%s: since resolve=False, strict=True only checks existence. "
-            "It doesn't follow symlinks.", return_method_name())
-        if not os.path.lexists(os.fspath(p)):  # Doesn't follow symlinks
-            raise FileNotFoundError(p)
+            "%s: resolve=False, strict=True checks existence (follow_symlinks=%s).",
+            return_method_name(), mode)
+        if mode:  # follows symlinks: missing/broken targets are considered non-existent
+            if not p.exists():
+                raise FileNotFoundError(p)
+        else:  # does not follow: symlink itself counts as existing even if broken
+            if not os.path.lexists(os.fspath(p)):
+                raise FileNotFoundError(p)
     return p.resolve(strict=strict) if resolve else p
 
 
-def _exists(p: Path, *, follow_symlinks: bool) -> bool:
-    """
-    Like Path.exists(), but if follow_symlinks=False it treats a symlink
-    as 'existing' even if its target is broken.
-    """
-    if follow_symlinks:
-        return p.exists()
-    try:
-        p.lstat()                # existence of the link itself
-        return True
-    except FileNotFoundError:
-        return False
-
-
-def _is_file(p: Path, *, follow_symlinks: bool) -> bool:
-    """
-    Version-proof 'is regular file?' that can avoid following symlinks.
-    """
-    if sys.version_info >= (3, 13):  # 3.13+ supports follow_symlinks
-        return p.is_file(follow_symlinks=follow_symlinks)
-    if follow_symlinks:
-        return p.is_file()
-    try:
-        import stat
-        return stat.S_ISREG(p.lstat().st_mode)
-    except FileNotFoundError:
-        return False
-
-
-def _is_dir(p: Path, *, follow_symlinks: bool) -> bool:
-    """
-    Version-proof 'is directory?' that can avoid following symlinks.
-    """
-    if sys.version_info >= (3, 13):  # 3.13+ supports follow_symlinks
-        return p.is_dir(follow_symlinks=follow_symlinks)
-    if follow_symlinks:
-        return p.is_dir()
-    try:
-        import stat
-        return stat.S_ISDIR(p.lstat().st_mode)
-    except FileNotFoundError:
-        return False
-
-
 def ensure_file(path: str | os.PathLike[str],
-                *,
                 raise_on_empty:  bool = False,
                 allow_symlink:   bool = True,
                 follow_symlinks: bool = True,
@@ -2999,7 +2967,7 @@ def ensure_file(path: str | os.PathLike[str],
 
     Args:
         path:            The path to check.
-        raise_on_empty:  If True, raise an exception if the file is empty.
+        raise_on_empty:  If True,  raise an exception if the file is empty.
         allow_symlink:   If False, raise an exception if the path is a symlink.
         follow_symlinks: If False, do not follow symlinks when checking if it's a file.
         return_resolved: If True, return the fully resolved real path.
@@ -3011,31 +2979,31 @@ def ensure_file(path: str | os.PathLike[str],
         FileNotFoundError: If the file does not exist.
         IsADirectoryError: If the path exists but is a directory.
         ValueError:        If the path exists but is not a regular file, or if symlinks are not allowed.
-        ValueError:        If raise_on_empty is True and the file is empty.
+        ValueError:        If raise_on_empty is True and the file is empty (or bad permissions, etc.)
     """
-    p = ensure_path(path, resolve=False)
-    if not _exists(p, follow_symlinks=follow_symlinks):
-        raise FileNotFoundError(f"No such file: {p}")
-    if not _is_file(p, follow_symlinks=follow_symlinks):
-        if _is_dir( p, follow_symlinks=follow_symlinks):
+    p = ensure_path(path, resolve=False, strict=True,
+                    exists_follow_symlinks=follow_symlinks)
+    if not safe_is_file(p, follow_symlinks=follow_symlinks):
+        if safe_is_dir( p, follow_symlinks=follow_symlinks):
             raise IsADirectoryError(f"Expected a file, got directory: {p}")
         raise ValueError(f"Path exists but is not a regular file: {p}")
     if not allow_symlink and p.is_symlink():
         raise ValueError(f"Symlinks not allowed: {p}")
-    try:
-        size = p.stat().st_size  # follows symlinks to check the target
-    except FileNotFoundError:
-        # Broken symlink while follow_symlinks=False
-        raise FileNotFoundError(f"No such file (broken symlink?): {p}") from None
-    if raise_on_empty and size == 0:
-        raise ValueError(f"File is empty: {p}")
-    elif size == 0:
-        logging.warning("File is empty: %s", p)
+    size = safe_size(p, follow_symlinks=follow_symlinks)
+    if size is not None:
+        if raise_on_empty and size == 0:
+            raise ValueError(f"File is empty: {p}")
+        elif size == 0:
+            logging.warning("File is empty: %s", p)
+    else:
+        if raise_on_empty:
+            raise ValueError(f"File size is unknown (permissions?): {p}")
+        else:
+            logging.warning("File size is unknown (permissions?): %s", p)
     return p.resolve(strict=True) if return_resolved else p.absolute()
 
 
 def ensure_dir(path: str | os.PathLike[str],
-               *,
                allow_symlink:   bool = True,
                follow_symlinks: bool = True,
                return_resolved: bool = False) -> Path:
@@ -3055,14 +3023,214 @@ def ensure_dir(path: str | os.PathLike[str],
         FileNotFoundError:  If the directory does not exist.
         NotADirectoryError: If the path exists but is not a directory.
     """
-    p = ensure_path(path, resolve=False)
-    if not _exists(p, follow_symlinks=follow_symlinks):
-        raise FileNotFoundError(f"No such directory: {p}")
-    if not _is_dir(p, follow_symlinks=follow_symlinks):
+    p = ensure_path(path, resolve=False, strict=True,
+                    exists_follow_symlinks=follow_symlinks)
+    if not safe_is_dir(p, follow_symlinks=follow_symlinks):
         raise NotADirectoryError(f"Expected a directory, got file: {p}")
     if not allow_symlink and p.is_symlink():
         raise ValueError(f"Symlinks not allowed: {p}")
     return p.resolve(strict=True) if return_resolved else p.absolute()
+
+
+_IS_PY_3_13: Final[bool] = sys.version_info >= (3, 13)
+
+
+def _is_file(p: Path, follow_symlinks: bool) -> bool:
+    """
+    Version-proof 'is regular file?' that can avoid following symlinks.
+    """
+    if _IS_PY_3_13:  # 3.13+ supports follow_symlinks
+        return p.is_file(follow_symlinks=follow_symlinks)
+    if follow_symlinks:
+        return p.is_file()
+    try:
+        import stat
+        return stat.S_ISREG(p.lstat().st_mode)
+    except FileNotFoundError:
+        return False
+
+
+def _is_dir(p: Path, follow_symlinks: bool) -> bool:
+    """
+    Version-proof 'is directory?' that can avoid following symlinks.
+    """
+    if _IS_PY_3_13:  # 3.13+ supports follow_symlinks
+        return p.is_dir(follow_symlinks=follow_symlinks)
+    if follow_symlinks:
+        return p.is_dir()
+    try:
+        import stat
+        return stat.S_ISDIR(p.lstat().st_mode)
+    except FileNotFoundError:
+        return False
+
+
+IGNORE_THESE_ERRORS: Final[frozenset[int]] = frozenset(
+    e for e in {
+        errno.EACCES, errno.EPERM, errno.ELOOP, errno.ENOTDIR, errno.ENOENT,
+        getattr(errno, "ESTALE", None),   # NFS: stale file handle (may not exist)
+    } if e is not None
+)
+
+
+def safe_is_file(path: str | os.PathLike[str],
+                 follow_symlinks: bool = True) -> bool:
+    """
+    Like Path.is_file(), but returns False on permission errors instead of raising.
+    Uses _is_file() for pre-3.13 compatibility and no-follow mode.
+
+    Args:
+        path:            The file or directory path to check.
+        follow_symlinks: Whether to follow symlinks (default: True).
+
+    Returns:
+        True if the path is a file, False otherwise.
+    
+    Raises:
+        Intentionally designed to catch PermissionError, FileNotFoundError,
+        some OSError variations. But not all.
+    """
+    p = ensure_path(path, resolve=False, strict=False)
+    try:
+        return _is_file(p, follow_symlinks=follow_symlinks)
+    except PermissionError:
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("safe_is_file: permission denied: %s", p)
+        return False
+    except OSError as e:
+        if e.errno in IGNORE_THESE_ERRORS:
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+                "%s: suppressed errno=%s (%s): %s", return_method_name(),
+                e.errno, getattr(errno, "errorcode", {}).get(e.errno, "?"), p
+            )
+            return False
+        raise
+
+
+def safe_is_dir(path: str | os.PathLike[str],
+                follow_symlinks: bool = True) -> bool:
+    """
+    Like Path.is_dir(), but returns False on permission errors instead of raising.
+    Uses _is_dir() for pre-3.13 compatibility and no-follow mode.
+
+    Args:
+        path:            The file or directory path to check.
+        follow_symlinks: Whether to follow symlinks (default: True).
+
+    Returns:
+        True if the path is a directory, False otherwise.
+    
+    Raises:
+        Intentionally designed to catch PermissionError, FileNotFoundError,
+        some OSError variations. But not all.
+    """
+    p = ensure_path(path, resolve=False, strict=False)
+    try:
+        return _is_dir(p, follow_symlinks=follow_symlinks)
+    except PermissionError:
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("safe_is_dir: permission denied: %s", p)
+        return False
+    except OSError as e:
+        if e.errno in IGNORE_THESE_ERRORS:
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+                "%s: suppressed errno=%s (%s): %s", return_method_name(),
+                e.errno, getattr(errno, "errorcode", {}).get(e.errno, "?"), p
+            )
+            return False
+        raise
+
+
+def safe_stat(path: str | os.PathLike[str],
+              follow_symlinks: bool = True) -> os.stat_result | None:
+    """
+    Like Path.stat()/lstat(), but returns None on permission/missing/loop errors.
+
+    Args:
+        path:            The file or directory path to stat.
+        follow_symlinks: Whether to follow symlinks (default: True).
+                         If true, uses Path.stat() else Path.lstat().
+
+    Returns:
+        An os.stat_result object or None if an error occurred.
+    
+    Raises:
+        Intentionally designed to catch PermissionError, FileNotFoundError,
+        some OSError variations. But not all.
+    """
+    p = ensure_path(path, resolve=False, strict=False)
+    try:
+        return p.stat() if follow_symlinks else p.lstat()
+    except (PermissionError, FileNotFoundError):
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("safe_stat: access/missing: %s", p)
+        return None
+    except OSError as e:
+        if e.errno in IGNORE_THESE_ERRORS:
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+                "%s: suppressed errno=%s (%s): %s", return_method_name(),
+                e.errno, getattr(errno, "errorcode", {}).get(e.errno, "?"), p
+            )
+            return None
+        raise
+
+
+def safe_size(path: str | os.PathLike[str],
+              follow_symlinks: bool = True) -> int | None:
+    """
+    Like Path.stat().st_size, but returns None on permission/missing/loop errors.
+
+    Args:
+        path:            The file or directory path to stat().st_size
+        follow_symlinks: Whether to follow symlinks (default: True).
+                         If true, uses Path.stat() else Path.lstat().
+
+    Returns:
+        The size of the file in bytes or None if an error occurred.
+    """
+    st = safe_stat(path, follow_symlinks=follow_symlinks)
+    return None if st is None else st.st_size
+
+
+def safe_mtime(path: str | os.PathLike[str],
+               follow_symlinks: bool = True,
+               ns: bool = False) -> int | float | None:
+    """
+    Return mtime (seconds float or ns int) or None on errors.
+
+    Args:
+        path:            The file or directory path to stat().st_mtime
+        follow_symlinks: Whether to follow symlinks (default: True).
+                         If true, uses Path.stat() else Path.lstat().
+        ns:              Whether to return the result in nanoseconds (default: False).
+
+    Returns:
+        The mtime of the file in seconds or nanoseconds, or None if an error occurred.
+    """
+    st = safe_stat(path, follow_symlinks=follow_symlinks)
+    if st is None:
+        return None
+    return st.st_mtime_ns if ns else st.st_mtime
+
+
+def safe_ctime(path: str | os.PathLike[str],
+               follow_symlinks: bool = True,
+               ns: bool = False) -> int | float | None:
+    """
+    Return ctime (seconds float or ns int) or None on errors.
+    Note: On POSIX, ctime == inode *change* time, not creation time.
+          On Windows, ctime is the file *creation* time.
+
+    Args:
+        path:            The file or directory path to stat().st_ctime
+        follow_symlinks: Whether to follow symlinks (default: True).
+                         If true, uses Path.stat() else Path.lstat().
+        ns:              Whether to return the result in nanoseconds (default: False).
+
+    Returns:
+        The ctime of the file in seconds or nanoseconds, or None if an error occurred.
+    """
+    st = safe_stat(path, follow_symlinks=follow_symlinks)
+    if st is None:
+        return None
+    return st.st_ctime_ns if ns else st.st_ctime
 
 
 def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
@@ -3131,7 +3299,7 @@ def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
         # Skip re-download if size matches on disk already.
         if dest.exists():
             try:
-                if dest.stat().st_size == expected:
+                if safe_size(dest) == expected:
                     logging.info("File already present with expected size; skipping: %s", dest)
                     return
             except OSError:
@@ -3185,11 +3353,11 @@ def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
 
             # Verify size if Content-Length available
             if total_i is not None:
-                actual = temp.stat().st_size
+                actual = safe_size(temp)
                 if actual != total_i:
                     raise IOError(f"Incomplete download: expected {total_i} bytes, got {actual} bytes")
             temp.replace(dest)
-            logging.info("Saved %s (%s)", dest, human_bytesize(dest.stat().st_size))
+            logging.info("Saved %s (%s)", dest, human_bytesize(safe_size(dest)))
             succeeded = True
             return
         except (HTTPError, URLError, socket.timeout, TimeoutError, IOError) as e:
@@ -3235,7 +3403,7 @@ def query_free_space(path: str | os.PathLike[str]) -> int:
     p = ensure_path(path)
 
     # Use the path itself if it's an existing directory; otherwise use its parent.
-    base = p if (p.exists() and p.is_dir()) else p.parent
+    base = p if (p.exists() and safe_is_dir(p)) else p.parent
 
     # Climb up until we find an existing directory.
     while not base.exists():
@@ -3335,13 +3503,14 @@ def find_ffmpeg() -> str | None:
     return None
 
 
-def human_bytesize(num: float | int, *, suffix: str = "B", si: bool = False, precision: int = 1,
+def human_bytesize(num: float | int | None, *, suffix: str = "B", si: bool = False, precision: int = 1,
                    space: bool = True, trim_trailing_zeros: bool = False, long_units: bool = False) -> str:
     """
     Formats a byte count into a human-readable string.
 
     Args:
         num:                 Size in bytes. Negative values are preserved with a leading minus.
+                             If None, returns "None".
         suffix:              Unit suffix appended after the prefix (defaults to "B"). If long_units is True and
                              suffix is "B", "bytes" is appended in the output. Otherwise, the suffix is appended to the long name.
         si:                  If True, use powers of 1000 with SI prefixes (k, M, G, ... up to R, Q).
@@ -3353,12 +3522,19 @@ def human_bytesize(num: float | int, *, suffix: str = "B", si: bool = False, pre
 
     Returns:
         A concise string such as "1.5KiB", "1.5 kB", or "1.5 megabytes" depending on options.
+        If num is None, returns "None".
         Handles negative values with a leading minus sign and units up to "quebibytes" (2^100 = 1024^10 bytes) for IEC,
         or "quettabytes" (10^30 bytes) for SI.
 
     Raises:
         None.
     """
+    if num is None:
+        return "None"
+    if precision < 0:
+        raise ValueError("precision must be non-negative")
+    if suffix and not isinstance(suffix, str):
+        suffix = str(suffix)
     step = 1000.0 if si else 1024.0
     symbols = (["", "k", "M", "G", "T", "P", "E", "Z", "Y", "R", "Q"]
                if si else ["", "Ki", "Mi", "Gi", "Ti", "Pi", "Ei", "Zi", "Yi", "Ri", "Qi"])
@@ -4607,8 +4783,8 @@ def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
     Turn arbitrary text into an ASCII-only, filesystem‐safe base filename.
     WARNING: Do not include an extension in the text, because this function
     might remove the dot which separates the filename from the extension.
-    It attempts to recognize and remove extensions listed in ALL_KNOWN_EXTENSIONS_SET
-    but this list is not exhaustive.
+    It attempts to recognize and remove extensions listed in ALL_KNOWN_EXTENSIONS
+    but this list (actually, ordered tuple) is not exhaustive.
 
     Steps:
       1. Unicode → ASCII
@@ -4645,7 +4821,7 @@ def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
 
     # List of common extensions to recognize and (temporarily) remove
     removed_ext = ""
-    for ext in ALL_KNOWN_EXTENSIONS_SET:
+    for ext in ALL_KNOWN_EXTENSIONS:
         if text.casefold().endswith(ext):
             text = text[:-len(ext)]
             removed_ext = ext
@@ -4706,7 +4882,7 @@ def if_filepath_then_read(input_string_or_filepath: str | os.PathLike[str],
     # Heuristics: if it contains newlines or is ridiculously long, it's source.
     if isinstance(input_string_or_filepath, str) and ("\n" in input_string_or_filepath or len(input_string_or_filepath) > 4096):
         return input_string_or_filepath
-    if not force_string and (file_path := ensure_path(input_string_or_filepath)).is_file():
+    if not force_string and safe_is_file(file_path := ensure_path(input_string_or_filepath)):
         try:
             contents = my_fopen(file_path, suppress_errors=True)
             if not contents:
@@ -5034,7 +5210,7 @@ def check_python_formatting(path: str | os.PathLike[str], diff_choice: int = 1) 
     import ast
     fallback_logging_config()
     path = ensure_file(path)
-    src = my_fopen(path)
+    src  = my_fopen(   path)
     if src is False:
         logging.error("❌ Failed to open file: %s", path)
         return
@@ -5118,7 +5294,7 @@ def run_flake8(path: str | os.PathLike[str], ignore_codes: list[str] = [],
     """
     from flake8.api import legacy as flake8
     fallback_logging_config()
-    path = ensure_file(path)
+    path        = ensure_file(path)
     style_guide = flake8.get_style_guide(max_line_length=max_line_length, ignore=ignore_codes)
     report = style_guide.check_files([path])
     if report.total_errors == 0:
@@ -5469,7 +5645,7 @@ def is_python_script(path: str | os.PathLike[str]) -> bool:
     """
     import stat
     path = ensure_path(path)
-    if not path.is_file():
+    if not safe_is_file(path):
         return False
 
     # Common extensions
@@ -5478,7 +5654,7 @@ def is_python_script(path: str | os.PathLike[str]) -> bool:
 
     # No-extension scripts: check for executable bit + python shebang
     try:
-        st = path.stat()
+        st = safe_stat(path)
     except OSError:
         return False
 
@@ -5685,7 +5861,7 @@ def _resolve_dir(dir_arg: str | None) -> Path:
         p = Path.cwd()
     if not p.exists():
         raise FileNotFoundError(f"Directory does not exist: {p}")
-    if not p.is_dir():
+    if not safe_is_dir(p):
         raise NotADirectoryError(f"Path is not a directory: {p}")
     return p
 
@@ -5699,7 +5875,7 @@ def _collect_files(root: Path, pattern: str, recursive: bool) -> list[Path]:
     else:
         search_iter = root.glob(pattern)
 
-    files = [p for p in search_iter if p.is_file()]
+    files = [p for p in search_iter if safe_is_file(p)]
     return files
 
 
@@ -6162,19 +6338,19 @@ def iter_files(paths: Iterable[str | os.PathLike[str]],
     for raw in paths:
         base = Path(raw)
 
-        if base.is_dir():
+        if ud.safe_is_dir(base):
             if recursive:
                 # Prefer Path.rglob for recursion (portable across 3.9+).
                 for f in base.rglob(pattern):
-                    if f.is_file() and not _is_excluded(f, excluded):
+                    if ud.safe_is_file(f) and not _is_excluded(f, excluded):
                         yield f
             else:
                 for f in base.glob(pattern):
-                    if f.is_file() and not _is_excluded(f, excluded):
+                    if ud.safe_is_file(f) and not _is_excluded(f, excluded):
                         yield f
         else:
             # Single file (or non-existent); yield if it meets filters.
-            if base.is_file() and (not only_py or base.suffix == ".py") and not _is_excluded(base, excluded):
+            if ud.safe_is_file(base) and (not only_py or base.suffix == ".py") and not _is_excluded(base, excluded):
                 yield base
 
 
@@ -6376,8 +6552,8 @@ def verify_script(options: Options, thepath: str | os.PathLike[str], thescript: 
     """
     # Check if it exists and is a file
     thepath = ensure_path(thepath)
-    if not thepath.is_file():
-        if thepath.is_dir():
+    if not safe_is_file(thepath):
+        if safe_is_dir(thepath):
             if not options.rawlog:
                 logging.error(f"Expected a file at {thepath}, but it is a directory.")
             return
@@ -6565,7 +6741,7 @@ def fix_mojibake(filepath: str | os.PathLike[str], make_backup: bool = True,
     import datetime as dt
     fallback_logging_config()
     filepath = ensure_file(filepath)
-    if not filepath.is_file():
+    if not safe_is_file(filepath):
         logging.error(f"{filepath} is not a file")
         return
 
@@ -6652,7 +6828,7 @@ def treeview_new_files(directory:      str | os.PathLike[str],
     if not directory.exists():
         logging.error(f"{prefix}└── [Directory does not exist: {directory}]")
         return False
-    if not directory.is_dir():
+    if not safe_is_dir(directory):
         logging.error(f"{prefix}└── [Not a directory: {directory}]")
         return False
 
@@ -6664,7 +6840,7 @@ def treeview_new_files(directory:      str | os.PathLike[str],
         if not last_file_path.exists():
             logging.error("%s└── [Last file path does not exist: %s]", prefix, last_file_path)
             return False
-        last_mtime          = last_file_path.stat().st_mtime
+        last_mtime          = safe_mtime(last_file_path)
         last_mtime_readable = dt.datetime.fromtimestamp(last_mtime).strftime("%Y-%m-%d %H:%M:%S")
         logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%sLast file path: %s (mtime: %s)", prefix, last_file_path, last_mtime_readable)
 
@@ -6676,7 +6852,7 @@ def treeview_new_files(directory:      str | os.PathLike[str],
         dir_color   = ""
 
     # Get the modification time of the directory itself
-    dir_mtime = directory.stat().st_mtime
+    dir_mtime      = safe_mtime(directory)
     current_is_new = dir_mtime > (last_mtime or 0)
 
     if state is None:
@@ -6702,30 +6878,30 @@ def treeview_new_files(directory:      str | os.PathLike[str],
     entries = [
         entry for entry in entries
         if not (
-            (entry.is_file() and (
+            (safe_is_file(entry) and (
                 entry == last_file_path or
                 entry == my_filepath    or
                 entry.name.startswith(".")
             )) or
-            (entry.is_dir() and entry.name in excluded_dirs) or
-            (entry.is_dir() and entry.expanduser().resolve() in already_printed)
+            (safe_is_dir(entry) and entry.name in excluded_dirs) or
+            (safe_is_dir(entry) and entry.expanduser().resolve() in already_printed)
         )
     ]
 
     # Sort entries: directories first, then files, case-insensitive
-    entries = sorted(entries, key=lambda e: (not e.is_dir(), e.name.casefold()))
+    entries = sorted(entries, key=lambda e: (not safe_is_dir(e), e.name.casefold()))
 
     # Collect relevant entries
     relevant_entries = []
     subdirectories = []
 
     for entry in entries:
-        if entry.is_file():
-            file_mtime = entry.stat().st_mtime
+        if safe_is_file(entry):
+            file_mtime = safe_mtime(entry)
             if file_mtime > last_mtime:
                 relevant_entries.append(entry)
                 has_relevant_files = True
-        elif entry.is_dir():
+        elif safe_is_dir(entry):
             sub_has_relevant = treeview_new_files(
                 entry,
                 last_file_path=last_file_path,
@@ -6739,7 +6915,7 @@ def treeview_new_files(directory:      str | os.PathLike[str],
                 probe_only=True             # probe mode: do not print contents
             )
             # Consider the subdirectory's own mtime
-            sub_is_new = entry.stat().st_mtime > last_mtime
+            sub_is_new = safe_mtime(entry) > last_mtime
             if sub_has_relevant or sub_is_new:
                 subdirectories.append(entry)
             if sub_has_relevant:
@@ -6965,9 +7141,12 @@ def open_filemanager_with_dirs(directories: list[str | os.PathLike[str]]) -> Non
     for directory in directories:
         directory = ensure_path(directory)
         if not directory.is_absolute():
-            logging.error(f"Directory {directory} is not an absolute path. Skipping.")
-            continue
-        if not directory.is_dir():
+            try:
+                directory = directory.resolve()
+            except Exception as e:
+                logging.error(f"Failed to resolve directory {directory}: {e}")
+                continue
+        if not safe_is_dir(directory):
             logging.error(f"Directory {directory} is not a valid directory. Skipping.")
             continue
         if not directory.exists():
@@ -7195,13 +7374,12 @@ def open_dir_in_VLC(the_dir: str | os.PathLike[str], sort_choice: str = "sort_by
     dirs_with_times:  list[tuple[float, Path]] = []  # Only used if not recursive
     entries:                    Iterator[Path] = the_dir.rglob("*") if recursive else the_dir.iterdir()
     for p in entries:
-        if p.is_file():
-            # Exclude playlist files
+        if safe_is_file(p):
             if p.suffix.casefold() in PLAYLIST_EXTENSIONS_SET:
-                continue
-            files_with_times.append((p.stat().st_mtime, p))
-        elif not recursive and p.is_dir():
-            dirs_with_times.append((p.stat().st_mtime, p))
+                continue  # Exclude playlist files
+            files_with_times.append((safe_mtime(p), p))
+        elif not recursive and safe_is_dir(p):
+            dirs_with_times.append((safe_mtime(p), p))
     if sort_choice == "sort_by_name":
         # Sort files by name, case-insensitively
         files_with_times.sort(   key=lambda x: x[1].name.casefold())
@@ -7276,7 +7454,7 @@ def remove_prefix_from_html_title(filepath: str | os.PathLike[str], prefix: str)
     """If the given filepath is an HTML file and its title starts with the given prefix, remove the prefix from the title and save the file, then return True. Otherwise, return False."""
     fallback_logging_config()
     filepath = ensure_path(filepath)
-    if not filepath.is_file():
+    if not safe_is_file(filepath):
         logging.warning("File '%s' does not exist or is not a file.", filepath)
         return False
     if filepath.suffix.casefold() not in (".html", ".htm"):
@@ -7376,6 +7554,7 @@ def normalize_for_search(text: str) -> str:
 def calculate_checksum(file_path: str | os.PathLike[str]) -> str:
     """Calculate the SHA256 checksum of a file."""
     import hashlib
+    file_path   = ensure_file(file_path)
     sha256_hash = hashlib.sha256()
     with file_path.open("rb") as f:
         for byte_block in iter(lambda: f.read(4096), b""):
@@ -7383,15 +7562,8 @@ def calculate_checksum(file_path: str | os.PathLike[str]) -> str:
     return sha256_hash.hexdigest()
 
 
-def check_list_for_duplicates(the_list: list) -> None:
-    """Check a list for duplicate elements."""
-    duplicates = [ext for ext in set(the_list) if the_list.count(ext) > 1]
-    if duplicates:
-        print("Duplicates:", duplicates)
-
-
-# A comprehensive list of encodings to try when reading files, with most likely encodings first.
-TEXT_ENCODINGS: list[str] = [
+# A comprehensive tuple of encodings to try when reading files, with most likely encodings first.
+TEXT_ENCODINGS: Final[tuple[str, ...]] = (
     "utf-8",           "latin-1",        "ascii",           "iso-8859-1",         "big5",
     "utf-8-sig",       "utf-16",         "utf-16-be",       "utf-16-le",          "utf-32",
     "utf-32-be",       "utf-32-le",      "cp1252",          "cp1251",             "cp1250",
@@ -7422,13 +7594,13 @@ TEXT_ENCODINGS: list[str] = [
     "palmos",          "punycode",       "quopri",          "raw-unicode-escape", "rot-13",
     "shift_jis",       "shift_jis_2004", "shift_jisx0213",  "unicode-escape",     "uu",
     "zlib",
-]
-TEXT_ENCODINGS_SET: set[str] = set(TEXT_ENCODINGS)  # sets are faster
+)
+TEXT_ENCODINGS_SET: Final[frozenset[str]] = frozenset(TEXT_ENCODINGS)  # sets are faster
 # # Quality control: examine encodings for any uppercase characters.
 # for enc in TEXT_ENCODINGS:
 #     if any(c.isupper() for c in enc):
 #         raise ValueError(f"Encoding '{enc}' contains uppercase characters. All encodings should be lowercase.")
-# check_list_for_duplicates(TEXT_ENCODINGS) # Run this after adding new encodings to ensure there are no duplicates.
+# assert len(TEXT_ENCODINGS_SET) == len(TEXT_ENCODINGS), "Duplicate text encodings?"
 # def all_encodings() -> list[str]:
 #     """Return a sorted list of all known Python text encodings."""
 #     import pkgutil, encodings, codecs
@@ -7452,7 +7624,7 @@ TEXT_ENCODINGS_SET: set[str] = set(TEXT_ENCODINGS)  # sets are faster
 # # Example usage
 # encs = all_encodings()
 # print(len(encs), "encodings found")
-# print(encs[:25])  # peek
+# print(f"Peek at the first few text encodings: {encs[:25]=}")
 # def invalid_encodings(names: list[str]) -> list[str]:
 #     """Return a list of invalid encoding names from the given list."""
 #     import codecs
@@ -7464,7 +7636,7 @@ TEXT_ENCODINGS_SET: set[str] = set(TEXT_ENCODINGS)  # sets are faster
 #             bad.append(n)
 #     return bad
 # bad = invalid_encodings(TEXT_ENCODINGS)
-# print("Invalid encodings:", bad)
+# print(f"Invalid encodings: {bad}" if bad else "No invalid encodings.")
 # missing_encodings = []
 # for enc in encs:
 #     if enc not in TEXT_ENCODINGS:
@@ -7472,11 +7644,17 @@ TEXT_ENCODINGS_SET: set[str] = set(TEXT_ENCODINGS)  # sets are faster
 # print(f"{len(missing_encodings)} encodings are missing from TEXT_ENCODINGS: {missing_encodings}")
 
 # A comprehensive list of python extensions.
-PYTHON_EXTENSIONS:    list[str] = [".py", ".pyw"]
-PYTHON_EXTENSIONS_SET: set[str] = set(PYTHON_EXTENSIONS)  # sets are faster
+PYTHON_EXTENSIONS:    Final[tuple[str, ...]] = (".py", ".pyw")
+PYTHON_EXTENSIONS_SET: Final[frozenset[str]] = frozenset(PYTHON_EXTENSIONS)
+# assert len(PYTHON_EXTENSIONS_SET) == len(PYTHON_EXTENSIONS), "Duplicate python extensions?"
+
+# A comprehensive list of HTML extensions.
+HTML_EXTENSIONS:    Final[tuple[str, ...]] = (".html", ".htm")
+HTML_EXTENSIONS_SET: Final[frozenset[str]] = frozenset(HTML_EXTENSIONS)
+# assert len(HTML_EXTENSIONS_SET) == len(HTML_EXTENSIONS), "Duplicate HTML extensions?"
 
 # A comprehensive list of text file extensions.
-TEXT_EXTENSIONS: list[str] = [
+TEXT_EXTENSIONS: Final[tuple[str, ...]] = (
     ".txt",          ".html",     ".htm",      ".csv",        ".json",       ".xml",
     ".adoc",         ".asciidoc", ".bib",      ".cfg",        ".conf",       ".ini",
     ".log",          ".md",       ".markdown", ".properties", ".rtf",        ".rst",
@@ -7501,12 +7679,12 @@ TEXT_EXTENSIONS: list[str] = [
     ".ics",          ".vcf",      ".vcard",    ".srt",        ".vtt",        ".ass",
     ".ssa",          ".lrc",      ".dot",      ".gv",         ".mermaid",    ".sgf",
     ".pgn",          ".sfv",      ".md5",      ".sha1",       ".sha256",
-]
-TEXT_EXTENSIONS_SET: set[str] = set(TEXT_EXTENSIONS)  # sets are faster
-# check_list_for_duplicates(TEXT_EXTENSIONS) # Run this after adding new extensions to ensure there are no duplicates.
+)
+TEXT_EXTENSIONS_SET: Final[frozenset[str]] = frozenset(TEXT_EXTENSIONS)
+# assert len(TEXT_EXTENSIONS_SET) == len(TEXT_EXTENSIONS), "Duplicate text extensions?"
 
 # A comprehensive list of video file extensions.
-VIDEO_EXTENSIONS: list[str] = [
+VIDEO_EXTENSIONS: Final[tuple[str, ...]] = (
     ".mp4",   ".mkv",   ".mov",   ".avi",    ".mpg",   ".mpeg",
     ".wmv",   ".m4v",   ".flv",   ".divx",   ".vob",   ".iso",
     ".3gp",   ".webm",  ".mts",   ".m2ts",   ".ts",    ".ogv",
@@ -7525,12 +7703,12 @@ VIDEO_EXTENSIONS: list[str] = [
     ".m1v",   ".y4m",   ".dif",   ".dvr-ms", ".tivo",  ".nuv",
     ".nsv",   ".nut",   ".bk2",   ".usm",    ".xmv",   ".thp",
     ".pmf",   ".h263",  ".h261",  ".vp9",
-]
-VIDEO_EXTENSIONS_SET: set[str] = set(VIDEO_EXTENSIONS)  # sets are faster
-# check_list_for_duplicates(VIDEO_EXTENSIONS) # Run this after adding new extensions to ensure there are no duplicates.
+)
+VIDEO_EXTENSIONS_SET: Final[frozenset[str]] = frozenset(VIDEO_EXTENSIONS)
+# assert len(VIDEO_EXTENSIONS_SET) == len(VIDEO_EXTENSIONS), "Duplicate video extensions?"
 
 # A comprehensive list of audio file extensions.
-AUDIO_EXTENSIONS: list[str] = [
+AUDIO_EXTENSIONS: Final[tuple[str, ...]] = (
     ".mp3",   ".wav",   ".flac",  ".aac",   ".ogg",   ".wma",
     ".m4a",   ".alac",  ".aiff",  ".opus",  ".amr",   ".pcm",
     ".au",    ".raw",   ".dts",   ".ac3",   ".mka",   ".mpc",
@@ -7550,12 +7728,12 @@ AUDIO_EXTENSIONS: list[str] = [
     ".la",    ".pac",   ".mlp",   ".thd",   ".aaxc",  ".dss",
     ".ds2",   ".awb",   ".bcstm", ".bfstm", ".bcwav", ".bfwav",
     ".fsb",   ".wem",   ".xwm",   ".lopus",
-]
-AUDIO_EXTENSIONS_SET: set[str] = set(AUDIO_EXTENSIONS)  # sets are faster
-# check_list_for_duplicates(AUDIO_EXTENSIONS) # Run this after adding new extensions to ensure there are no duplicates.
+)
+AUDIO_EXTENSIONS_SET: Final[frozenset[str]] = frozenset(AUDIO_EXTENSIONS)
+# assert len(AUDIO_EXTENSIONS_SET) == len(AUDIO_EXTENSIONS), "Duplicate audio extensions?"
 
 # A comprehensive list of subtitle file extensions.
-SUBTITLE_EXTENSIONS: list[str] = [
+SUBTITLE_EXTENSIONS: Final[tuple[str, ...]] = (
     ".srt",   ".sub",    ".idx",   ".ass",   ".ssa",   ".vtt",
     ".ttml",  ".dfxp",   ".smi",   ".smil",  ".usf",   ".psb",
     ".mks",   ".lrc",    ".stl",   ".pjs",   ".rt",    ".aqt",
@@ -7564,12 +7742,12 @@ SUBTITLE_EXTENSIONS: list[str] = [
     ".ebu",   ".sami",   ".xml",   ".itt",   ".txt",   ".sup",
     ".sst",   ".son",    ".mcc",   ".pac",   ".890",   ".mpl",
     ".onl",   ".cin",    ".tds",   ".ult",   ".ttxt",
-]
-SUBTITLE_EXTENSIONS_SET: set[str] = set(SUBTITLE_EXTENSIONS)  # sets are faster
-# check_list_for_duplicates(SUBTITLE_EXTENSIONS) # Run this after adding new extensions to ensure there are no duplicates.
+)
+SUBTITLE_EXTENSIONS_SET: Final[frozenset[str]] = frozenset(SUBTITLE_EXTENSIONS)
+# assert len(SUBTITLE_EXTENSIONS_SET) == len(SUBTITLE_EXTENSIONS), "Duplicate subtitle extensions?"
 
 # A comprehensive list of image file extensions.
-IMAGE_EXTENSIONS: list[str] = [
+IMAGE_EXTENSIONS: Final[tuple[str, ...]] = (
     ".bmp",  ".dib",   ".gif",    ".jpeg", ".jpg",  ".jpe",
     ".jfif", ".pjpeg", ".pjp",    ".png",  ".pbm",  ".pgm",
     ".ppm",  ".pnm",   ".pam",    ".tif",  ".tiff", ".sgi",
@@ -7592,22 +7770,22 @@ IMAGE_EXTENSIONS: list[str] = [
     ".g3",   ".g4",    ".fax",    ".sff",  ".wsq",  ".pspimage",
     ".pdn",  ".psp",   ".ps",     ".ase",  ".clip", ".afphoto",
     ".bsq",
-]
-IMAGE_EXTENSIONS_SET: set[str] = set(IMAGE_EXTENSIONS)  # sets are faster
-# check_list_for_duplicates(IMAGE_EXTENSIONS) # Run this after adding new extensions to ensure there are no duplicates.
+)
+IMAGE_EXTENSIONS_SET: Final[frozenset[str]] = frozenset(IMAGE_EXTENSIONS)
+# assert len(IMAGE_EXTENSIONS_SET) == len(IMAGE_EXTENSIONS), "Duplicate image extensions?"
 
 # A comprehensive list of playlist file extensions.
-PLAYLIST_EXTENSIONS: list[str] = [
+PLAYLIST_EXTENSIONS: Final[tuple[str, ...]] = (
     ".m3u",    ".m3u8",    ".pls",  ".xspf",  ".asx",    ".wpl",
     ".zpl",    ".b4s",     ".cue",  ".smil",  ".smi",    ".ram",
     ".wax",    ".wmx",     ".wvx",  ".fpl",   ".mpcpl",  ".dpl",
     ".aimppl", ".aimppl4", ".pla",  ".xml",
-]
-PLAYLIST_EXTENSIONS_SET: set[str] = set(PLAYLIST_EXTENSIONS)  # sets are faster
-# check_list_for_duplicates(PLAYLIST_EXTENSIONS) # Run this after adding new extensions to ensure there are no duplicates.
+)
+PLAYLIST_EXTENSIONS_SET: Final[frozenset[str]] = frozenset(PLAYLIST_EXTENSIONS)
+# assert len(PLAYLIST_EXTENSIONS_SET) == len(PLAYLIST_EXTENSIONS), "Duplicate playlist extensions?"
 
 # A comprehensive list of archive file extensions.
-ARCHIVE_EXTENSIONS: list[str] = [
+_ARCHIVE_EXTENSIONS_1: tuple[str, ...] = (
     ".zip",     ".rar",    ".7z",    ".tar",    ".gz",      ".tgz",
     ".bz2",     ".xz",     ".tbz2",  ".tz2",    ".lzma",    ".lz",
     ".xpi",     ".crx",    ".zst",   ".cab",    ".arj",     ".ace",
@@ -7622,22 +7800,35 @@ ARCHIVE_EXTENSIONS: list[str] = [
     ".cbz",     ".cbr",    ".cb7",   ".kmz",    ".warc",    ".pk3",
     ".pk4",     ".alz",    ".cpt",   ".ha",     ".sqx",     ".z01",
     ".r00",     ".001",
-]
+)
 # Technically this list should include .z02... and .r01... and .002...
-ARCHIVE_EXTENSIONS.extend([f".z{num:02d}" for num in range(2, 100)])
-ARCHIVE_EXTENSIONS.extend([f".r{num:02d}" for num in range(1, 100)])
-ARCHIVE_EXTENSIONS.extend([f".{num:03d}"  for num in range(2, 100)])
-ARCHIVE_EXTENSIONS_SET: set[str] = set(ARCHIVE_EXTENSIONS)  # sets are faster
-# check_list_for_duplicates(ARCHIVE_EXTENSIONS) # Run this after adding new extensions to ensure there are no duplicates.
+_ARCHIVE_EXTENSIONS_2: tuple[str, ...] = tuple(f".z{num:02d}" for num in range(2, 100))
+_ARCHIVE_EXTENSIONS_3: tuple[str, ...] = tuple(f".r{num:02d}" for num in range(1, 100))
+_ARCHIVE_EXTENSIONS_4: tuple[str, ...] = tuple(f".{num:03d}"  for num in range(2, 100))
+_ARCHIVE_CATEGORIES = (
+    _ARCHIVE_EXTENSIONS_1, _ARCHIVE_EXTENSIONS_2,
+    _ARCHIVE_EXTENSIONS_3, _ARCHIVE_EXTENSIONS_4,
+)
+ARCHIVE_EXTENSIONS: Final[tuple[str, ...]] = tuple(
+    dict.fromkeys(chain.from_iterable(_ARCHIVE_CATEGORIES))
+)
+ARCHIVE_EXTENSIONS_SET: Final[frozenset[str]] = frozenset(ARCHIVE_EXTENSIONS)
+# assert len(ARCHIVE_EXTENSIONS_SET) == len(ARCHIVE_EXTENSIONS), "Duplicate archive extensions?"
 
-ALL_KNOWN_EXTENSIONS: list[str] = PYTHON_EXTENSIONS   + TEXT_EXTENSIONS  + \
-                                  SUBTITLE_EXTENSIONS + VIDEO_EXTENSIONS + \
-                                  AUDIO_EXTENSIONS    + IMAGE_EXTENSIONS + \
-                                  PLAYLIST_EXTENSIONS + ARCHIVE_EXTENSIONS
-# print(f"{len(ALL_KNOWN_EXTENSIONS)} total known extensions.")
-ALL_KNOWN_EXTENSIONS_SET: set[str] =  set(ALL_KNOWN_EXTENSIONS)      # sets are faster
-ALL_KNOWN_EXTENSIONS               = list(ALL_KNOWN_EXTENSIONS_SET)  # Remove duplicates
-# Quality control: search for uppercase characters and extensions like .tar.gz
+# Build the combined tuple with first-seen order across categories
+_ALL_CATEGORIES = (
+    PYTHON_EXTENSIONS, HTML_EXTENSIONS, TEXT_EXTENSIONS, SUBTITLE_EXTENSIONS, VIDEO_EXTENSIONS,
+    AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, PLAYLIST_EXTENSIONS, ARCHIVE_EXTENSIONS,
+)
+ALL_KNOWN_EXTENSIONS: Final[tuple[str, ...]] = tuple(
+    dict.fromkeys(chain.from_iterable(_ALL_CATEGORIES))
+)
+ALL_KNOWN_EXTENSIONS_SET: Final[frozenset[str]] = frozenset(ALL_KNOWN_EXTENSIONS)
+# assert len(ALL_KNOWN_EXTENSIONS) == len(ALL_KNOWN_EXTENSIONS_SET)
+# # If you ever iterate the combined tuple (e.g., custom matching where longer extensions should win like .tar.gz before .gz), sort by length after dedup:
+# # ALL_KNOWN_EXTENSIONS = tuple(
+# #     sorted(dict.fromkeys(chain.from_iterable(_ALL_CATEGORIES)), key=len, reverse=True)
+# # )
 # print(f"{len(ALL_KNOWN_EXTENSIONS)} total known extensions.")
 # for ext in ALL_KNOWN_EXTENSIONS:
 #     if any(c.isupper() for c in ext):
