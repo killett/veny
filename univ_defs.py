@@ -5281,7 +5281,8 @@ def check_python_formatting(path: str | os.PathLike[str], diff_choice: int = 1) 
     return True
 
 
-def run_flake8(path: str | os.PathLike[str], ignore_codes: list[str] = [],
+def run_flake8(options: Options, path: str | os.PathLike[str],
+               ignore_codes: list[str] | None = None,
                max_line_length: int = 100) -> flake8.Report:
     """
     Run Flake8 on 'path', but:
@@ -5289,21 +5290,40 @@ def run_flake8(path: str | os.PathLike[str], ignore_codes: list[str] = [],
       - ignore whatever codes are in 'ignore_codes'.
 
     Args:
+        options:         Options instance containing various settings.
         path:            The path to the Python file to check.
         ignore_codes:    A list of Flake8 error/warning codes to ignore.
         max_line_length: The (custom) maximum allowed line length for E501 checks.
 
     Returns:
-        flake8.Report : The Flake8 report object containing the results.
+        flake8.Report:   The Flake8 report object containing the results.
 
     Raises:
         FileNotFoundError: If the specified file does not exist.
     """
     from flake8.api import legacy as flake8
+    # Ensures our env manager installs the plugin; no runtime effect on Flake8.
+    try:  # Flake8: "no quality assurance": F401 = Pyflakes code for “module imported but unused”
+        import bugbear  # noqa: F401
+        options.use_bugbear = True
+    except ImportError:
+        options.use_bugbear = False
+        pass
     fallback_logging_config()
+    if options.use_bugbear:
+        logging.info("Using flake8-bugbear checks.")
+    if ignore_codes is None:
+        ignore_codes = []
+    if not isinstance(ignore_codes, list):
+        raise TypeError("'ignore_codes' must be a list of strings.")
+    if not all(isinstance(code, str) for code in ignore_codes):
+        raise TypeError("All elements in 'ignore_codes' must be strings.")
     path        = ensure_file(path)
-    style_guide = flake8.get_style_guide(max_line_length=max_line_length, ignore=ignore_codes)
-    report = style_guide.check_files([path])
+    kwargs = dict(max_line_length=max_line_length, ignore=ignore_codes)
+    if options.use_bugbear:
+        kwargs["extend_select"] = ("B",)        # optionally: ("B", "B950")
+    style_guide = flake8.get_style_guide(**kwargs)
+    report      = style_guide.check_files([path])
     if report.total_errors == 0:
         logging.info("✅ No Flake8 violations found in %s.", os.fspath(path))
         return report
@@ -5313,33 +5333,53 @@ def run_flake8(path: str | os.PathLike[str], ignore_codes: list[str] = [],
     return report
 
 
-def _gather_flake8_issues(path: str | os.PathLike[str], ignore_codes: list[str] = [],
+def _gather_flake8_issues(options: Options, path: str | os.PathLike[str],
+                          ignore_codes: list[str] | None = None,
                           max_line_length: int = 100) -> dict[str, str]:
     """
     Returns a dict mapping each Flake8 error code to its first-seen description
     in the file at 'path'.
     Tries the 'flake8' CLI (fast), but if it's not on PATH, falls back
     to an in-process Application/API solution.
+
+    Args:
+        options:         Options instance containing various settings. Contains:
+                             - use_bugbear: Whether to include flake8-bugbear checks.
+        path:            The path to the Python file to check.
+        ignore_codes:    A list of Flake8 error/warning codes to ignore.
+        max_line_length: The (custom) maximum allowed line length for E501 checks.
+
+    Returns:
+        A dictionary mapping Flake8 error codes to their descriptions.
+    
+    Raises:
+        FileNotFoundError: If the specified file does not exist.
     """
+    if ignore_codes is None:
+        ignore_codes = []
     try:
-        return _gather_via_cli(path, max_line_length, ignore_codes)
+        return _gather_via_cli(options, path, max_line_length, ignore_codes)
     except FileNotFoundError:
-        return _gather_via_app(path, max_line_length, ignore_codes)
+        return _gather_via_app(options, path, max_line_length, ignore_codes)
 
 
-def _gather_via_cli(path: str | os.PathLike[str], max_line_length: int,
-                    ignore_codes: list[str]) -> dict[str, str]:
+def _gather_via_cli(options: Options, path: str | os.PathLike[str],
+                    max_line_length: int, ignore_codes: list[str]) -> dict[str, str]:
     """Use the flake8 CLI to gather codes and descriptions."""
     import subprocess
     path = ensure_file(path)
     fmt = "%(row)d:%(col)d: %(code)s %(text)s"
-    args = [
-        "flake8",
+    args = [  # sys.executable ensures we use the same Python interpreter (probably in a venv)
+        sys.executable, "-m", "flake8",
         f"--max-line-length={max_line_length}",
         f"--ignore={','.join(ignore_codes)}",
         f"--format={fmt}",
         os.fspath(path),
     ]
+    if options.use_bugbear:
+        args.insert(-1, "--extend-select=B")    # or "B,B950"
+    # if using B950 and you want it to replace E501:
+    #     args.insert(-1, "--extend-ignore=E501")
     proc = subprocess.run(args, capture_output=True, text=True)
     codes: dict[str, str] = {}
     for line in proc.stdout.splitlines():
@@ -5353,8 +5393,8 @@ def _gather_via_cli(path: str | os.PathLike[str], max_line_length: int,
     return codes
 
 
-def _gather_via_app(path: str | os.PathLike[str], max_line_length: int,
-                    ignore_codes: list[str]) -> dict[str, str]:
+def _gather_via_app(options: Options, path: str | os.PathLike[str],
+                    max_line_length: int, ignore_codes: list[str]) -> dict[str, str]:
     """Use the flake8 Application API to gather codes and descriptions."""
     from flake8.main.application import Application
     from flake8.formatting.base  import BaseFormatter
@@ -5386,6 +5426,10 @@ def _gather_via_app(path: str | os.PathLike[str], max_line_length: int,
     app = CodeDictApp()
     # supply exactly the same CLI settings in-process
     cli_args = [f"--max-line-length={max_line_length}", f"--ignore={','.join(ignore_codes)}", os.fspath(path)]
+    if options.use_bugbear:
+        cli_args.insert(-1, "--extend-select=B")   # or "B,B950"
+    # if using B950 and you want it to replace E501:
+    #     cli_args.insert(-1, "--extend-ignore=E501")
     # this will parse, run checks, and invoke our formatter behind the scenes
     app.run(cli_args)
     # the formatter collected everything into .codes
@@ -5400,8 +5444,9 @@ def get_autopep8_fixable_codes() -> set[str]:
     """
     import subprocess
     fallback_logging_config()
-    try:
-        proc = subprocess.run(["autopep8", "--list-fixes"], capture_output=True, text=True, check=True)
+    try:  # sys.executable ensures we use the same Python interpreter (probably in a venv)
+        proc = subprocess.run([sys.executable, "-m", "autopep8", "--list-fixes"],
+                              capture_output=True, text=True, check=True)
     except (FileNotFoundError, subprocess.CalledProcessError):
         logging.warning("autopep8 not found or failed.", exc_info=True)
         # autopep8 not on PATH or error—assume nothing fixable
@@ -5485,9 +5530,9 @@ def highlight_changes(orig: str, new: str, unchanged_color: str,
     return "".join(old_out), "".join(new_out)
 
 
-def my_diff(orig_text: str, changed_text: str,
-            orig_path:    str | os.PathLike[str],
-            changed_path: str | os.PathLike[str] | None = None,
+def my_diff(orig_text:     str, changed_text: str,
+            orig_path:     str | os.PathLike[str],
+            changed_path:  str | os.PathLike[str] | None = None,
             diff_choice:   int = 1,
             changed_color: str = ANSI_CYAN,
             deleted_color: str = ANSI_RED,
@@ -5607,7 +5652,7 @@ def my_diff(orig_text: str, changed_text: str,
             if line.startswith("@@"):  # hunk header?
                 # flush any leftover from the prior hunk
                 process_hunk()
-                m = header_re.match(line)
+                m           = header_re.match(line)
                 orig_lineno = int(m.group(1))
                 new_lineno  = int(m.group(2))
                 continue
@@ -5685,7 +5730,7 @@ def diff_and_confirm(orig_text: str, changed_text: str,
                      changed_color: str = ANSI_CYAN,
                      deleted_color: str = ANSI_RED,
                      added_color:   str = ANSI_YELLOW,
-                     the_fix: str = "", description: str = "") -> bool:
+                     the_fix:       str = "", description: str = "") -> bool:
     """
     Show a unified diff of orig_text → changed_text with a number of context lines
     (determined by 'diff_choice') around each hunk, log using 'label' and 'description', then prompt.
@@ -5745,7 +5790,7 @@ def diff_and_confirm(orig_text: str, changed_text: str,
 
 
 def ask_and_autopep8(path: str | os.PathLike[str], code: str,
-                     description: str = "", diff_choice: int = 1,
+                     description:   str = "", diff_choice: int = 1,
                      changed_color: str = ANSI_CYAN,
                      deleted_color: str = ANSI_RED,
                      added_color:   str = ANSI_YELLOW) -> bool:
@@ -5812,7 +5857,7 @@ def ask_and_autopep8(path: str | os.PathLike[str], code: str,
 
 def ask_and_replace(old_str: str, new_str: str,
                     path: str | os.PathLike[str],  label: str = "",
-                    diff_choice: int = 1, description: str = "",
+                    diff_choice:   int = 1, description: str = "",
                     changed_color: str = ANSI_CYAN,
                     deleted_color: str = ANSI_RED,
                     added_color:   str = ANSI_YELLOW,
@@ -5953,7 +5998,8 @@ def multireplace(options: Options) -> None:
     logging.info("Done.")
 
 
-def interactive_flake8(path: str | os.PathLike[str], diff_choice: int = 1,
+def interactive_flake8(options: Options,
+                       path: str | os.PathLike[str], diff_choice:     int = 1,
                        ignore_codes: list[str] = [], max_line_length: int = 100,
                        changed_color: str = ANSI_CYAN,
                        deleted_color: str = ANSI_RED,
@@ -5964,6 +6010,8 @@ def interactive_flake8(path: str | os.PathLike[str], diff_choice: int = 1,
     3) For each code, ask the user; on "yes", call autopep8 to fix only that code.
 
     Args:
+        options:         The parsed command-line options. Contains:
+                             - use_bugbear: Whether to include flake8-bugbear checks.
         path:            Path to the Python file to check.
         diff_choice:     How many context lines to show in the diff (0 = old-style diff,
                          1  = unified diff with 0 context lines,
@@ -5977,10 +6025,10 @@ def interactive_flake8(path: str | os.PathLike[str], diff_choice: int = 1,
     fallback_logging_config()
     path = ensure_file(path)
     logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("At the top of the function %s(), diff_choice=%s", return_method_name(), diff_choice)
-    if not run_flake8(path, ignore_codes=ignore_codes, max_line_length=max_line_length):
+    if not run_flake8(options, path, ignore_codes=ignore_codes, max_line_length=max_line_length):
         logging.info("No flake8 errors—nothing to do.")
         return
-    codes = _gather_flake8_issues(path, ignore_codes=ignore_codes, max_line_length=max_line_length)
+    codes = _gather_flake8_issues(options, path, ignore_codes=ignore_codes, max_line_length=max_line_length)
     fixable_codes = get_autopep8_fixable_codes()
     logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Autopep8 can fix these codes: %s", fixable_codes)
     for code, desc in codes.items():
@@ -5992,7 +6040,7 @@ def interactive_flake8(path: str | os.PathLike[str], diff_choice: int = 1,
                                 changed_color=changed_color, deleted_color=deleted_color, added_color=added_color):
             break
     logging.info("%sDone. Re-running flake8 to confirm fixes...%s", ANSI_GREEN, ANSI_RESET)
-    run_flake8(path, ignore_codes=ignore_codes, max_line_length=max_line_length)
+    run_flake8(options, path, ignore_codes=ignore_codes, max_line_length=max_line_length)
 
 
 # - Use {str(univ_defs_dir)!r} so Windows backslashes are safely escaped in the string literal.
@@ -6133,7 +6181,7 @@ def main() -> None:
                                           rawlog=True)
     if not ud.check_python_formatting(options.args.filepath, diff_choice=options.args.diff_choice):
         return
-    ud.interactive_flake8(options.args.filepath, diff_choice=options.args.diff_choice,
+    ud.interactive_flake8(options, options.args.filepath, diff_choice=options.args.diff_choice,
                           ignore_codes=ud.IGNORED_CODES, max_line_length=1000,
                           changed_color=options.args.changed_color, deleted_color=options.args.deleted_color,
                           added_color=options.args.added_color)

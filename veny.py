@@ -79,7 +79,7 @@ class Options():
         self.download_script_path:  Path | None = None
         self.simultaneous_success:         bool = False
         self.max_checks:                    int = 10  # Maximum number of times to check any repeated process.
-        self.check_interval:                int = 5  # Number of seconds to wait between checks.
+        self.check_interval:                int =  5  # Number of seconds to wait between checks.
         self.rawlog:                       bool = False
         self.pipreqs_available:            bool = False
         self.univ_defs_path:               Path = ud.ensure_path(ud.__file__).resolve(strict=True)
@@ -1072,6 +1072,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
             "jnp": "jax.numpy",
             # "sm": "statsmodels",
             "netCDF4": "netcdf4",
+            "bugbear": "flake8-bugbear",
             "skill_metrics": "SkillMetrics",
             # This list is from the pipreqs repo in file "mapping", retrieved on 2024-08-15 from here: https://github.com/bndr/pipreqs
             "AFQ": "pyAFQ",
