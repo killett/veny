@@ -82,7 +82,7 @@ class Options():
         self.check_interval:                int = 5  # Number of seconds to wait between checks.
         self.rawlog:                       bool = False
         self.pipreqs_available:            bool = False
-        self.univ_defs_path:               Path = ud.ensure_path(ud.__file__)  # Full path to univ_defs.py
+        self.univ_defs_path:               Path = ud.ensure_path(ud.__file__).resolve(strict=True)
         self.univ_defs_sys_path_script:    Path = self.my_dir / "univ_defs_sys_path_script.py"
         self.mydiff_path:                  Path = self.my_dir / "mydiff.py"
         self.myaudit_path:                 Path = self.my_dir / "myaudit.py"
@@ -2237,7 +2237,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
 
     def set_venv_dir(self, venv_dir: str | os.PathLike[str]) -> None:
         """Set the directory for the virtual environment."""
-        p = ud.ensure_path(venv_dir, resolve=False)  # Don't resolve() yet because the path might not exist yet.
+        p = ud.ensure_path(venv_dir)
         self.venv_dir             = p
         self.venv_python          = p / "bin" / "python"  # Do NOT resolve() this symlink path
         self.venv_pip             = p / "bin" / "pip"     # Do NOT resolve() this symlink path
@@ -2507,7 +2507,7 @@ def main() -> None:
             if not options.rawlog: logging.info("Elapsed time: %s", elapsed_time)
             if not getattr(options.args, "full", False):
                 command_list = [options.venv_python, options.python_script] + [arg for arg in options.script_args]
-                if not options.rawlog: logging.info("Running command: %s", " ".join(shlex.quote(os.fspath(arg)) for arg in command_list))
+                if not options.rawlog: logging.info("Running command: %s", " ".join(shlex.quote(str(arg)) for arg in command_list))
                 result = subprocess.run(command_list)
                 end_time = dt.datetime.now()
                 elapsed_time = end_time - start_venv_time
@@ -4216,7 +4216,7 @@ def safe_eval(expr: str) -> Any | None:
         tree = ast.parse(expr, mode="eval")
         return _safe_eval_node(tree.body)  # tree.body is the root expr
     except (SyntaxError, ValueError) as e:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("safe_eval: Unsupported expression: %r: %s", expr, e)
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s: Unsupported expression: %r: %s", ud.return_method_name(), expr, e)
         return None
 
 
@@ -4260,7 +4260,7 @@ def process_import(options: Options, module_name: str, file_path: str | os.PathL
         logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Skipping standard library import: %s", module_name)
         return False
 
-    file_path = ud.ensure_path(file_path)
+    file_path = ud.ensure_file(file_path)
 
     logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Processing import: %s from file %s", module_name, file_path)
 
@@ -4618,10 +4618,7 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
     Raises:
         None, but logs errors if the provided path is not a valid Python script or if parsing fails.
     """
-    first_path = ud.ensure_path(first_path)
-    if not ud.safe_is_file(first_path):
-        logging.error(f"Provided first_path is not a file: {first_path}")
-        return
+    first_path = ud.ensure_file(first_path)
     if not ud.is_python_script(first_path) or not ud.compile_code(first_path):
         logging.error(f"Skipping invalid Python script: {first_path}")
         return
@@ -4853,7 +4850,7 @@ def check_packages_in_venv(options: Options, package: str | None = None,
     if not venv_dir:
         venv_dir = options.venv_dir
     else:
-        venv_dir = ud.ensure_path(venv_dir)
+        venv_dir = ud.ensure_dir(venv_dir)
     if sys.platform == "win32":
         venv_python = (venv_dir / "Scripts" / "python.exe").absolute()
     else:  # Do NOT use resolve() here because this is a symlink and resolve() would break it
@@ -4889,7 +4886,7 @@ else:
 """
     the_command = [venv_python, "-c", python_code]
     result = subprocess.run(the_command, capture_output=True, text=True, check=False)
-    # logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("check_packages_in_venv command:\n%s", " ".join(shlex.quote(os.fspath(arg)) for arg in the_command))
+    # logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("check_packages_in_venv command:\n%s", " ".join(shlex.quote(str(arg)) for arg in the_command))
     logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("check_packages_in_venv stdout:\n%s", result.stdout)
     logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("check_packages_in_venv stderr:\n%s", result.stderr)
     return "packages imported successfully" in result.stdout
@@ -4949,7 +4946,22 @@ def list_packages(options: Options) -> None:
     Examine command line arguments to determine if we're looking at a directory or a single python script. List all installed and uninstalled packages that are imported in that directory or python script. Return these sets inside the options object.
 
     Args:
-        options: Options object containing command line arguments and settings.
+        options: Options object containing command line arguments and settings. Contains:
+            - python_script:           Path to the Python script or directory to analyze.
+            - rawlog:                  Boolean indicating if raw logging is enabled.
+            - pipreqs_available:       Boolean indicating if pipreqs is available for
+                                       generating requirements.
+            - script_dir:              Directory containing the script, used for logging.
+            - all_imports:             Set to be populated with all imports found.
+            - installed_imports:       Set to be populated with installed imports.
+            - uninstalled_imports:     Set to be populated with uninstalled imports.
+            - known_bad_imports:       Set of known bad imports to filter out.
+            - standard_modules:        Set of standard library modules to ignore.
+            - custom_modules:          Dictionary mapping custom module names to their file paths.
+            - module_aliases:          Dictionary mapping import names to package names
+                                       (e.g., 'PIL' -> 'Pillow').
+            - reversed_module_aliases: Reverse mapping of module_aliases for checking installations.
+            - also_needs:              Dictionary mapping packages to their dependencies.
 
     Returns:
         None - modifies options to include all imports found in the specified Python script or directory.
@@ -4959,21 +4971,22 @@ def list_packages(options: Options) -> None:
         FileNotFoundError: If the specified file or directory does not exist.
     """
     if getattr(options.args, "full", False):
-        if not options.rawlog: logging.info("Building a virtual environment that can run every python script in %s", options.script_dir)
+        if not options.rawlog: logging.info("Building a virtual environment that can run every python script in %s", os.fspath(options.script_dir))
 
     if isinstance(options.python_script, (str, Path)):
-        options.python_script = ud.ensure_path(options.python_script)
+        options.python_script         = ud.ensure_path(options.python_script)
         options.loaded_custom_modules = set()
         if ud.safe_is_file(options.python_script):
             if ud.is_python_script(options.python_script):
-                if not options.rawlog: logging.info("Processing a single Python script: %s", options.python_script)
+                if not options.rawlog: logging.info("Processing a single Python script: %s", os.fspath(options.python_script))
                 python_file = options.python_script
                 options.all_imports = set()
                 find_imports_and_IO_in_script(options, python_file)
             else:
-                raise ValueError(f"'{options.python_script}' is not a valid Python script.")
+                raise ValueError(f"'{os.fspath(options.python_script)}' is not a valid Python script.")
         elif ud.safe_is_dir(options.python_script):
-            if not options.rawlog: logging.info("Processing an entire folder of Python scripts: %s", options.python_script)
+            if not options.rawlog: logging.info("Processing an entire folder of Python scripts: %s",
+                                                os.fspath(options.python_script))
             python_dir = options.python_script
             if options.pipreqs_available:
                 if not options.rawlog: logging.info("Using pipreqs to generate requirements.")
@@ -4984,7 +4997,7 @@ def list_packages(options: Options) -> None:
                 if not options.rawlog: logging.info("Using custom script to find imports.")
                 get_all_imports(options, options.python_script)
         else:
-            raise FileNotFoundError(f"The file or directory {options.python_script} does not exist.")
+            raise FileNotFoundError(f"The file or directory {os.fspath(options.python_script)} does not exist.")
     else:
         raise ValueError(f"Unexpected type for options.python_script: {type(options.python_script)}")
 
@@ -5021,7 +5034,7 @@ def get_all_imports(options: Options, directory: str | os.PathLike[str]) -> None
                 # OLD: logging.info(f"Processing file {processed_files:>{max_digits}}/{total_files} : {file_path}")
                 logging.info("Processing file %*d/%d : %s",
                              max_digits, processed_files, total_files, file_path)
-    if not options.rawlog: logging.info("Finished processing files in %s", directory)
+    if not options.rawlog: logging.info("Finished processing files in %s", os.fspath(directory))
 
 
 def generate_requirements(directory: str | os.PathLike[str]) -> None:
@@ -5108,7 +5121,7 @@ def install_package(package_name: str, options: Options) -> bool:
     """Install a single package and return the success status (True if successful, False otherwise)."""
     the_command = [options.venv_python, "-m", "pip", "install", package_name,
                    "--no-index", "--find-links", options.packages_dir]
-    logging.info("Running pip install: %s", " ".join(shlex.quote(os.fspath(arg)) for arg in the_command))
+    logging.info("Running pip install: %s", " ".join(shlex.quote(str(arg)) for arg in the_command))
     result = subprocess.run(the_command, capture_output=True, text=True)
     if not options.rawlog: logging.info(result.stdout)
     if result.stderr:
@@ -5299,7 +5312,7 @@ def setup_virtualenv(options: Options) -> bool:
 
     # Activate virtual environment and install wheel
     install_command = [options.venv_pip, "install", "wheel"]
-    logging.info("Running pip install: %s", " ".join(shlex.quote(os.fspath(arg)) for arg in install_command))
+    logging.info("Running pip install: %s", " ".join(shlex.quote(str(arg)) for arg in install_command))
     subprocess.run(install_command, check=True)
     if not options.rawlog: logging.info("Wheel installed in the virtual environment.")
 
@@ -5353,10 +5366,12 @@ def load_last_used_venv_dir(options: Options) -> Path | None:
         if not options.rawlog: logging.info("Last used venv directory is None.")
         return None
     elif not ud.safe_is_dir(last_used_options.venv_dir):
-        if not options.rawlog: logging.warning("Last used venv directory %s is no longer valid.", last_used_options.venv_dir)
+        if not options.rawlog: logging.warning("Last used venv directory %s is no longer valid.",
+                                               os.fspath(last_used_options.venv_dir))
         return None
     else:
-        if not options.rawlog: logging.info("Last used venv directory found: %s", last_used_options.venv_dir)
+        if not options.rawlog: logging.info("Last used venv directory found: %s",
+                                            os.fspath(last_used_options.venv_dir))
         return last_used_options.venv_dir
 
 
@@ -5373,10 +5388,12 @@ def load_last_used_venv_python(options: Options) -> Path | None:
         if not options.rawlog: logging.info("Last used venv_python is None.")
         return None
     elif not ud.safe_is_file(last_used_options.venv_python):
-        if not options.rawlog: logging.warning("Last used venv_python %s is no longer valid.", last_used_options.venv_python)
+        if not options.rawlog: logging.warning("Last used venv_python %s is no longer valid.",
+                                               os.fspath(last_used_options.venv_python))
         return None
     else:
-        if not options.rawlog: logging.info("Last used venv_python found: %s", last_used_options.venv_python)
+        if not options.rawlog: logging.info("Last used venv_python found: %s",
+                                            os.fspath(last_used_options.venv_python))
         return last_used_options.venv_python
 
 
@@ -5432,15 +5449,15 @@ def check_venv_dir(options: Options, options_from_cache: Options) -> bool:
                     return True
                 else:
                     logging.error("The cached venv directory %s failed check_packages_in_venv.",
-                                  options_from_cache.venv_dir)
+                                  os.fspath(options_from_cache.venv_dir))
             else:
                 if not options.rawlog:
                     logging.info("The cached venv directory %s does not have all the currently required packages.",
-                                 options_from_cache.venv_dir)
+                                 os.fspath(options_from_cache.venv_dir))
         else:
             if not options.rawlog:
                 logging.info("The cached venv directory %s is no longer valid.",
-                             options_from_cache.venv_dir)
+                             os.fspath(options_from_cache.venv_dir))
     return False
 
 
@@ -5565,6 +5582,7 @@ STANDARD_LIB_PATHS: tuple[Path, ...] = (Path("/") / "usr" / "lib",
                                         Path("/") / "usr" / "local" / "lib64")
 
 STANDARD_LIB_NAMES: tuple[str, ...] = ("lib", "lib64")
+
 
 def is_standard_path(options: Options, path: str | os.PathLike[str]) -> bool:
     """Check if the given path is a standard system path or part of a virtual environment."""

@@ -1018,17 +1018,17 @@ class LLMs:
             cands = [m for m in cands if not self.model_info.get(m, {}).get("local", False)]
 
         # Merge env JSON (if present) into cfg.model_scores; allow both float and {'code','general'} forms
-        scores    = dict(config.model_scores)  # copy
-        json_path = os.getenv("LLM_MODEL_SCORES_JSON")
-        if json_path:
+        scores        = dict(config.model_scores)  # copy
+        json_path_str = os.getenv("LLM_MODEL_SCORES_JSON")
+        if json_path_str:
             try:
                 import json
-                with open(json_path, "r", encoding=DEFAULT_ENCODING) as f:
+                with open(json_path_str, "r", encoding=DEFAULT_ENCODING) as f:
                     data = json.load(f)
                 if isinstance(data, dict):
                     scores.update(data)
             except Exception as e:
-                logging.warning("Failed to load LLM_MODEL_SCORES_JSON from %s: %s", json_path, e)
+                logging.warning("Failed to load LLM_MODEL_SCORES_JSON from %s: %s", json_path_str, e)
 
         if not config.use_litellm:
             cands = [m for m in cands if not self.model_info.get(m, {}).get("local", False)]
@@ -1369,13 +1369,13 @@ class LLMs:
                 try:
                     import json
                     from urllib import request
-                    payload = json.dumps({"model": tag, "prompt": text}).encode("utf-8")
+                    payload = json.dumps({"model": tag, "prompt": text}).encode(DEFAULT_ENCODING)
                     req = request.Request(f"{base}/api/tokenize",
                                         data=payload,
                                         headers={"Content-Type": "application/json"})
                     with request.urlopen(req, timeout=2.0) as resp:
                         raw = resp.read()
-                    data = json.loads(raw.decode("utf-8", "replace"))
+                    data = json.loads(raw.decode(DEFAULT_ENCODING, "replace"))
                     toks = data.get("tokens")
                     if isinstance(toks, list):
                         return len(toks)
@@ -1521,14 +1521,14 @@ def configure_logging(basename: str, log_level: int | str = logging.INFO,
 
     # Proceed with configuring logging if no MemoryHandler was found
     if not logdir:  # Default to the current working directory if no logdir is provided.
-        logdir = Path.cwd() / "logs"
+        logdir = Path.cwd().expanduser().resolve(strict=True) / "logs"
     else:
         logdir = ensure_path(logdir)
     logdir.mkdir(parents=True, exist_ok=True)
 
     now = dt.datetime.now()
-    log_base = f".{basename}-log-{now.strftime('%Y%m%d-%H%M%S')}"
-    log_info = logdir / (log_base + ".out")
+    log_base   = f".{basename}-log-{now.strftime('%Y%m%d-%H%M%S')}"
+    log_info   = logdir / (log_base + ".out")
     log_errors = logdir / (log_base + ".err")
 
     root_logger.handlers = []  # Reset any existing handlers
@@ -1627,7 +1627,7 @@ def my_popen(command_list: list, suppress_info: bool = False,
     import shlex
     fallback_logging_config(log_level=logging.INFO if not suppress_info else logging.ERROR)
     command_list_str = [str(item) for item in command_list]
-    the_statement = "Executing command: " + " ".join(shlex.quote(os.fspath(arg)) for arg in command_list_str)
+    the_statement = "Executing command: " + " ".join(shlex.quote(str(arg)) for arg in command_list_str)
     if not suppress_info:
         logging.info(the_statement)
     else:
@@ -1692,9 +1692,9 @@ def my_popen(command_list: list, suppress_info: bool = False,
 
 
 def my_fopen(file_path: str | os.PathLike[str], suppress_errors: bool = False,
-             rawlog: bool = False, numlines: int | None = None) -> TextIO | bool | str:
+             rawlog: bool = False, numlines: int | None = None) -> str | bool:
     """
-    Attempt to read a text file with various encodings and return the file content if successful. Optionally, specify numlines to limit the number of lines read and return a string instead of a TextIO object.
+    Attempt to read a text file with various encodings and return the file content if successful. Optionally, specify numlines to limit the number of lines read.
 
     Args:
         file_path:       Path to the file to read.
@@ -1703,54 +1703,65 @@ def my_fopen(file_path: str | os.PathLike[str], suppress_errors: bool = False,
         numlines:        If specified, read only this many lines from the file and return them as a string.
 
     Returns:
-        The content of the file as a string if numlines is specified, otherwise a TextIO object. Returns False if the file does not exist, is empty, or is a non-text file (video, audio, or image).
-
-    Raises:
-        FileNotFoundError:  If the file does not exist.
-        UnicodeDecodeError: If the file cannot be read with any of the specified encodings.
+        The content of the file as a string.
+        Returns False:
+         - if the file does not exist
+         - is empty
+         - is a non-text file (video, audio, image, archive)
+         - cannot be read with any of the specified encodings
     """
     fallback_logging_config(log_level=logging.INFO if not suppress_errors else logging.CRITICAL,
                             rawlog=rawlog)
     file_path = ensure_path(file_path)
     if not file_path.exists():
-        this_message = f"File does not exist: {file_path}"
+        this_message = f"File does not exist: {os.fspath(file_path)}"
         if not rawlog:
             if not suppress_errors: logging.error(this_message)
-            else:                   logging.info(this_message)
+            else:                   logging.info( this_message)
         return False
     if not safe_is_file(file_path):
-        this_message = f"Path is a directory, not a file: {file_path}"
+        this_message = f"Path is a directory, not a file: {os.fspath(file_path)}"
         if not rawlog:
             if not suppress_errors: logging.error(this_message)
-            else:                   logging.info(this_message)
+            else:                   logging.info( this_message)
         return False
-    if safe_size(file_path) == 0:
-        this_message = f"File is empty: {file_path}"
+    if (file_path_size := safe_size(file_path)) is None:
+        this_message = f"Could not determine file size: {os.fspath(file_path)}"
         if not rawlog:
             if not suppress_errors: logging.error(this_message)
-            else:                   logging.info(this_message)
+            else:                   logging.info( this_message)
+        return False
+    if file_path_size == 0:
+        this_message = f"File is empty: {os.fspath(file_path)}"
+        if not rawlog:
+            if not suppress_errors: logging.error(this_message)
+            else:                   logging.info( this_message)
         return False
     # Does the file extension match any of these (non-text) extensions?
     casefolded_suffix = file_path.suffix.casefold()
     if casefolded_suffix in VIDEO_EXTENSIONS_SET:
         if not rawlog:
-            if not suppress_errors: logging.error("Skipping video file %s", file_path)
-            else:                   logging.info( "Skipping video file %s", file_path)
+            this_message = f"Skipping video file {os.fspath(file_path)}"
+            if not suppress_errors: logging.error(this_message)
+            else:                   logging.info( this_message)
         return False
     if casefolded_suffix in AUDIO_EXTENSIONS_SET:
         if not rawlog:
-            if not suppress_errors: logging.error("Skipping audio file %s", file_path)
-            else:                   logging.info( "Skipping audio file %s", file_path)
+            this_message = f"Skipping audio file {os.fspath(file_path)}"
+            if not suppress_errors: logging.error(this_message)
+            else:                   logging.info( this_message)
         return False
     if casefolded_suffix in IMAGE_EXTENSIONS_SET:
         if not rawlog:
-            if not suppress_errors: logging.error("Skipping image file %s", file_path)
-            else:                   logging.info( "Skipping image file %s", file_path)
+            this_message = f"Skipping image file {os.fspath(file_path)}"
+            if not suppress_errors: logging.error(this_message)
+            else:                   logging.info( this_message)
         return False
     if casefolded_suffix in ARCHIVE_EXTENSIONS_SET:
         if not rawlog:
-            if not suppress_errors: logging.error("Skipping archive file %s", file_path)
-            else:                   logging.info( "Skipping archive file %s", file_path)
+            this_message = f"Skipping archive file {os.fspath(file_path)}"
+            if not suppress_errors: logging.error(this_message)
+            else:                   logging.info( this_message)
         return False
     for encoding in TEXT_ENCODINGS:  # use the (ordered) tuple so more common encodings are tried first.
         try:
@@ -1759,16 +1770,23 @@ def my_fopen(file_path: str | os.PathLike[str], suppress_errors: bool = False,
                     file_content = file.read()
                 else:
                     file_content = "".join(file.readline() for _ in range(numlines))
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Successfully read %s with encoding %s", file_path, encoding)
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Successfully read %s with encoding %s", os.fspath(file_path), encoding)
             return file_content  # Exit the function if reading is successful
         except UnicodeDecodeError:
-            this_message = f"Unicode decode error with encoding {encoding} reading file {file_path}"
-            if not suppress_errors: logging.warning(this_message, exc_info=True)
-            else:                   logging.info(   this_message, exc_info=True)
+            if not rawlog:
+                this_message = f"Unicode decode error with encoding {encoding} reading file {os.fspath(file_path)}"
+                if not suppress_errors: logging.warning(this_message, exc_info=True)
+                else:                   logging.info(   this_message, exc_info=True)
+            continue
+        except LookupError:
+            if not rawlog:
+                this_message = f"Unknown codec {encoding} for file {os.fspath(file_path)}"
+                if not suppress_errors: logging.warning(this_message, exc_info=True)
+                else:                   logging.info(   this_message, exc_info=True)
             continue
         except Exception:  # Catch any other exceptions that might occur, but don't crash.
-            this_message = f"Error reading file {file_path} with encoding {encoding}."
             if not rawlog:
+                this_message = f"Error reading file {os.fspath(file_path)} with encoding {encoding}."
                 if not suppress_errors: logging.error(this_message, exc_info=True)
                 else:                   logging.info( this_message, exc_info=True)
             return False
@@ -1793,14 +1811,15 @@ def load_ast_var(var_name: str, script_path: str | os.PathLike[str],
         AttributeError:    If the variable is not found at the top level of the script.
         ValueError:        If the value of the variable cannot be evaluated as a literal expression.
     """
-    fallback_logging_config(rawlog=rawlog)
     import ast
+    fallback_logging_config(rawlog=rawlog)
+    script_path  = ensure_file(script_path)
     file_content = my_fopen(script_path, rawlog=rawlog)
     if not file_content:
-        my_critical_error(f"Failed to open {script_path}", choose_breakpoint=True)
+        my_critical_error(f"Failed to open {os.fspath(script_path)}", choose_breakpoint=True)
     tree = ast.parse(file_content, script_path)
     if tree is None:
-        raise SyntaxError(f"Could not parse {script_path}")
+        raise SyntaxError(f"Could not parse {os.fspath(script_path)}")
 
     for node in tree.body:
         # handle plain assignments: var_name = <expr>
@@ -1820,7 +1839,7 @@ def load_ast_var(var_name: str, script_path: str | os.PathLike[str],
                 except ValueError as e:
                     raise ValueError(f"Cannot literal_eval the value of {var_name}: {e}") from e
 
-    logging.info("Top-level variable %r not found in %s", var_name, script_path)
+    logging.info("Top-level variable %r not found in %s", var_name, os.fspath(script_path))
     return None
 
 
@@ -1999,29 +2018,28 @@ def show_function_source(target: object | str, *, unwrap: bool = True,
         out = sys.stdout
     # Path-like or string path
     elif isinstance(output, (str, os.PathLike)):
-        path = ensure_path(output, resolve=False)
-        # Fail fast if it's a directory
-        if path.exists() and safe_is_dir(path):
-            raise IsADirectoryError(f"Output path is a directory: {path!s}")
+        path = ensure_path(output).resolve()
+        if safe_is_dir(path):
+            raise IsADirectoryError(f"Output path is a directory: {os.fspath(path)}")
         # Ensure parents exist ('.' is fine to call mkdir() on with exist_ok=True)
         path.parent.mkdir(parents=True, exist_ok=True)
         existed = path.exists()
-        note = (f"# Appending to existing file: {path.resolve()}"
+        note = (f"# Appending to existing file: {os.fspath(path)}"
                 if existed
-                else f"# Creating new file: {path.resolve()}")
+                else f"# Creating new file: {os.fspath(path)}")
         # Try atomic write helper if available; fall back on any failure.
         _maw = globals().get("my_atomic_write")
         if callable(_maw):
             try:
                 # newline hygiene: one newline after note; ensure src ends with exactly one
                 payload = (note + "\n") + (src if src.endswith("\n") else src + "\n")
-                _maw(path, payload, "a", encoding="utf-8")
+                _maw(path, payload, "a", encoding=DEFAULT_ENCODING)
                 return src
             except Exception:
                 # Non-atomic fallback below
                 pass
         # newline="" lets print() manage newlines consistently across platforms
-        out = path.open("a", encoding="utf-8", newline="")
+        out = path.open("a", encoding=DEFAULT_ENCODING, newline="")
         closer = out.close
     # Last chance: duck-typed "file-like" with a text write() method.
     # Reject binary streams explicitly.
@@ -2049,16 +2067,17 @@ def normalize_to_dict(value: Any, var_name: str, script_path: str | os.PathLike[
         return {}
     if isinstance(value, dict):
         return value
+    script_path_str = os.fspath(script_path)
     if isinstance(value, str):
         try:
             parsed = json.loads(value)
             if isinstance(parsed, dict):
                 return parsed
-            logging.warning("Variable %r in %r JSON-decoded to %s, expected dict.", var_name, script_path, type(parsed).__name__)
+            logging.warning("Variable %r in %r JSON-decoded to %s, expected dict.", var_name, script_path_str, type(parsed).__name__)
         except json.JSONDecodeError as e:
-            logging.warning("Failed to JSON-decode variable %r from %s. Expected a dict or JSON string.", var_name, script_path, exc_info=e)
+            logging.warning("Failed to JSON-decode variable %r from %s. Expected a dict or JSON string.", var_name, script_path_str, exc_info=e)
     else:
-        logging.warning("Variable %r in %s is of type %s, expected dict or JSON string.", var_name, script_path, type(value).__name__)
+        logging.warning("Variable %r in %s is of type %s, expected dict or JSON string.", var_name, script_path_str, type(value).__name__)
     return {}
 
 
@@ -2510,7 +2529,7 @@ def _http_meets_expectations(status: int | None, body: bytes | None, expect: dic
 
     if "substr" in expect and body is not None:
         try:
-            text = body.decode("utf-8", errors="ignore")
+            text = body.decode(DEFAULT_ENCODING, errors="ignore")
         except Exception:
             text = ""
         if str(expect["substr"]) not in text:
@@ -2911,57 +2930,26 @@ def find_additional_alias_files(options: Options) -> None:
     options.additional_alias_files = valid_files
 
 
-def ensure_path(path: str | os.PathLike[str],
-                resolve:                       bool = True,
-                expand:                        bool = True,
-                strict:                        bool = False,
-                exists_follow_symlinks: bool | None = None) -> Path:
+def ensure_path(path: str | os.PathLike[str], absolute: bool = True) -> Path:
     """
     Ensure that the path is a Path. If not, make it a Path.
 
     Args:
-        path:                   The path to ensure is a Path object.
-        resolve:                If True, resolve the path to its absolute form (following symlinks).
-        expand:                 If True, expand user directories (e.g., ~) in the path.
-        strict:                 If True, raise an error if the path does not exist.
-                                If False, return a Path object that may not exist.
-        exists_follow_symlinks: If strict=True and resolve=False, choose whether the existence
-                                check should follow symlinks (True uses Path.exists()) or not
-                                (False uses os.path.lexists()). If None, defaults to not follow.
+        path:     The path to ensure is a Path object.
+        absolute: If True (default), return an absolute path without resolving symlinks.
 
     Returns:
-        A Path object representing the ensured path.
-
-    Raises:
-        FileNotFoundError:               If the path does not exist.
-        RuntimeError or OSError (ELOOP): If resolve(strict=True) and the symlink loops
+        A Path object (expanded for "~"). If absolute=True, it's absolute; otherwise it may be relative.
     """
     p = path if isinstance(path, Path) else Path(path)
-    if not expand and not resolve and not strict:
-        return p
-    p = p.expanduser() if  expand else p
-    if strict and not resolve:
-        fallback_logging_config()
-        mode = (exists_follow_symlinks
-                if exists_follow_symlinks is not None
-                else False)  # default matches previous behavior: don't follow
-        logging.getLogger().isEnabledFor(logging.WARNING) and logging.warning(
-            "%s: resolve=False, strict=True checks existence (follow_symlinks=%s).",
-            return_method_name(), mode)
-        if mode:  # follows symlinks: missing/broken targets are considered non-existent
-            if not p.exists():
-                raise FileNotFoundError(p)
-        else:  # does not follow: symlink itself counts as existing even if broken
-            if not os.path.lexists(os.fspath(p)):
-                raise FileNotFoundError(p)
-    return p.resolve(strict=strict) if resolve else p
+    p = p.expanduser()  # always expand "~"
+    return p.absolute() if absolute else p
 
 
 def ensure_file(path: str | os.PathLike[str],
                 raise_on_empty:  bool = False,
                 allow_symlink:   bool = True,
-                follow_symlinks: bool = True,
-                return_resolved: bool = False) -> Path:
+                follow_symlinks: bool = True) -> Path:
     """
     Ensure that the given path is an existing file and return it as a Path object.
 
@@ -2970,7 +2958,9 @@ def ensure_file(path: str | os.PathLike[str],
         raise_on_empty:  If True,  raise an exception if the file is empty.
         allow_symlink:   If False, raise an exception if the path is a symlink.
         follow_symlinks: If False, do not follow symlinks when checking if it's a file.
-        return_resolved: If True, return the fully resolved real path.
+                         If False, symlinks aren't considered files (even if allow_symlink=True).
+                         With follow_symlinks=False, attribute reads (size/mtime/etc.) also don't
+                         follow symlinks.
 
     Returns:
         A Path object representing the file.
@@ -2981,32 +2971,33 @@ def ensure_file(path: str | os.PathLike[str],
         ValueError:        If the path exists but is not a regular file, or if symlinks are not allowed.
         ValueError:        If raise_on_empty is True and the file is empty (or bad permissions, etc.)
     """
-    p = ensure_path(path, resolve=False, strict=True,
-                    exists_follow_symlinks=follow_symlinks)
+    p = ensure_path(path)  # expanded + absolute, no symlink resolution
+    # Existence check (follow or not)
+    exists = p.exists() if follow_symlinks else os.path.lexists(os.fspath(p))
+    if not exists:
+        raise FileNotFoundError(f"No such file: {os.fspath(p)}")
+    if not allow_symlink and p.is_symlink():
+        raise ValueError(f"Symlinks not allowed: {os.fspath(p)}")
     if not safe_is_file(p, follow_symlinks=follow_symlinks):
         if safe_is_dir( p, follow_symlinks=follow_symlinks):
-            raise IsADirectoryError(f"Expected a file, got directory: {p}")
-        raise ValueError(f"Path exists but is not a regular file: {p}")
-    if not allow_symlink and p.is_symlink():
-        raise ValueError(f"Symlinks not allowed: {p}")
-    size = safe_size(p, follow_symlinks=follow_symlinks)
-    if size is not None:
-        if raise_on_empty and size == 0:
-            raise ValueError(f"File is empty: {p}")
-        elif size == 0:
-            logging.warning("File is empty: %s", p)
+            raise IsADirectoryError(f"Expected a file, got directory: {os.fspath(p)}")
+        raise ValueError(f"Path exists but is not a regular file: {os.fspath(p)}")
+    if (p_size := safe_size(p, follow_symlinks=follow_symlinks)) is not None:
+        if raise_on_empty and p_size == 0:
+            raise ValueError(f"File is empty: {os.fspath(p)}")
+        elif p_size == 0:
+            logging.warning("File is empty: %s", os.fspath(p))
     else:
         if raise_on_empty:
-            raise ValueError(f"File size is unknown (permissions?): {p}")
+            raise ValueError(f"File size is unknown (permissions?): {os.fspath(p)}")
         else:
-            logging.warning("File size is unknown (permissions?): %s", p)
-    return p.resolve(strict=True) if return_resolved else p.absolute()
+            logging.warning("File size is unknown (permissions?): %s", os.fspath(p))
+    return p
 
 
 def ensure_dir(path: str | os.PathLike[str],
                allow_symlink:   bool = True,
-               follow_symlinks: bool = True,
-               return_resolved: bool = False) -> Path:
+               follow_symlinks: bool = True) -> Path:
     """
     Ensure that the given path is an existing directory and return it as a Path object.
     
@@ -3014,7 +3005,9 @@ def ensure_dir(path: str | os.PathLike[str],
         path:            The path to check.
         allow_symlink:   If False, raise an exception if the path is a symlink.
         follow_symlinks: If False, do not follow symlinks when checking if it's a directory.
-        return_resolved: If True, return the fully resolved real path.
+                         If False, symlinks aren't considered directories (even if allow_symlink=True).
+                         With follow_symlinks=False, attribute reads (size/mtime/etc.) also don't
+                         follow symlinks.
 
     Returns:
         A Path object representing the directory.
@@ -3023,13 +3016,15 @@ def ensure_dir(path: str | os.PathLike[str],
         FileNotFoundError:  If the directory does not exist.
         NotADirectoryError: If the path exists but is not a directory.
     """
-    p = ensure_path(path, resolve=False, strict=True,
-                    exists_follow_symlinks=follow_symlinks)
-    if not safe_is_dir(p, follow_symlinks=follow_symlinks):
-        raise NotADirectoryError(f"Expected a directory, got file: {p}")
+    p      = ensure_path(path)  # expanded + absolute
+    exists = p.exists() if follow_symlinks else os.path.lexists(os.fspath(p))
+    if not exists:
+        raise FileNotFoundError(f"No such directory: {os.fspath(p)}")
     if not allow_symlink and p.is_symlink():
-        raise ValueError(f"Symlinks not allowed: {p}")
-    return p.resolve(strict=True) if return_resolved else p.absolute()
+        raise ValueError(f"Symlinks not allowed: {os.fspath(p)}")
+    if not safe_is_dir(p, follow_symlinks=follow_symlinks):
+        raise NotADirectoryError(f"Expected a directory, got file: {os.fspath(p)}")
+    return p
 
 
 _IS_PY_3_13: Final[bool] = sys.version_info >= (3, 13)
@@ -3090,7 +3085,7 @@ def safe_is_file(path: str | os.PathLike[str],
         Intentionally designed to catch PermissionError, FileNotFoundError,
         some OSError variations. But not all.
     """
-    p = ensure_path(path, resolve=False, strict=False)
+    p = path if isinstance(path, Path) else ensure_path(path)
     try:
         return _is_file(p, follow_symlinks=follow_symlinks)
     except PermissionError:
@@ -3123,7 +3118,7 @@ def safe_is_dir(path: str | os.PathLike[str],
         Intentionally designed to catch PermissionError, FileNotFoundError,
         some OSError variations. But not all.
     """
-    p = ensure_path(path, resolve=False, strict=False)
+    p = path if isinstance(path, Path) else ensure_path(path)
     try:
         return _is_dir(p, follow_symlinks=follow_symlinks)
     except PermissionError:
@@ -3156,11 +3151,13 @@ def safe_stat(path: str | os.PathLike[str],
         Intentionally designed to catch PermissionError, FileNotFoundError,
         some OSError variations. But not all.
     """
-    p = ensure_path(path, resolve=False, strict=False)
+    p = path if isinstance(path, Path) else ensure_path(path)
     try:
         return p.stat() if follow_symlinks else p.lstat()
     except (PermissionError, FileNotFoundError):
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("safe_stat: access/missing: %s", p)
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s: access/missing: %s",
+                                                                          return_method_name(),
+                                                                          os.fspath(p))
         return None
     except OSError as e:
         if e.errno in IGNORE_THESE_ERRORS:
@@ -3299,9 +3296,17 @@ def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
         # Skip re-download if size matches on disk already.
         if dest.exists():
             try:
-                if safe_size(dest) == expected:
-                    logging.info("File already present with expected size; skipping: %s", dest)
+                if (dest_size := safe_size(dest)) is not None and dest_size == expected:
+                    logging.info("File already present with expected size; skipping: %s", os.fspath(dest))
                     return
+                elif dest_size is not None:
+                    logging.info("File already present but size mismatch (have %s, need %s); re-downloading: %s",
+                                 human_bytesize(dest_size), human_bytesize(expected), os.fspath(dest))
+                elif dest_size is None:
+                    logging.warning("File size is unknown (permissions?): %s", os.fspath(dest))
+                    sys.exit(1)
+                else:
+                    logging.error(f"File {os.fspath(dest)} exists but has a VERY CONFUSING size mismatch (have {dest_size}, need {expected}).")
             except OSError:
                 pass
         free_bytes = query_free_space(dest)
@@ -3353,11 +3358,12 @@ def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
 
             # Verify size if Content-Length available
             if total_i is not None:
-                actual = safe_size(temp)
-                if actual != total_i:
-                    raise IOError(f"Incomplete download: expected {total_i} bytes, got {actual} bytes")
+                if (actual_size := safe_size(temp)) is None:
+                    raise IOError(f"Could not determine size of downloaded file {os.fspath(temp)}")
+                if actual_size != total_i:
+                    raise IOError(f"Incomplete download: expected {total_i} bytes, got {actual_size} bytes")
             temp.replace(dest)
-            logging.info("Saved %s (%s)", dest, human_bytesize(safe_size(dest)))
+            logging.info("Saved %s (%s)", os.fspath(dest), human_bytesize(safe_size(dest)))
             succeeded = True
             return
         except (HTTPError, URLError, socket.timeout, TimeoutError, IOError) as e:
@@ -3403,7 +3409,7 @@ def query_free_space(path: str | os.PathLike[str]) -> int:
     p = ensure_path(path)
 
     # Use the path itself if it's an existing directory; otherwise use its parent.
-    base = p if (p.exists() and safe_is_dir(p)) else p.parent
+    base = p if safe_is_dir(p) else p.parent
 
     # Climb up until we find an existing directory.
     while not base.exists():
@@ -3437,7 +3443,7 @@ def ensure_even_dimensions(image_path: str | os.PathLike[str]) -> None:
                 img.save(image_path)
                 logging.info("Resized image to even dimensions: width = %d, height = %d", new_width, new_height)
             except OSError as e:
-                raise ValueError(f"Could not resize image {image_path} to even dimensions: {e}") from e
+                raise ValueError(f"Could not resize image {os.fspath(image_path)} to even dimensions: {e}") from e
         else:
             logging.info("Image already has even dimensions: width = %d, height = %d", width, height)
 
@@ -4496,7 +4502,7 @@ def _to_jsonable(obj: Any, *, roundtrip: bool, _seen: set[int]) -> Any:
         pass
     # Fallback
     stringified = str(obj)
-    logging.warning(f"Object of type {type(obj).__name__} is not JSON serializable; converting to string: {stringified}")
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Object of type %s is not JSON serializable; converting to string: %s",type(obj).__name__, stringified)
     return stringified if not roundtrip else {"__type__": "object", "value": stringified}
 
 
@@ -4642,7 +4648,8 @@ def save_options_to_json(options: Options) -> None:
     with open(options.options_json_filepath, "w", encoding=DEFAULT_ENCODING) as json_file:
         json.dump(payload, json_file, indent=4, ensure_ascii=False)
 
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Options saved to JSON file: %s", options.options_json_filepath)
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Options saved to JSON file: %s",
+                                                                      os.fspath(options.options_json_filepath))
 
 
 def load_options_from_json(options: Options, json_file: str | os.PathLike[str]) -> Options | None:
@@ -4676,7 +4683,7 @@ def load_options_from_json(options: Options, json_file: str | os.PathLike[str]) 
     options_FROM_JSON = copy.deepcopy(Options())  # Just in case.
     for key, value in options_dict.items():
         setattr(options_FROM_JSON, key, value)
-    if not options.rawlog: logging.info("options loaded from %s", json_file)
+    if not options.rawlog: logging.info("options loaded from %s", os.fspath(json_file))
     return options_FROM_JSON
 
 
@@ -4886,15 +4893,15 @@ def if_filepath_then_read(input_string_or_filepath: str | os.PathLike[str],
         try:
             contents = my_fopen(file_path, suppress_errors=True)
             if not contents:
-                logging.error("Could not read file: %s", file_path)
+                logging.error("Could not read file: %s", os.fspath(file_path))
                 return ""
             return contents
         except FileNotFoundError:
-            logging.exception("File not found: %s", file_path)
+            logging.exception("File not found: %s", os.fspath(file_path))
         except PermissionError:
-            logging.exception("Permission denied: %s", file_path)
+            logging.exception("Permission denied: %s", os.fspath(file_path))
         except UnicodeDecodeError:
-            logging.exception("Could not decode %r.", file_path)
+            logging.exception("Could not decode %r.", os.fspath(file_path))
     else:  # Otherwise, treat "input_string" as a string.
         if not isinstance(input_string_or_filepath, str):
             raise TypeError(f"Expected 'input_string_or_filepath' to be a string or file path, got {type(input_string_or_filepath).__name__!r}")
@@ -5212,22 +5219,22 @@ def check_python_formatting(path: str | os.PathLike[str], diff_choice: int = 1) 
     path = ensure_file(path)
     src  = my_fopen(   path)
     if src is False:
-        logging.error("❌ Failed to open file: %s", path)
+        logging.error("❌ Failed to open file: %s", os.fspath(path))
         return
 
     if compile_code(src):
-        logging.info("✅ %s compiled successfully.", path)
+        logging.info("✅ %s compiled successfully.", os.fspath(path))
 
     logging.warning("LOOK FOR logging.debug STATEMENTS THAT USE F-STRINGS OR THAT DON'T HAVE GUARDS!!")
 
     if BACKTICK in src:
-        logging.warning("File %s contains the backtick character (%r). Use straight quotation marks (') instead.", path, BACKTICK)
+        logging.warning("File %s contains the backtick character (%r). Use straight quotation marks (') instead.", os.fspath(path), BACKTICK)
         if not ask_and_replace(old_str=BACKTICK, new_str="'", path=path, label="backtick",
                                diff_choice=diff_choice,
                                description=f"Replace backtick ({BACKTICK}) with straight apostrophe (')"):
             return False
     if LSQUOTE in src or RSQUOTE in src:
-        logging.warning("File %s contains curly single quotation marks (%r or %r). Use straight apostrophes (') instead.", path, LSQUOTE, RSQUOTE)
+        logging.warning("File %s contains curly single quotation marks (%r or %r). Use straight apostrophes (') instead.", os.fspath(path), LSQUOTE, RSQUOTE)
         if not ask_and_replace(old_str=LSQUOTE, new_str="'", path=path, label="left-curly-apostrophe",
                                diff_choice=diff_choice,
                                description=f"Replace left curly apostrophe ({LSQUOTE}) with straight apostrophe (')"):
@@ -5237,7 +5244,7 @@ def check_python_formatting(path: str | os.PathLike[str], diff_choice: int = 1) 
                                description=f"Replace right curly apostrophe ({RSQUOTE}) with straight apostrophe (')"):
             return False
     if LDQUOTE in src or RDQUOTE in src:
-        logging.warning("File %s contains curly double quotation marks (%r or %r). Use straight quotation marks (\") instead.", path, LDQUOTE, RDQUOTE)
+        logging.warning("File %s contains curly double quotation marks (%r or %r). Use straight quotation marks (\") instead.", os.fspath(path), LDQUOTE, RDQUOTE)
         if not ask_and_replace(old_str=LDQUOTE, new_str='"', path=path,
                                label="left-curly-quotation-mark",
                                diff_choice=diff_choice,
@@ -5248,7 +5255,7 @@ def check_python_formatting(path: str | os.PathLike[str], diff_choice: int = 1) 
                                description=f'Replace right curly double quotation mark ({RDQUOTE}) with straight double quotation mark (")'):
             return False
     if HORIZONTAL_ELLIPSIS in src:
-        logging.warning("File %s contains the horizontal ellipsis character (%r). Use three periods (...) instead.", path, HORIZONTAL_ELLIPSIS)
+        logging.warning("File %s contains the horizontal ellipsis character (%r). Use three periods (...) instead.", os.fspath(path), HORIZONTAL_ELLIPSIS)
         if not ask_and_replace(old_str=HORIZONTAL_ELLIPSIS, new_str="...", path=path,
                                label="horizontal-ellipsis", diff_choice=diff_choice,
                                description=f"Replace horizontal ellipsis ({HORIZONTAL_ELLIPSIS}) with three periods (...)"):
@@ -5257,7 +5264,7 @@ def check_python_formatting(path: str | os.PathLike[str], diff_choice: int = 1) 
     try:
         tree = ast.parse(src, path)
     except SyntaxError:
-        logging.exception("❌ %s contains a syntax error.", path)
+        logging.exception("❌ %s contains a syntax error.", os.fspath(path))
         return False
 
     checker = FormatChecker(src)
@@ -5298,9 +5305,9 @@ def run_flake8(path: str | os.PathLike[str], ignore_codes: list[str] = [],
     style_guide = flake8.get_style_guide(max_line_length=max_line_length, ignore=ignore_codes)
     report = style_guide.check_files([path])
     if report.total_errors == 0:
-        logging.info("✅ No Flake8 violations found in %s.", path)
+        logging.info("✅ No Flake8 violations found in %s.", os.fspath(path))
         return report
-    logging.error("Found %d total violations in %s:", report.total_errors, path)
+    logging.error("Found %d total violations in %s:", report.total_errors, os.fspath(path))
     for stat in report.get_statistics(""):
         logging.error("  %s", stat)
     return report
@@ -5563,7 +5570,7 @@ def my_diff(orig_text: str, changed_text: str,
             last_removed = None
 
     if diff_choice == 0:  # old style diff (difflib.Differ)
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Using old-style diff for %s with %d original and %d fixed lines.", orig_path, len(orig_lines), len(changed_lines))
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Using old-style diff for %s with %d original and %d fixed lines.", os.fspath(orig_path), len(orig_lines), len(changed_lines))
         orig_lineno = 1
         new_lineno  = 1
         for line in difflib.Differ().compare(orig_lines, changed_lines):
@@ -5587,7 +5594,7 @@ def my_diff(orig_text: str, changed_text: str,
         process_hunk()
         flush_removed(orig_lineno)
     elif diff_choice >= 1:  # unified or context diff
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Using unified diff for %s with %d original and %d fixed lines.", orig_path, len(orig_lines), len(changed_lines))
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Using unified diff for %s with %d original and %d fixed lines.", os.fspath(orig_path), len(orig_lines), len(changed_lines))
         ctx  = max(diff_choice - 1, 0)
         diff = difflib.unified_diff(
             orig_lines, changed_lines,
@@ -5643,7 +5650,6 @@ def is_python_script(path: str | os.PathLike[str]) -> bool:
         FileNotFoundError: If the file is not found.
         PermissionError:   If the file is not accessible due to permission issues.
     """
-    import stat
     path = ensure_path(path)
     if not safe_is_file(path):
         return False
@@ -5658,7 +5664,11 @@ def is_python_script(path: str | os.PathLike[str]) -> bool:
     except OSError:
         return False
 
+    if st is None:  # This can happen if the user doesn't have permission to stat the file.
+        return False
+
     # Must be a regular file and executable by owner/group/other
+    import stat
     if not stat.S_ISREG(st.st_mode) or not (st.st_mode & (stat.S_IXUSR|stat.S_IXGRP|stat.S_IXOTH)):
         return False
 
@@ -5710,7 +5720,7 @@ def diff_and_confirm(orig_text: str, changed_text: str,
     label_str = f"{ANSI_RED}{label}{ANSI_RESET}" if label     else ""
     fix_str   = f" using {the_fix}"              if the_fix   else ""
     subject   = f"{label_str} "                  if label_str else ""
-    logging.info("End of proposed %schanges to %s%s.", subject, path, fix_str)
+    logging.info("End of proposed %schanges to %s%s.", subject, os.fspath(path), fix_str)
     if description:
         prefix = f"{label_str}: "                if label_str else ""
         logging.info(f"{prefix}{ANSI_YELLOW}{description}{ANSI_RESET}")
@@ -5723,9 +5733,9 @@ def diff_and_confirm(orig_text: str, changed_text: str,
             return False  # Don't write if it won't compile, and don't continue.
         path.write_text(changed_text, encoding=DEFAULT_ENCODING)
         if the_fix:
-            logging.info(f"{ANSI_GREEN}Applied {the_fix} to {path}{ANSI_RESET}")
+            logging.info(f"{ANSI_GREEN}Applied {the_fix} to {os.fspath(path)}{ANSI_RESET}")
         else:
-            logging.info(f"{ANSI_GREEN}Applied changes to {path}{ANSI_RESET}")
+            logging.info(f"{ANSI_GREEN}Applied changes to {os.fspath(path)}{ANSI_RESET}")
     elif ans in ("q", "quit", "exit"):
         logging.info(f"{ANSI_YELLOW}Exiting without further changes.{ANSI_RESET}")
         return False
@@ -5784,7 +5794,7 @@ def ask_and_autopep8(path: str | os.PathLike[str], code: str,
             changed_text = candidate
             break
     if changed_text == orig_text:
-        logging.info("No changes for %s in %s using %s.", code, path, the_fix)
+        logging.info("No changes for %s in %s using %s.", code, os.fspath(path), the_fix)
         return True
     if not isinstance(diff_choice, int) or diff_choice < 0:
         logging.error("Invalid diff_choice=%d. Must be a non-negative integer.", diff_choice)
@@ -5832,14 +5842,14 @@ def ask_and_replace(old_str: str, new_str: str,
         PermissionError: If the file is not accessible due to permission issues.
     """
     fallback_logging_config()
-    path = ensure_file(path)
-    orig_text = my_fopen(path)
+    path         = ensure_file(path)
+    orig_text    = my_fopen(path)
     changed_text = orig_text.replace(old_str, new_str)
     if changed_text == orig_text:
         if label:
-            logging.info("No occurrences of %s in %s.", label, path)
+            logging.info("No occurrences of %s in %s.", label, os.fspath(path))
         else:
-            logging.info("No occurrences of '%s' in %s.", old_str, path)
+            logging.info("No occurrences of '%s' in %s.", old_str, os.fspath(path))
         return True
     the_fix = f"replace '{old_str}' with '{new_str}'"
     return diff_and_confirm(orig_text, changed_text, path, label=label, diff_choice=diff_choice,
@@ -5858,11 +5868,11 @@ def _resolve_dir(dir_arg: str | None) -> Path:
     if dir_arg:
         p = ensure_path(dir_arg)
     else:
-        p = Path.cwd()
+        p = Path.cwd().expanduser().resolve(strict=True)
     if not p.exists():
-        raise FileNotFoundError(f"Directory does not exist: {p}")
+        raise FileNotFoundError(f"Directory does not exist: {os.fspath(p)}")
     if not safe_is_dir(p):
-        raise NotADirectoryError(f"Path is not a directory: {p}")
+        raise NotADirectoryError(f"Path is not a directory: {os.fspath(p)}")
     return p
 
 
@@ -5999,6 +6009,7 @@ if str(univ_defs_dir) not in sys.path:
 '''
 
 MYDIFF_SCRIPT: str = r'''from __future__ import annotations
+import os
 import sys
 import argparse
 import logging
@@ -6017,7 +6028,7 @@ class Options:
         self.my_name:  str = Path(sys.argv[0]).stem  # The invoked name of this script without the .py extension
         self.log_mode: int = logging.INFO  # Use the -debug command line argument to change to DEBUG.
         self.args: argparse.Namespace | None = None
-        self.default_dir: Path = Path.cwd()  # Default to current working directory
+        self.default_dir: Path = Path.cwd().expanduser().resolve(strict=True)  # Default to current working directory
 
 
 def parse_arguments(options: Options) -> None:
@@ -6051,10 +6062,10 @@ def main() -> None:
     orig_text    = ud.my_fopen(options.args.orig_path)
     changed_text = ud.my_fopen(options.args.changed_path)
     if orig_text is False:
-        logging.error(f"Failed to read original file: {options.args.orig_path}")
+        logging.error(f"Failed to read original file: {os.fspath(options.args.orig_path)}")
         return
     if changed_text is False:
-        logging.error(f"Failed to read changed file: {options.args.changed_path}")
+        logging.error(f"Failed to read changed file: {os.fspath(options.args.changed_path)}")
         return
     if orig_text == changed_text:
         return  # Standard diff would show no changes
@@ -6090,7 +6101,7 @@ class Options:
         self.my_name:  str = Path(sys.argv[0]).stem  # The invoked name of this script without the .py extension
         self.log_mode: int = logging.INFO  # Use the -debug command line argument to change to DEBUG.
         self.args: argparse.Namespace | None = None
-        self.default_dir: Path = Path.cwd()  # Default to current working directory
+        self.default_dir: Path = Path.cwd().expanduser().resolve(strict=True)  # Default to current working directory
 
 
 def parse_arguments(options: Options) -> None:
@@ -6155,7 +6166,7 @@ class Options:
         self.log_mode: int = logging.INFO  # Use the -debug command line argument to change to DEBUG.
         self.args: argparse.Namespace | None = None
         self.default_glob_pattern: str = "*"
-        self.default_dir: Path = Path.cwd()  # Default to current working directory
+        self.default_dir: Path = Path.cwd().expanduser().resolve(strict=True)  # Default to current working directory
 
 
 def parse_arguments(options: Options) -> None:
@@ -6217,7 +6228,7 @@ class Options:
         """Initialize the Options class with default values."""
         self.my_name:                    str = Path(sys.argv[0]).stem  # The invoked name of this script without the .py extension
         self.default_exclude_dirs:  set[str] = set(ud.DEFAULT_EXCLUDE_DIRS)
-        self.default_dir:               Path = Path.cwd()  # Default to current working directory
+        self.default_dir:               Path = Path.cwd().expanduser().resolve(strict=True)  # Default to current working directory
         self.log_mode:                   int = logging.INFO  # Use the -debug command line argument to change to DEBUG.
         self.args: argparse.Namespace | None = None
 
@@ -6452,18 +6463,15 @@ def search_file(path: str | os.PathLike[str],
                 ignore_case: bool,
                 show_line_numbers: bool) -> list[str]:
     """Return matching blocks for a single file."""
-    p = Path(path)
-    try:
-        text = p.read_text(encoding=ud.DEFAULT_ENCODING)
-    except UnicodeDecodeError:
-        text = p.read_text(encoding="latin-1")
-    except Exception as ex:
-        logging.warning("Skipping %s (%s)", os.fspath(p), ex)  # convert at presentation boundary
+    p    = ud.ensure_file(path)
+    text = ud.my_fopen(p, suppress_errors=True)
+    if not isinstance(text, str):
+        logging.warning("Skipping %s (unreadable or non-text).", os.fspath(p))
         return []
 
     masked = _mask_strings_and_comments(text)
-    flags = re.IGNORECASE if ignore_case else 0
-    pat = re.compile(pattern if regex else re.escape(pattern), flags)
+    flags  = re.IGNORECASE if ignore_case else 0
+    pat    = re.compile(pattern if regex else re.escape(pattern), flags)
 
     # lines that contain a match (in code, not in strings/comments)
     hit_lines: set[int] = set()
@@ -6555,11 +6563,11 @@ def verify_script(options: Options, thepath: str | os.PathLike[str], thescript: 
     if not safe_is_file(thepath):
         if safe_is_dir(thepath):
             if not options.rawlog:
-                logging.error(f"Expected a file at {thepath}, but it is a directory.")
+                logging.error(f"Expected a file at {os.fspath(thepath)}, but it is a directory.")
             return
         thepath.write_text(thescript, encoding=DEFAULT_ENCODING)
         if not options.rawlog:
-            logging.info("Creating %s with the specified script.", thepath)
+            logging.info("Creating %s with the specified script.", os.fspath(thepath))
         return
 
     # It is a file: read and compare
@@ -6567,9 +6575,9 @@ def verify_script(options: Options, thepath: str | os.PathLike[str], thescript: 
     # Overwrite if different
     if existing != thescript:
         if not options.rawlog:
-            logging.info("Contents of %s differ from the specified script in %s as follows:", thepath, __file__)
+            logging.info("Contents of %s differ from the specified script in %s as follows:", os.fspath(thepath), __file__)
             my_diff(existing, thescript, thepath, diff_choice=1)
-            logging.info("Overwriting %s with the specified script.", thepath)
+            logging.info("Overwriting %s with the specified script.", os.fspath(thepath))
         thepath.write_text(thescript, encoding=DEFAULT_ENCODING)
 
 
@@ -6585,9 +6593,9 @@ def decode_utf8(raw_bytes: bytes, path: str = "input string") -> str | None:
         logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s failed to decode as UTF‑8.", path)
         return None
     if any(0x0080 <= ord(ch) <= 0x009F for ch in text):
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s contains lone C1 controls, not valid UTF-8.", path)
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s contains lone C1 controls, not valid UTF-8.", os.fspath(path))
         return None
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s decoded as valid UTF‑8.", path)
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s decoded as valid UTF‑8.", os.fspath(path))
     return text
 
 
@@ -6599,10 +6607,11 @@ def decode_cp1252(raw_bytes: bytes, path: str = "input string") -> str | None:
     fallback_logging_config()
     try:
         text = raw_bytes.decode("cp1252", errors="strict")
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s decoded as valid CP1252.", path)
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s decoded as valid CP1252.",
+                                                                          os.fspath(path))
         return text
     except UnicodeDecodeError:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s failed to decode as CP1252.", path, exc_info=True)
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s failed to decode as CP1252.", os.fspath(path), exc_info=True)
         return None
 
 
@@ -6628,13 +6637,14 @@ def fix_text(current_text: str, path: str | os.PathLike[str], raw_bytes: bytes) 
     import ftfy
     fallback_logging_config()
     path = ensure_file(path)
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Checking %s for mojibake.", path)
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Checking %s for mojibake.",
+                                                                      os.fspath(path))
     if not contains_mojibake(current_text):
         return None
     try:
         fixed = ftfy.fix_encoding(current_text)
     except Exception:  # Catch any unexpected errors from ftfy without crashing
-        logging.error("Failed to fix mojibake in %s.", path, exc_info=True)
+        logging.error("Failed to fix mojibake in %s.", os.fspath(path), exc_info=True)
         return None
     # If logging level is set to DEBUG, show my diff of original vs fixed:
     if logging.getLogger().isEnabledFor(logging.DEBUG):
@@ -6643,7 +6653,7 @@ def fix_text(current_text: str, path: str | os.PathLike[str], raw_bytes: bytes) 
             mangled_original = raw_bytes.decode("cp1252", errors="replace")
             my_diff(mangled_original, fixed, path)
         except Exception:  # Catch any unexpected errors from decoding but don't crash.
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Could not simulate browser mangling in %s.", path, exc_info=True)
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Could not simulate browser mangling in %s.", os.fspath(path), exc_info=True)
     return fixed
 
 
@@ -6716,11 +6726,11 @@ def my_atomic_write(filepath: str | Path | os.PathLike[str], data: str | bytes |
     # ensure parent directory exists
     path.parent.mkdir(parents=True, exist_ok=True)
     # choose text or binary mode
-    is_bytes = isinstance(data, (bytes, bytearray))
-    mode     = write_mode + ("b" if is_bytes else "")
-    text_enc = None if is_bytes else encoding
-    lock_path = str(path) + ".lock"
-    lock = FileLock(lock_path, timeout=lock_timeout)
+    is_bytes      = isinstance(data, (bytes, bytearray))
+    mode          = write_mode + ("b" if is_bytes else "")
+    text_enc      = None if is_bytes else encoding
+    lock_path_str = os.fspath(path) + ".lock"
+    lock          = FileLock(lock_path_str, timeout=lock_timeout)
     try:
         with lock:
             # atomicwrites will write to a temp file in the same dir then os.replace()
@@ -6729,7 +6739,7 @@ def my_atomic_write(filepath: str | Path | os.PathLike[str], data: str | bytes |
                               encoding=text_enc, preserve_mode=True) as f:
                 f.write(data)
     except Timeout:
-        raise RuntimeError(f"Could not acquire lock on {lock_path!r} within {lock_timeout} seconds")
+        raise RuntimeError(f"Could not acquire lock on {lock_path_str!r} within {lock_timeout} seconds")
 
 
 def fix_mojibake(filepath: str | os.PathLike[str], make_backup: bool = True,
@@ -6742,14 +6752,14 @@ def fix_mojibake(filepath: str | os.PathLike[str], make_backup: bool = True,
     fallback_logging_config()
     filepath = ensure_file(filepath)
     if not safe_is_file(filepath):
-        logging.error(f"{filepath} is not a file")
+        logging.error(f"{os.fspath(filepath)} is not a file")
         return
 
     try:
         with open(filepath, "rb") as f:
             raw_bytes = f.read()
     except Exception:  # Catch any unexpected errors from reading the file without crashing.
-        logging.error(f"Failed to read {filepath}.", exc_info=True)
+        logging.error(f"Failed to read {os.fspath(filepath)}.", exc_info=True)
         return
 
     original_text =      decode_utf8(raw_bytes, filepath) \
@@ -6764,28 +6774,28 @@ def fix_mojibake(filepath: str | os.PathLike[str], make_backup: bool = True,
     maybe_fixed = fix_text(current_text, filepath, raw_bytes)
     if maybe_fixed is not None:
         current_text = maybe_fixed
-        logging.info("✔ Fixed mojibake: %s", filepath)
+        logging.info("✔ Fixed mojibake: %s", os.fspath(filepath))
 
     # If the text is from an HTML file, ensure it has a UTF-8 meta tag
-    if filepath.suffix.casefold() in (".html", ".htm"):
+    if filepath.suffix.casefold() in HTML_EXTENSIONS_SET:
         current_text = ensure_utf8_meta(current_text)
 
     # If we have fixed the text, write it back
     if current_text != original_text:
         if dry_run:
-            logging.info("Dry run: would write changes to %s", filepath)
+            logging.info("Dry run: would write changes to %s", os.fspath(filepath))
         else:
             if make_backup:
                 current_datetime = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-                backup_path = f"{filepath}_{current_datetime}.bak"
+                backup_path_str = f"{os.fspath(filepath)}_{current_datetime}.bak"
                 try:
-                    filepath.rename(backup_path)
-                    logging.info("Backup created: %s", backup_path)
+                    filepath.rename(backup_path_str)
+                    logging.info("Backup created: %s", backup_path_str)
                 except OSError:
-                    logging.exception("Failed to create backup for %s.", filepath)
+                    logging.exception("Failed to create backup for %s.", os.fspath(filepath))
                     return
             my_atomic_write(filepath, current_text, "w", encoding="utf-8")
-            logging.info("✔ Successfully fixed mojibake in %s", filepath)
+            logging.info("✔ Successfully fixed mojibake in %s", os.fspath(filepath))
 
 
 def treeview_new_files(directory:      str | os.PathLike[str],
@@ -6826,10 +6836,10 @@ def treeview_new_files(directory:      str | os.PathLike[str],
 
     directory = ensure_path(directory)
     if not directory.exists():
-        logging.error(f"{prefix}└── [Directory does not exist: {directory}]")
+        logging.error(f"{prefix}└── [Directory does not exist: {os.fspath(directory)}]")
         return False
     if not safe_is_dir(directory):
-        logging.error(f"{prefix}└── [Not a directory: {directory}]")
+        logging.error(f"{prefix}└── [Not a directory: {os.fspath(directory)}]")
         return False
 
     if last_file_path is None:
@@ -6838,11 +6848,17 @@ def treeview_new_files(directory:      str | os.PathLike[str],
     else:
         last_file_path = ensure_path(last_file_path)
         if not last_file_path.exists():
-            logging.error("%s└── [Last file path does not exist: %s]", prefix, last_file_path)
+            logging.error("%s└── [Last file path does not exist: %s]", prefix, os.fspath(last_file_path))
             return False
         last_mtime          = safe_mtime(last_file_path)
+        if last_mtime is None:
+            logging.error("%s└── [Could not get mtime for last file path: %s]",
+                          prefix, os.fspath(last_file_path))
+            return False
         last_mtime_readable = dt.datetime.fromtimestamp(last_mtime).strftime("%Y-%m-%d %H:%M:%S")
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%sLast file path: %s (mtime: %s)", prefix, last_file_path, last_mtime_readable)
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%sLast file path: %s (mtime: %s)",
+                                                                          prefix,
+                                                                          os.fspath(last_file_path), last_mtime_readable)
 
     if use_colors:
         reset_color = ANSI_RESET
@@ -6883,8 +6899,8 @@ def treeview_new_files(directory:      str | os.PathLike[str],
                 entry == my_filepath    or
                 entry.name.startswith(".")
             )) or
-            (safe_is_dir(entry) and entry.name in excluded_dirs) or
-            (safe_is_dir(entry) and entry.expanduser().resolve() in already_printed)
+            ((safe_is_dir_entry := safe_is_dir(entry)) and entry.name in excluded_dirs) or
+            (safe_is_dir_entry and entry.expanduser().resolve() in already_printed)
         )
     ]
 
@@ -7140,19 +7156,13 @@ def open_filemanager_with_dirs(directories: list[str | os.PathLike[str]]) -> Non
     logging.info("Opening file manager with specified directories...")
     for directory in directories:
         directory = ensure_path(directory)
-        if not directory.is_absolute():
-            try:
-                directory = directory.resolve()
-            except Exception as e:
-                logging.error(f"Failed to resolve directory {directory}: {e}")
-                continue
-        if not safe_is_dir(directory):
-            logging.error(f"Directory {directory} is not a valid directory. Skipping.")
-            continue
         if not directory.exists():
-            logging.error(f"Directory {directory} does not exist. Skipping.")
+            logging.error(f"Directory {os.fspath(directory)} does not exist. Skipping.")
             continue
-        subprocess.Popen([filemanager_command, directory], stdout=subprocess.DEVNULL,
+        if not safe_is_dir(directory):
+            logging.error(f"Directory {os.fspath(directory)} is not a valid directory. Skipping.")
+            continue
+        subprocess.Popen([filemanager_command, os.fspath(directory)], stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL)
         # Optional: Wait briefly between opening directories
         time.sleep(0.5)
@@ -7363,7 +7373,6 @@ def open_dir_in_VLC(the_dir: str | os.PathLike[str], sort_choice: str = "sort_by
                     recursive: bool = False, no_start:  bool = False) -> None:
     """Create a playlist of the files in the specified directory, then play that playlist in VLC. By default, don't search the directory recursively and sort the files by name. Optional arguments allow recursive loading or sorting by modification time. If no_start is True, don't start playback in VLC."""
     import subprocess
-    the_dir = ensure_dir(the_dir)
     if the_dir is None:
         raise ValueError("The directory path cannot be None.")
     the_dir = ensure_dir(the_dir)
@@ -7401,8 +7410,8 @@ def open_dir_in_VLC(the_dir: str | os.PathLike[str], sort_choice: str = "sort_by
     playlist_path = the_dir / f"{filename_format(the_dir.name)}_playlist.m3u"
     playlist_path.write_text(playlist_content, encoding=DEFAULT_ENCODING)
     # Open the playlist in VLC
-    if start_flag: command_list = ["vlc", start_flag, playlist_path]
-    else:          command_list = ["vlc",             playlist_path]
+    if start_flag: command_list = ["vlc", start_flag, os.fspath(playlist_path)]
+    else:          command_list = ["vlc",             os.fspath(playlist_path)]
     subprocess.Popen(command_list, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
@@ -7427,7 +7436,7 @@ def remove_prefix_from_filename(filepath: str | os.PathLike[str], prefix: str) -
     fallback_logging_config()
     filepath = ensure_path(filepath)
     if not filepath.exists():
-        logging.warning("File or directory '%s' does not exist.", filepath)
+        logging.warning("File or directory '%s' does not exist.", os.fspath(filepath))
         return False
     file = filepath.name
     if file.startswith(prefix):
@@ -7439,12 +7448,13 @@ def remove_prefix_from_filename(filepath: str | os.PathLike[str], prefix: str) -
         if not new_filepath.exists():
             try:
                 filepath.rename(new_filepath)
-                logging.info("Renamed '%s' to '%s'.", filepath, new_filepath)
+                logging.info("Renamed '%s' to '%s'.", os.fspath(filepath), os.fspath(new_filepath))
                 return True
             except OSError as e:
-                raise OSError(f"Failed to rename '{filepath}' to '{new_filepath}': {e}") from e
+                raise OSError(f"Failed to rename '{os.fspath(filepath)}' to '{os.fspath(new_filepath)}': {e}") from e
         else:
-            logging.warning("Cannot rename '%s' to '%s': New path already exists.", filepath, new_filepath)
+            logging.warning("Cannot rename '%s' to '%s': New path already exists.",
+                            os.fspath(filepath), os.fspath(new_filepath))
             return False
     else:
         return False
@@ -7455,23 +7465,23 @@ def remove_prefix_from_html_title(filepath: str | os.PathLike[str], prefix: str)
     fallback_logging_config()
     filepath = ensure_path(filepath)
     if not safe_is_file(filepath):
-        logging.warning("File '%s' does not exist or is not a file.", filepath)
+        logging.warning("File '%s' does not exist or is not a file.", os.fspath(filepath))
         return False
-    if filepath.suffix.casefold() not in (".html", ".htm"):
-        logging.warning("File '%s' is not an HTML or HTM file.", filepath)
+    if filepath.suffix.casefold() not in HTML_EXTENSIONS_SET:
+        logging.warning("File '%s' is not an HTML or HTM file.", os.fspath(filepath))
         return False
     html = my_fopen(filepath)
     title_start = html.find("<title>") + len("<title>")
     title_end   = html.find("</title>", title_start)
     if title_start == -1 or title_end == -1:
-        logging.warning("Could not find the title in the HTML file '%s'.", filepath)
+        logging.warning("Could not find the title in the HTML file '%s'.", os.fspath(filepath))
         return False
     title = html[title_start:title_end]
     if title.startswith(prefix):
         new_title = title.replace(prefix, "", 1)  # Replace only the first occurrence
-        new_html = html[:title_start] + new_title + html[title_end:]
+        new_html  = html[:title_start] + new_title + html[title_end:]
         filepath.write_text(new_html, encoding=DEFAULT_ENCODING)
-        logging.info("Removed prefix '%s' from the title in '%s'.", prefix, filepath)
+        logging.info("Removed prefix '%s' from the title in '%s'.", prefix, os.fspath(filepath))
         return True
     else:
         return False
@@ -7504,9 +7514,10 @@ def combine_html_files(file_paths:  list[str | os.PathLike[str]],
     head_content  = ""
     first_file_processed = False
     for file_path in file_paths:
-        file = my_fopen(file_path)
+        file_path     = ensure_file(file_path)
+        file_contents = my_fopen(file_path)
         try:
-            soup = BeautifulSoup(file, "html.parser")
+            soup = BeautifulSoup(file_contents, "html.parser")
             # Extract <head> from the first Chapter1.html
             if not first_file_processed:
                 head_content = str(soup.head)
@@ -7515,7 +7526,7 @@ def combine_html_files(file_paths:  list[str | os.PathLike[str]],
             body_content = soup.body
             combined_body += str(body_content)
         except Exception:  # Catch any unexpected errors from BeautifulSoup without crashing.
-            logging.exception(f"File {file_path} encountered an error.")
+            logging.exception(f"File {os.fspath(file_path)} encountered an error.")
     # Create the new HTML structure
     combined_html = f"<!DOCTYPE html>\n<html>\n{head_content}\n<body>\n{combined_body}\n</body>\n</html>"
     # Save to the output file path
@@ -7524,8 +7535,8 @@ def combine_html_files(file_paths:  list[str | os.PathLike[str]],
         output_file_path.parent.mkdir(parents=True, exist_ok=True)
         output_file_path.write_text(combined_html, encoding=DEFAULT_ENCODING)
     except Exception:  # Catch any unexpected errors from writing the file without crashing.
-        logging.exception("Error saving combined HTML to %s.", output_file_path)
-    logging.info("Saved combined HTML to '%s'.", output_file_path)
+        logging.exception("Error saving combined HTML to %s.", os.fspath(output_file_path))
+    logging.info("Saved combined HTML to '%s'.", os.fspath(output_file_path))
 
 
 # Map these to spaces (treat like separators)
@@ -7649,7 +7660,7 @@ PYTHON_EXTENSIONS_SET: Final[frozenset[str]] = frozenset(PYTHON_EXTENSIONS)
 # assert len(PYTHON_EXTENSIONS_SET) == len(PYTHON_EXTENSIONS), "Duplicate python extensions?"
 
 # A comprehensive list of HTML extensions.
-HTML_EXTENSIONS:    Final[tuple[str, ...]] = (".html", ".htm")
+HTML_EXTENSIONS:    Final[tuple[str, ...]] = (".html", ".htm", ".xhtml")
 HTML_EXTENSIONS_SET: Final[frozenset[str]] = frozenset(HTML_EXTENSIONS)
 # assert len(HTML_EXTENSIONS_SET) == len(HTML_EXTENSIONS), "Duplicate HTML extensions?"
 
