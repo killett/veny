@@ -2229,12 +2229,13 @@ If you're using the bash shell, follow these steps to add the alias manually:
             "zopyx": "zopyx.textindexng3"}
         self.reversed_module_aliases = {v: k for k, v in self.module_aliases.items()}
         # Set of known bad imports that should be ignored.
-        self.known_bad_imports: set[str] = {"__builtin__", "snakeClass", "GPUampcor", "pathfinding_salvo_rework", "seaborn", "DQN", "bayesOpt", "tkinter", "msvcrt", "BaseHTTPServer", "urlparse", "tkFileDialog", "tkMessageBox", "ConfigParser", "Cookie", "HTMLParser", "Queue", "SocketServer", "StringIO", "Tkinter", "UserDict", "cPickle", "cStringIO", "cookielib", "htmlentitydefs", "httplib", "tkFont", "tkMessageBox", "urllib2", "non_existent_module"}  # "BaseHTTPServer", "urlparse", "tkFileDialog", "tkMessageBox", "ConfigParser", "Cookie", "HTMLParser", "Queue", "SocketServer", "StringIO", "Tkinter", "UserDict", "cPickle", "cStringIO", "cookielib", "htmlentitydefs", "httplib", "tkFont", "tkMessageBox", "urllib2" are Python 2 modules - we don't want to try to install them. A more general approach would involve importing stdlib_list and using that to filter out stdlib modules from Python 2 and Python 3: https://pypi.org/project/stdlib-list/
+        self.known_bad_imports: set[str] = {"__builtin__", "snakeClass", "GPUampcor", "pathfinding_salvo_rework", "seaborn", "DQN", "bayesOpt", "tkinter", "msvcrt", "BaseHTTPServer", "urlparse", "tkFileDialog", "tkMessageBox", "ConfigParser", "Cookie", "HTMLParser", "Queue", "SocketServer", "StringIO", "Tkinter", "UserDict", "cPickle", "cStringIO", "cookielib", "htmlentitydefs", "httplib", "tkFont", "urllib2", "non_existent_module"}  # "BaseHTTPServer", "urlparse", "tkFileDialog", "tkMessageBox", "ConfigParser", "Cookie", "HTMLParser", "Queue", "SocketServer", "StringIO", "Tkinter", "UserDict", "cPickle", "cStringIO", "cookielib", "htmlentitydefs", "httplib", "tkFont", "tkMessageBox", "urllib2" are Python 2 modules - we don't want to try to install them. A more general approach would involve importing stdlib_list and using that to filter out stdlib modules from Python 2 and Python 3: https://pypi.org/project/stdlib-list/
         # https://chatgpt.com/share/687000fd-be84-8006-a7f4-06af4b1e0eda
         # List of unusual imports that are not standard library modules or packages.
         self.unusual_imports: list[str] = ["a", "an", "dl", "the", "it", "x", "xx", "above", "another", "__builtin__", "within"]
         # List of directories to stay out of when searching for local custom imports because they're filled with standard library modules or other irrelevant files.
-        self.stay_out_list: list[str] = ["myenv", "anaconda3", ".conda", os.sep+"lib"+os.sep, ".vscode"]
+        self.stay_out_list: list[str] = ["myenv", ".venv", "anaconda3", "miniconda3", "miniforge3",
+                                         ".conda", os.sep+"lib"+os.sep, ".vscode"]
 
     def set_venv_dir(self, venv_dir: str | os.PathLike[str]) -> None:
         """Set the directory for the virtual environment."""
@@ -2629,7 +2630,7 @@ def add_alias_to_rc_file(options: Options) -> None:
             with open(options.rc_file, "a") as f:
                 f.write("\n" + options.alias_command + "\n")
             logging.info("Alias added to %s", options.rc_file)
-    except (IOError, OSError) as e:
+    except OSError as e:
         logging.exception("Failed to write alias to %s", options.rc_file)
         logging.error(options.manual_instructions)
 
@@ -5081,7 +5082,7 @@ def download_packages(options: Options) -> bool:
         # Run the initial download script and capture the output
         result = ud.my_popen([options.download_script_path])
         return result.returncode == 0
-    except (IOError, OSError) as e:
+    except OSError:
         logging.exception("Error writing or executing download script.")
         return False
 
@@ -5685,7 +5686,7 @@ def dict_of_custom_modules(options: Options) -> dict[str, Path]:
                                          most_recent_file, most_recent_timestamp, options.pathlibcutoff)
                         custom_modules = {k: ud.ensure_path(v) for k, v in custom_modules.items()}
                     return custom_modules
-        except Exception as e:
+        except Exception:
             logging.exception("Error loading custom modules from pickle file.")
             logging.error("Falling back to regenerating the custom modules dictionary from sys.path.")
 

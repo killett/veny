@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path  # Preferred over os.path for path manipulations.
 import logging
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from itertools import chain
 from typing import TextIO, Any, TypeAlias, Type, Literal, Protocol, Final
 import re  # Used to precompile regexes for performance
@@ -644,7 +644,7 @@ class LLMs:
                 if not self._is_provider_available(provider, cfg.local_model_name):
                     raise RuntimeError(
                         f"Local model '{cfg.local_model_name}' is not available on runtime "
-                        f"'{entry.get('runtime','unknown')}'. Ensure the runtime is up "
+                        f"'{entry.get('runtime', 'unknown')}'. Ensure the runtime is up "
                         f"(Ollama: {cfg.ollama_base_url}) and that the model is pulled."
                     )
 
@@ -1539,7 +1539,7 @@ def configure_logging(basename: str, log_level: int | str = logging.INFO,
         debug_info_handler.setLevel(logging.DEBUG)
         warning_error_handler = logging.FileHandler(log_errors)
         warning_error_handler.setLevel(logging.WARNING)
-    except (IOError, OSError) as e:
+    except OSError as e:
         print(f"Failed to create log files: {e}", flush=True)
         return None
 
@@ -1917,7 +1917,7 @@ def show_function_source(target: object | str, *, unwrap: bool = True,
         unwrap: If True, attempt to unwrap decorated functions to show
                 the original implementation. Defaults to True.
         output: A file-like object to write to (optional, defaults to sys.stdout). More details:
-    
+
     Details on the "output" argument:
     - None -> sys.stdout
     - TextIO (e.g., sys.stdout, an open text file, StringIO) -> used as-is
@@ -1994,9 +1994,10 @@ def show_function_source(target: object | str, *, unwrap: bool = True,
         obj = obj.func
 
     if not (inspect.isroutine(obj) or inspect.ismethoddescriptor(obj)):
-        call = getattr(obj, "__call__", None)
-        if call and (inspect.isfunction(call) or inspect.ismethod(call)):
-            obj = call
+        if callable(obj):        # use callable(), not getattr/hasattr
+            call = obj.__call__  # bound method; safe after callable()
+            if inspect.isfunction(call) or inspect.ismethod(call):
+                obj = call
 
     # Built-ins / C-extensions don't have retrievable Python source
     if inspect.isbuiltin(obj) or inspect.ismethoddescriptor(obj):
@@ -3000,7 +3001,7 @@ def ensure_dir(path: str | os.PathLike[str],
                follow_symlinks: bool = True) -> Path:
     """
     Ensure that the given path is an existing directory and return it as a Path object.
-    
+
     Args:
         path:            The path to check.
         allow_symlink:   If False, raise an exception if the path is a symlink.
@@ -3080,7 +3081,7 @@ def safe_is_file(path: str | os.PathLike[str],
 
     Returns:
         True if the path is a file, False otherwise.
-    
+
     Raises:
         Intentionally designed to catch PermissionError, FileNotFoundError,
         some OSError variations. But not all.
@@ -3113,7 +3114,7 @@ def safe_is_dir(path: str | os.PathLike[str],
 
     Returns:
         True if the path is a directory, False otherwise.
-    
+
     Raises:
         Intentionally designed to catch PermissionError, FileNotFoundError,
         some OSError variations. But not all.
@@ -3146,7 +3147,7 @@ def safe_stat(path: str | os.PathLike[str],
 
     Returns:
         An os.stat_result object or None if an error occurred.
-    
+
     Raises:
         Intentionally designed to catch PermissionError, FileNotFoundError,
         some OSError variations. But not all.
@@ -3366,7 +3367,7 @@ def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
             logging.info("Saved %s (%s)", os.fspath(dest), human_bytesize(safe_size(dest)))
             succeeded = True
             return
-        except (HTTPError, URLError, socket.timeout, TimeoutError, IOError) as e:
+        except (HTTPError, URLError, socket.timeout, IOError) as e:
             last_err = e
             logging.warning("Download failed (%s).", e)
             if attempt >= retries:
@@ -3602,7 +3603,7 @@ def my_plural(n: int, word: str) -> str:
         engine = getattr(my_plural, "_inflect_engine", None)
         if engine is None:
             engine = inflect.engine()
-            setattr(my_plural, "_inflect_engine", engine)
+            my_plural._inflect_engine = engine
 
         # plural_noun returns False when it can't/shouldn't pluralize
         plural = engine.plural_noun(word)
@@ -4337,7 +4338,7 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
         if pd is not None and isinstance(given_date, pd.Timestamp):
             parsed_dt = given_date.to_pydatetime()
 
-    error_message = f"The date '{given_date}' is type {type(given_date).__name__!r} in an unknown format. Please use NOW, YYYY, YYYY-MM, YYYY-MM-DD, YYYY-MM-DDTHH:MM:SS, other ISO8601 strings, or a decimal year like 2002.291. Datetimes in pandas.Timestamp, numpy.datetime64, or datetime.datetime formats are also accepted and will be converted to datetime.datetime objects in the specified timezone ({parsed_tz})."
+    error_message: str = f"The date '{given_date}' is type {type(given_date).__name__!r} in an unknown format. Please use NOW, YYYY, YYYY-MM, YYYY-MM-DD, YYYY-MM-DDTHH:MM:SS, other ISO8601 strings, or a decimal year like 2002.291. Datetimes in pandas.Timestamp, numpy.datetime64, or datetime.datetime formats are also accepted and will be converted to datetime.datetime objects in the specified timezone ({parsed_tz})."
 
     if parsed_dt is None and not isinstance(given_date, str):
         raise TypeError(error_message)
@@ -4351,7 +4352,7 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
     # Try parsing the date string in various formats
     # Start with RFC 2822 format, then ISO8601, then free-form strings
     # Store any errors encountered in a list to provide feedback if all parsing attempts fail.
-    errors = []
+    errors: list[str] = []
 
     if parsed_dt is None:
         import email.utils
@@ -4502,7 +4503,7 @@ def _to_jsonable(obj: Any, *, roundtrip: bool, _seen: set[int]) -> Any:
         pass
     # Fallback
     stringified = str(obj)
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Object of type %s is not JSON serializable; converting to string: %s",type(obj).__name__, stringified)
+    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Object of type %s is not JSON serializable; converting to string: %s", type(obj).__name__, stringified)
     return stringified if not roundtrip else {"__type__": "object", "value": stringified}
 
 
@@ -5303,25 +5304,27 @@ def run_flake8(options: Options, path: str | os.PathLike[str],
     """
     from flake8.api import legacy as flake8
     # Ensures our env manager installs the plugin; no runtime effect on Flake8.
-    try:  # Flake8: "no quality assurance": F401 = Pyflakes code for “module imported but unused”
+    try:  # Flake8: "no quality assurance": F401 = Pyflakes code for "module imported but unused"
         import bugbear  # noqa: F401
-        options.use_bugbear = True
+        # "B" = All standard Bugbear rules (B001...B8xx). "B9" = All optional/opinionated B9xx rules.
+        options.bugbear_choice = "B,B9"
     except ImportError:
-        options.use_bugbear = False
-        pass
+        options.bugbear_choice = None
     fallback_logging_config()
-    if options.use_bugbear:
+    if options.bugbear_choice:
         logging.info("Using flake8-bugbear checks.")
     if ignore_codes is None:
-        ignore_codes = []
+        ignore_codes: list[str] = []
     if not isinstance(ignore_codes, list):
         raise TypeError("'ignore_codes' must be a list of strings.")
     if not all(isinstance(code, str) for code in ignore_codes):
         raise TypeError("All elements in 'ignore_codes' must be strings.")
     path        = ensure_file(path)
     kwargs = dict(max_line_length=max_line_length, ignore=ignore_codes)
-    if options.use_bugbear:
-        kwargs["extend_select"] = ("B",)        # optionally: ("B", "B950")
+    codes = tuple(c.strip() for c in options.bugbear_choice.split(",") if c.strip())
+    kwargs["extend_select"] = codes
+    if any(c in {"B9", "B950"} for c in codes):
+        kwargs["extend_ignore"] = ("E501",)  # E501 is redundant if B9xx rules are enabled
     style_guide = flake8.get_style_guide(**kwargs)
     report      = style_guide.check_files([path])
     if report.total_errors == 0:
@@ -5344,19 +5347,19 @@ def _gather_flake8_issues(options: Options, path: str | os.PathLike[str],
 
     Args:
         options:         Options instance containing various settings. Contains:
-                             - use_bugbear: Whether to include flake8-bugbear checks.
+                             - bugbear_choice: Whether to include flake8-bugbear checks (and if so, which ones?)
         path:            The path to the Python file to check.
         ignore_codes:    A list of Flake8 error/warning codes to ignore.
         max_line_length: The (custom) maximum allowed line length for E501 checks.
 
     Returns:
         A dictionary mapping Flake8 error codes to their descriptions.
-    
+
     Raises:
         FileNotFoundError: If the specified file does not exist.
     """
     if ignore_codes is None:
-        ignore_codes = []
+        ignore_codes: list[str] = []
     try:
         return _gather_via_cli(options, path, max_line_length, ignore_codes)
     except FileNotFoundError:
@@ -5376,10 +5379,11 @@ def _gather_via_cli(options: Options, path: str | os.PathLike[str],
         f"--format={fmt}",
         os.fspath(path),
     ]
-    if options.use_bugbear:
-        args.insert(-1, "--extend-select=B")    # or "B,B950"
-    # if using B950 and you want it to replace E501:
-    #     args.insert(-1, "--extend-ignore=E501")
+    if options.bugbear_choice:
+        args.insert(-1, f"--extend-select={options.bugbear_choice}")
+        selected = {c.strip() for c in options.bugbear_choice.split(",") if c.strip()}
+        if selected & {"B9", "B950"}:
+            args.insert(-1, "--extend-ignore=E501")  # E501 is redundant if B9xx rules are enabled
     proc = subprocess.run(args, capture_output=True, text=True)
     codes: dict[str, str] = {}
     for line in proc.stdout.splitlines():
@@ -5403,6 +5407,7 @@ def _gather_via_app(options: Options, path: str | os.PathLike[str],
 
     class CodeDictFormatter(BaseFormatter):
         """Custom formatter that collects codes and their first descriptions."""
+
         def __init__(self, options: dict[str, str]) -> None:
             """Initialize the formatter with options."""
             super().__init__(options)
@@ -5417,6 +5422,7 @@ def _gather_via_app(options: Options, path: str | os.PathLike[str],
 
     class CodeDictApp(Application):
         """Custom Application subclass to use our CodeDictFormatter."""
+
         def make_formatter(self) -> BaseFormatter:
             """Create a custom formatter that collects codes and descriptions."""
             # force our custom formatter
@@ -5426,10 +5432,11 @@ def _gather_via_app(options: Options, path: str | os.PathLike[str],
     app = CodeDictApp()
     # supply exactly the same CLI settings in-process
     cli_args = [f"--max-line-length={max_line_length}", f"--ignore={','.join(ignore_codes)}", os.fspath(path)]
-    if options.use_bugbear:
-        cli_args.insert(-1, "--extend-select=B")   # or "B,B950"
-    # if using B950 and you want it to replace E501:
-    #     cli_args.insert(-1, "--extend-ignore=E501")
+    if options.bugbear_choice:
+        cli_args.insert(-1, f"--extend-select={options.bugbear_choice}")
+        selected = {c.strip() for c in options.bugbear_choice.split(",") if c.strip()}
+        if selected & {"B9", "B950"}:
+            cli_args.insert(-1, "--extend-ignore=E501")  # E501 is redundant if B9xx rules are enabled
     # this will parse, run checks, and invoke our formatter behind the scenes
     app.run(cli_args)
     # the formatter collected everything into .codes
@@ -5507,8 +5514,8 @@ def highlight_changes(orig: str, new: str, unchanged_color: str,
     """
     import difflib
     sm = difflib.SequenceMatcher(None, orig, new)
-    new_out = []
-    old_out = []
+    new_out: list[str] = []
+    old_out: list[str] = []
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         old_segment = orig[i1:i2]
         new_segment =  new[j1:j2]
@@ -5999,11 +6006,13 @@ def multireplace(options: Options) -> None:
 
 
 def interactive_flake8(options: Options,
-                       path: str | os.PathLike[str], diff_choice:     int = 1,
-                       ignore_codes: list[str] = [], max_line_length: int = 100,
-                       changed_color: str = ANSI_CYAN,
-                       deleted_color: str = ANSI_RED,
-                       added_color:   str = ANSI_YELLOW) -> None:
+                       path: str | os.PathLike[str],
+                       diff_choice:     int = 1,
+                       ignore_codes: list[str] | None = None,
+                       max_line_length: int = 100,
+                       changed_color:   str = ANSI_CYAN,
+                       deleted_color:   str = ANSI_RED,
+                       added_color:     str = ANSI_YELLOW) -> None:
     """
     1) Run the flake8 API for summary counts.
     2) Shell out to flake8 CLI once to harvest one description per code.
@@ -6011,7 +6020,7 @@ def interactive_flake8(options: Options,
 
     Args:
         options:         The parsed command-line options. Contains:
-                             - use_bugbear: Whether to include flake8-bugbear checks.
+                             - bugbear_choice: Whether to include flake8-bugbear checks.
         path:            Path to the Python file to check.
         diff_choice:     How many context lines to show in the diff (0 = old-style diff,
                          1  = unified diff with 0 context lines,
@@ -6025,12 +6034,15 @@ def interactive_flake8(options: Options,
     fallback_logging_config()
     path = ensure_file(path)
     logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("At the top of the function %s(), diff_choice=%s", return_method_name(), diff_choice)
+    if ignore_codes is None:
+        ignore_codes: list[str] = []
     if not run_flake8(options, path, ignore_codes=ignore_codes, max_line_length=max_line_length):
         logging.info("No flake8 errors—nothing to do.")
         return
     codes = _gather_flake8_issues(options, path, ignore_codes=ignore_codes, max_line_length=max_line_length)
     fixable_codes = get_autopep8_fixable_codes()
     logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Autopep8 can fix these codes: %s", fixable_codes)
+    touched_code = False
     for code, desc in codes.items():
         if code not in fixable_codes:
             logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Skipping %s: no autopep8 fixer", code)
@@ -6039,9 +6051,13 @@ def interactive_flake8(options: Options,
         if not ask_and_autopep8(path, code, desc, diff_choice=diff_choice,
                                 changed_color=changed_color, deleted_color=deleted_color, added_color=added_color):
             break
-    logging.info("%sDone. Re-running flake8 to confirm fixes...%s", ANSI_GREEN, ANSI_RESET)
-    run_flake8(options, path, ignore_codes=ignore_codes, max_line_length=max_line_length)
-
+        touched_code = True
+    if touched_code:
+        logging.info("%sDone. Re-running flake8 to confirm fixes...%s", ANSI_GREEN, ANSI_RESET)
+        run_flake8(options, path, ignore_codes=ignore_codes, max_line_length=max_line_length)
+    else:
+        logging.info("No fixable flake8 codes found or no changes made.")
+        return
 
 # - Use {str(univ_defs_dir)!r} so Windows backslashes are safely escaped in the string literal.
 # - Double the braces around 'univ_defs_dir' in the f-string to keep them literal in the written file.
@@ -7351,7 +7367,7 @@ def set_system_volume(percent: int, tolerance: int = 1,
                     raise RuntimeError(f"Mute verify failed: got {state}")
                 logging.info("[pulsectl] Volume set to %d%%, %s", actual, state)
                 return  # Successfully set volume and verified
-        except (ImportError, ModuleNotFoundError):
+        except ImportError:
             logging.warning("[pulsectl] Not installed; falling back to pactl...")
         except PulseError as e:
             logging.error("[pulsectl] PulseError: %s; falling back to pactl...", e)
@@ -7429,7 +7445,7 @@ def open_dir_in_VLC(the_dir: str | os.PathLike[str], sort_choice: str = "sort_by
     # List to store files with their modification times
     files_with_times: list[tuple[float, Path]] = []
     dirs_with_times:  list[tuple[float, Path]] = []  # Only used if not recursive
-    entries:                    Iterator[Path] = the_dir.rglob("*") if recursive else the_dir.iterdir()
+    entries:                    Iterable[Path] = the_dir.rglob("*") if recursive else the_dir.iterdir()
     for p in entries:
         if safe_is_file(p):
             if p.suffix.casefold() in PLAYLIST_EXTENSIONS_SET:
@@ -7604,7 +7620,7 @@ def normalize_for_search(text: str) -> str:
     try:
         from unidecode import unidecode
         decoded_text = unidecode(text)
-    except (ImportError, ModuleNotFoundError):
+    except ImportError:
         logging.warning("unidecode module not installed; diacritics will not be removed.")
         decoded_text = text
     return decoded_text.casefold().translate(TRANSLATION_TABLE)
