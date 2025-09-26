@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path  # Preferred over os.path for path manipulations.
 import logging
-from collections.abc import Sequence
+from collections.abc import Sequence, Callable, Iterable
 from itertools import chain
 from typing import TextIO, Any, TypeAlias, Type, Literal, Protocol, Final
 import re  # Used to precompile regexes for performance
@@ -80,9 +80,9 @@ class PlotOptions(Options):
         """Initialize PlotOptions class with values from the Options class, and default plotting values."""
         # Ideas for improving this parent class: https://chatgpt.com/share/6876a7e2-da84-8006-9c8f-100d243b73e4
         super().__init__()
-        self.myfigsize   = (16, 9)
-        self.fsize       = 24
-        self.dpi_choice  = 300
+        self.myfigsize  = (16, 9)
+        self.fsize      = 24
+        self.dpi_choice = 300
         # keep immutable "base" palettes so we can recompute safely
         self._base_colors      = ["black", "red",    "blue",      "green",      "purple"]
         self._base_lightcolors = ["grey",  "pink",   "lightblue", "lightgreen", "lightpurple"]
@@ -133,7 +133,6 @@ class SelectionStrategy(str, Enum):
 class LLMConfig:
     """Configuration for LLM selection and usage. Data only."""
     # Routing / engines
-    use_litellm:        bool = True
     allow_local_models: bool = True
     use_local_model:    bool = False
     local_model_name:    str = "ollama/qwen2.5-coder:1.5b-base"
@@ -149,10 +148,6 @@ class LLMConfig:
 
     # Candidates + scoring
     candidate_models:    list[str] = field(default_factory=list)    # if empty -> _default_candidate_models()
-
-    # Back-compat defaults (filled after selection)
-    default_model:   str = "gpt-3.5-turbo"
-    default_company: str = "OpenAI"
 
     # Optional: commonly-used knobs some programs keep near config
     default_temperature: float = 0.0
@@ -232,8 +227,7 @@ class StrategyFn(Protocol):
 
 class LLMs:
     """
-    - Owns legacy vendor SDK clients (OpenAI/Anthropic)
-    - Optionally routes via LiteLLM
+    - Routes via LiteLLM
     - Builds ModelInfo list, filters by availability/context
     - Applies registered/built-in selection strategy
     - Exposes stable send_prompt(...)
@@ -558,10 +552,7 @@ class LLMs:
 
     # ---------- public lifecycle ----------
     def __init__(self) -> None:
-        """
-        Initialize legacy vendors immediately (keeps backward compat).
-        LiteLLM is lazy-initialized when/if config.use_litellm is True.
-        """
+        """Initialize LLMs manager. Call apply_config() before use."""
         # LiteLLM configuration:
         self._config:                           LLMConfig | None = None
         self._selected:                         ModelInfo | None = None
@@ -569,68 +560,29 @@ class LLMs:
         self._strategies:                  dict[str, StrategyFn] = {}
         self._last_strategy:                                 str = str(SelectionStrategy.CHEAPEST.value)
         self._pricing_cache: dict[str, tuple[float, float, int]] = {}
-        self._litellm_ready:                                bool = False
+        self._litellm_ready:                                bool = False  # True when/if LiteLLM client has been imported
         self._litellm_mod:                            Any | None = None
-        self._legacy_available:                             bool = False
         self._register_builtin_strategies()
-        self.init_llms()  # sets up legacy clients
 
-        # Legacy direct API access:
-        from types import ModuleType
-        self.llms: list[dict[str, str]] = [
-            {"name": "OpenAI",    "module": "openai",    "env_var": "OPENAI_API_KEY"},
-            {"name": "Anthropic", "module": "anthropic", "env_var": "ANTHROPIC_API_KEY"},
-        ]
-        self.found_llms:                         dict[str, bool] = {}
-        self.llm_modules:                  dict[str, ModuleType] = {}
-        self.clients:                             dict[str, Any] = {}
-        self.model:   str = "gpt-3.5-turbo"
-        self.company: str = "OpenAI"
+    @property
+    def selected(self) -> ModelInfo | None:
+        """Read-only handle to the currently selected model (or None)."""
+        return self._selected
 
-    # ---------- vendor discovery (legacy) ----------
-    def init_llms(self) -> None:
-        """Discover legacy vendor SDKs + clients."""
-        for llm in self.llms:
-            this_llm = llm["name"]
-            this_key = llm["env_var"]
-            try:
-                if this_llm == "OpenAI":
-                    import openai  # type: ignore
-                    self.llm_modules[this_llm] = openai
-                elif this_llm == "Anthropic":
-                    import anthropic  # type: ignore
-                    self.llm_modules[this_llm] = anthropic
-                else:
-                    my_critical_error(f"Unknown LLM: {this_llm}")
+    @property
+    def model(self) -> str | None:
+        """Selected model name."""
+        return self._selected.name     if self._selected else None
 
-                msg = f"{this_llm} package found"
-                if this_key in os.environ:
-                    self.found_llms[this_llm] = True
-                    msg += f", and the {this_key} environment variable is set."
-                else:
-                    self.found_llms[this_llm] = False
-                    msg += f", but the {this_key} environment variable is not set, so the {this_llm} package cannot be used."
-                print(msg)
-            except ImportError as e:
-                self.found_llms[this_llm] = False
-                print(f"{this_llm} package not found, so it cannot be used. Error: {e}")
-
-        # Create legacy clients for available SDKs
-        for llm_name, ok in self.found_llms.items():
-            if not ok:
-                continue
-            if   llm_name == "OpenAI":
-                self.clients[llm_name] = self.llm_modules[llm_name].OpenAI()
-            elif llm_name == "Anthropic":
-                self.clients[llm_name] = self.llm_modules[llm_name].Anthropic()
-
-        self._legacy_available = any(self.found_llms.values())
+    @property
+    def provider(self) -> str | None:
+        """Selected provider name."""
+        return self._selected.provider if self._selected else None
 
     # ---------- config application ----------
     def apply_config(self, config: LLMConfig) -> None:
         """
-        Store config, hydrate defaults, compute candidates, select a model,
-        then set self.model/self.company for back-compat.
+        Store config, hydrate defaults, compute candidates, select a model.
         """
         cfg = self._resolve_config(config)
         self._config = cfg
@@ -653,75 +605,42 @@ class LLMs:
             chosen                        = self._build_model_info(cfg.local_model_name, cfg)
             self._selected                = chosen
             self._candidates_after_filter = [chosen]
-            self.model                    = chosen.name
-            self.company                  = chosen.provider
-            self._after_selection(self.model, self.company)
+            self._after_selection(chosen.name, chosen.provider)
             return
 
-        # Build + base filter
-        raw_candidates = [self._build_model_info(m, cfg) for m in cfg.candidate_models]
-        ctx = SelectionContext(
-            tokens_in=cfg.assumed_prompt_tokens,
-            tokens_out=cfg.assumed_output_tokens,
-            min_context_tokens=cfg.min_context_tokens,
-            require_local=False,   # "prefer_local" handled in scoring, not filtering
-        )
-        filtered, reasons_map = self._filter_candidates(raw_candidates, ctx)
+        # Build pool and context with the resolved cfg
+        eff, ctx, reasons_map = self._selection_pool(cfg)
 
-        # Optional: attempt hard filters for cost/speed only if it won't nuke the pool
-        eff = filtered if filtered else raw_candidates
-        if cfg.max_estimated_cost is not None:
-            tmp = [m for m in eff if m.estimate_cost(cfg.assumed_prompt_tokens,
-                                                     cfg.assumed_output_tokens) <= cfg.max_estimated_cost]
-            if tmp:  # only keep if we still have choices
-                eff = tmp
-        if cfg.speed_floor is not None:
-            tmp = [m for m in eff if (m.speed is not None and m.speed >= cfg.speed_floor)]
-            if tmp:
-                eff = tmp
-
-        self._candidates_after_filter = eff
-        if not self._candidates_after_filter:
-            raise RuntimeError(
-                "No candidates available after filtering. "
-                "Check allow_local_models, min_context_tokens, candidate_models, and provider availability."
-            )
-
-        # attach reasons to the models we keep
-        for mi in self._candidates_after_filter:
-            mi.meta["filter_reasons"] = reasons_map.get(mi.name, [])
-
-        # Choose strategy: if user signaled multi-objective prefs, prefer the composite strategy
+        # Choose strategy (same logic you already have)
         if isinstance(cfg.selection_strategy, SelectionStrategy):
             strategy_name = cfg.selection_strategy.value
         else:
             strategy_name = str(cfg.selection_strategy)
 
         wants_multi = any([
-            cfg.prefer_code, cfg.prefer_low_TTFT, cfg.prefer_local,
-            cfg.max_estimated_cost is not None, cfg.speed_floor is not None,
-            cfg.weight_code_skill > 0.0, cfg.weight_general_skill > 0.0,
-            cfg.weight_TTFT > 0.0, cfg.weight_speed > 0.0, cfg.weight_nonlocal_penalty > 0.0,
+            cfg.prefer_code,
+            cfg.prefer_low_TTFT,cfg.prefer_local,
+            cfg.max_estimated_cost is not None,
+            cfg.speed_floor        is not None,
+            cfg.weight_code_skill       > 0.0,
+            cfg.weight_general_skill    > 0.0,
+            cfg.weight_TTFT             > 0.0,
+            cfg.weight_speed            > 0.0,
+            cfg.weight_nonlocal_penalty > 0.0,
         ])
         if wants_multi and strategy_name == SelectionStrategy.CHEAPEST.value:
             strategy_name = "multi_objective"
 
-        strategy_fn = self._strategies.get(strategy_name)
-        if strategy_fn is None:
-            strategy_name = SelectionStrategy.CHEAPEST.value
-            strategy_fn = self._strategies[strategy_name]
+        strategy_fn         = self._strategies.get(strategy_name) or \
+                              self._strategies[SelectionStrategy.CHEAPEST.value]
         self._last_strategy = strategy_name
 
-        winner         = strategy_fn(self._candidates_after_filter, ctx)
-        self._selected = winner
-        self.model     = winner.name
-        self.company   = winner.provider
-
-        for mi in raw_candidates:
-            if mi.name in reasons_map:
-                mi.meta.setdefault("filter_reasons", reasons_map[mi.name])
-
-        self._after_selection(self.model, self.company)
+        winner              = strategy_fn(eff, ctx)
+        self._selected      = winner
+        self._candidates_after_filter = eff
+        for mi in self._candidates_after_filter:
+            mi.meta["filter_reasons"] = reasons_map.get(mi.name, [])
+        self._after_selection(winner.name, winner.provider)
 
     def refresh_selection(self) -> None:
         """Re-run selection using the current LLMConfig."""
@@ -869,6 +788,79 @@ class LLMs:
                 mi.meta.pop("filter_reasons", None)
         return res
 
+    def _selection_pool(self, cfg: LLMConfig) -> tuple[list[ModelInfo], SelectionContext]:
+        """Build the effective candidate pool and SelectionContext for a given config."""
+        # Forced-local short-circuit → caller should handle, but keep this as a guard
+        if cfg.use_local_model:
+            # validate local availability (reuse the same checks as apply_config)
+            entry = self.model_info.get(cfg.local_model_name, {})
+            if not entry.get("local", False):
+                raise RuntimeError(f"cfg.use_local_model is {cfg.use_local_model} but '{cfg.local_model_name}' is not marked as local in the registry.")
+            provider = entry.get("provider", "Local")
+            if not self._is_provider_available(provider, cfg.local_model_name):
+                raise RuntimeError(
+                    f"Local model '{cfg.local_model_name}' is not available on runtime "
+                    f"'{entry.get('runtime', 'unknown')}'. Ensure the runtime is up "
+                    f"(Ollama: {cfg.ollama_base_url}) and that the model is pulled."
+                )
+            mi = self._build_model_info(cfg.local_model_name, cfg)
+            ctx = SelectionContext(
+                tokens_in=cfg.assumed_prompt_tokens,
+                tokens_out=cfg.assumed_output_tokens,
+                min_context_tokens=cfg.min_context_tokens,
+                require_local=True,
+            )
+            return [mi], ctx
+        raw_candidates = [self._build_model_info(m, cfg) for m in cfg.candidate_models]
+        ctx = SelectionContext(
+            tokens_in=cfg.assumed_prompt_tokens,
+            tokens_out=cfg.assumed_output_tokens,
+            min_context_tokens=cfg.min_context_tokens,
+            require_local=False,
+        )
+        filtered, reasons_map = self._filter_candidates(raw_candidates, ctx)
+        eff = filtered if filtered else raw_candidates
+        if cfg.max_estimated_cost is not None:
+            tmp = [m for m in eff if m.estimate_cost(cfg.assumed_prompt_tokens, cfg.assumed_output_tokens) <= cfg.max_estimated_cost]
+            if tmp:
+                eff = tmp
+        if cfg.speed_floor is not None:
+            tmp = [m for m in eff if (m.speed is not None and m.speed >= cfg.speed_floor)]
+            if tmp:
+                eff = tmp
+        if not eff:
+            raise RuntimeError(
+                "No candidates available after filtering. "
+                "Check allow_local_models, min_context_tokens, candidate_models, and provider availability."
+            )
+        return eff, ctx, reasons_map
+
+    def alternative_model(self, *, strategy: SelectionStrategy | str,
+                          return_reasons: bool = False, **cfg_overrides) -> ModelInfo:
+        """
+        Return the best candidate under a given strategy using a TEMPORARY config
+        built from the current config + partial overrides (e.g., use_local_model=True),
+        WITHOUT mutating the current selection.
+        """
+        from dataclasses import replace as _dc_replace
+        base_cfg = self.get_config()  # snapshot of current config (already resolved by apply_config)
+        # apply partial overrides
+        try:
+            tmp_cfg = _dc_replace(base_cfg, **cfg_overrides)
+        except TypeError as e:
+            raise ValueError(f"Invalid override(s): {e}")
+        # Re-resolve in case overrides trigger weight injections, etc.
+        tmp_cfg  = self._resolve_config(tmp_cfg)
+        # Build pool (handles forced-local inside)
+        eff, ctx, reasons_map = self._selection_pool(tmp_cfg)
+        # Pick strategy
+        name = strategy.value if isinstance(strategy, SelectionStrategy) else str(strategy)
+        fn = self._strategies.get(name)
+        if fn is None:
+            raise ValueError(f"Unknown strategy: {name}")
+        winner = fn(eff, ctx)
+        return (winner, reasons_map) if return_reasons else winner
+
     def describe_selection(self) -> dict[str, Any]:
         """Describe the current model selection."""
         chosen = self._selected
@@ -925,58 +917,40 @@ class LLMs:
 
     # ---------- core send method (stable) ----------
     def send_prompt(self, prompt: str, system_message: str,
-                    model: str, company: str, temperature: float,
+                    model: str, temperature: float,
                     max_tokens: int = 1000) -> str:
         """
-        If config.use_litellm: route via LiteLLM (company ignored for transport).
-        Else: use legacy vendor client keyed by 'company'.
-        Returns text content.
+        Send a prompt+system message to the specified model, return the text response.
+
+        Args:
+            prompt:         The user prompt to send.
+            system_message: The system message to include.
+            model:          The model name to use (must be in model_info).
+            temperature:    Sampling temperature.
+            max_tokens:     Maximum tokens to generate in the response.
+        
+        Returns:
+            The text response from the model.
+        
+        Raises:
+            RuntimeError: If the model is unknown or if the request fails.
+            ValueError:   If the prompt is empty.
         """
-        cfg = self._config or LLMConfig()
-        if cfg.use_litellm:
-            self._ensure_litellm()
-            litellm = self._litellm_mod  # type: ignore
-
-            extra = self._extra_litellm_args_for(model)
-            try:
-                resp = litellm.completion(
-                    model=model,
-                    messages=[{"role": "system", "content": system_message},
-                              {"role": "user",   "content": prompt}],
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    **extra
-                )
-            except Exception as e:
-                my_critical_error(f"LiteLLM request failed for model '{model}': {e}")
-
-            return self._extract_text_from_openai_like(resp)
-
-        # --- Legacy vendor paths preserved as before ---
-        if company == "OpenAI":
-            if "OpenAI" not in self.clients:
-                my_critical_error("OpenAI client not initialized or OPENAI_API_KEY not set.")
-            response_obj = self.clients["OpenAI"].chat.completions.create(
+        self._ensure_litellm()
+        litellm = self._litellm_mod  # type: ignore
+        extra   = self._extra_litellm_args_for(model)
+        try:
+            resp = litellm.completion(
                 model=model,
-                temperature=temperature,
                 messages=[{"role": "system", "content": system_message},
                           {"role": "user",   "content": prompt}],
-            )
-            return response_obj.choices[0].message.content
-        elif company == "Anthropic":
-            if "Anthropic" not in self.clients:
-                my_critical_error("Anthropic client not initialized or ANTHROPIC_API_KEY not set.")
-            response_obj = self.clients["Anthropic"].messages.create(
-                model=model,
-                max_tokens=max_tokens,
                 temperature=temperature,
-                system=system_message,
-                messages=[{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+                max_tokens=max_tokens,
+                **extra
             )
-            return response_obj.content[0].text
-        else:
-            my_critical_error(f"Unknown company: {company}")
-            return ""  # unreachable
+        except Exception as e:
+            my_critical_error(f"LiteLLM request failed for model '{model}': {e}")
+        return self._extract_text_from_openai_like(resp)
 
     # ====================================================
     # overridable hooks (tiny, intentional)
@@ -1029,9 +1003,6 @@ class LLMs:
                     scores.update(data)
             except Exception as e:
                 logging.warning("Failed to load LLM_MODEL_SCORES_JSON from %s: %s", json_path_str, e)
-
-        if not config.use_litellm:
-            cands = [m for m in cands if not self.model_info.get(m, {}).get("local", False)]
 
         hydrated = replace(config, candidate_models=cands, model_scores=scores)
 
@@ -1353,7 +1324,7 @@ class LLMs:
             return 0
 
         if model is None:
-            model = getattr(self, "model", None) or ""
+            model = self._selected.name if self._selected else ""
 
         entry    = self.model_info.get(model, {})
         runtime  = (entry.get("runtime") or "").strip().casefold()
@@ -1602,7 +1573,7 @@ def my_critical_error(message: str = "A critical error occurred.",
         # No exception is being handled; log only the message
         logging.critical(message)
     if choose_breakpoint:
-        print("Entering breakpoint while inside the my_critical_error() function. You can step outside of this function and remain paused by pressing 'n' to access variables in the calling function or press 'c' to continue running the script.")
+        print("Entering breakpoint while inside the my_critical_error() function. You can step outside of this function and remain paused by pressing 'n' to access variables in the calling function or press 'c' to continue running the script. If logging is enabled but the level is not set to DEBUG, you can type logging.getLogger().setLevel(logging.DEBUG) to see more detailed logs.")
         breakpoint()
     else:
         sys.exit(exit_code)
@@ -1713,7 +1684,7 @@ def my_fopen(file_path: str | os.PathLike[str], suppress_errors: bool = False,
     fallback_logging_config(log_level=logging.INFO if not suppress_errors else logging.CRITICAL,
                             rawlog=rawlog)
     file_path = ensure_path(file_path)
-    if not file_path.exists():
+    if not safe_exists(file_path):
         this_message = f"File does not exist: {os.fspath(file_path)}"
         if not rawlog:
             if not suppress_errors: logging.error(this_message)
@@ -1946,7 +1917,6 @@ def show_function_source(target: object | str, *, unwrap: bool = True,
     import inspect
     import pydoc
     import io
-    from collections.abc import Callable
     # Resolve the object if 'target' is a string
     if isinstance(target, str):
         name = target
@@ -2024,9 +1994,9 @@ def show_function_source(target: object | str, *, unwrap: bool = True,
             raise IsADirectoryError(f"Output path is a directory: {os.fspath(path)}")
         # Ensure parents exist ('.' is fine to call mkdir() on with exist_ok=True)
         path.parent.mkdir(parents=True, exist_ok=True)
-        existed = path.exists()
+        exists = safe_exists(path)
         note = (f"# Appending to existing file: {os.fspath(path)}"
-                if existed
+                if exists
                 else f"# Creating new file: {os.fspath(path)}")
         # Try atomic write helper if available; fall back on any failure.
         _maw = globals().get("my_atomic_write")
@@ -2972,9 +2942,8 @@ def ensure_file(path: str | os.PathLike[str],
         ValueError:        If the path exists but is not a regular file, or if symlinks are not allowed.
         ValueError:        If raise_on_empty is True and the file is empty (or bad permissions, etc.)
     """
-    p = ensure_path(path)  # expanded + absolute, no symlink resolution
-    # Existence check (follow or not)
-    exists = p.exists() if follow_symlinks else os.path.lexists(os.fspath(p))
+    p      = ensure_path(path)  # expanded + absolute, no symlink resolution
+    exists = safe_exists(p, follow_symlinks=follow_symlinks)
     if not exists:
         raise FileNotFoundError(f"No such file: {os.fspath(p)}")
     if not allow_symlink and p.is_symlink():
@@ -3017,8 +2986,8 @@ def ensure_dir(path: str | os.PathLike[str],
         FileNotFoundError:  If the directory does not exist.
         NotADirectoryError: If the path exists but is not a directory.
     """
-    p      = ensure_path(path)  # expanded + absolute
-    exists = p.exists() if follow_symlinks else os.path.lexists(os.fspath(p))
+    p      = ensure_path(path)  # expanded + absolute, no symlink resolution
+    exists = safe_exists(p, follow_symlinks=follow_symlinks)
     if not exists:
         raise FileNotFoundError(f"No such directory: {os.fspath(p)}")
     if not allow_symlink and p.is_symlink():
@@ -3067,6 +3036,47 @@ IGNORE_THESE_ERRORS: Final[frozenset[int]] = frozenset(
         getattr(errno, "ESTALE", None),   # NFS: stale file handle (may not exist)
     } if e is not None
 )
+
+
+def safe_exists(path: str | os.PathLike[str],
+                follow_symlinks: bool = True) -> bool:
+    """
+    Like Path.exists()/os.path.lexists(), but doesn't raise on permission/loop errors.
+
+    Args:
+        path:            The path to check.
+        follow_symlinks: If False, do not follow symlinks when checking if it exists.
+
+    Returns:
+        True if the path appears to exist (respecting follow_symlinks), False if it doesn't.
+        For certain access/loop issues, returns True to avoid misclassifying as 'missing'.
+    """
+    p = path if isinstance(path, Path) else ensure_path(path)
+
+    if not follow_symlinks:
+        # lexists() doesn't raise for permission and treats a symlink itself as 'exists'
+        return os.path.lexists(os.fspath(p))
+
+    try:
+        return p.exists()
+    except PermissionError:
+        # Treat as 'exists but inaccessible' to avoid raising FileNotFoundError upstream
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            "%s: permission denied: %s", return_method_name(), os.fspath(p)
+        )
+        return True
+    except OSError as e:
+        # Fine-grained handling: missing vs. other transient/loop errors
+        if e.errno in (errno.ENOENT, errno.ENOTDIR):
+            return False
+        if e.errno in IGNORE_THESE_ERRORS:
+            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+                "%s: suppressed errno=%s (%s): %s", return_method_name(),
+                e.errno, getattr(errno, "errorcode", {}).get(e.errno, "?"), os.fspath(p)
+            )
+            # assume it exists but is problematic (loop, access, stale handle)
+            return True
+        raise
 
 
 def safe_is_file(path: str | os.PathLike[str],
@@ -3273,7 +3283,7 @@ def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
 
     # Remove any stale partial to avoid skewing free-space checks.
     try:
-        if temp.exists():
+        if safe_exists(temp):
             temp.unlink()
     except OSError:
         # If we can't remove it, we'll truncate on open later; free-space check may be conservative.
@@ -3295,7 +3305,7 @@ def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
 
     if expected is not None:
         # Skip re-download if size matches on disk already.
-        if dest.exists():
+        if safe_exists(dest):
             try:
                 if (dest_size := safe_size(dest)) is not None and dest_size == expected:
                     logging.info("File already present with expected size; skipping: %s", os.fspath(dest))
@@ -3383,7 +3393,7 @@ def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
             break
         finally:
             try:
-                if not succeeded and temp.exists():
+                if not succeeded and safe_exists(temp):
                     temp.unlink()
             except OSError:
                 pass
@@ -3413,7 +3423,7 @@ def query_free_space(path: str | os.PathLike[str]) -> int:
     base = p if safe_is_dir(p) else p.parent
 
     # Climb up until we find an existing directory.
-    while not base.exists():
+    while not safe_exists(base):
         if base == base.parent:
             raise FileNotFoundError(f"No existing parent found for {path!r}")
         base = base.parent
@@ -3459,7 +3469,7 @@ def find_ffmpeg() -> str | None:
         None
 
     Returns:
-        The path to the ffmpeg executable or None if not found.
+        A string containing the path to the ffmpeg executable or None if not found.
 
     Raises:
         None
@@ -3468,14 +3478,16 @@ def find_ffmpeg() -> str | None:
     # 1) Explicit env vars (user can set one of these)
     for env_key in ("FFMPEG", "FFMPEG_PATH", "IMAGEIO_FFMPEG_EXE"):
         p = os.environ.get(env_key)
-        if p and Path(p).exists():
-            return os.fspath(Path(p))
+        if p:
+            p = ensure_file(p)
+            return os.fspath(p)
 
     # 2) On PATH (handles .exe on Windows automatically)
     for name in ("ffmpeg", "ffmpeg.exe"):
         p = shutil.which(name)
         if p:
-            return p
+            p = ensure_file(p)
+            return os.fspath(p)
 
     # 3) Typical Conda/Miniconda/Mambaforge locations
     sp = Path(sys.prefix)  # current Python env prefix
@@ -3498,14 +3510,15 @@ def find_ffmpeg() -> str | None:
     try:
         import imageio_ffmpeg  # type: ignore
         p = imageio_ffmpeg.get_ffmpeg_exe()
-        if p and Path(p).exists():
-            return os.fspath(Path(p))
+        if p:
+            p = ensure_file(p)
+            return os.fspath(p)
     except Exception:
         pass
 
     for c in candidates:
-        if c.exists():
-            return str(c)
+        if safe_exists(c):
+            return os.fspath(c)
 
     return None
 
@@ -4920,7 +4933,7 @@ def compile_code(source_or_filepath: str | os.PathLike[str],
         force_source:       If True, treat 'source_or_filepath' as a source code string even if it looks like a file path.
 
     Returns:
-        bool: True if compilation succeeds, False if it fails with a SyntaxError or other exception
+        True if compilation succeeds, False if it fails with a SyntaxError or other exception
 
     Raises:
         SyntaxError: If the source code has a syntax error, it will be logged and False is returned.
@@ -5210,7 +5223,7 @@ def check_python_formatting(path: str | os.PathLike[str], diff_choice: int = 1) 
         diff_choice: How many context lines to show in the diff (0 = old-style diff, 1 = unified diff with 0 context lines, 2+ = unified diff with 'diff_choice - 1' context lines).
 
     Returns:
-        bool: False if the user chose to quit during any replacement prompts, True otherwise.
+        False if the user chose to quit during any replacement prompts, True otherwise.
 
     Raises:
         FileNotFoundError: If the specified file does not exist.
@@ -5308,11 +5321,11 @@ def run_flake8(options: Options, path: str | os.PathLike[str],
         import bugbear  # noqa: F401
         # "B" = All standard Bugbear rules (B001...B8xx). "B9" = All optional/opinionated B9xx rules.
         options.bugbear_choice = "B,B9"
+        logging.info("Using flake8-bugbear checks.")
     except ImportError:
+        logging.error("flake8-bugbear is not installed, so no Bugbear checks will be performed.")
         options.bugbear_choice = None
     fallback_logging_config()
-    if options.bugbear_choice:
-        logging.info("Using flake8-bugbear checks.")
     if ignore_codes is None:
         ignore_codes: list[str] = []
     if not isinstance(ignore_codes, list):
@@ -5321,10 +5334,11 @@ def run_flake8(options: Options, path: str | os.PathLike[str],
         raise TypeError("All elements in 'ignore_codes' must be strings.")
     path        = ensure_file(path)
     kwargs = dict(max_line_length=max_line_length, ignore=ignore_codes)
-    codes = tuple(c.strip() for c in options.bugbear_choice.split(",") if c.strip())
-    kwargs["extend_select"] = codes
-    if any(c in {"B9", "B950"} for c in codes):
-        kwargs["extend_ignore"] = ("E501",)  # E501 is redundant if B9xx rules are enabled
+    if options.bugbear_choice:
+        codes  = tuple(c.strip() for c in options.bugbear_choice.split(",") if c.strip())
+        kwargs["extend_select"] = codes
+        if any(c in {"B9", "B950"} for c in codes):
+            kwargs["extend_ignore"] = ("E501",)  # E501 is redundant if B9xx rules are enabled
     style_guide = flake8.get_style_guide(**kwargs)
     report      = style_guide.check_files([path])
     if report.total_errors == 0:
@@ -5585,32 +5599,47 @@ def my_diff(orig_text:     str, changed_text: str,
         nonlocal hunk_entries
         if not hunk_entries:
             return
+        # Partition current hunk entries.
         deletes = [e for e in hunk_entries if e[0] == "-"]
         inserts = [e for e in hunk_entries if e[0] == "+"]
+        # We'll pair in order: kth delete with kth insert.
         pair_count = min(len(deletes), len(inserts))
-        di = ii = 0
+        di = 0
+        # Track which 'new' line numbers have already been consumed by a pairing
+        # (so we can skip printing those '+' entries when the loop hits them later).
+        consumed_new_line_numbers: set[int] = set()
         for tag, text, dln, nln in hunk_entries:
             if tag == "-":
                 if di < pair_count:
+                    # Compare this delete with its paired insert.
                     old_vis = _vis_trailing_ws(text)
-                    new_vis = _vis_trailing_ws(inserts[di][1])
-                    old_hl, new_hl = highlight_changes(
-                        old_vis, new_vis,
-                        unchanged_color=changed_color,  # this is confusing but correct. "The unchanged parts in the changed line"
-                        added_color=added_color,
-                        deleted_color=deleted_color
-                    )
+                    new_text = inserts[di][1]
+                    new_nln  = inserts[di][3]
+                    new_vis  = _vis_trailing_ws(new_text)
+                    # Mark the paired '+' as consumed, regardless of identical/different.
+                    consumed_new_line_numbers.add(new_nln)
+                    # If identical after visibility transform, emit nothing (no context).
+                    if old_vis == new_vis:
+                        di += 1
+                        continue
+                    # Otherwise, highlight differences.
+                    old_hl, new_hl = highlight_changes(old_vis, new_vis,
+                                                       unchanged_color=changed_color,
+                                                       added_color=added_color,
+                                                       deleted_color=deleted_color)
                     logging.info(f"< {dln:>{the_digits}}: {old_hl}{ANSI_RESET}")
-                    logging.info(f"{changed_color}> {inserts[di][3]:>{the_digits}}:{ANSI_RESET} {new_hl}{ANSI_RESET}")
+                    logging.info(f"{changed_color}> {new_nln:>{the_digits}}:{ANSI_RESET} {new_hl}{ANSI_RESET}")
+                    di += 1
                 else:
-                    logging.info(f"< {dln:>{the_digits}}: "
-                                 f"{deleted_color}{_vis_trailing_ws(text)}{ANSI_RESET}")
-                di += 1
+                    # Unpaired delete (pure removal in this hunk).
+                    logging.info(f"< {dln:>{the_digits}}: {deleted_color}{_vis_trailing_ws(text)}{ANSI_RESET}")
             elif tag == "+":
-                if ii >= pair_count:
-                    logging.info(f"{changed_color}> {nln:>{the_digits}}:{ANSI_RESET} "
-                                 f"{ANSI_RED}{_vis_trailing_ws(text)}{ANSI_RESET}")
-                ii += 1
+                # If this '+' was already paired (even if identical), skip it.
+                if nln in consumed_new_line_numbers:
+                    continue
+                # Unpaired insert (pure addition in this hunk).
+                vis = _vis_trailing_ws(text)
+                logging.info(f"{changed_color}> {nln:>{the_digits}}:{ANSI_RESET} {ANSI_RED}{vis}{ANSI_RESET}")
         hunk_entries.clear()
 
     def flush_removed(orig_lineno: int) -> None:
@@ -5695,7 +5724,7 @@ def is_python_script(path: str | os.PathLike[str]) -> bool:
         path: The file path to check.
 
     Returns:
-        bool: True if the path is a Python script, False otherwise.
+        True if the path is a Python script, False otherwise.
 
     Raises:
         IsADirectoryError: If the path is a directory.
@@ -5758,7 +5787,7 @@ def diff_and_confirm(orig_text: str, changed_text: str,
         description:   A longer description of the issue being fixed (default "").
 
     Returns:
-        bool: False if the user chose to quit; True otherwise.
+        False if the user chose to quit; True otherwise.
 
     Raises:
         FileNotFoundError: If the specified file does not exist.
@@ -5817,7 +5846,7 @@ def ask_and_autopep8(path: str | os.PathLike[str], code: str,
         added_color:   Color to use for the added characters in changed lines (default ANSI_GREEN).
 
     Returns:
-        bool: True if the user wants to continue, False if they want to quit.
+        True if the user wants to continue, False if they want to quit.
 
     Raises:
         FileNotFoundError: If the specified file does not exist.
@@ -5921,7 +5950,7 @@ def _resolve_dir(dir_arg: str | None) -> Path:
         p = ensure_path(dir_arg)
     else:
         p = Path.cwd().expanduser().resolve(strict=True)
-    if not p.exists():
+    if not safe_exists(p):
         raise FileNotFoundError(f"Directory does not exist: {os.fspath(p)}")
     if not safe_is_dir(p):
         raise NotADirectoryError(f"Path is not a directory: {os.fspath(p)}")
@@ -5930,7 +5959,6 @@ def _resolve_dir(dir_arg: str | None) -> Path:
 
 def _collect_files(root: Path, pattern: str, recursive: bool) -> list[Path]:
     """Collect files matching the glob pattern from root."""
-    from collections.abc import Iterable
     search_iter: Iterable[Path]
     if recursive:
         search_iter = root.rglob(pattern)
@@ -6012,7 +6040,7 @@ def interactive_flake8(options: Options,
                        max_line_length: int = 100,
                        changed_color:   str = ANSI_CYAN,
                        deleted_color:   str = ANSI_RED,
-                       added_color:     str = ANSI_YELLOW) -> None:
+                       added_color:     str = ANSI_YELLOW) -> bool:
     """
     1) Run the flake8 API for summary counts.
     2) Shell out to flake8 CLI once to harvest one description per code.
@@ -6030,6 +6058,9 @@ def interactive_flake8(options: Options,
         changed_color:   Color for unchanged characters in changed lines (default: ANSI_CYAN).
         deleted_color:   Color for deleted characters in original lines (default: ANSI_RED).
         added_color:     Color for added characters in changed lines (default: ANSI_YELLOW).
+
+    Returns:
+        False if the user chose to quit during any replacement prompts, True otherwise.
     """
     fallback_logging_config()
     path = ensure_file(path)
@@ -6038,7 +6069,7 @@ def interactive_flake8(options: Options,
         ignore_codes: list[str] = []
     if not run_flake8(options, path, ignore_codes=ignore_codes, max_line_length=max_line_length):
         logging.info("No flake8 errors—nothing to do.")
-        return
+        return True
     codes = _gather_flake8_issues(options, path, ignore_codes=ignore_codes, max_line_length=max_line_length)
     fixable_codes = get_autopep8_fixable_codes()
     logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Autopep8 can fix these codes: %s", fixable_codes)
@@ -6050,14 +6081,54 @@ def interactive_flake8(options: Options,
         logging.info("\n→ %s: %s", ANSI_RED + code + ANSI_RESET, ANSI_YELLOW + desc + ANSI_RESET)
         if not ask_and_autopep8(path, code, desc, diff_choice=diff_choice,
                                 changed_color=changed_color, deleted_color=deleted_color, added_color=added_color):
-            break
+            return False
         touched_code = True
     if touched_code:
         logging.info("%sDone. Re-running flake8 to confirm fixes...%s", ANSI_GREEN, ANSI_RESET)
         run_flake8(options, path, ignore_codes=ignore_codes, max_line_length=max_line_length)
     else:
         logging.info("No fixable flake8 codes found or no changes made.")
+    return True
+
+
+def run_mypy(options: Options,
+             path: str | os.PathLike[str]) -> None:
+    """
+    Run basic mypy static analysis on the specified file.
+    
+    Args:
+        options: The parsed command-line options. (Currently unused but included for consistency.)
+        path:    Path to the Python file to analyze.
+    
+    Returns:
+        None.
+    """
+    try:
+        from importlib import import_module
+        mypy_api = import_module("mypy.api")
+    except ModuleNotFoundError:
+        logging.error("mypy is not installed.")
         return
+
+    # Note: mypy analyzes files (not raw strings), so we pass the path.
+    # This is the most basic run with default settings.
+    mypy_stdout, mypy_stderr, mypy_exit = mypy_api.run([str(path)])
+
+    # You can inspect these variables or integrate them with your own logging/handling:
+    #   - mypy_stdout: str with human-readable diagnostics
+    #   - mypy_stderr: str with internal mypy errors (if any)
+    #   - mypy_exit:   int exit code (0 = success, 1 = type issues found, 2 = mypy failure)
+    if mypy_stdout:
+        logging.info("mypy output:\n%s", mypy_stdout)
+    if mypy_stderr:
+        logging.error("mypy internal errors:\n%s", mypy_stderr)
+    if mypy_exit == 0:
+        logging.info("mypy completed successfully with no type issues.")
+    elif mypy_exit == 1:
+        logging.warning("mypy completed with type issues found.")
+    else:
+        logging.error("mypy failed with exit code %d.", mypy_exit)
+
 
 # - Use {str(univ_defs_dir)!r} so Windows backslashes are safely escaped in the string literal.
 # - Double the braces around 'univ_defs_dir' in the f-string to keep them literal in the written file.
@@ -6201,6 +6272,7 @@ def main() -> None:
                           ignore_codes=ud.IGNORED_CODES, max_line_length=1000,
                           changed_color=options.args.changed_color, deleted_color=options.args.deleted_color,
                           added_color=options.args.added_color)
+    ud.run_mypy(options, options.args.filepath)
     ud.print_all_errors(memory_handler)
     logging.shutdown()
 
@@ -6345,7 +6417,7 @@ import io
 import logging
 import re
 from pathlib import Path
-from typing import Iterable
+from collections.abc import Iterable
 
 import tokenize  # stdlib
 
@@ -6888,8 +6960,8 @@ def treeview_new_files(directory:      str | os.PathLike[str],
                         files (default False).
 
     Returns:
-        bool: True if any relevant files are found or the directory itself is newer than last_mtime,
-              False otherwise.
+        True if any relevant files are found or the directory itself is newer than last_mtime,
+        False otherwise.
 
     Raises:
         None: Catches exceptions, logs an error and returns False if the directory is not a valid
@@ -6899,7 +6971,7 @@ def treeview_new_files(directory:      str | os.PathLike[str],
     fallback_logging_config(rawlog=True)
 
     directory = ensure_path(directory)
-    if not directory.exists():
+    if not safe_exists(directory):
         logging.error(f"{prefix}└── [Directory does not exist: {os.fspath(directory)}]")
         return False
     if not safe_is_dir(directory):
@@ -6911,7 +6983,7 @@ def treeview_new_files(directory:      str | os.PathLike[str],
         logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%sNo last file path provided, considering all files.", prefix)
     else:
         last_file_path = ensure_path(last_file_path)
-        if not last_file_path.exists():
+        if not safe_exists(last_file_path):
             logging.error("%s└── [Last file path does not exist: %s]", prefix, os.fspath(last_file_path))
             return False
         last_mtime          = safe_mtime(last_file_path)
@@ -7067,6 +7139,104 @@ def treeview_new_files(directory:      str | os.PathLike[str],
     return should_show
 
 
+def ensure_docker_installed() -> None:
+    """Check if the Docker CLI is installed; if not, raise an error."""
+    import shutil
+    if shutil.which("docker") is not None:
+        return
+    my_critical_error("Docker CLI not found. Please install Docker: https://docs.docker.com/get-docker/")
+
+
+def ensure_daemon_running() -> None:
+    """Check if the Docker daemon is running; if not, attempt to start it."""
+    info = my_popen(["docker", "info"])
+    if info.success:
+        return
+    logging.info("Docker daemon not running; attempting to start it...")
+    if sys.platform.startswith("linux"):
+        start = my_popen(["sudo", "systemctl", "start", "docker"])
+        if not start.success:
+            start = my_popen(["sudo", "service", "docker", "start"])
+        if not start.success:
+            my_critical_error(f"Could not start Docker daemon:\n{start.stderr}")
+    elif sys.platform == "darwin":
+        launcher = my_popen(["open", "-a", "Docker"])
+        if not launcher.success:
+            my_critical_error("Failed to launch Docker Desktop. Please start it from your Applications folder.")
+        # Wait for the daemon to start...
+        for _ in range(10):
+            time.sleep(3)
+            info = my_popen(["docker", "info"])
+            if info.success:
+                logging.info("Docker daemon is running!")
+                return
+        my_critical_error("Docker Desktop did not finish starting within 30 seconds.\nPlease open Docker Desktop manually.")
+    else:
+        my_critical_error(f"Unsupported OS for auto-starting Docker: {sys.platform}")
+
+
+def ensure_image_built(image: str, *,
+                       dockerfile: Path | None = None,
+                       build_dir:  Path | None = None,
+                       build_cmd:   str | None = None) -> None:
+    """
+    Ensure that a Docker image with the given name exists; if not, build it.
+    You can specify either a dockerfile (whose first line is a comment with the build command)
+    or a build_cmd (and optionally a build_dir). If both dockerfile and build_cmd are None,
+    the function will raise an error.
+    """
+    inspect = my_popen(["docker", "image", "inspect", image])
+    if inspect.success:
+        return
+
+    if build_cmd is None:
+        if dockerfile is None:
+            my_critical_error(f"Image {image} missing and no build_cmd/dockerfile provided")
+        try:
+            first = open(dockerfile, "r").readline().strip()
+        except OSError:
+            my_critical_error(f"Cannot read {os.fspath(dockerfile)} to build {image}")
+        if not first.startswith("#"):
+            my_critical_error(f"No build command found in {os.fspath(dockerfile)}")
+        build_cmd = first.lstrip("# ").strip()
+        if build_dir is None:
+            build_dir = dockerfile.parent
+
+    # run build_cmd in build_dir
+    import shlex
+    full_cmd = f"cd {shlex.quote(os.fspath(build_dir or Path.cwd()))} && {build_cmd}"
+    build = my_popen(["sh", "-c", full_cmd])
+    if not build.success:
+        my_critical_error(f"Failed to build {image}:\n{build.stderr}")
+
+
+def run_with_docker_fixes(base_args: list[str], *,
+                          ensure_build:         Callable[[], None]  | None = None,
+                          extra_fixes: Iterable[Callable[[], None]] | None = None) -> MyPopenResult:
+    """
+    Run a command (typically 'docker run ...') and if it fails, attempt to fix
+    common Docker issues (like Docker not installed or daemon not running) and retry.
+    """
+    fixes = [ensure_docker_installed, ensure_daemon_running]
+    if ensure_build is not None:
+        fixes.append(ensure_build)
+    if extra_fixes:
+        fixes.extend(extra_fixes)
+
+    last = None
+    for fix in fixes:
+        last = my_popen(base_args)
+        if last.success:
+            return last
+        logging.info("docker run failed; attempting to fix: %s", fix.__name__)
+        fix()
+
+    last = my_popen(base_args)
+    if last.success:
+        return last
+    my_critical_error(f"After applying all fixes, still failed:\n{last.stderr}")
+
+
 def check_if_command_exists(command: str) -> bool:
     """
     Check if a command exists on the system.
@@ -7075,7 +7245,7 @@ def check_if_command_exists(command: str) -> bool:
         command: The command to check.
 
     Returns:
-        bool: True if the command exists, False otherwise.
+        True if the command exists, False otherwise.
     """
     import subprocess
     return subprocess.run(["which", command], capture_output=True).returncode == 0
@@ -7220,7 +7390,7 @@ def open_filemanager_with_dirs(directories: list[str | os.PathLike[str]]) -> Non
     logging.info("Opening file manager with specified directories...")
     for directory in directories:
         directory = ensure_path(directory)
-        if not directory.exists():
+        if not safe_exists(directory):
             logging.error(f"Directory {os.fspath(directory)} does not exist. Skipping.")
             continue
         if not safe_is_dir(directory):
@@ -7424,7 +7594,7 @@ def set_system_volume(percent: int, tolerance: int = 1,
     logging.info("[pactl] Volume set to %d%%", percent)
 
 
-def open_playlist_in_VLC(playlist: str | os.PathLike[str], no_start:  bool = False) -> None:
+def open_playlist_in_VLC(playlist: str | os.PathLike[str], no_start: bool = False) -> None:
     """Open a playlist in VLC. If no_start is True, don't start playback in VLC."""
     import subprocess
     playlist = ensure_file(playlist)
@@ -7499,7 +7669,7 @@ def remove_prefix_from_filename(filepath: str | os.PathLike[str], prefix: str) -
     """
     fallback_logging_config()
     filepath = ensure_path(filepath)
-    if not filepath.exists():
+    if not safe_exists(filepath):
         logging.warning("File or directory '%s' does not exist.", os.fspath(filepath))
         return False
     file = filepath.name
@@ -7509,7 +7679,7 @@ def remove_prefix_from_filename(filepath: str | os.PathLike[str], prefix: str) -
         while new_file[0] in " _-":
             new_file = new_file[1:]
         new_filepath = filepath.parent / new_file
-        if not new_filepath.exists():
+        if not safe_exists(new_filepath):
             try:
                 filepath.rename(new_filepath)
                 logging.info("Renamed '%s' to '%s'.", os.fspath(filepath), os.fspath(new_filepath))
@@ -7758,6 +7928,104 @@ TEXT_EXTENSIONS: Final[tuple[str, ...]] = (
 TEXT_EXTENSIONS_SET: Final[frozenset[str]] = frozenset(TEXT_EXTENSIONS)
 # assert len(TEXT_EXTENSIONS_SET) == len(TEXT_EXTENSIONS), "Duplicate text extensions?"
 
+# A comprehensive list of book / ebook extensions (textual & comic-book archives).
+BOOK_EXTENSIONS: Final[tuple[str, ...]] = (
+    # Open / widely supported ebooks
+    ".epub",     # EPUB (most common open ebook format)
+    ".pdf",      # PDF (widely used for ebooks, especially textbooks)
+    ".txt",      # Plain text
+    ".rtf",      # Rich Text Format
+    ".html",     # HTML
+    ".htm",      # HTML
+    ".xhtml",    # XHTML
+    ".doc",      # Microsoft Word (legacy binary format)
+    ".docx",     # Microsoft Word (modern XML-based format)
+    ".odt",      # OpenDocument Text
+
+    # Amazon / Kindle family
+    ".azw",      # Kindle (based on MOBI)
+    ".azw1",     # Kindle Topaz (legacy)
+    ".azw3",     # Kindle KF8
+    ".azw4",     # Kindle Print Replica (PDF-like)
+    ".azw6",     # Kindle KFX resource container
+    ".kfx",      # Kindle KFX
+    ".mobi",     # Mobipocket
+    ".prc",      # Mobipocket (often identical container)
+    ".tpz",      # Kindle Topaz (legacy)
+
+    # Apple iBooks
+    ".ibooks",
+
+    # FictionBook
+    ".fb2",
+    ".fbz",      # zipped FB2
+
+    # DjVu (scanned books)
+    ".djvu",
+    ".djv",
+
+    # Legacy / less common ebook formats
+    ".lit",      # Microsoft Reader
+    ".oeb",      # Open eBook
+    ".oebzip",   # zipped OEB
+    ".pdb",      # Palm/eReader container (various subtypes)
+    ".pml",      # Palm Markup Language (often paired with PDB)
+    ".pmlz",     # zipped PML
+    ".tr2",      # TomeRaider
+    ".tr3",      # TomeRaider
+    ".rb",       # Rocket eBook
+    ".tcr",      # Psion/TECsoft TCR
+    ".chm",      # Compiled HTML Help (commonly used for tech ebooks)
+    ".snb",      # Shanda Bambook
+    ".umd",      # UMD eBook (popular in some regions)
+
+    # Comic-book archives (graphic novels / manga)
+    ".cbz",      # ZIP-based
+    ".cbr",      # RAR-based
+    ".cb7",      # 7z-based
+    ".cbt",      # TAR-based
+    ".cba",      # ACE-based
+
+    # Sony BBeB family
+    ".lrf",      # Sony BBeB
+    ".lrx",      # Sony BBeB (encrypted)
+    ".lrs",      # Sony BBeB XML source
+
+    # Kobo
+    ".kepub",    # Kobo Kepub variant
+
+    # Apple authoring/export
+    ".iba",      # iBooks Author package/export
+    ".pages",    # Apple Pages document (often used for manuscripts)
+
+    # Apabi / CN markets
+    ".ceb",      # Apabi eBook
+    ".xeb",      # Apabi eBook (variant)
+
+    # Paginated document formats
+    ".xps",      # XML Paper Specification
+    ".oxps",     # OpenXPS
+
+    # Print/TeX outputs (often used for books)
+    ".ps",       # PostScript
+    ".dvi",      # TeX DVI
+
+    # Source/book authoring text formats
+    ".tex",      # LaTeX source
+    ".rst",      # reStructuredText
+    ".md",       # Markdown
+    ".markdown", # Markdown (long extension)
+
+    # Desktop publishing / layout sources
+    ".indd",     # Adobe InDesign document
+    ".idml",     # Adobe InDesign Markup Language
+    ".qxp",      # QuarkXPress project
+    ".qxd",      # QuarkXPress document
+    ".sla",      # Scribus document
+)
+BOOK_EXTENSIONS_SET: Final[frozenset[str]] = frozenset(BOOK_EXTENSIONS)
+# assert len(BOOK_EXTENSIONS_SET) == len(BOOK_EXTENSIONS), "Duplicate book extensions?"
+
 # A comprehensive list of video file extensions.
 VIDEO_EXTENSIONS: Final[tuple[str, ...]] = (
     ".mp4",   ".mkv",   ".mov",   ".avi",    ".mpg",   ".mpeg",
@@ -7873,8 +8141,8 @@ _ARCHIVE_EXTENSIONS_1: tuple[str, ...] = (
     ".tzo",     ".tzst",   ".lzo",   ".lz4",    ".phar",    ".asar",
     ".whl",     ".nupkg",  ".gem",   ".crate",  ".conda",   ".ipa",
     ".cbz",     ".cbr",    ".cb7",   ".kmz",    ".warc",    ".pk3",
-    ".pk4",     ".alz",    ".cpt",   ".ha",     ".sqx",     ".z01",
-    ".r00",     ".001",
+    ".pk4",     ".alz",    ".cpt",   ".ha",     ".sqx",     ".uha",
+    ".z01",     ".r00",    ".001",
 )
 # Technically this list should include .z02... and .r01... and .002...
 _ARCHIVE_EXTENSIONS_2: tuple[str, ...] = tuple(f".z{num:02d}" for num in range(2, 100))
@@ -7892,8 +8160,8 @@ ARCHIVE_EXTENSIONS_SET: Final[frozenset[str]] = frozenset(ARCHIVE_EXTENSIONS)
 
 # Build the combined tuple with first-seen order across categories
 _ALL_CATEGORIES = (
-    PYTHON_EXTENSIONS, HTML_EXTENSIONS, TEXT_EXTENSIONS, SUBTITLE_EXTENSIONS, VIDEO_EXTENSIONS,
-    AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, PLAYLIST_EXTENSIONS, ARCHIVE_EXTENSIONS,
+    PYTHON_EXTENSIONS, HTML_EXTENSIONS,  TEXT_EXTENSIONS,  BOOK_EXTENSIONS,     SUBTITLE_EXTENSIONS,
+    VIDEO_EXTENSIONS,  AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, PLAYLIST_EXTENSIONS, ARCHIVE_EXTENSIONS,
 )
 ALL_KNOWN_EXTENSIONS: Final[tuple[str, ...]] = tuple(
     dict.fromkeys(chain.from_iterable(_ALL_CATEGORIES))

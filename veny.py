@@ -14,11 +14,12 @@ import shutil
 import venv
 import pickle
 from pathlib import Path  # Preferred over os.path for path manipulations.
-from typing import Any
+from typing import Any, Final
 import logging
 import tempfile
 import shlex  # For safely quoting shell commands
 from functools import lru_cache  # For caching results of expensive function calls
+from collections import defaultdict
 
 import univ_defs as ud
 
@@ -126,8 +127,9 @@ If you're using the bash shell, follow these steps to add the alias manually:
         # Keep a list of all python standard library modules.
         # Consider switching to stdlib_list package: https://pypi.org/project/stdlib-list/
         # https://chatgpt.com/share/687000fd-be84-8006-a7f4-06af4b1e0eda
-        # This list is from the pipreqs repo in file "mapping", retrieved on 2024-08-15 from here: https://github.com/bndr/pipreqs
-        self.standard_modules: list[str] = ["_abc", "abc", "aifc",
+        # This list is from the pipreqs repo in file "stdlib", retrieved on 2024-08-15 from here: https://github.com/bndr/pipreqs
+        # File "stdlib" is here: https://github.com/bndr/pipreqs/blob/master/pipreqs/stdlib
+        self.standard_modules: Final[frozenset[str]] = frozenset({"_abc", "abc", "aifc",
             "_aix_support", "antigravity", "argparse", "array",
             "_ast", "ast", "asynchat", "_asyncio", "asyncio",
             "asyncio.base_events", "asyncio.base_futures",
@@ -1061,7 +1063,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
             "xml.sax.xmlreader", "xxlimited", "_xxsubinterpreters",
             "xxsubtype", "_xxtestfuzz", "zipapp", "zipfile",
             "zipimport", "zlib", "zoneinfo", "zoneinfo._common",
-            "zoneinfo._tzpath", "zoneinfo._zoneinfo"]
+            "zoneinfo._tzpath", "zoneinfo._zoneinfo"})
         # Sometimes, a module is imported in python using a different name than is required in the "pip install" command. Keep track of these exceptions here.
         self.module_aliases: dict[str, str] = {
             # I added these manually by asking ChatGPT what pip aliases are different than their import commands:
@@ -1072,9 +1074,64 @@ If you're using the bash shell, follow these steps to add the alias manually:
             "jnp": "jax.numpy",
             # "sm": "statsmodels",
             "netCDF4": "netcdf4",
-            "bugbear": "flake8-bugbear",
             "skill_metrics": "SkillMetrics",
+            "bugbear": "flake8-bugbear",
+            "whisper": "openai-whisper",
+            "mypy.api": "mypy",
+            "speedtest": "speedtest-cli",
             # This list is from the pipreqs repo in file "mapping", retrieved on 2024-08-15 from here: https://github.com/bndr/pipreqs
+            # There are a LOT of duplicate keys in this list! I don't know why. Python dicts will just use the last one.
+            # "mapping" file is here: https://github.com/bndr/pipreqs/blob/master/pipreqs/mapping
+            # It's used like this:
+            # def get_pkg_names(pkgs):
+            #     """Get PyPI package names from a list of imports.
+
+            #     Args:
+            #         pkgs (List[str]): List of import names.
+
+            #     Returns:
+            #         List[str]: The corresponding PyPI package names.
+
+            #     """
+            #     result = set()
+            #     with open(join("mapping"), "r") as f:
+            #         data = dict(x.strip().split(":") for x in f)
+            #     for pkg in pkgs:
+            #         # Look up the mapped requirement. If a mapping isn't found,
+            #         # simply use the package name.
+            #         result.add(data.get(pkg, pkg))
+            #     # Return a sorted list for backward compatibility.
+            #     return sorted(result, key=lambda s: s.lower())
+            # Here's an alternative: https://pypi.org/project/pip-run/
+            # Here's another alternative: https://pypi.org/project/coherent.deps/
+            # Here's some relevant info from the coherent.deps project description:
+            # Maintaining the mapping
+            # There is a subpackage, distributions, which contains two scripts, load and process (invoked by python -m coherent.deps.distributions.{load,process}) to load the distributions from a "top downloads" summary and then process those by loading their data from PyPI.
+
+            # To get the full set of "top downloaded" packages that contain at least one download, run this query:
+
+            #   pipx run --python 3.13 pypinfo --json --indent 0 --limit 800000 --days 30 "" project > ~/Downloads/top-pypi-packages-30-days.json
+
+            # Note that this pypinfo script requires a Google API key and with a very high limit like 800000, will cost several dollars to run, so the maintainer only runs it about twice a year.
+
+            # Then, to refresh the database with the downloaded dataset:
+
+            #   py -3.13 -m pip-run coherent.deps -- -m coherent.deps.distributions.load ~/Downloads/top-pypi-packages-30-days.json
+
+            # This process will ensure that all packages are up-to-date with their latest download stats.
+
+            # From there, ensure that any newly-added packages are processed:
+
+            #   py -3.13 -m pip-run coherent.deps -- -m coherent.deps.distributions.process
+
+            # Note that only those entries without an updated field will be processed. To re-process packgaes that may have grown stale, clear the updated field on those entries. For example, to mark stale any entries older than 6 months:
+
+            # max_age = datetime.timedelta(days=6*30)
+            # filter = {'updated': {'$lt': datetime.today() - max_age}}
+            # op = {'$unset': 'updated'}
+            # collection.update_many(filter, op)
+
+            # Thereafter, re-run the process routine, which will re-process the packages without the updated field.
             "AFQ": "pyAFQ",
             "AG_fft_tools": "agpy",
             "ANSI": "pexpect",
@@ -2328,26 +2385,20 @@ def main() -> None:
     start_time = dt.datetime.now()
     options = Options()
     parse_arguments(options)
-    script_string         = getattr(options.args, "script",       None)
-    options.script_args   = getattr(options.args, "script_args",    [])
-    options.rawlog        = getattr(options.args, "rawlog",      False)
+    script_string       = getattr(options.args, "script",       None)
+    options.script_args = getattr(options.args, "script_args",    [])
+    options.rawlog      = getattr(options.args, "rawlog",      False)
     if script_string is None:
         options.python_script = None
     else:
-        p = Path(script_string).expanduser()
-        try:
-            p = p.resolve(strict=True)
-        except FileNotFoundError as e:
-            raise ValueError(f"Script not found: {p}") from e
-        if not p.exists():
-            raise ValueError(f"Script does not exist: {p} (obtained from {script_string})")
-        options.python_script = p
+        options.python_script = ud.ensure_file(script_string, raise_on_empty=True).resolve(strict=True)
+        options.script_dir    = options.python_script.parent.absolute()
+        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Directory where the script to run is located: %s", os.fspath(options.script_dir))
 
     if getattr(options.args, "feeling_lucky", False) and options.python_script:
-        options.script_dir = options.python_script.parent.absolute()
         last_used_venv_python = load_last_used_venv_python(options)
         if last_used_venv_python:
-            command_list = [last_used_venv_python, options.python_script] + options.script_args
+            command_list = [os.fspath(last_used_venv_python), os.fspath(options.python_script)] + options.script_args
             result = subprocess.run(command_list)
             if result.returncode != 0 and not options.rawlog:
                 print(f"Error running script: {result.stderr}")
@@ -2416,9 +2467,6 @@ def main() -> None:
     else:
         logging.info("You must specify either a script to run or one of these arguments: alias, manual, blank-slate (be careful using blank-slate because it deletes all cached virtual environments, among other things!).")
 
-    options.script_dir = options.python_script.parent.absolute()
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Directory where the script to run is located: %s", options.script_dir)
-
     if getattr(options.args, "reqs", False):
         parse_extra_requirements(options)
         if not options.rawlog:
@@ -2473,14 +2521,14 @@ def main() -> None:
     if not options.uninstalled_imports:
         if not options.rawlog: logging.info("All required packages are already installed.")
         start_raw_time = dt.datetime.now()
-        subprocess.run([sys.executable, options.python_script] + options.script_args)
+        subprocess.run([sys.executable, os.fspath(options.python_script)] + options.script_args)
         elapsed_raw_time = dt.datetime.now() - start_raw_time
         if not options.rawlog: logging.info("Runtime: %s", elapsed_raw_time)
     elif is_virtualenv():
         if not options.rawlog: logging.info("Already in a virtual environment.")
         if check_packages_in_venv(options):
             start_raw_time = dt.datetime.now()
-            subprocess.run([sys.executable, options.python_script] + options.script_args)
+            subprocess.run([sys.executable, os.fspath(options.python_script)] + options.script_args)
             elapsed_raw_time = dt.datetime.now() - start_raw_time
             if not options.rawlog: logging.info("Runtime: %s", elapsed_raw_time)
         else:
@@ -2505,15 +2553,17 @@ def main() -> None:
         if match_dir:
             options.set_venv_dir(match_dir)
             start_venv_time = dt.datetime.now()
-            elapsed_time = start_venv_time - start_time
+            elapsed_time    = start_venv_time - start_time
             if not options.rawlog: logging.info("Elapsed time: %s", elapsed_time)
             if not getattr(options.args, "full", False):
-                command_list = [options.venv_python, options.python_script] + [arg for arg in options.script_args]
-                if not options.rawlog: logging.info("Running command: %s", " ".join(shlex.quote(str(arg)) for arg in command_list))
-                result = subprocess.run(command_list)
-                end_time = dt.datetime.now()
+                command_list = [os.fspath(options.venv_python), os.fspath(options.python_script)] + \
+                               [str(arg) for arg in options.script_args]
+                if not options.rawlog: logging.info("Running command: %s", " ".join(shlex.quote(arg) for arg in command_list))
+                result       = subprocess.run(command_list)
+                end_time     = dt.datetime.now()
                 elapsed_time = end_time - start_venv_time
-                if not options.rawlog: logging.info("Elapsed time since activating virtual environment: %s", elapsed_time)
+                if not options.rawlog: logging.info("Elapsed time since activating virtual environment: %s",
+                                                    elapsed_time)
                 if result.returncode != 0 and not options.rawlog:
                     logging.error("Error running script: %s", result.stderr)
             if options.venv_dir.name.startswith("failed-") and options.simultaneous_success:
@@ -4315,8 +4365,8 @@ class FunctionInfo:
 
     def __init__(self, function_name: str, node: ast.FunctionDef) -> None:
         """Initialize the function information, storing its AST node too."""
-        self.function_name: str            = function_name
-        self.ast_node: ast.FunctionDef     = node
+        self.function_name:            str = function_name
+        self.ast_node:     ast.FunctionDef = node
         self.imports_in_function: set[str] = set()
         self.function_calls:      set[str] = set()
 
@@ -4326,34 +4376,37 @@ class ModuleInfo:
 
     def __init__(self, module_name: str) -> None:
         """Initialize the module information."""
-        self.module_name:                           str = module_name
-        self.top_level_imports:                set[str] = set()
-        self.functions:         dict[str, FunctionInfo] = {}
-        self.top_level_calls:                  set[str] = set()
-        self.aliases:           dict[str, str]          = {}
-        self.classes:           set[str]                = set()
+        self.module_name:                   str = module_name
+        self.top_level_imports:        set[str] = set()
+        self.functions: dict[str, FunctionInfo] = {}
+        self.top_level_calls:          set[str] = set()
+        self.aliases:            dict[str, str] = {}
+        self.classes:                  set[str] = set()
+        self.base_classes: dict[str, list[str]] = {}
 
 
 class ImportFunctionCollector(ast.NodeVisitor):
     """Visitor class to collect function and import information from a module."""
 
-    def __init__(self, module_name: str, options: Options,
+    def __init__(self, options: Options, module_name: str,
                  file_path: str) -> None:
         """Initialize the import function collector."""
-        self.module_info      = ModuleInfo(module_name)
-        self.current_function = None
-        self.current_class    = None
-        self.aliases          = {}
-        self.options          = options
-        self.file_path        = file_path
-        self.base_classes     = {}
+        self.module_info:                      ModuleInfo = ModuleInfo(module_name)
+        self.current_function:                 str | None = None
+        self.current_class:                    str | None = None
+        self.aliases:                      dict[str, str] = {}
+        self.options:                             Options = options
+        self.file_path:                               str = file_path
+        self.base_classes:           dict[str, list[str]] = {}
+        self.attr_types: defaultdict[str, dict[str, str]] = defaultdict(dict)  # {class_name: {attr_name: "QualifiedTypeName"}}
+        self._param_types:                 dict[str, str] = {}  # param name -> "QualifiedTypeName"
 
     def visit_Import(self, node: ast.Import) -> None:
         """Visit an import statement and add the imported module to the module's list of imports."""
         for alias in node.names:
-            name = alias.asname or alias.name
-            full_name = alias.name
-            top_level_package = full_name.split(".")[0]
+            name               = alias.asname or alias.name
+            full_name          = alias.name
+            top_level_package  = full_name.split(".")[0]
             self.aliases[name] = full_name
             if self.current_function:
                 self.module_info.functions[self.current_function].imports_in_function.add(top_level_package)
@@ -4383,10 +4436,18 @@ class ImportFunctionCollector(ast.NodeVisitor):
             func_name = f"{self.current_class}.{func_name}"
         self.module_info.functions[func_name] = FunctionInfo(func_name, node)
         logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Added function: %s to module %s", func_name, self.module_info.module_name)
-        prev_function = self.current_function
+        prev_function         = self.current_function
         self.current_function = func_name
+        # Track parameter annotations (only while inside this function)
+        self._param_types = {}
+        for a in node.args.args:
+            if a.annotation is not None:
+                t = self._type_name(a.annotation)
+                if t:
+                    self._param_types[a.arg] = t
         self.generic_visit(node)
         self.current_function = prev_function
+        self._param_types = {}
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         """Visit a class definition and set the current class."""
@@ -4462,7 +4523,21 @@ class ImportFunctionCollector(ast.NodeVisitor):
         """Visit a function call and add it to the function's list of calls."""
         func_name = self.get_full_name(node.func)
         original_func_name = func_name
-
+        # Resolve self.<attr>.<method> to the attribute's type
+        if func_name and self.current_class:
+            parts = func_name.split(".")
+            # Pattern: CurrentClass.<attr>.<method>[.<more>]
+            if len(parts) >= 3 and parts[0] == self.current_class:
+                attr = parts[1]
+                method_tail = ".".join(parts[2:])
+                t = self.attr_types.get(self.current_class, {}).get(attr)
+                if t:
+                    # Qualify local classes with the current module
+                    if t in self.module_info.classes:
+                        func_name = f"{self.module_info.module_name}.{t}.{method_tail}"
+                    else:
+                        # t might already be qualified by an alias (e.g., "ud.LLMs")
+                        func_name = f"{t}.{method_tail}"
         if func_name:
             parts = func_name.split(".")
             if parts[0] in self.module_info.classes:
@@ -4477,11 +4552,9 @@ class ImportFunctionCollector(ast.NodeVisitor):
                     func_name = f"{self.module_info.module_name}.{func_name}"
             else:
                 logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s is not a class, leaving as-is.", func_name)
-
             # If func_name corresponds to a class in this module, treat it as calling __init__
             if func_name in self.module_info.classes:
                 func_name = f"{func_name}.__init__"
-
             # Handle dynamic imports
             if func_name == "__import__":
                 module_name = self.extract_module_name_from_import(node)
@@ -4492,6 +4565,45 @@ class ImportFunctionCollector(ast.NodeVisitor):
                         self.module_info.top_level_imports.add(module_name)
                 else:
                     logging.warning("Cannot resolve dynamic import: %s", ast.unparse(node))
+            # Handle importlib.import_module(...)
+            elif func_name == "importlib.import_module":
+                abs_name = self.extract_module_name_from_importlib_import_module(node)
+                if abs_name:
+                    self._register_import_name(abs_name)
+                else:
+                    logging.warning("Cannot resolve importlib.import_module call: %s", ast.unparse(node))
+            # Handle importlib.util.spec_from_file_location(...)
+            elif func_name == "importlib.util.spec_from_file_location":
+                res = self.extract_from_importlib_spec_from_file_location(node)
+                if res:
+                    mod, loc = res
+                    self._register_import_name(mod)
+                    if loc:
+                        self._register_constant_path_for_module(mod, loc)
+            # Handle importlib.machinery.SourceFileLoader(...).load_module()
+            # We match either the constructor itself or the chained .load_module():
+            elif func_name == "importlib.machinery.SourceFileLoader":
+                res = self.extract_from_importlib_sourcefileloader(node)
+                if res:
+                    mod, loc = res
+                    self._register_import_name(mod)
+                    if loc:
+                        self._register_constant_path_for_module(mod, loc)
+            # Also catch the chained call: importlib.machinery.SourceFileLoader(...).load_module()
+            elif isinstance(node.func, ast.Attribute) and node.func.attr == "load_module":
+                # node.func.value should be the Call to SourceFileLoader(...)
+                loader_call = node.func.value
+                if isinstance(loader_call, ast.Call):
+                    callee = self.get_full_name(loader_call.func)
+                    if callee == "importlib.machinery.SourceFileLoader":
+                        res = self.extract_from_importlib_sourcefileloader(loader_call)
+                        if res:
+                            mod, loc = res
+                            self._register_import_name(mod)
+                            if loc:
+                                self._register_constant_path_for_module(mod, loc)
+                        else:
+                            logging.warning("Cannot resolve SourceFileLoader(...).load_module() call: %s", ast.unparse(node))
             elif func_name.startswith("super."):
                 # Handle super calls
                 _, method_name = func_name.split(".", 1)
@@ -4536,6 +4648,175 @@ class ImportFunctionCollector(ast.NodeVisitor):
             return func_name
         return None
 
+    def _type_name(self, node: ast.AST) -> str | None:
+        """
+        Extract a string type name from an annotation or qualified name.
+        Handles Name or Attribute, using aliases when needed.
+        """
+        if isinstance(node, ast.Name):
+            return self.aliases.get(node.id, node.id)
+        if isinstance(node, ast.Attribute):
+            base = self._type_name(node.value)
+            return f"{base}.{node.attr}" if base else node.attr
+        return None
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        """
+        Visit an annotated assignment and record attribute types.
+        e.g. self.options: Options = options
+        """
+        if (
+            self.current_class and
+            isinstance(node.target, ast.Attribute) and
+            isinstance(node.target.value, ast.Name) and
+            node.target.value.id == "self"
+        ):
+            t = self._type_name(node.annotation)
+            if t:
+                self.attr_types[self.current_class][node.target.attr] = t
+        self.generic_visit(node)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        """
+        Visit an assignment and try to infer attribute types from RHS.
+        e.g. self.options = options   (infer type from param annotation if possible)
+        """
+        for tgt in node.targets:
+            if (
+                self.current_class and
+                isinstance(tgt, ast.Attribute) and
+                isinstance(tgt.value, ast.Name) and
+                tgt.value.id == "self"
+            ):
+                # Try to infer type from RHS if RHS is a Name that matches a typed param
+                if isinstance(node.value, ast.Name):
+                    pname = node.value.id
+                    t = self._param_types.get(pname)
+                    if t:
+                        self.attr_types[self.current_class][tgt.attr] = t
+        self.generic_visit(node)
+
+    # --- Importlib helpers -------------------------------------------------
+
+    def _const_str(self, node: ast.AST) -> str | None:
+        """Return node.value if the node is a constant string; else None."""
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        return None
+
+    def _resolve_relative_module(self, name: str, package: str | None) -> str | None:
+        """
+        Resolve 'name' that may start with dots against an absolute 'package'.
+        Mirrors importlib semantics roughly; for our purposes we only need to
+        resolve to a package string to feed the rest of the pipeline.
+        """
+        if not name:
+            return None
+        if not name.startswith("."):
+            return name  # already absolute
+        if not package:
+            return None  # cannot resolve without a package
+        # Count leading dots
+        i = 0
+        while i < len(name) and name[i] == ".":
+            i += 1
+        # Climb up 'i-1' levels from package
+        pkg_parts = package.split(".")
+        if i - 1 > len(pkg_parts):
+            return None
+        base = ".".join(pkg_parts[: len(pkg_parts) - (i - 1)])
+        tail = name[i:]
+        return f"{base}.{tail}" if tail else base
+
+    def _register_import_name(self, module_name: str) -> None:
+        """
+        Record an import for the current function (or top-level) using the
+        top-level package (to match your existing pipeline).
+        """
+        top_level = module_name.split(".")[0] if module_name else None
+        if not top_level:
+            return
+        if self.current_function:
+            self.module_info.functions[self.current_function].imports_in_function.add(top_level)
+        else:
+            self.module_info.top_level_imports.add(top_level)
+
+    def _register_constant_path_for_module(self, module_name: str, path_str: str) -> None:
+        """
+        Best-effort: if we get a constant file path for a dynamically loaded module,
+        map it immediately so later phases can resolve it as a local module.
+        """
+        try:
+            # Resolve relative to the file we’re analyzing
+            base_dir = Path(self.file_path).parent
+            p = (base_dir / path_str).expanduser().resolve() if not os.path.isabs(path_str) else Path(path_str).expanduser().resolve()
+        except Exception:
+            return
+        # Only accept .py files or a directory with __init__.py
+        if p.suffix == ".py" and ud.safe_exists(p):
+            self.options.custom_modules[module_name] = p
+        elif ud.safe_is_dir(p) and ud.safe_exists(p / "__init__.py"):
+            self.options.custom_modules[module_name] = p
+
+    def extract_module_name_from_importlib_import_module(self, node: ast.Call) -> str | None:
+        """
+        Handle importlib.import_module(name, package=None) and aliased import_module().
+        Only constant strings are supported.
+        """
+        if not node.args:
+            return None
+        name = self._const_str(node.args[0])
+        if name is None:
+            logging.error(f"Cannot resolve import_module with non-constant name: {ast.unparse(node)}")
+            return None
+        pkg = None
+        if len(node.args) >= 2:
+            pkg = self._const_str(node.args[1])
+        else:
+            for kw in node.keywords or []:
+                if kw.arg == "package":
+                    pkg = self._const_str(kw.value)
+        if name.startswith("."):
+            abs_name = self._resolve_relative_module(name, pkg)
+            if abs_name is None:
+                logging.error(f"Cannot resolve relative import_module without constant package: {ast.unparse(node)}")
+                return None
+            return abs_name
+        return name
+
+    def extract_from_importlib_spec_from_file_location(self, node: ast.Call) -> tuple[str, str] | None:
+        """
+        Handle importlib.util.spec_from_file_location(name, location, ...).
+        Returns (module_name, location_path) if both are constant strings.
+        """
+        if len(node.args) < 2:
+            return None
+        mod = self._const_str(node.args[0])
+        loc = self._const_str(node.args[1])
+        if mod is None:
+            logging.error(f"Cannot resolve spec_from_file_location with non-constant module name: {ast.unparse(node)}")
+            return None
+        if loc is None:
+            # We can still record the import name, just no path to register
+            return (mod, None)
+        return (mod, loc)
+
+    def extract_from_importlib_sourcefileloader(self, node: ast.Call) -> tuple[str, str] | None:
+        """
+        Handle importlib.machinery.SourceFileLoader(name, path).
+        Returns (module_name, path) if both are constant strings.
+        """
+        if len(node.args) < 2:
+            return None
+        mod = self._const_str(node.args[0])
+        loc = self._const_str(node.args[1])
+        if mod is None:
+            logging.error(f"Cannot resolve SourceFileLoader with non-constant module name: {ast.unparse(node)}")
+            return None
+        if loc is None:
+            return (mod, None)
+        return (mod, loc)
+
 
 def split_function_name(called_func: str, default_module: str) -> tuple[str, str]:
     """Split a fully qualified function name into module and function parts. If there's no dot, the default_module is used as the module."""
@@ -4558,6 +4839,22 @@ def build_call_graph(modules_info: dict[str, ModuleInfo]) -> dict[str, set[str]]
             call_graph[full_func_name] = set()
             for called_func in func_info.function_calls:
                 called_module, called_name = split_function_name(called_func, module_name)
+                # If target looks like Class.method and isn't present, try the base class.
+                if called_module in modules_info:
+                    mi = modules_info[called_module]
+                    if "." in called_name:
+                        cls, meth = called_name.split(".", 1)
+                        if called_name not in mi.functions and cls in mi.base_classes:
+                            bases = mi.base_classes.get(cls, [])
+                            if bases:
+                                base = bases[0]  # you currently assume single inheritance
+                                # If base is defined in the same module, qualify it; else keep as-is (e.g., "ud.LLMs")
+                                if base in mi.classes:
+                                    called_full_name = f"{called_module}.{base}.{meth}"
+                                else:
+                                    called_full_name = f"{base}.{meth}"
+                                call_graph[full_func_name].add(called_full_name)
+                                continue
                 # Check if called_name is a class in the module
                 if called_module in modules_info and called_name in modules_info[called_module].classes:
                     # Class instantiation, call __init__
@@ -4578,30 +4875,25 @@ def collect_used_imports(start_module: str, start_func: str,
     """Collect all imports used in a function and its callees."""
     if visited is None:
         visited = set()
-    full_func_name = f"{start_module}.{start_func}"
+    full_func_name: str = f"{start_module}.{start_func}"
     if full_func_name in visited:
         logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Already visited %s, skipping.", full_func_name)
         return set()
     logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Visiting function: %s", full_func_name)
     visited.add(full_func_name)
-    imports = set()
-    module_info = modules_info.get(start_module)
+    imports: set[str] = set()
+    module_info       = modules_info.get(start_module)
     if module_info:
         func_info = module_info.functions.get(start_func)
         if func_info:
             if func_info.imports_in_function:
                 logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Function %s imports: %s", full_func_name, func_info.imports_in_function)
-            else:
-                logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("No direct imports found in %s", full_func_name)
             imports.update(func_info.imports_in_function)
-            for called_func in func_info.function_calls:
-                called_module, called_name = split_function_name(called_func, start_module)
-                logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("From %s, visiting called function %s.%s", full_func_name, called_module, called_name)
-                imports.update(collect_used_imports(called_module, called_name, call_graph, modules_info, visited))
-        else:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("No function info found for %s", full_func_name)
-    else:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("No module info found for %s", start_module)
+    # Follow resolved edges from the call graph:
+    edges = call_graph.get(full_func_name, set())
+    for called_full in edges:
+        called_module, called_name = split_function_name(called_full, start_module)
+        imports.update(collect_used_imports(called_module, called_name, call_graph, modules_info, visited))
     return imports
 
 
@@ -4665,10 +4957,11 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
             continue
         module_contents[module_name] = file_content
         module_trees[module_name]    = tree
-        collector = ImportFunctionCollector(module_name, options, module_path)
+        collector                    = ImportFunctionCollector(options, module_name, module_path)
         collector.visit(tree)
-        module_info = collector.module_info
-        modules_info[module_name] = module_info
+        module_info                  = collector.module_info
+        module_info.base_classes     = collector.base_classes
+        modules_info[module_name]    = module_info
         # Process only top-level imports to find local modules
         for import_name in module_info.top_level_imports:
             if import_name in options.standard_modules:
@@ -4743,10 +5036,11 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
                         logging.error(f"Failed to parse the file: {module_file_path}")
                         continue
                     module_contents[import_name] = file_content
-                    module_trees[import_name]    = tree
-                    collector = ImportFunctionCollector(import_name, options, module_file_path)
+                    module_trees[   import_name] = tree
+                    collector = ImportFunctionCollector(options, import_name, module_file_path)
                     collector.visit(tree)
-                    module_info = collector.module_info
+                    module_info               = collector.module_info
+                    module_info.base_classes  = collector.base_classes
                     modules_info[import_name] = module_info
                     used_imports.update(module_info.top_level_imports)
                     # Process top-level imports to find more local modules
@@ -4779,7 +5073,7 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
             func_info = modules_info[mod].functions.get(func)
             if not func_info:
                 continue
-            func_src = src
+            func_src  = src
             func_node = func_info.ast_node
             # run your original visitor on that one FunctionDef
             FileOperationsVisitor(options,    func_src).visit(func_node)
@@ -4886,7 +5180,7 @@ else:
     print(f"All {{len(successes)}} (out of {{counter}}) packages imported successfully.")
     sys.exit(0)
 """
-    the_command = [venv_python, "-c", python_code]
+    the_command = [os.fspath(venv_python), "-c", python_code]
     result = subprocess.run(the_command, capture_output=True, text=True, check=False)
     # logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("check_packages_in_venv command:\n%s", " ".join(shlex.quote(str(arg)) for arg in the_command))
     logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("check_packages_in_venv stdout:\n%s", result.stdout)
@@ -4920,18 +5214,17 @@ def split_imports(options: Options) -> None:
             logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Checking if import %s is installed or uninstalled", imp)
             if imp in options.custom_modules.keys():
                 logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Custom module %s has path %s", imp, options.custom_modules[imp])
-                status_str = "YES - custom module"
+                status_str = f"{ud.ANSI_CYAN}YES - custom module{ud.ANSI_RESET}"
             elif check_packages_in_venv(options, package=package_name,
                                         venv_dir=venv_dir):
                 logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Module %s can be imported in venv", imp)
-                status_str = "YES -     installed"
+                status_str = f"{ud.ANSI_GREEN}YES -     installed{ud.ANSI_RESET}"
                 options.installed_imports.add(imp)
             else:
                 logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Import %s is not installed and not a custom module", imp)
-                status_str = " NO - NOT installed"
+                status_str = f" NO - NOT installed"
                 options.uninstalled_imports.add(package_name)
             if not options.rawlog:
-                # OLD: logging.info(f"Checking import {imp:{max_length}} : {i:>{max_digits}}/{options.total_imports} - {status_str}")
                 logging.info("Checking import %-*s : %*d/%d - %s",
                              max_length,  # width for imp (left-aligned)
                              imp,
@@ -5023,8 +5316,8 @@ def get_all_imports(options: Options, directory: str | os.PathLike[str]) -> None
     # Build one iterator of candidate files (recursive)
     candidates = (p for p in directory.rglob("*") if ud.safe_is_file(p) and not stayed_out_dir(options, p))
     # If you want a progress denominator that matches what you'll actually process:
-    total_files = sum(1 for p in candidates if ud.is_python_script(p))
-    max_digits = len(str(total_files))  # For formatting progress output
+    total_files     = sum(1 for p in candidates if ud.is_python_script(p))
+    max_digits      = len(str(total_files))  # For formatting progress output
     processed_files = 0
     # Recreate the iterator (generators are single-use)
     candidates = (p for p in directory.rglob("*") if ud.safe_is_file(p) and not stayed_out_dir(options, p))
@@ -5121,8 +5414,8 @@ def install_packages_individually(options: Options) -> bool:
 
 def install_package(package_name: str, options: Options) -> bool:
     """Install a single package and return the success status (True if successful, False otherwise)."""
-    the_command = [options.venv_python, "-m", "pip", "install", package_name,
-                   "--no-index", "--find-links", options.packages_dir]
+    the_command = [os.fspath(options.venv_python), "-m", "pip", "install", package_name,
+                   "--no-index", "--find-links", os.fspath(options.packages_dir)]
     logging.info("Running pip install: %s", " ".join(shlex.quote(str(arg)) for arg in the_command))
     result = subprocess.run(the_command, capture_output=True, text=True)
     if not options.rawlog: logging.info(result.stdout)
@@ -5130,14 +5423,14 @@ def install_package(package_name: str, options: Options) -> bool:
         logging.error(result.stderr)
     if result.returncode != 0:
         # Use pip to download files for package_name to options.packages_dir
-        download_command = [options.venv_python, "-m", "pip", "download", "--dest",
-                            options.packages_dir, package_name]
+        download_command = [os.fspath(options.venv_python), "-m", "pip", "download", "--dest",
+                            os.fspath(options.packages_dir), package_name]
         download_result = subprocess.run(download_command, capture_output=True, text=True)
         if download_result.returncode != 0:
             ud.my_critical_error(f"Failed to download {package_name}. Error: {download_result.stderr}")
         # Use pip to install package_name from the file that was just downloaded to options.packages_dir
-        install_command = [options.venv_python, "-m", "pip", "install", "--no-index",
-                           "--find-links", options.packages_dir, package_name]
+        install_command = [os.fspath(options.venv_python), "-m", "pip", "install", "--no-index",
+                           "--find-links", os.fspath(options.packages_dir), package_name]
         install_result = subprocess.run(install_command, capture_output=True, text=True)
         if install_result.returncode != 0:
             logging.error("Failed to install %s. Error: %s", package_name, install_result.stderr)
@@ -5219,7 +5512,7 @@ builtin_modules = list_builtin_modules()
 print("\\n".join(installed_packages + available_modules + list(builtin_modules)))
 """
 
-        list_command = [python_executable, "-c", list_command_script]
+        list_command = [os.fspath(python_executable), "-c", list_command_script]
 
         try:
             result = subprocess.run(list_command, check=True, capture_output=True, text=True)
@@ -5309,11 +5602,11 @@ def setup_virtualenv(options: Options) -> bool:
     write_requirements_file_with_extras(options)
 
     if not options.rawlog: logging.info("Creating virtual environment...")
-    subprocess.check_call([sys.executable, "-m", "venv", options.venv_dir])
+    subprocess.check_call([sys.executable, "-m", "venv", os.fspath(options.venv_dir)])
     if not options.rawlog: logging.info("Virtual environment created.")
 
     # Activate virtual environment and install wheel
-    install_command = [options.venv_pip, "install", "wheel"]
+    install_command = [os.fspath(options.venv_pip), "install", "wheel"]
     logging.info("Running pip install: %s", " ".join(shlex.quote(str(arg)) for arg in install_command))
     subprocess.run(install_command, check=True)
     if not options.rawlog: logging.info("Wheel installed in the virtual environment.")
@@ -5777,7 +6070,7 @@ def check_python_version(command: str) -> bool:
 def find_preferred_python_version() -> str | None:
     """Find the command for the preferred version of python (stored in univ_defs.py as PY_VERSION)."""
     # Check if the preferred python command (only specifying integer part of the preferred version) exists and returns a valid path
-    preferred_major = int(ud.PY_VERSION)
+    preferred_major       = int(ud.PY_VERSION)
     preferred_python_path = subprocess.run(["which", f"python{preferred_major}"],
                                            capture_output=True, text=True).stdout.strip()
     if preferred_python_path and check_python_version(f"python{preferred_major}"):
