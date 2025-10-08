@@ -120,7 +120,8 @@ If you're using the bash shell, follow these steps to add the alias manually:
    source ~/.bashrc
 """
         self.also_needs: dict[str, list[str]] = {  # Some packages also need other packages to be installed.
-            "xarray": ["dask", "netcdf4", "h5netcdf"],
+            "xarray"  : ["dask", "netcdf4", "h5netcdf"],
+            "litellm" : ["tenacity"],
             # NOT PIP PACKAGES: "pyautogui": ["scrot", "python3-tk"]
             # Add more packages and their dependencies here
         }
@@ -2393,7 +2394,7 @@ def main() -> None:
     else:
         options.python_script = ud.ensure_file(script_string, raise_on_empty=True).resolve(strict=True)
         options.script_dir    = options.python_script.parent.absolute()
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Directory where the script to run is located: %s", os.fspath(options.script_dir))
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Directory where the script to run is located: %s", os.fspath(options.script_dir))
 
     if getattr(options.args, "feeling_lucky", False) and options.python_script:
         last_used_venv_python = load_last_used_venv_python(options)
@@ -2413,9 +2414,9 @@ def main() -> None:
 
     options.python_command = find_preferred_python_version()
     if options.python_command:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Python %s is available at: %s", ud.PY_VERSION, options.python_command)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Python %s is available at: %s", ud.PY_VERSION, options.python_command)
     else:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Python %s is not available.", ud.PY_VERSION)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Python %s is not available.", ud.PY_VERSION)
 
     if not ud.safe_is_dir(options.my_dir):
         if not options.rawlog: logging.info("Directory %s does not exist yet, so it is being created.", options.my_dir)
@@ -2450,7 +2451,7 @@ def main() -> None:
                      options.my_name, options.my_name)
         shutil.rmtree(options.my_dir, ignore_errors=True)
         for file in options.cwd.iterdir():
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Checking %s", file)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Checking %s", file)
             if ud.safe_is_file(file):
                 if (file.name.startswith(f".{options.my_name}-")                      and file.suffix.casefold() == ".out" ) or \
                    (file.name.startswith(f".{options.my_name}-")                      and file.suffix.casefold() == ".err" ) or \
@@ -2481,7 +2482,7 @@ def main() -> None:
     # Look for files in options.my_dir that start with pip_list and load the most recent one.
     options.pip_list = []
     pip_list_files = sorted([f for f in options.my_dir.iterdir() if f.name.startswith("pip_list")], reverse=True)
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("pip_list_files = %s", " ".join(os.fspath(f) for f in pip_list_files))
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("pip_list_files = %s", " ".join(os.fspath(f) for f in pip_list_files))
     # If --rc was not specified, look for a text file with the pip list the last time this script was run.
     if not getattr(options.args, "rc", False) and pip_list_files:
         try:
@@ -2497,10 +2498,10 @@ def main() -> None:
 
     try:
         import pipreqs
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("pipreqs is available, so it will be used.")
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("pipreqs is available, so it will be used.")
         options.pipreqs_available = True
     except ImportError:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("pipreqs is not available. Try installing it with 'pip install pipreqs'.")
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("pipreqs is not available. Try installing it with 'pip install pipreqs'.")
         options.pipreqs_available = False
 
     list_packages(options)
@@ -2807,7 +2808,7 @@ class FileOperationsVisitor(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:
         """Visit Call nodes to find file operations."""
         return
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("FileVisiting Call node: %s", ast.dump(node))
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("FileVisiting Call node: %s", ast.dump(node))
         if self._process_open(        node): return
         if self._process_pathlib(     node): return
         if self._process_shutil(      node): return
@@ -3540,7 +3541,7 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:
         """Visit Call nodes to find network operations."""
         return
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("NetworkVisiting Call node: %s", ast.dump(node))
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("NetworkVisiting Call node: %s", ast.dump(node))
         if self._process_requests(       node): return
         if self._process_urllib(         node): return
         if self._process_ftp(            node): return
@@ -4268,7 +4269,7 @@ def safe_eval(expr: str) -> Any | None:
         tree = ast.parse(expr, mode="eval")
         return _safe_eval_node(tree.body)  # tree.body is the root expr
     except (SyntaxError, ValueError) as e:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s: Unsupported expression: %r: %s", ud.return_method_name(), expr, e)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("%s: Unsupported expression: %r: %s", ud.return_method_name(), expr, e)
         return None
 
 
@@ -4309,24 +4310,24 @@ class SysPathVisitor(ast.NodeVisitor):
 def process_import(options: Options, module_name: str, file_path: str | os.PathLike[str]) -> bool:
     """Process an import by checking if it's a local custom module or a standard import, and handle it accordingly."""
     if module_name in options.standard_modules:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Skipping standard library import: %s", module_name)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Skipping standard library import: %s", module_name)
         return False
 
     file_path = ud.ensure_file(file_path)
 
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Processing import: %s from file %s", module_name, file_path)
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Processing import: %s from file %s", module_name, file_path)
 
     base_dir        = file_path.parent
     module_path_str = module_name.replace(".", os.sep)
 
     # Avoid loopback to the same file
     if module_name == file_path.stem:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Avoiding loopback to the same file: %s", module_name)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Avoiding loopback to the same file: %s", module_name)
         return False
     if module_name == "pipreqs" and f"{options.my_name}.py" in str(file_path):
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Avoiding loopback to pipreqs in %s.py", options.my_name)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Avoiding loopback to pipreqs in %s.py", options.my_name)
         return False
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Constructed module path: %s", module_path_str)
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Constructed module path: %s", module_path_str)
 
     # Check if the import is a .py file in the same directory
     potential_file_path = (base_dir / f"{module_path_str}.py").expanduser().resolve()
@@ -4334,18 +4335,18 @@ def process_import(options: Options, module_name: str, file_path: str | os.PathL
         options.custom_modules[module_name] = potential_file_path
         options.loaded_custom_modules.add(module_name)
         options.samedir_files.append(potential_file_path)
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Added same directory file: %s", potential_file_path)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Added same directory file: %s", potential_file_path)
         return True
 
     # Check if the import is a package (directory with __init__.py)
     potential_dir_path = (base_dir / module_path_str).expanduser().resolve()
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Constructed potential directory path: %s", potential_dir_path)
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Constructed potential directory path: %s", potential_dir_path)
     if ud.safe_is_dir(potential_dir_path) and ud.safe_is_file(potential_dir_path / "__init__.py") and module_path_str not in options.subfolders:
         options.custom_modules[module_name] = potential_dir_path
         options.loaded_custom_modules.add(module_name)
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Resolved local package to: %s", potential_dir_path)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Resolved local package to: %s", potential_dir_path)
         options.subfolders.append(module_path_str)
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Added subfolder: %s", module_path_str)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Added subfolder: %s", module_path_str)
         return True
 
     # Check if this module is in the custom_modules dictionary.
@@ -4353,10 +4354,10 @@ def process_import(options: Options, module_name: str, file_path: str | os.PathL
         module_file = options.custom_modules[module_name]
         if module_name not in options.loaded_custom_modules:
             options.loaded_custom_modules.add(module_name)
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Resolved via custom_modules: %s → %s", module_name, module_file)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Resolved via custom_modules: %s → %s", module_name, module_file)
         return True
 
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Could not resolve local import, treating as external: %s", module_name)
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Could not resolve local import, treating as external: %s", module_name)
     return False
 
 
@@ -4435,7 +4436,7 @@ class ImportFunctionCollector(ast.NodeVisitor):
         if self.current_class:
             func_name = f"{self.current_class}.{func_name}"
         self.module_info.functions[func_name] = FunctionInfo(func_name, node)
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Added function: %s to module %s", func_name, self.module_info.module_name)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Added function: %s to module %s", func_name, self.module_info.module_name)
         prev_function         = self.current_function
         self.current_function = func_name
         # Track parameter annotations (only while inside this function)
@@ -4466,7 +4467,7 @@ class ImportFunctionCollector(ast.NodeVisitor):
                     base_name = alias_target + "." + ".".join(parts[1:])
                 base_class_names.append(base_name)
         self.base_classes[node.name] = base_class_names
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Recorded base classes for %s: %s", node.name, self.base_classes[node.name])
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Recorded base classes for %s: %s", node.name, self.base_classes[node.name])
         # Now that base_classes is set, visit the class body
         self.generic_visit(node)
         self.current_class = prev_class
@@ -4544,14 +4545,14 @@ class ImportFunctionCollector(ast.NodeVisitor):
                 # It's a class from this module
                 if func_name in self.module_info.classes:
                     # func_name is exactly the class name, treat as constructor
-                    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s is identified as a class. Converting to __init__ call.", func_name)
+                    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("%s is identified as a class. Converting to __init__ call.", func_name)
                     func_name = f"{self.module_info.module_name}.{func_name}.__init__"
                 else:
                     # It's a method/attribute call on a class from this module
-                    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s is a method/attribute on a class from the same module. Qualifying with module name.", func_name)
+                    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("%s is a method/attribute on a class from the same module. Qualifying with module name.", func_name)
                     func_name = f"{self.module_info.module_name}.{func_name}"
             else:
-                logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s is not a class, leaving as-is.", func_name)
+                if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("%s is not a class, leaving as-is.", func_name)
             # If func_name corresponds to a class in this module, treat it as calling __init__
             if func_name in self.module_info.classes:
                 func_name = f"{func_name}.__init__"
@@ -4622,11 +4623,11 @@ class ImportFunctionCollector(ast.NodeVisitor):
             if kw.value is not None:
                 self._maybe_record_func_ref(kw.value)
         self.generic_visit(node)
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Call found: original func_name=%s, resolved func_name=%s", original_func_name, func_name)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Call found: original func_name=%s, resolved func_name=%s", original_func_name, func_name)
         if self.current_function:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Adding function call %s to %s", func_name, self.current_function)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Adding function call %s to %s", func_name, self.current_function)
         else:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Adding top-level call: %s", func_name)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Adding top-level call: %s", func_name)
 
     def get_full_name(self, node: ast.AST) -> str | None:
         """Get the full name of a node, including any aliases."""
@@ -4862,9 +4863,9 @@ def build_call_graph(modules_info: dict[str, ModuleInfo]) -> dict[str, set[str]]
                 else:
                     called_full_name = f"{called_module}.{called_name}"
                 call_graph[full_func_name].add(called_full_name)
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Call graph constructed:")
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Call graph constructed:")
     for func, calls in call_graph.items():
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s calls: %s", func, calls)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("%s calls: %s", func, calls)
     return call_graph
 
 
@@ -4877,9 +4878,9 @@ def collect_used_imports(start_module: str, start_func: str,
         visited = set()
     full_func_name: str = f"{start_module}.{start_func}"
     if full_func_name in visited:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Already visited %s, skipping.", full_func_name)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Already visited %s, skipping.", full_func_name)
         return set()
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Visiting function: %s", full_func_name)
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Visiting function: %s", full_func_name)
     visited.add(full_func_name)
     imports: set[str] = set()
     module_info       = modules_info.get(start_module)
@@ -4887,7 +4888,7 @@ def collect_used_imports(start_module: str, start_func: str,
         func_info = module_info.functions.get(start_func)
         if func_info:
             if func_info.imports_in_function:
-                logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Function %s imports: %s", full_func_name, func_info.imports_in_function)
+                if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Function %s imports: %s", full_func_name, func_info.imports_in_function)
             imports.update(func_info.imports_in_function)
     # Follow resolved edges from the call graph:
     edges = call_graph.get(full_func_name, set())
@@ -4973,9 +4974,9 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
                     modules_to_process.append(module_file_path)
             else:
                 options.all_imports.add(import_name)
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Modules processed so far:")
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Modules processed so far:")
     for m_name, m_info in modules_info.items():
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Module: %s, Classes: %s, Functions: %s", m_name, m_info.classes, list(m_info.functions.keys()))
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Module: %s, Classes: %s, Functions: %s", m_name, m_info.classes, list(m_info.functions.keys()))
     # Now build the call graph
     call_graph = build_call_graph(modules_info)
     # Collect used imports starting from the first module
@@ -4988,7 +4989,7 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
         used_imports.update(module_info.top_level_imports)
         for func_name in module_info.top_level_calls:
             called_module, called_name = split_function_name(func_name, module_name)
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Collecting used imports for module '%s' and func_name '%s'", called_module, called_name)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Collecting used imports for module '%s' and func_name '%s'", called_module, called_name)
             used_imports.update(
                 collect_used_imports(
                     called_module,  # Use the extracted module name
@@ -4998,8 +4999,8 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
                     visited_funcs
                 )
             )
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Used imports collected from '%s' in '%s': %s", called_name, called_module, used_imports)
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Used imports after collecting from module %s: %s", module_name, used_imports)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Used imports collected from '%s' in '%s': %s", called_name, called_module, used_imports)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Used imports after collecting from module %s: %s", module_name, used_imports)
     collect_imports_from_module(first_path.stem)
     # Scan the *initial* script (first_path) everywhere:
     first_module = first_path.stem
@@ -5156,7 +5157,7 @@ def check_packages_in_venv(options: Options, package: str | None = None,
     else:
         use_pip_list(options)
         packages = [options.reversed_module_aliases.get(pkg, pkg) for pkg in options.uninstalled_imports]
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Packages to check in venv: %s", packages)
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Packages to check in venv: %s", packages)
     python_code = f"""
 import sys
 from importlib import import_module
@@ -5182,9 +5183,9 @@ else:
 """
     the_command = [os.fspath(venv_python), "-c", python_code]
     result = subprocess.run(the_command, capture_output=True, text=True, check=False)
-    # logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("check_packages_in_venv command:\n%s", " ".join(shlex.quote(str(arg)) for arg in the_command))
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("check_packages_in_venv stdout:\n%s", result.stdout)
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("check_packages_in_venv stderr:\n%s", result.stderr)
+    # if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("check_packages_in_venv command:\n%s", " ".join(shlex.quote(str(arg)) for arg in the_command))
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("check_packages_in_venv stdout:\n%s", result.stdout)
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("check_packages_in_venv stderr:\n%s", result.stderr)
     return "packages imported successfully" in result.stdout
 
 
@@ -5193,7 +5194,7 @@ def split_imports(options: Options) -> None:
     options.bad_imports = options.known_bad_imports.intersection(options.all_imports)
     options.bad_imports.update({imp for imp in options.all_imports if imp.startswith("_")})
     if options.bad_imports:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Identified bad imports: %s", options.bad_imports)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Identified bad imports: %s", options.bad_imports)
     options.all_imports = options.all_imports - options.bad_imports
     options.installed_imports   = set()
     options.uninstalled_imports = set()
@@ -5211,17 +5212,17 @@ def split_imports(options: Options) -> None:
         venv.create(venv_dir, with_pip=True)
         for i, imp in enumerate(options.all_imports, 1):
             package_name = options.module_aliases.get(imp, imp)
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Checking if import %s is installed or uninstalled", imp)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Checking if import %s is installed or uninstalled", imp)
             if imp in options.custom_modules.keys():
-                logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Custom module %s has path %s", imp, options.custom_modules[imp])
+                if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Custom module %s has path %s", imp, options.custom_modules[imp])
                 status_str = f"{ud.ANSI_CYAN}YES - custom module{ud.ANSI_RESET}"
             elif check_packages_in_venv(options, package=package_name,
                                         venv_dir=venv_dir):
-                logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Module %s can be imported in venv", imp)
+                if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Module %s can be imported in venv", imp)
                 status_str = f"{ud.ANSI_GREEN}YES -     installed{ud.ANSI_RESET}"
                 options.installed_imports.add(imp)
             else:
-                logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Import %s is not installed and not a custom module", imp)
+                if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Import %s is not installed and not a custom module", imp)
                 status_str = f" NO - NOT installed"
                 options.uninstalled_imports.add(package_name)
             if not options.rawlog:
@@ -5516,14 +5517,14 @@ print("\\n".join(installed_packages + available_modules + list(builtin_modules))
 
         try:
             result = subprocess.run(list_command, check=True, capture_output=True, text=True)
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Output:\n%s", result.stdout)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Output:\n%s", result.stdout)
         except subprocess.CalledProcessError as e:
             logging.exception("%s\nException type: %s", e, type(e).__name__)
 
         # Use regular expressions to find all package names
         options.pip_list = re.findall(r'^[^\s]+', result.stdout, re.MULTILINE)
         options.pip_list = [pkg for pkg in options.pip_list if pkg != "Package" and not all(c == "-" for c in pkg)]
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("\noptions.pip_list = %s", options.pip_list)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("\noptions.pip_list = %s", options.pip_list)
 
         pip_list_filename = options.my_dir / f"pip_list_{options.timestamp}.txt"
         pip_list_filename.write_text("\n".join(options.pip_list), encoding=ud.DEFAULT_ENCODING)
@@ -5531,7 +5532,7 @@ print("\\n".join(installed_packages + available_modules + list(builtin_modules))
     new_uninstalled_imports = options.installed_imports - set(options.pip_list)
     options.uninstalled_imports = options.uninstalled_imports.union(new_uninstalled_imports)
     if options.uninstalled_imports:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("new_uninstalled_imports = %s", new_uninstalled_imports)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("new_uninstalled_imports = %s", new_uninstalled_imports)
     options.installed_imports = options.installed_imports - new_uninstalled_imports
     # Once again, add packages from the options.extra_requirements dictionary if "--reqs" is specified as a runtime argument. (Do this again, just in case they got removed from the uninstalled_imports set above.)
     if getattr(options.args, "reqs", False):
@@ -5558,7 +5559,7 @@ def parse_extra_requirements(options: Options) -> dict[str, str | None]:
 
 def write_requirements_file_with_extras(options: Options) -> None:
     """Write the requirements file with the extra requirements added and generate a 'pretty' requirements string."""
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Writing packages to %s", options.requirements_file)
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Writing packages to %s", options.requirements_file)
     options.pretty_requirements = ""
     # Define the symbol replacements
     replacements = [(">=", "_ge"),
