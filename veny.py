@@ -26,11 +26,12 @@ import univ_defs as ud
 __version__: str = "0.2.0"
 
 
-class Options():
+class Options(ud.Options):
     """Class that has all global options in one place."""
 
     def __init__(self) -> None:
         """Initialize the Options class with default values."""
+        super().__init__()                  # Call the parent class's __init__ method from univ_defs.py
         self.log_mode:                      int = logging.INFO  # Use --debug to change to logging.DEBUG.
         self.search_above_this_dir:        bool = True
         self.my_filepath:                  Path = ud.ensure_path(sys.argv[0])  # Full (invoked) path to this script
@@ -40,12 +41,6 @@ class Options():
         # Instead, it's the directory where this script will store its virtual environments and packages.
         self.my_dir:                       Path = self.home / self.my_name
         self.python_command:                str = ""
-        self.shell:                         str = ""
-        self.rc_file:               Path | None = None
-        self.alias:                         str = ""  # The alias to use for this script, if any.
-        self.additional_alias_files: list[Path] = []
-        self.alias_command:          str | None = None  # The command to run when the alias is used.
-        self.computer_name:                 str = ""  # The name of this computer, retrieved from various methods.
         self.cwd:                          Path = Path.cwd().expanduser().resolve(strict=True)
         self.venv_name:                     str = "myenv"  # Can NOT include dashes ("-")
         self.packages_dir:                 Path = self.my_dir / "packages"
@@ -68,35 +63,36 @@ class Options():
         self.script_args:             list[str] = []
         self.options_json_filepath: Path | None = None
         # Before 2025-08-10 at 22:49:00, paths were stored as strings. After that date, they were stored as pathlib.Path objects. Any .pkl files created before that date have their paths converted to pathlib.Path objects when loaded. Any .json files created before that date are ignored when loading last-used options.
-        self.pathlibcutoff:                 str = "20250810-224900"
-        self.current_pip_version:           str = ""
-        self.new_pip_version:               str = ""
-        self.venv_dir:              Path | None = None
-        self.venv_python:           Path | None = None
-        self.venv_pip:              Path | None = None
-        self.requirements_file:     Path | None = None
-        self.extra_requirements: dict[str, str] = {}
-        self.extra_requirements_file:       str = "extra_requirements.txt"
-        self.download_script_path:  Path | None = None
-        self.simultaneous_success:         bool = False
-        self.max_checks:                    int = 10  # Maximum number of times to check any repeated process.
-        self.check_interval:                int =  5  # Number of seconds to wait between checks.
-        self.rawlog:                       bool = False
-        self.pipreqs_available:            bool = False
-        self.univ_defs_path:               Path = ud.ensure_path(ud.__file__).resolve(strict=True)
-        self.univ_defs_sys_path_script:    Path = self.my_dir / "univ_defs_sys_path_script.py"
-        self.mydiff_path:                  Path = self.my_dir / "mydiff.py"
-        self.myaudit_path:                 Path = self.my_dir / "myaudit.py"
-        self.multireplace_path:            Path = self.my_dir / "multireplace.py"
-        self.treeview_path:                Path = self.my_dir / "treeview.py"
-        self.printall_path:                Path = self.my_dir / "printall.py"
-        self.read_files:             list[Path] = []  # List of files read       by the Python script.
-        self.write_files:            list[Path] = []  # List of files written    by the Python script.
-        self.download_urls:          list[Path] = []  # List of  URLs downloaded by the Python script.
-        self.upload_urls:            list[Path] = []  # List of  URLs uploaded   by the Python script.
-        self.current_method_name:           str = ""  # Name of the current method being executed.
-        self.args:    argparse.Namespace | None = None
-        self.manual_instructions:           str = f"""
+        self.pathlibcutoff:                        str = "20250810-224900"
+        self.current_pip_version:                  str = ""
+        self.new_pip_version:                      str = ""
+        self.venv_dir:                     Path | None = None
+        self.venv_python:                  Path | None = None
+        self.venv_pip:                     Path | None = None
+        self.requirements_file:            Path | None = None
+        self.extra_requirements: dict[str, str | None] = {}
+        self.extra_requirements_file:              str = "extra_requirements.txt"
+        self.pretty_requirements:                  str = ""
+        self.download_script_path:         Path | None = None
+        self.simultaneous_success:                bool = False
+        self.max_checks:                           int = 10  # Maximum number of times to check any repeated process.
+        self.check_interval:                       int =  5  # Number of seconds to wait between checks.
+        self.rawlog:                              bool = False
+        self.pipreqs_available:                   bool = False
+        self.univ_defs_path:                      Path = ud.ensure_path(ud.__file__).resolve(strict=True)
+        self.univ_defs_sys_path_script:           Path = self.my_dir / "univ_defs_sys_path_script.py"
+        self.mydiff_path:                         Path = self.my_dir / "mydiff.py"
+        self.myaudit_path:                        Path = self.my_dir / "myaudit.py"
+        self.multireplace_path:                   Path = self.my_dir / "multireplace.py"
+        self.treeview_path:                       Path = self.my_dir / "treeview.py"
+        self.printall_path:                       Path = self.my_dir / "printall.py"
+        self.read_files:                    list[Path] = []  # List of files read       by the Python script.
+        self.write_files:                   list[Path] = []  # List of files written    by the Python script.
+        self.download_urls:                 list[Path] = []  # List of  URLs downloaded by the Python script.
+        self.upload_urls:                   list[Path] = []  # List of  URLs uploaded   by the Python script.
+        self.current_method_name:                  str = ""  # Name of the current method being executed.
+        self.args:           argparse.Namespace | None = None
+        self.manual_instructions:                  str = f"""
 This program acts as a wrapper around Python to automate the creation of virtual environments and the installation of any required packages. Instead of typing "python3 script.py", you can type "{self.my_name} script.py" to run script.py in a virtual environment which has all the required packages.
 
 It's convenient to add an alias to the shell configuration file so that typing ALIAS anywhere runs this program. This can either be done by running this program with the "--alias ALIAS" command line argument (for example: "python3 {self.my_name}.py --alias {self.my_name}") or by following the manual instructions below. The following steps assume this program is saved as {self.my_name}.py in your home directory (~), but you can adjust the path and filename to match your setup.
@@ -2410,8 +2406,6 @@ def main() -> None:
     memory_handler = ud.configure_logging(options.my_name, log_level=options.log_mode,
                                           rawlog=options.rawlog)
 
-    options.computer_name = ud.get_computer_name(options.rawlog)
-
     options.python_command = find_preferred_python_version()
     if options.python_command:
         if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Python %s is available at: %s", ud.PY_VERSION, options.python_command)
@@ -2681,7 +2675,7 @@ def add_alias_to_rc_file(options: Options) -> None:
             with open(options.rc_file, "a") as f:
                 f.write("\n" + options.alias_command + "\n")
             logging.info("Alias added to %s", options.rc_file)
-    except OSError as e:
+    except OSError:
         logging.exception("Failed to write alias to %s", options.rc_file)
         logging.error(options.manual_instructions)
 
@@ -3110,7 +3104,6 @@ class FileOperationsVisitor(ast.NodeVisitor):
                 and node.args):
             filename = _literal_str(node.args[0])
             mode     = _literal_str(node.args[1]) if len(node.args) > 1 else "r"
-            method = node.func.attr
             if filename:
                 if mode.startswith("r"):
                     _record_IO(self.options, self.file_content, "read_files",
@@ -4748,7 +4741,7 @@ class ImportFunctionCollector(ast.NodeVisitor):
         map it immediately so later phases can resolve it as a local module.
         """
         try:
-            # Resolve relative to the file we’re analyzing
+            # Resolve relative to the file we're analyzing
             base_dir = Path(self.file_path).parent
             p = (base_dir / path_str).expanduser().resolve() if not os.path.isabs(path_str) else Path(path_str).expanduser().resolve()
         except Exception:
@@ -5144,7 +5137,8 @@ def check_packages_in_venv(options: Options, package: str | None = None,
     Raises:
         None:       This function does not raise exceptions, but logs errors if the import fails.
     """
-    if not venv_dir:
+    if venv_dir is None:
+        assert options.venv_dir is not None, "options.venv_dir must be set"
         venv_dir = options.venv_dir
     else:
         venv_dir = ud.ensure_dir(venv_dir)
@@ -5223,7 +5217,7 @@ def split_imports(options: Options) -> None:
                 options.installed_imports.add(imp)
             else:
                 if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Import %s is not installed and not a custom module", imp)
-                status_str = f" NO - NOT installed"
+                status_str = " NO - NOT installed"
                 options.uninstalled_imports.add(package_name)
             if not options.rawlog:
                 logging.info("Checking import %-*s : %*d/%d - %s",
@@ -5266,6 +5260,8 @@ def list_packages(options: Options) -> None:
         ValueError:        If the provided path is not a valid Python script or directory.
         FileNotFoundError: If the specified file or directory does not exist.
     """
+    assert options.python_script is not None, "options.python_script must be set"
+    assert options.script_dir    is not None, "options.script_dir must be set"
     if getattr(options.args, "full", False):
         if not options.rawlog: logging.info("Building a virtual environment that can run every python script in %s", os.fspath(options.script_dir))
 
@@ -5370,6 +5366,7 @@ def download_packages(options: Options) -> bool:
     {options.venv_pip} download -r {options.requirements_file} -d {options.packages_dir}"""
 
     try:
+        assert options.download_script_path is not None, "Download script path is not set."
         if not options.rawlog: logging.info("Writing download script to %s", options.download_script_path)
         options.download_script_path.write_text(download_script, encoding=ud.DEFAULT_ENCODING)
         options.download_script_path.chmod(0o755)
@@ -5409,12 +5406,16 @@ def install_packages_individually(options: Options) -> bool:
 
     if failed_packages:
         logging.error("Failed to install the following packages: %s", ", ".join(failed_packages))
+        return False
     else:
         if not options.rawlog: logging.info("All packages installed successfully.")
+        return True
 
 
 def install_package(package_name: str, options: Options) -> bool:
     """Install a single package and return the success status (True if successful, False otherwise)."""
+    assert options.venv_python  is not None, "Virtual environment Python executable is not set."
+    assert options.packages_dir is not None, "Packages directory is not set."
     the_command = [os.fspath(options.venv_python), "-m", "pip", "install", package_name,
                    "--no-index", "--find-links", os.fspath(options.packages_dir)]
     logging.info("Running pip install: %s", " ".join(shlex.quote(str(arg)) for arg in the_command))
@@ -5539,8 +5540,19 @@ print("\\n".join(installed_packages + available_modules + list(builtin_modules))
         options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
 
 
-def parse_extra_requirements(options: Options) -> dict[str, str | None]:
-    """Parse an extra requirements file and return a dictionary of package names (and version specifiers, if present)."""
+def parse_extra_requirements(options: Options) -> None:
+    """
+    Parse an extra requirements file and return a dictionary of package names (and version specifiers, if present).
+    The file should have one package per line, optionally with version specifiers (e.g., 'package>=1.0').
+    Lines starting with '#' are treated as comments and ignored.
+    
+    Args:
+        options: Options object containing the path to the extra requirements file.
+    
+    Returns:
+        None. A dictionary where keys are package names and values are version specifiers is added
+        to the options object as extra_requirements.
+    """
     options.extra_requirements = {}
     file_content = ud.my_fopen(options.extra_requirements_file, suppress_errors=True, rawlog=options.rawlog)
     if not file_content:
@@ -5569,6 +5581,9 @@ def write_requirements_file_with_extras(options: Options) -> None:
                     (">", "_gt"),
                     ("<", "_lt"),
                     (",", "_and")]
+    assert options.requirements_file   is not None, "options.requirements_file must be set"
+    assert options.uninstalled_imports is not None, "options.uninstalled_imports must be set"
+    assert options.extra_requirements  is not None, "options.extra_requirements must be set"
     with open(options.requirements_file, "w") as f:
         # Write the packages in alphabetical order so the requirements file is deterministic.
         for idx, package in enumerate(sorted(options.uninstalled_imports)):
@@ -5603,10 +5618,12 @@ def setup_virtualenv(options: Options) -> bool:
     write_requirements_file_with_extras(options)
 
     if not options.rawlog: logging.info("Creating virtual environment...")
+    assert options.venv_dir is not None, "options.venv_dir must be set"
     subprocess.check_call([sys.executable, "-m", "venv", os.fspath(options.venv_dir)])
     if not options.rawlog: logging.info("Virtual environment created.")
 
     # Activate virtual environment and install wheel
+    assert options.venv_pip is not None, "options.venv_pip must be set"
     install_command = [os.fspath(options.venv_pip), "install", "wheel"]
     logging.info("Running pip install: %s", " ".join(shlex.quote(str(arg)) for arg in install_command))
     subprocess.run(install_command, check=True)
@@ -5632,6 +5649,8 @@ def is_virtualenv() -> bool:
 
 def load_last_used_options(options: Options) -> Options | None:
     """Look for the most recent JSON file in the script directory that matches the script name and load it into a new Options object. Ignore any JSON files created before the options.pathlibcutoff timestamp."""
+    assert options.script_dir    is not None, "options.script_dir must be set"
+    assert options.python_script is not None, "options.python_script must be set"
     pattern = re.compile(r"last-used-on-(\d{8}-\d{6})")
     json_files = [
         f
@@ -5672,7 +5691,15 @@ def load_last_used_venv_dir(options: Options) -> Path | None:
 
 
 def load_last_used_venv_python(options: Options) -> Path | None:
-    """Look for the most recent JSON file in the script directory that matches the script name and return the venv_python from it."""
+    """
+    Look for the most recent JSON file in the script directory that matches the script name and return the venv_python from it.
+    
+    Args:
+        options: Options object containing settings and paths.
+    
+    Returns:
+        The Path object of the last used venv_python, or None if not found or invalid.
+    """
     last_used_options = load_last_used_options(options)
     if not last_used_options:
         if not options.rawlog: logging.info("No last used options found, so no venv_python to return.")
@@ -5693,48 +5720,85 @@ def load_last_used_venv_python(options: Options) -> Path | None:
         return last_used_options.venv_python
 
 
-def latest_venv(final_venv_folders: dict[str, dict[str, int]]) -> str:
-    """Return the folder with the latest timestamp."""
-    latest_folder = None
-    latest_timestamp = None
-
+def latest_venv(final_venv_folders: dict[Path, dict[str, int]]) -> Path | None:
+    """
+    Return the folder Path that has the latest timestamp.
+    
+    Args:
+        final_venv_folders: A dictionary where keys are folder paths (as strings or
+                            os.PathLike objects) and values are dictionaries containing
+                            metadata about each folder, including a 'timestamp' key.
+    
+    Returns:
+        The Path object of the folder with the latest timestamp, or None if no valid
+        folder is found.
+    """
+    latest_folder:   Path | None = None
+    latest_timestamp: int | None = None
     for folder, data in final_venv_folders.items():
         if latest_timestamp is None or data['timestamp'] > latest_timestamp:
             latest_timestamp = data['timestamp']
-            latest_folder = folder
-
+            latest_folder    = folder
     return latest_folder
 
 
-def oldest_venv(final_venv_folders: dict[str, dict[str, int]]) -> str:
-    """Return the folder with the oldest timestamp."""
-    oldest_folder = None
-    oldest_timestamp = None
+def oldest_venv(final_venv_folders: dict[Path, dict[str, int]]) -> Path | None:
+    """
+    Return the folder Path that has the oldest timestamp.
 
+    Args:
+        final_venv_folders: A dictionary where keys are folder paths (as strings or
+                            os.PathLike objects) and values are dictionaries containing
+                            metadata about each folder, including a 'timestamp' key.
+    
+    Returns:
+        The Path object of the folder with the oldest timestamp, or None if no valid
+        folder is found.
+    """
+    oldest_folder:   Path | None = None
+    oldest_timestamp: int | None = None
     for folder, data in final_venv_folders.items():
-        if oldest_timestamp is None or data['timestamp'] > oldest_timestamp:
+        if oldest_timestamp is None or data['timestamp'] < oldest_timestamp:
             oldest_timestamp = data['timestamp']
-            oldest_folder = folder
-
+            oldest_folder    = folder
     return oldest_folder
 
 
-def smallest_venv(final_venv_folders: dict[str, dict[str, int]]) -> str:
-    """Return the folder with the fewest packages."""
-    smallest_folder = None
-    smallest_num_packages = None
+def smallest_venv(final_venv_folders: dict[Path, dict[str, int]]) -> Path | None:
+    """
+    Return the folder Path that has the fewest packages.
 
+    Args:
+        final_venv_folders: A dictionary where keys are folder paths (as strings or
+                            os.PathLike objects) and values are dictionaries containing
+                            metadata about each folder, including a 'num_packages' key.
+    
+    Returns:
+        The Path object of the folder with the fewest packages, or None if no valid
+        folder is found.
+    """
+    smallest_folder: Path | None = None
+    smallest_num_packages: int | None = None
     for folder, data in final_venv_folders.items():
         if smallest_num_packages is None or data['num_packages'] < smallest_num_packages:
             smallest_num_packages = data['num_packages']
-            smallest_folder = folder
-
+            smallest_folder       = folder
     return smallest_folder
 
 
 def check_venv_dir(options: Options, options_from_cache: Options) -> bool:
-    """Check if the last used venv is still valid."""
-    if hasattr(options_from_cache, "venv_dir"):
+    """
+    Check if the last used venv is still valid.
+    
+    Args:
+        options:            Options object containing the current settings.
+        options_from_cache: Options object loaded from the last used JSON file.
+
+    Returns:
+        True if the cached venv directory is valid and meets the current requirements,
+        False otherwise.
+    """
+    if hasattr(options_from_cache, "venv_dir") and options_from_cache.venv_dir is not None:
         # This might be loaded from an old options file which used strings.
         options_from_cache.venv_dir = ud.ensure_path(options_from_cache.venv_dir)
         if ud.safe_is_dir(options_from_cache.venv_dir):
@@ -5771,6 +5835,7 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
         None, but logs errors if the combination of flags is invalid, if no matching venv is found,
         or if the cached venv is invalid.
     """
+    assert options.args is not None  # For mypy
     if not getattr(options.args, "latest",    False) and \
        not getattr(options.args, "oldest",    False) and \
        not getattr(options.args, "last_used", False) and \
@@ -5780,7 +5845,7 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
        not getattr(options.args, "latest",    False) and \
        not getattr(options.args, "smallest",  False):
         options_last_used = load_last_used_options(options)
-        if check_venv_dir(options, options_last_used):
+        if options_last_used is not None and check_venv_dir(options, options_last_used):
             return options_last_used.venv_dir
         else:
             if not options.rawlog: logging.info("Trying to load the latest matching venv now.")
@@ -5808,14 +5873,21 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
         if len(missing_packages) <= number_unknown_packages:
             venv_folders.append(folder)
     # Loop through possibly valid venv folders and compare requirements in detail.
-    final_venv_folders = {}
+    final_venv_folders: dict[Path, dict[str, int]] = {}
     for folder in venv_folders:
         this_requirements_file = options.my_dir / folder / "requirements.txt"
         with open(this_requirements_file, "r") as file:
             requirements = set(file.read().splitlines())
         if options.uninstalled_imports.issubset(requirements):
             this_timestamp = folder.name.split("-")[2]+"-"+folder.name.split("-")[3]
-            final_venv_folders[folder] = {"timestamp"    : this_timestamp,
+            try:
+                ts_int = int(this_timestamp)
+            except ValueError:
+                if logging.getLogger().isEnabledFor(logging.DEBUG):
+                    logging.debug("Skipping folder %s because timestamp %s is not an integer.",
+                                  os.fspath(folder), this_timestamp)
+                continue
+            final_venv_folders[folder] = {"timestamp"    : ts_int,
                                           "num_packages" : len(requirements)}
     if not final_venv_folders:
         if not options.rawlog: logging.info("No matching venv folders found in the cache.")
@@ -5828,7 +5900,12 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
            not getattr(options.args, "smallest",  False):
             # Return the latest venv in the cache which has all the packages needed now
             options_latest = copy.deepcopy(options)
-            options_latest.set_venv_dir(options.my_dir / latest_venv(final_venv_folders))
+            latest_venv_folder: Path | None = latest_venv(final_venv_folders)
+            if latest_venv_folder is None:
+                if not options.rawlog:
+                    logging.error("Could not determine the latest venv folder from the cache.")
+                return None
+            options_latest.set_venv_dir(latest_venv_folder)
             options_latest.uninstalled_imports = options.uninstalled_imports
             if check_venv_dir(options, options_latest):
                 return options_latest.venv_dir
@@ -5842,7 +5919,12 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
                 not getattr(options.args, "smallest",  False):
             # Return the oldest venv in the cache which has all the packages needed now
             options_oldest = copy.deepcopy(options)
-            options_oldest.set_venv_dir(options.my_dir / oldest_venv(final_venv_folders))
+            oldest_venv_folder: Path | None = oldest_venv(final_venv_folders)
+            if oldest_venv_folder is None:
+                if not options.rawlog:
+                    logging.error("Could not determine the oldest venv folder from the cache.")
+                return None
+            options_oldest.set_venv_dir(oldest_venv_folder)
             options_oldest.uninstalled_imports = options.uninstalled_imports
             if check_venv_dir(options, options_oldest):
                 return options_oldest.venv_dir
@@ -5856,7 +5938,12 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
                 not getattr(options.args, "last_used", False):
             # Return the smallest venv in the cache which has all the packages needed now
             options_smallest = copy.deepcopy(options)
-            options_smallest.set_venv_dir(options.my_dir / smallest_venv(final_venv_folders))
+            smallest_venv_folder: Path | None = smallest_venv(final_venv_folders)
+            if smallest_venv_folder is None:
+                if not options.rawlog:
+                    logging.error("Could not determine the smallest venv folder from the cache.")
+                return None
+            options_smallest.set_venv_dir(smallest_venv_folder)
             options_smallest.uninstalled_imports = options.uninstalled_imports
             if check_venv_dir(options, options_smallest):
                 return options_smallest.venv_dir
@@ -5870,6 +5957,7 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
                           f"{getattr(options.args, 'oldest',    False) = }\n"
                           f"{getattr(options.args, 'last_used', False) = }\n"
                           f"{getattr(options.args, 'smallest',  False) = }")
+    return None
 
 
 STANDARD_LIB_PATHS: tuple[Path, ...] = (Path("/") / "usr" / "lib",
@@ -5941,7 +6029,7 @@ def dict_of_custom_modules(options: Options) -> dict[str, Path]:
         search_constraint_path_boolean     = only_search_here_path_boolean
 
     log = logging.getLogger()  # Prebind the logger to avoid repeated global lookups in hot loop
-    log.isEnabledFor(logging.DEBUG) and logging.debug("Searching for custom modules pickle files with constraint: search_above_text_to_match = %s",
+    if log.isEnabledFor(logging.DEBUG): logging.debug("Searching for custom modules pickle files with constraint: search_above_text_to_match = %s",
                   search_above_text_to_match)
     if not getattr(options.args, "rc",       False) and \
        not getattr(options.args, "no_cache", False):
@@ -5949,16 +6037,18 @@ def dict_of_custom_modules(options: Options) -> dict[str, Path]:
             potential_files = [file for file in options.cwd.iterdir()
                                if file.name.startswith(f".{options.my_name}_custom_modules_") and
                                   file.suffix.casefold() == ".pkl" and
-                                  options.computer_name in file.name and
+                                  ud.COMPUTER_NAME in file.name and
                                   search_constraint_filename_boolean(file.name, search_above_text_to_match)]
             if not potential_files:
                 if not options.rawlog:
                     logging.info("No existing custom modules pickle files found in the current directory.")
             else:
                 # If multiple files are found, pick the most recent one based on the timestamp in the filename.
-                potential_files_with_timestamps = [(file, ud.extract_timestamp(file.name)) for file in potential_files]
-                # Filter out files where timestamp extraction failed
-                potential_files_with_timestamps = [(file, ts) for file, ts in potential_files_with_timestamps if ts is not None]
+                potential_files_with_timestamps: list[tuple[Path, str]] = [
+                    (file, ts)
+                    for file in potential_files
+                    if (ts := ud.extract_timestamp(file.name)) is not None
+                ]
                 if not potential_files_with_timestamps:
                     if not options.rawlog:
                         logging.info("No valid timestamps found in custom modules pickle filenames.")
@@ -5970,7 +6060,7 @@ def dict_of_custom_modules(options: Options) -> dict[str, Path]:
                     if not options.rawlog:
                         logging.info("Loading custom modules from most recent pickle file: %s", most_recent_file)
                     with open(most_recent_file, "rb") as f:
-                        custom_modules = pickle.load(f)
+                        loaded_modules = pickle.load(f)
                     if most_recent_timestamp < options.pathlibcutoff:
                         if not options.rawlog:
                             logging.info("Custom modules file %s is from date %s "
@@ -5978,8 +6068,11 @@ def dict_of_custom_modules(options: Options) -> dict[str, Path]:
                                          "paths were stored as Paths (which happened on %s). "
                                          "Converting all paths to pathlib.Path objects.",
                                          most_recent_file, most_recent_timestamp, options.pathlibcutoff)
-                        custom_modules = {k: ud.ensure_path(v) for k, v in custom_modules.items()}
-                    return custom_modules
+                        normalized: dict[str, Path] = {k: ud.ensure_path(v) for k, v in loaded_modules.items()}
+                    else:
+                        # If the pickle already contains Paths, narrow the type for mypy
+                        normalized = {k: (v if isinstance(v, Path) else ud.ensure_path(v)) for k, v in loaded_modules.items()}
+                    return normalized
         except Exception:
             logging.exception("Error loading custom modules from pickle file.")
             logging.error("Falling back to regenerating the custom modules dictionary from sys.path.")
@@ -5999,10 +6092,10 @@ def dict_of_custom_modules(options: Options) -> dict[str, Path]:
     safe_is_file = ud.safe_is_file
     safe_is_dir  = ud.safe_is_dir
 
-    log.isEnabledFor(logging.DEBUG) and logging.debug("Generating custom modules dictionary from sys.path...")
+    if log.isEnabledFor(logging.DEBUG): logging.debug("Generating custom modules dictionary from sys.path...")
     for path in map(Path, sys.path):
         if not is_std(path) and safe_is_dir(path) and search_constraint_path_boolean(options, path):
-            log.isEnabledFor(logging.DEBUG) and logging.debug("Checking path: %s", path)
+            if log.isEnabledFor(logging.DEBUG): logging.debug("Checking path: %s", path)
 
             # Prebind a few globals/attributes to locals before os.walk to cut repeated global lookups:
             setdefault_mod   = custom_modules.setdefault
@@ -6047,11 +6140,11 @@ def dict_of_custom_modules(options: Options) -> dict[str, Path]:
 
     # Now save to a pickle file:
     current_time = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    custom_filename = f".{options.my_name}_custom_modules_{options.computer_name}{search_above_text_to_write}{current_time}.pkl"
-    with open(custom_filename, "wb") as f:
+    custom_filename = f".{options.my_name}_custom_modules_{ud.COMPUTER_NAME}{search_above_text_to_write}{current_time}.pkl"
+    with open(custom_filename, "wb") as f_out:
         if not options.rawlog:
             logging.info("Saving custom modules to %s", custom_filename)
-        pickle.dump(custom_modules, f)
+        pickle.dump(custom_modules, f_out, protocol=pickle.HIGHEST_PROTOCOL)  # Use highest protocol for efficiency because we don't need backward compatibility for caching purposes
     return custom_modules
 
 

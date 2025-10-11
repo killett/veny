@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 
 # Written by Emmy Killett (she/her), ChatGPT 4o (it/its), ChatGPT o1-preview (it/its), ChatGPT o3-mini-high (it/its), ChatGPT o4-mini-high (it/its), ChatGPT 5 Thinking (it/its), and GitHub Copilot (it/its).
-from __future__ import annotations  # For Python 3.7+ compatibility with type annotations
+from __future__         import annotations  # For Python 3.7+ compatibility with type annotations
 import os
 import sys
-from pathlib import Path  # Preferred over os.path for path manipulations.
 import logging
-from collections.abc import Sequence, Callable, Iterable
-from itertools import chain
-from typing import TextIO, Any, TypeAlias, Type, Literal, Protocol, Final
-import re  # Used to precompile regexes for performance
-from dataclasses import dataclass, field, replace
-from enum import Enum
+from pathlib            import Path  # Preferred over os.path for path manipulations.
+from collections.abc    import Sequence, Callable, Iterable
+from itertools          import chain
+from typing             import TextIO, Any, TypeAlias, Type, Literal, Final, Protocol, overload
+from dataclasses        import dataclass, field, replace
+from enum               import Enum
+from concurrent.futures import ThreadPoolExecutor
 import errno
+import re  # Used to precompile regexes for performance
 
 # Version of univ_defs.py:
 __version__: Final[str] = "0.2.1"
@@ -22,7 +23,10 @@ __version__: Final[str] = "0.2.1"
 # The next version (Python 3.13) will leave the bugfix phase around 2026-10.
 PY_VERSION: Final[float] = 3.12
 
-NASA_COMPUTER_NAME_PREFIX: Final[str] = "RAYL"  # Computers with names starting with this prefix are at NASA and can only use "cleared" LLMs.
+# Further down, this COMPUTER_NAME is obtained by calling get_computer_name().
+# Then IS_NASA_COMPUTER is set based on whether COMPUTER_NAME starts with any of NASA_COMPUTER_NAME_PREFIXES.
+# JPL computers often have names starting with "MT" which stands for "ManTech"
+NASA_COMPUTER_NAME_PREFIXES: Final[tuple[str, ...]] = ("RAYL", "NASA", "JPL", "MT")  # NASA computers start with these prefixes and can only use "cleared" LLMs.
 
 # Default encoding used for reading and writing text files:
 DEFAULT_ENCODING: str = "utf-8"
@@ -38,7 +42,10 @@ ANSI_RESET:  str = "\033[0m"
 IGNORED_CODES: list[str] = [
     "W503",  # line break before binary operator (W503 and W504 are mutually exclusive, so ignore both)
     "W504",  # line break  after binary operator (W503 and W504 are mutually exclusive, so ignore both)
-    "E128",  # continuation line under-indented for visual indent
+    "E117",  # over-indented line (comment)                        (I like to play with indentation so this cramps my style)
+    "E127",  # continuation line over-indented for visual indent   (I like to play with indentation so this cramps my style)
+    "E122",  # continuation line missing indentation or outdented  (I like to play with indentation so this cramps my style)
+    "E128",  # continuation line under-indented for visual indent  (I like to play with indentation so this cramps my style)
     "E201",  # whitespace after "("
     "E202",  # whitespace before ")"
     "E203",  # whitespace before ":"
@@ -71,8 +78,17 @@ class Options:
 
     def __init__(self) -> None:
         """Initialize the options with default values."""
-        self.log_mode: int = logging.INFO
-        self.home:    Path = Path.home()  # User's home directory
+        import argparse
+        self.log_mode:                      int = logging.INFO
+        self.home:                         Path = Path.home()  # User's home directory
+        self.shell:                  str | None = None
+        self.rc_file:               Path | None = None
+        self.alias:                  str | None = None  # The alias to use for this script, if any.
+        self.alias_command:          str | None = None  # The command to run when the alias is used.
+        self.additional_alias_files: list[Path] = []
+        self.rawlog:                       bool = False
+        self.bugbear_choice:         str | None = None  # set by run_flake8() if bugbear is installed.
+        self.args:    argparse.Namespace | None = None
 
 
 class PlotOptions(Options):
@@ -126,7 +142,7 @@ class MemoryHandler(logging.Handler):
     def __init__(self, level: int = logging.ERROR) -> None:
         """Initialize the MemoryHandler with the specified logging level."""
         super().__init__(level)
-        self.logs = []
+        self.logs: list[str] = []
 
     def emit(self, record: logging.LogRecord) -> None:
         """Capture the log record and store it in memory."""
@@ -176,8 +192,22 @@ def fallback_logging_config(log_level: int | str = logging.INFO, rawlog: bool = 
 
 
 def configure_logging(basename: str, log_level: int | str = logging.INFO,
-                      rawlog: bool = False, logdir: str | os.PathLike[str] = "") -> MemoryHandler:
-    """Configure logging to write to files and stdout/stderr, and return a MemoryHandler to capture ERROR logs for later (duplicate) printing."""
+                      rawlog: bool = False, logdir: str | os.PathLike[str] = "") -> MemoryHandler | None:
+    """
+    Configure logging to write to files and stdout/stderr, and return a MemoryHandler to capture ERROR logs for later (duplicate) printing.
+
+    Args:
+        basename : Base name for the log files.
+        log_level: Logging level (default: logging.INFO).
+        rawlog   : If True, use a simple log format without timestamps or levels.
+        logdir   : Directory to store log files. Defaults to './logs'.
+
+    Returns:
+        MemoryHandler instance capturing ERROR logs, or None if log files couldn't be created.
+
+    Raises:
+        None (file creation errors are caught and logged to stdout).
+    """
     import datetime as dt
 
     root_logger = logging.getLogger()
@@ -300,7 +330,7 @@ def my_popen(command_list: list, suppress_info: bool = False,
     if not suppress_info:
         logging.info(the_statement)
     else:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(the_statement)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(the_statement)
 
     try:
         process = subprocess.Popen(
@@ -316,16 +346,20 @@ def my_popen(command_list: list, suppress_info: bool = False,
 
         def read_stdout() -> None:
             """Read stdout line by line and log it."""
+            if process.stdout is None:
+                return
             for line in process.stdout:
                 stdout_lines.append(line)
                 log_line = line.strip()
                 if not suppress_info:
                     logging.info(log_line)
                 else:
-                    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(log_line)
+                    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(log_line)
 
         def read_stderr() -> None:
             """Read stderr line by line and log it."""
+            if process.stderr is None:
+                return
             for line in process.stderr:
                 stderr_lines.append(line)
                 log_line = line.strip()
@@ -334,7 +368,7 @@ def my_popen(command_list: list, suppress_info: bool = False,
                 elif not suppress_info:
                     logging.info(log_line)
                 else:
-                    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(log_line)
+                    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(log_line)
 
         # Start threads
         stdout_thread = threading.Thread(target=read_stdout)
@@ -364,7 +398,7 @@ def my_fopen(file_path: str | os.PathLike[str],
              suppress_errors: bool = False,
              rawlog:          bool = False,
              numlines:  int | None = None,
-             verbose:         bool = True) -> str | bool:
+             verbose:         bool = True) -> str | Literal[False]:
     """
     Attempt to read a text file with various encodings and return the file content if successful. Optionally, specify numlines to limit the number of lines read.
 
@@ -377,7 +411,7 @@ def my_fopen(file_path: str | os.PathLike[str],
 
     Returns:
         The content of the file as a string.
-        Returns False:
+        Returns Literal[False]:
          - if the file does not exist
          - is empty
          - is a non-text file (video, audio, image, archive)
@@ -447,7 +481,7 @@ def my_fopen(file_path: str | os.PathLike[str],
                     file_content = file.read()
                 else:
                     file_content = "".join(file.readline() for _ in range(numlines))
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Successfully read %s with encoding %s", os.fspath(file_path), encoding)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Successfully read %s with encoding %s", os.fspath(file_path), encoding)
             return file_content  # Exit the function if reading is successful
         except UnicodeDecodeError:
             if verbose and not rawlog:
@@ -518,13 +552,13 @@ def return_method_name(levels_up: int = 1) -> str:
                     fr = fr.f_back
                     climbed += 1
                 if climbed < levels:
-                    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("return_method_name(): truncated at top of stack (requested levels_up=%s but only climbed=%s)", levels, climbed)
+                    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("return_method_name(): truncated at top of stack (requested levels_up=%s but only climbed=%s)", levels, climbed)
             finally:
                 if frame is not None:
                     try:
                         frame.clear()
                     except Exception as e:
-                        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+                        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                             "Failed to clear frame: %s", e
                         )
                     del frame
@@ -711,7 +745,9 @@ def analyze_computer_name_results(results: dict[str, str], rawlog: bool = False)
         return primary_name
 
 
-_IS_NASA_MACHINE = get_computer_name(rawlog=True).casefold().startswith(NASA_COMPUTER_NAME_PREFIX.casefold())
+COMPUTER_NAME: str = get_computer_name(rawlog=True)
+NASA_CASEFOLDED_COMPUTER_NAME_PREFIXES: Final[tuple[str, ...]] = tuple(p.casefold() for p in NASA_COMPUTER_NAME_PREFIXES)
+IS_NASA_COMPUTER: bool = COMPUTER_NAME.casefold().startswith(NASA_CASEFOLDED_COMPUTER_NAME_PREFIXES)
 
 
 class SelectionStrategy(str, Enum):
@@ -730,7 +766,7 @@ class LLMConfig:
     """Configuration for LLM selection and usage. Data only."""
     # Routing / engines
     # If only_cleared_models is True, only use a model that has been "cleared" for use at NASA on open-source code.
-    only_cleared_models:    bool = _IS_NASA_MACHINE
+    only_cleared_models:    bool = IS_NASA_COMPUTER
     only_local_models:      bool = False
     allow_local_models:     bool = True
 
@@ -831,13 +867,12 @@ class SelectionContext:
     tokens_out:         int
     min_context_tokens: int
     require_local:     bool = False
-    require_cleared:   bool = _IS_NASA_MACHINE
+    require_cleared:   bool = IS_NASA_COMPUTER
     extras:  dict[str, Any] = field(default_factory=dict)
 
 
-class StrategyFn(Protocol):
-    """Strategy function interface."""
-    def __call__(self, candidates: Sequence[ModelInfo], ctx: SelectionContext) -> ModelInfo: ...
+# Type alias: any function that takes (candidates: Sequence[ModelInfo], ctx: SelectionContext) and returns a ModelInfo.
+StrategyFn: TypeAlias = Callable[[Sequence[ModelInfo], SelectionContext], ModelInfo]
 
 
 class LLMs:
@@ -1355,7 +1390,6 @@ class LLMs:
     # S61 — Anthropic: Claude 3.5 Sonnet announcement (Jun 21, 2024) — https://www.anthropic.com/news/claude-3-5-sonnet
     # S62 — Google Cloud Blog: Claude 3.5 Sonnet on Vertex AI (Jun 20, 2024) — https://cloud.google.com/blog/products/ai-machine-learning/announcing-anthropics-claude-3-5-sonnet-on-vertex-ai-providing-more-choice-for-enterprises
 
-
     # Provider -> required env var
     _provider_env: dict[str, str] = {
         "OpenAI"    : "OPENAI_API_KEY",
@@ -1369,7 +1403,7 @@ class LLMs:
         """Initialize LLMs manager. Call apply_config() before use."""
         self._config:                           LLMConfig | None = None
         self._base_config:                      LLMConfig | None = None  # re-apply after failure/reconnect
-        self._temp_unavailable_models:                  set[str] = set() # transient banlist after failures
+        self._temp_unavailable_models:                  set[str] = set()  # transient banlist after failures
         self._temp_unavailable_providers:               set[str] = set()
         self._selected:                         ModelInfo | None = None
         self._candidates_after_filter:           list[ModelInfo] = []
@@ -1416,7 +1450,7 @@ class LLMs:
 
         wants_multi = any([
             cfg.prefer_code,
-            cfg.prefer_low_TTFT,cfg.prefer_local,
+            cfg.prefer_low_TTFT, cfg.prefer_local,
             cfg.max_estimated_cost is not None,
             cfg.speed_floor        is not None,
             cfg.weight_code_skill       > 0.0,
@@ -1442,7 +1476,7 @@ class LLMs:
     def refresh_selection(self) -> None:
         """Re-run selection using the current LLMConfig."""
         if self._config is None:
-            my_critical_error("refresh_selection() called before apply_config().")
+            raise RuntimeError("refresh_selection() called before apply_config().")
         self.apply_config(self._config)
 
     def get_config(self) -> LLMConfig:
@@ -1550,9 +1584,9 @@ class LLMs:
 
                 # Optional floor on speed (soft penalty, not exclusion)
                 if cfg.speed_floor is not None:
-                    if m.speed is None: 
+                    if m.speed is None:
                         speed_pen += 1.0
-                    elif m.speed < cfg.speed_floor:  
+                    elif m.speed < cfg.speed_floor:
                         # Scale the penalty relative to how far below the floor to avoid a hard jump:
                         speed_pen += (cfg.speed_floor - m.speed) / max_speed if max_speed else 1.0
 
@@ -1622,9 +1656,7 @@ class LLMs:
             if tmp:
                 eff = tmp
         if not eff:
-            sample_list = list(reasons_map.items())
-            smallnum    = min(5, len(sample_list))
-            sample      = dict(sample_list[:smallnum])
+            sample = dict(list(reasons_map.items())[:5])
             raise RuntimeError(
                 "No candidates available after filtering. "
                 f"candidates={len(raw_candidates)}; reasons_sample={sample}. "
@@ -1632,9 +1664,23 @@ class LLMs:
             )
         return eff, ctx, reasons_map
 
+    # Use overloads to indicate the different return types based on return_reasons to appease mypy.
+    @overload
     def alternative_model(self, *, strategy: SelectionStrategy | str,
-                          return_reasons: bool = False,
-                          **cfg_overrides) -> ModelInfo | tuple[ModelInfo,dict[str, list[str]]]:
+                          return_reasons: Literal[True],
+                          **cfg_overrides: Any) -> tuple[ModelInfo, dict[str, list[str]]]:
+        """Overload: return (ModelInfo, reasons_map) when return_reasons=True."""
+        ...
+
+    @overload
+    def alternative_model(self, *, strategy: SelectionStrategy | str,
+                          return_reasons: Literal[False] = False,  # This shows the default value for return_reasons is False
+                          **cfg_overrides: Any) -> ModelInfo:
+        """Overload: return ModelInfo when return_reasons=False (default)."""
+        ...
+
+    def alternative_model(self, *, strategy: SelectionStrategy | str,
+                          return_reasons: bool = False, **cfg_overrides: Any) -> ModelInfo | tuple[ModelInfo, dict[str, list[str]]]:
         """
         Return the best candidate under a given strategy using a TEMPORARY config
         built from the current config + partial overrides (e.g., only_local_models=True),
@@ -1646,10 +1692,10 @@ class LLMs:
                              reasons_map is a dict of model name -> list of filter reasons.
             **cfg_overrides: Partial overrides to apply to the current config
                              (e.g., only_local_models=True).
-        
+
         Returns:
             The selected ModelInfo, or (ModelInfo, reasons_map) if return_reasons is True.
-        
+
         Raises:
             ValueError: If the strategy is unknown or if overrides are invalid.
         """
@@ -1740,6 +1786,7 @@ class LLMs:
 
         # Helper to detect rate-limit-ish errors
         def _is_rate_limit_exc(err: Exception) -> bool:
+            """Return True if the exception looks like a rate-limit error."""
             m = str(err).casefold()
             return ("rate limit" in m) or ("ratelimit" in m) or ("429" in m) or ("too many requests" in m)
 
@@ -1757,7 +1804,8 @@ class LLMs:
                 return litellm_mod.completion(**kwargs)
             except Exception as e:
                 if _is_rate_limit_exc(e):
-                    import re, time
+                    import re
+                    import time
                     m = re.search(r"retry[- ]after[:=]\s*(\d+)", str(e).lower())
                     if m:
                         time.sleep(float(m.group(1)))
@@ -1776,7 +1824,8 @@ class LLMs:
             stop=stop_after_attempt(max_attempts),
             reraise=True,
         )
-        def _do():
+        def _do() -> Any:
+            """Inner function to apply Tenacity retry logic."""
             comp_with_retries = getattr(litellm_mod, "completion_with_retries", None)
             if callable(comp_with_retries):
                 return comp_with_retries(max_retries=1, **kwargs)   # keep LiteLLM retries small under Tenacity
@@ -1796,10 +1845,10 @@ class LLMs:
             model:          The model name to use (must be in model_info).
             temperature:    Sampling temperature.
             max_tokens:     Maximum tokens to generate in the response.
-        
+
         Returns:
             The text response from the model.
-        
+
         Raises:
             RuntimeError: If the model is unknown or if the request fails.
             ValueError:   If the prompt is empty.
@@ -1812,7 +1861,7 @@ class LLMs:
         # Ensure LiteLLM and prepare common kwargs
         self._ensure_litellm()
         litellm = self._litellm_mod  # type: ignore
-        messages=[{"role": "system", "content": system_message},
+        messages = [{"role": "system", "content": system_message},
                   {"role": "user",   "content": prompt}]
         extra = self._extra_litellm_args_for(model)
 
@@ -1851,8 +1900,8 @@ class LLMs:
             try:
                 self._temp_unavailable_models.clear()
                 self._temp_unavailable_providers.clear()
-            except Exception as e:
-                logging.warning("Could not clear temporary banlists: %s", e)
+            except Exception as e2:
+                logging.warning("Could not clear temporary banlists: %s", e2)
         except Exception as e:
             # Mark the current model as temporarily unavailable for re-selection
             try:
@@ -1861,8 +1910,8 @@ class LLMs:
                 # Only ban the provider if it looks like a provider-wide issue
                 if isinstance(prov, str) and prov and self._should_ban_provider_for(e):
                     self._temp_unavailable_providers.add(prov)
-            except Exception as e:
-                logging.warning("Could not update temporary banlists: %s", e)
+            except Exception as e3:
+                logging.warning("Could not update temporary banlists: %s", e3)
             # ---- Iterative failover: try the next best candidates under the same strategy ----
             base_cfg = self._base_config or self.get_config()
             last_exc = e
@@ -1887,18 +1936,18 @@ class LLMs:
                     try:
                         self._temp_unavailable_models.clear()
                         self._temp_unavailable_providers.clear()
-                    except Exception as e:
-                        logging.warning("Could not clear temporary banlists: %s", e)
+                    except Exception as e4:
+                        logging.warning("Could not clear temporary banlists: %s", e4)
                     return self._extract_text_from_openai_like(resp)
-                except Exception as e2:
-                    last_exc = e2
+                except Exception as e5:
+                    last_exc = e5
                     try:
                         self._temp_unavailable_models.add(failover_model)
                         prov2 = (self.model_info.get(failover_model, {}) or {}).get("provider")
-                        if isinstance(prov2, str) and prov2 and self._should_ban_provider_for(e2):
+                        if isinstance(prov2, str) and prov2 and self._should_ban_provider_for(e5):
                             self._temp_unavailable_providers.add(prov2)
-                    except Exception as e:
-                        logging.warning("Could not update temporary banlists: %s", e)
+                    except Exception as e6:
+                        logging.warning("Could not update temporary banlists: %s", e6)
             # If we reach here, all failovers failed
             my_critical_error(
                 f"LiteLLM request failed for model '{model}' and iterative failover also failed. "
@@ -1933,7 +1982,7 @@ class LLMs:
 
     def _after_selection(self, model: str, provider: str) -> None:
         """Optional hook for telemetry/logging; default no-op."""
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Selected model %s (%s)", model, provider)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Selected model %s (%s)", model, provider)
 
     # ====================================================
     # internals
@@ -2053,6 +2102,8 @@ class LLMs:
         try:
             self._ensure_litellm()
             litellm = self._litellm_mod  # type: ignore
+            if litellm is None:
+                raise RuntimeError("LiteLLM not available")
             # 1) Zero-cost-ish metadata path
             get_info = getattr(litellm, "get_model_info", None)
             if callable(get_info):
@@ -2062,7 +2113,7 @@ class LLMs:
                     # If we got a dict back without raising, consider it OK
                     ok = isinstance(md, dict)
                 except Exception as e:
-                    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("availability probe (get_model_info) failed for %s/%s: %s", provider, model, e)
+                    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("availability probe (get_model_info) failed for %s/%s: %s", provider, model, e)
             # 2) Minimal completion (last resort). Guard with tiny timeout & 1 token.
             if not ok and (getattr(cfg, "availability_probe_allow_costly", False) is True):
                 try:
@@ -2089,9 +2140,9 @@ class LLMs:
                         litellm.completion(**kwargs)
                     ok = True
                 except Exception as e:
-                    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("availability probe (1-token completion) failed for %s/%s: %s", provider, model, e)
+                    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("availability probe (1-token completion) failed for %s/%s: %s", provider, model, e)
         except Exception as e:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("availability probe setup failed for %s/%s: %s", provider, model, e)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("availability probe setup failed for %s/%s: %s", provider, model, e)
             ok = False
         self._availability_cache[key] = (ok, now)
         return ok
@@ -2151,12 +2202,12 @@ class LLMs:
             return True
         if env_var not in os.environ:
             return False
-        # Optional fast probe + cached result to avoid “env set but broken” DX
+        # Optional fast probe + cached result to avoid "env set but broken" DX
         try:
             if not self._probe_provider_available(provider, model):
                 return False
         except Exception as e:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Ignoring availability probe failure for %s/%s: %s", provider, model, e)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Ignoring availability probe failure for %s/%s: %s", provider, model, e)
             # Fail-open to avoid blocking selection entirely on probe hiccups
         return True
 
@@ -2287,7 +2338,7 @@ class LLMs:
         try:
             inp = int(self._count_chat_tokens(messages, model))
         except Exception as e:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "_count_chat_tokens(messages, model) failed for %s, %s: %s", messages, model, e
             )
             inp = 0
@@ -2306,7 +2357,8 @@ class LLMs:
 
         self._init_rate_db(cfg.rate_db_path)
 
-        import time, sqlite3
+        import time
+        import sqlite3
         now     = time.time()
         rl      = self._get_rate_limits_for(model)
         scope   = str(rl["scope"])
@@ -2424,13 +2476,13 @@ class LLMs:
             )
             cur.execute("COMMIT")
         except Exception as e1:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "_throttle_if_needed failed for %s/%s: %s", provider, model, e1
             )
             try:
                 cur.execute("ROLLBACK")
             except Exception as e2:
-                logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+                if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                     "_throttle_if_needed ROLLBACK failed for %s/%s: %s", provider, model, e2
                 )
             # fail-open on throttle store problems
@@ -2453,7 +2505,7 @@ class LLMs:
             import json
             return json.loads(raw.decode(DEFAULT_ENCODING))
         except Exception as e:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "_http_get_json: JSON parse failed for %s: %s", url, e
             )
             return None
@@ -2483,30 +2535,28 @@ class LLMs:
         if model in self._pricing_cache:
             return self._pricing_cache[model]
 
-        entry = self.model_info.get(model, {})
+        entry:  dict[str, Any] = self.model_info.get(model, {})
+        context:           int = int(entry.get("context", _DEFAULT_MODEL_CONTEXT))
+        in_cost:  float | None = None
+        out_cost: float | None = None
 
         # Local models: $0 and registry context
         if entry.get("local") is True:
-            ctx = int(entry.get("context", _DEFAULT_MODEL_CONTEXT))
             in_cost = out_cost = 0.0
-            self._pricing_cache[model] = (in_cost, out_cost, ctx)
+            self._pricing_cache[model] = (in_cost, out_cost, context)
             return self._pricing_cache[model]
 
         # ---- non-local path ----
-        in_cost  = None
-        out_cost = None
-        context  = int(entry.get("context", _DEFAULT_MODEL_CONTEXT))
-
         try:
             import litellm  # type: ignore
             info_fn = getattr(litellm, "get_model_info", None)
-            md = {}
+            md: dict[str, Any] = {}
             if callable(info_fn):
                 try:
                     md = info_fn(model) or {}
-                except Exception as e:
-                    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
-                        "LiteLLM get_model_info(%s) failed: %s", model, e
+                except Exception as e2:
+                    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
+                        "LiteLLM get_model_info(%s) failed: %s", model, e2
                     )
                     md = {}
 
@@ -2520,7 +2570,7 @@ class LLMs:
                 try:
                     context = int(max_ctx)
                 except Exception as e:
-                    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+                    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                         "_get_model_pricing_and_context: context extraction failed for %s: %s", model, e
                     )
 
@@ -2545,7 +2595,7 @@ class LLMs:
                             out_cost = float(row["output_cost_per_1k_tokens"]) / 1000.0
 
         except Exception as e:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "LiteLLM pricing/context lookup failed for %s: %s", model, e
             )
 
@@ -2574,34 +2624,34 @@ class LLMs:
         try:
             return resp.choices[0].message.content  # type: ignore[attr-defined]
         except Exception as e:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "_extract_text_from_openai_like: pydantic-like extraction failed for %s: %s", resp, e
             )
         # dict-like
         try:
             return resp["choices"][0]["message"]["content"]  # type: ignore[index]
         except Exception as e:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "_extract_text_from_openai_like: dict-like extraction failed for %s: %s", resp, e
             )
         # object-like with dict message
         try:
             return resp.choices[0].message["content"]  # type: ignore[index]
         except Exception as e:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "_extract_text_from_openai_like: object-like extraction failed for %s: %s", resp, e
             )
         # completion-style (no chat message wrapper)
         try:
             return resp["choices"][0]["text"]  # type: ignore[index]
         except Exception as e:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "_extract_text_from_openai_like: completion-style extraction failed for %s: %s", resp, e
             )
         try:
             return resp.choices[0].text  # type: ignore[attr-defined]
         except Exception as e:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "_extract_text_from_openai_like: completion-style extraction failed for %s: %s", resp, e
             )
         # Anthropic / segment-style lists
@@ -2618,7 +2668,7 @@ class LLMs:
                 if parts:
                     return "".join(parts)
         except Exception as e:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "_extract_text_from_openai_like: segment-style extraction failed for %s: %s", resp, e
             )
         # delta fragments (best-effort)
@@ -2630,7 +2680,7 @@ class LLMs:
                 if "text" in d and isinstance(d["text"], str):
                     return d["text"]
         except Exception as e:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "_extract_text_from_openai_like: delta extraction failed for %s: %s", resp, e
             )
         # As last resort, stringify
@@ -2674,7 +2724,7 @@ class LLMs:
                 elif isinstance(res, int):
                     return int(res)
         except Exception as e:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "_count_chat_tokens: litellm.token_counter failed for %s: %s", model, e
             )
 
@@ -2700,7 +2750,7 @@ class LLMs:
             if isinstance(provider, str) and provider.strip() == "OpenAI":
                  tokens += 4 * len(messages) + 2
         except Exception as e:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "_count_chat_tokens: tiny overhead heuristic failed for %s: %s", model, e
             )
         return int(tokens)
@@ -2756,7 +2806,7 @@ class LLMs:
                     if isinstance(toks, list):
                         return len(toks)
                 except Exception as e:
-                    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+                    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                         "_count_chat_tokens: local ollama tokenizer failed for %s: %s", model, e
                     )
                     # fall through to other methods
@@ -2772,7 +2822,7 @@ class LLMs:
                 try:
                     return int(get_num_tokens(model=model, text=text))
                 except Exception as e:
-                    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+                    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                         "_count_chat_tokens: litellm.get_num_tokens failed for %s: %s", model, e
                     )
 
@@ -2785,7 +2835,7 @@ class LLMs:
                     if isinstance(out, int):
                         return int(out)
                 except Exception as e:
-                    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+                    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                         "_count_chat_tokens: litellm.token_counter (raw text) failed for %s: %s", model, e
                     )
                 # Others want chat messages, returning a dict
@@ -2797,11 +2847,11 @@ class LLMs:
                             if isinstance(v, (int, float)):
                                 return int(v)
                 except Exception as e:
-                    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+                    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                         "_count_chat_tokens: litellm.token_counter (chat messages) failed for %s: %s", model, e
                     )
         except Exception as e:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "_count_chat_tokens: litellm.token_counter failed for %s: %s", model, e
             )
 
@@ -2820,7 +2870,7 @@ class LLMs:
             try:
                 enc = tiktoken.get_encoding(enc_name)
             except Exception as e:
-                logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+                if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                     "tiktoken.get_encoding(%s) failed for %s: %s", enc_name, model, e
                 )
                 # fallback to cl100k_base if the preferred encoding is unavailable
@@ -2828,7 +2878,7 @@ class LLMs:
 
             return len(enc.encode(text))
         except Exception as e:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "tiktoken-based tokenization failed for %s: %s", model, e
             )
 
@@ -2866,7 +2916,7 @@ def load_ast_var(var_name: str, script_path: str | os.PathLike[str],
     script_path  = ensure_file(script_path)
     file_content = my_fopen(script_path, rawlog=rawlog)
     if not file_content:
-        my_critical_error(f"Failed to open {os.fspath(script_path)}", choose_breakpoint=True)
+        raise FileNotFoundError(f"Failed to open {os.fspath(script_path)}")
     tree = ast.parse(file_content, script_path)
     if tree is None:
         raise SyntaxError(f"Could not parse {os.fspath(script_path)}")
@@ -2944,9 +2994,11 @@ def _builtin_stub(obj: object) -> str:
     header = f"# {context}\n" if context else ""
 
     try:
-        sig = str(inspect.signature(obj))
+        # Tell inspect.signature that obj is callable to appease mypy
+        from typing import cast, Callable as TypingCallable
+        sig = str(inspect.signature(cast(TypingCallable[..., Any], obj)))
     except Exception as e:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
             "_builtin_stub: inspect.signature failed for %s: %s", def_name, e
         )
         sig = _sanitize_text_signature(getattr(obj, "__text_signature__", None))
@@ -2999,10 +3051,16 @@ def show_function_source(target: object | str, *, unwrap: bool = True,
     import inspect
     import pydoc
     import io
+    from types  import FrameType
+    from typing import cast, Callable as TypingCallable
     # Resolve the object if 'target' is a string
     if isinstance(target, str):
-        name = target
-        frame = inspect.currentframe().f_back  # caller's frame
+        name  = target
+        currentframe = inspect.currentframe()
+        assert currentframe is not None
+        theframe = currentframe.f_back  # caller's frame
+        assert theframe is not None
+        frame: FrameType = theframe     # help mypy narrow for f_locals / f_globals
         try:
             obj = frame.f_locals.get(name)
             if obj is None:
@@ -3022,7 +3080,7 @@ def show_function_source(target: object | str, *, unwrap: bool = True,
                             base = getattr(base, part)
                         obj = base
                     except Exception as e:
-                        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+                        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                             "Failed to resolve %s: %s", part, e
                         )
             if obj is None:
@@ -3040,9 +3098,10 @@ def show_function_source(target: object | str, *, unwrap: bool = True,
     # Optionally unwrap decorated functions
     if unwrap:
         try:
-            obj = inspect.unwrap(obj)
+            # Tell inspect.signature that obj is callable to appease mypy
+            obj = inspect.unwrap(cast(TypingCallable[..., Any], obj))
         except Exception as e:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "%s: Failed to unwrap %s: %s", return_method_name(), obj, e
             )
 
@@ -3058,18 +3117,18 @@ def show_function_source(target: object | str, *, unwrap: bool = True,
     # Built-ins / C-extensions don't have retrievable Python source
     if inspect.isbuiltin(obj) or inspect.ismethoddescriptor(obj):
         src = _builtin_stub(obj)
-    else:
-        src = inspect.getsource(obj)
+    else:  # Tell inspect.signature that obj is callable to appease mypy
+        src = inspect.getsource(cast(TypingCallable[..., Any], obj))
 
     # Decide where to write
-    out: TextIO
+    out:                       TextIO
     closer: Callable[[], None] | None = None  # callable to close if *we* open a file
-    note: str | None = None
+    note:                  str | None = None
     if output is None:
         out = sys.stdout
     # Accept known text-mode IO bases directly
     elif isinstance(output, (io.TextIOBase, io.StringIO)):
-        out = output
+        out = cast(TextIO, output)  # Tell mypy that "out" has type TextIO
     # Accept "-" as a common alias for stdout
     elif isinstance(output, (str, os.PathLike)) and str(output) == "-":
         out = sys.stdout
@@ -3094,7 +3153,7 @@ def show_function_source(target: object | str, *, unwrap: bool = True,
                 return src
             except Exception as e:
                 # Non-atomic fallback below
-                logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+                if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                     "my_atomic_write failed for %s: %s", path, e
                 )
         # newline="" lets print() manage newlines consistently across platforms
@@ -3191,10 +3250,133 @@ DNS_TEST_NAMES: list[str] = [
     "dns.google",       # Google DNS name
 ]
 
+# module-level shared executor (created on first use)
+_EXECUTOR: ThreadPoolExecutor | None = None
+
+
+def _get_executor() -> ThreadPoolExecutor:
+    """Create or return a shared thread pool; never blocks on shutdown."""
+    global _EXECUTOR
+    if _EXECUTOR is None:
+        _EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="ud-timer")
+        executor  = _EXECUTOR
+        assert executor is not None  # for mypy
+        import atexit
+        atexit.register(executor.shutdown, wait=False, cancel_futures=True)
+    assert _EXECUTOR is not None  # for mypy: function guarantees a pool
+    return _EXECUTOR
+
+
+def _call_with_timeout(fn: Callable[..., Any], *args: Any, timeout: float) -> tuple[bool, Any | None]:
+    """
+    Run fn(*args) in the shared pool and bound wall time.
+    Returns (True, result) before the timeout; (False, None) on timeout or error.
+    Never waits for the worker to finish if we time out.
+    """
+    from concurrent.futures import TimeoutError as FutTimeoutError
+    pool = _get_executor()
+    fut  = pool.submit(fn, *args)
+    try:
+        return True, fut.result(timeout=timeout)
+    except FutTimeoutError as e1:
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("call_with_timeout timeout: %r", e1)
+        fut.cancel()  # best-effort; we don't join
+        return False, None
+    except Exception as e2:
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("call_with_timeout exception: %r", e2)
+        fut.cancel()
+        return False, None
+
+
+def _dns_resolve(name: str, timeout: float) -> bool:
+    """
+    Try resolving a hostname using the system resolver, but impose a wall-clock cap.
+
+    Args:
+        name:    Hostname to resolve.
+        timeout: Per-attempt timeout (seconds).
+
+    Returns:
+        True if resolution returns at least one address, else False.
+
+    Raises:
+        None.
+    """
+    import socket
+
+    def _work(n: str) -> bool:
+        """Perform the actual blocking getaddrinfo call."""
+        # Do *not* rely on setdefaulttimeout here; just let getaddrinfo run in a thread.
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("DNS: resolving %s", n)
+        res = socket.getaddrinfo(n, None, type=socket.SOCK_STREAM)
+        ok  = len(res) > 0
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("DNS: %s for %s", "success" if ok else "empty result", n)
+        return ok
+
+    ok, val = _call_with_timeout(_work, name, timeout=timeout)
+    if not ok:
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("DNS: timeout for %s (>%0.2fs)", name, timeout)
+        return False
+    return bool(val)
+
+
+def _any_dns_name_resolves(names: list[str], per_name_timeout: float, max_workers: int = 4) -> bool:
+    """
+    Resolve several names in parallel; return True on first success or False if all fail/time out.
+    The whole phase is bounded by roughly per_name_timeout (not names * timeout).
+
+    Args:
+        names:            List of DNS names to resolve.
+        per_name_timeout: Timeout (seconds) per name resolution attempt.
+        max_workers:      Maximum number of parallel worker threads (default 4).
+
+    Returns:
+        True if any name resolves successfully, otherwise False.
+
+    Raises:
+        None (errors are caught and logged at DEBUG level).
+    """
+    from concurrent.futures import wait, FIRST_COMPLETED
+    if not names:
+        return False
+    n_workers = max(1, min(len(names), max_workers))
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("DNS: concurrent phase (%d names, %d workers)", len(names), n_workers)
+    with ThreadPoolExecutor(max_workers=n_workers) as pool:
+        futures = [pool.submit(_dns_resolve, n, per_name_timeout) for n in names]
+        # Wait once up to per_name_timeout for *any* to finish successfully:
+        done, not_done = wait(futures, timeout=per_name_timeout, return_when=FIRST_COMPLETED)
+        # Fast check: if any completed True, bail out; otherwise collect late finishes briefly.
+        for f in done:
+            try:
+                if f.result():
+                    return True
+            except Exception:
+                pass
+        # Give remaining futures a tiny grace to finish (but don't block long):
+        for f in not_done:
+            f.cancel()
+    return False
+
+
+def _http_probe_with_cap(url: str, method: str, timeout: float,
+                         opener: urllib.request.OpenerDirector
+                         ) -> tuple[bool, int | None, bytes | None, str | None]:
+    """
+    Run _http_probe but bound total wall time (DNS + connect + read).
+    """
+    def _work() -> tuple[bool, int | None, bytes | None, str | None]:
+        """ Call the actual HTTP probe function."""
+        return _http_probe(url=url, method=method, timeout=timeout, opener=opener)
+    ok, result = _call_with_timeout(_work, timeout=timeout)
+    if not ok or result is None:
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("HTTP: timeout for %s %s (>%0.2fs)", method, url, timeout)
+        return False, None, None, None
+    return result
+
 
 def _tcp_connect(host: str, port: int, timeout: float) -> bool:
     """
-    Attempt a TCP connection to a numeric IP address.
+    Attempt a TCP connection to a numeric IP address (no DNS).
 
     Args:
         host:    Numeric IP address (IPv4/IPv6) as a string.
@@ -3207,46 +3389,25 @@ def _tcp_connect(host: str, port: int, timeout: float) -> bool:
     Raises:
         None (errors are caught and logged at DEBUG level).
     """
-    try:
-        import socket
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("TCP: connecting to %s:%d (timeout=%f)", host, port, timeout)
-        with socket.create_connection((host, port), timeout=timeout):
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("TCP: success %s:%d", host, port)
-            return True
-    except OSError as exc:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("TCP: failure %s:%d (%s)", host, port, exc)
-        return False
-
-
-def _dns_resolve(name: str, timeout: float) -> bool:
-    """
-    Try resolving a hostname using the system resolver.
-
-    Args:
-        name:    Hostname to resolve.
-        timeout: Per-attempt timeout (seconds).
-
-    Returns:
-        True if resolution returns at least one address, else False.
-
-    Raises:
-        None.
-    """
-    # socket has no per-call DNS timeout, so use global default temporarily.
     import socket
-    default_timeout = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(timeout)
+    import ipaddress
     try:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("DNS: resolving %s (timeout=%f)", name, timeout)
-        res = socket.getaddrinfo(name, None, type=socket.SOCK_STREAM)
-        ok  = len(res) > 0
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("DNS: %s for %s", "success" if ok else "empty result", name)
-        return ok
-    except OSError as exc:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("DNS: failure for %s (%s)", name, exc)
+        ip     = ipaddress.ip_address(host)
+        family = socket.AF_INET6 if ip.version == 6 else socket.AF_INET
+        sock   = socket.socket(family, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
+            "TCP: connecting to %s:%d (timeout=%f)", host, port, timeout
+        )
+        try:
+            sock.connect((host, port))
+        finally:
+            sock.close()
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("TCP: success %s:%d", host, port)
+        return True
+    except Exception as exc:
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("TCP: failure %s:%d (%s)", host, port, exc)
         return False
-    finally:
-        socket.setdefaulttimeout(default_timeout)
 
 
 def _build_http_opener(ignore_proxies: bool) -> urllib.request.OpenerDirector:
@@ -3293,7 +3454,7 @@ def _http_probe(url: str, method: str, timeout: float,
     req.add_header("User-Agent", f"{Path(sys.argv[0]).stem}/{__version__} (+python-urllib)")
 
     try:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("HTTP: %s %s (timeout=%f)", method, url, timeout)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("HTTP: %s %s (timeout=%f)", method, url, timeout)
         with opener.open(req, timeout=timeout) as resp:
             status = getattr(resp, "status", None) or resp.getcode()
             data   = b""
@@ -3302,19 +3463,19 @@ def _http_probe(url: str, method: str, timeout: float,
             if method.upper() == "GET":
                 # Cap read size to avoid hanging on big captive pages.
                 data = resp.read(2048)
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("HTTP: %s %s -> %d, final_url=%s", method, url, status, final_url)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("HTTP: %s %s -> %d, final_url=%s", method, url, status, final_url)
             return True, int(status), data, final_url
     except urllib.error.HTTPError as exc:
         try:
             body = exc.read(2048) if hasattr(exc, "read") else None
         except Exception as e:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("HTTP: failed to read body from HTTPError: %s", e)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("HTTP: failed to read body from HTTPError: %s", e)
             body = None
         final_url = exc.geturl() if hasattr(exc, "geturl") else None  # ← keep this
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("HTTP: HTTPError %s %s -> %d", method, url, exc.code)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("HTTP: HTTPError %s %s -> %d", method, url, exc.code)
         return False, int(exc.code), body, final_url
     except Exception as exc:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("HTTP: failure %s %s (%s)", method, url, exc)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("HTTP: failure %s %s (%s)", method, url, exc)
         return False, None, None, None
 
 
@@ -3352,7 +3513,7 @@ def _http_meets_expectations(status: int | None, body: bytes | None, expect: dic
         try:
             text = body.decode(DEFAULT_ENCODING, errors="ignore")
         except Exception as e:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("HTTP: failed to decode body: %s", e)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("HTTP: failed to decode body: %s", e)
             text = ""
         if str(expect["substr"]) not in text:
             return False
@@ -3384,7 +3545,7 @@ def _looks_like_captive(status: int | None, final_url: str | None, body: bytes |
         return True
     if status in (301, 302, 303, 307, 308):
         return True
-    b = (body or b"")[:256].casefold()
+    b = (body or b"")[:256].lower()  # bytes, safe for ASCII checks
     if status == 204 and b:
         return True
     if status == 200 and b:
@@ -3407,7 +3568,7 @@ def _should_use_proc_cap() -> bool:
         import resource  # type: ignore
         return os.name == "posix" and hasattr(resource, "RLIMIT_NPROC")
     except Exception as e:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
             "_should_use_proc_cap: exception checking resource module: %s", e
         )
         return False
@@ -3429,7 +3590,7 @@ def _advisory_user_proc_limit_cap(current_cap: int) -> int:
         cap         = max(1, int(soft * 0.75))
         return min(current_cap, cap)
     except Exception as e:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
             "_advisory_user_proc_limit_cap: exception checking resource limits: %s", e
         )
         return current_cap
@@ -3475,7 +3636,7 @@ def _run_tcp_checks_with_pool(tcp_targets: list[tuple[str, int]],
     Raises:
         None (creation failures are handled with backoff and logging).
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import as_completed
     # 1) Never spawn more workers than concurrent tasks; pick a safe cap.
     n_workers: int = _effective_workers(requested=requested_workers,
                                         num_tasks=len(tcp_targets),
@@ -3487,7 +3648,7 @@ def _run_tcp_checks_with_pool(tcp_targets: list[tuple[str, int]],
 
     for n in backoff_plan:
         try:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("ThreadPool: attempting max_workers=%d", n)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("ThreadPool: attempting max_workers=%d", n)
             with ThreadPoolExecutor(max_workers=n) as pool:
                 futures = {pool.submit(_tcp_connect, h, p, timeout): (h, p) for (h, p) in tcp_targets}
                 for fut in as_completed(futures):
@@ -3496,10 +3657,10 @@ def _run_tcp_checks_with_pool(tcp_targets: list[tuple[str, int]],
                             try:  # Optional: stop launching/awaiting more work asap
                                 pool.shutdown(cancel_futures=True)
                             except TypeError as e:  # Python < 3.9 doesn't support cancel_futures
-                                logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("ThreadPool: shutdown(cancel_futures=True) not supported: %s", e)
+                                if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("ThreadPool: shutdown(cancel_futures=True) not supported: %s", e)
                             return True
                     except Exception as exc:
-                        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("TCP: unexpected exception: %s", exc)
+                        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("TCP: unexpected exception: %s", exc)
             return False
         except (RuntimeError, OSError, MemoryError) as exc:
             logging.warning("Could not start thread pool with %d workers (%s). Trying fewer.", n, exc)
@@ -3518,13 +3679,12 @@ class CheckResult:
     captive_detected: bool
 
 
-def _check_once(timeout:     float, workers: int,
-                include_ipv6: bool, ignore_proxies: bool) -> CheckResult:
+def _check_once(timeout: float, workers: int, include_ipv6: bool, ignore_proxies: bool) -> CheckResult:
     """
-    Perform one pass of the connectivity checks.
+    Perform one pass of the connectivity checks with a total timeout budget.
 
     Args:
-        timeout:        Per-attempt timeout in seconds.
+        timeout:        Total timeout budget (seconds) for the entire attempt.
         workers:        Thread pool size for parallel network attempts.
         include_ipv6:   Whether to include IPv6 TCP targets.
         ignore_proxies: If True, bypass env proxies for HTTP probes.
@@ -3536,44 +3696,58 @@ def _check_once(timeout:     float, workers: int,
         None.
     """
     import socket
+    import time
+    start = time.monotonic()
+
+    def _remaining() -> float:
+        """
+        Return remaining time budget for the current attempt.
+        Never return below a small floor to allow some progress.
+        """
+        # Allow a little budget spread across phases; never below a small floor.
+        spent = time.monotonic() - start
+        rem = max(0.25, timeout - spent)  # per-attempt budget ~= timeout seconds
+        return rem
+
     tcp_targets: list[tuple[str, int]] = IPV4_TARGETS.copy()
     if include_ipv6 and getattr(socket, "has_ipv6", False):
         tcp_targets.extend(IPV6_TARGETS)
 
-    dns_ok:           bool = False
-    http_ok:          bool = False
-    captive_detected: bool = False
+    dns_ok           = False
+    http_ok          = False
+    captive_detected = False
 
-    # --- TCP connectivity to numeric IPs (with safe sizing & backoff) ---
-    tcp_ok: bool = _run_tcp_checks_with_pool(tcp_targets=tcp_targets,
-                                            timeout=timeout,
-                                            requested_workers=workers)
+    # 1) TCP connectivity (already self-bounded by per-connection timeouts)
+    tcp_ok = _run_tcp_checks_with_pool(tcp_targets=tcp_targets,
+                                       timeout=min(timeout, 5.0),
+                                       requested_workers=workers)
 
-    # --- DNS resolution (sequential with quick bail-out) ---
-    for name in DNS_TEST_NAMES:
-        if _dns_resolve(name, timeout=timeout):
-            dns_ok = True
-            break
+    # 2) DNS (parallel, with hard cap ~timeout seconds total for the phase)
+    dns_ok = _any_dns_name_resolves(DNS_TEST_NAMES, per_name_timeout=min( max(0.5, _remaining()), timeout))
 
-    # --- HTTP probes (sequential, quick bail-outs) ---
-    opener = _build_http_opener(ignore_proxies=ignore_proxies)
-    for probe in HTTP_PROBES:
-        ok, status, body, final_url = _http_probe(
-            url=probe["url"],
-            method=probe["method"],
-            timeout=timeout,
-            opener=opener,
-        )
-        if ok and _http_meets_expectations(status, body, probe["expect"]):
-            http_ok = True
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("HTTP probe OK: %s", probe['note'])
-            break
-        # Any strong hints of a captive portal?
-        if _looks_like_captive(status, final_url, body):
-            captive_detected = True
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Captive portal suspected at %s (status=%d, final_url=%s)", probe['url'], status, final_url)
-            # We can stop early—being behind a captive portal ≠ usable internet.
-            break
+    # 3) HTTP probes: only try if DNS is healthy (avoids another resolver stall)
+    if dns_ok:
+        opener = _build_http_opener(ignore_proxies=ignore_proxies)
+        for probe in HTTP_PROBES:
+            rem = _remaining()
+            if rem <= 0.3:
+                break  # out of budget for this attempt
+            ok, status, body, final_url = _http_probe_with_cap(
+                url=probe["url"],
+                method=probe["method"],
+                timeout=min(rem, timeout),
+                opener=opener,
+            )
+            if ok and _http_meets_expectations(status, body, probe["expect"]):
+                http_ok = True
+                if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("HTTP probe OK: %s", probe['note'])
+                break
+            if _looks_like_captive(status, final_url, body):
+                captive_detected = True
+                if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
+                    "Captive portal suspected at %s (status=%s, final_url=%s)", probe['url'], status, final_url
+                )
+                break
 
     return CheckResult(
         tcp_ok=tcp_ok,
@@ -3622,13 +3796,13 @@ def is_internet_available(timeout_per_step: float = 2.5,
     """
     attempts: int = max(1, retries + 1)
     for attempt in range(1, attempts + 1):
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(f"Connectivity attempt {attempt}/{attempts}")
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(f"Connectivity attempt {attempt}/{attempts}")
         res = _check_once(timeout=timeout_per_step,
                           workers=workers,
                           include_ipv6=include_ipv6,
                           ignore_proxies=ignore_proxies)
 
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
             "Result(tcp_ok=%s, dns_ok=%s, http_ok=%s, captive=%s)",
             res.tcp_ok, res.dns_ok, res.http_ok, res.captive_detected
         )
@@ -3676,7 +3850,7 @@ def detect_shell(options: Options) -> None:
     shell_path = os.getenv("SHELL")
     if not shell_path:  # If shell_path is None or empty (""), try to get the parent process name
         try:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("SHELL environment variable not set, trying to detect shell from parent process.")
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("SHELL environment variable not set, trying to detect shell from parent process.")
             ppid   = os.getppid()
             result = subprocess.run(["ps", "-p", str(ppid), "-o", "comm="],
                                     capture_output=True, text=True, check=True)
@@ -3921,7 +4095,7 @@ def safe_exists(path: str | os.PathLike[str],
         return p.exists()
     except PermissionError:
         # Treat as 'exists but inaccessible' to avoid raising FileNotFoundError upstream
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
             "%s: permission denied: %s", return_method_name(), os.fspath(p)
         )
         return True
@@ -3930,7 +4104,7 @@ def safe_exists(path: str | os.PathLike[str],
         if e.errno in (errno.ENOENT, errno.ENOTDIR):
             return False
         if e.errno in IGNORE_THESE_ERRORS:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "%s: suppressed errno=%s (%s): %s", return_method_name(),
                 e.errno, getattr(errno, "errorcode", {}).get(e.errno, "?"), os.fspath(p)
             )
@@ -3960,11 +4134,11 @@ def safe_is_file(path: str | os.PathLike[str],
     try:
         return _is_file(p, follow_symlinks=follow_symlinks)
     except PermissionError:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("safe_is_file: permission denied: %s", p)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("safe_is_file: permission denied: %s", p)
         return False
     except OSError as e:
         if e.errno in IGNORE_THESE_ERRORS:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "%s: suppressed errno=%s (%s): %s", return_method_name(),
                 e.errno, getattr(errno, "errorcode", {}).get(e.errno, "?"), p
             )
@@ -3993,11 +4167,11 @@ def safe_is_dir(path: str | os.PathLike[str],
     try:
         return _is_dir(p, follow_symlinks=follow_symlinks)
     except PermissionError:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("safe_is_dir: permission denied: %s", p)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("safe_is_dir: permission denied: %s", p)
         return False
     except OSError as e:
         if e.errno in IGNORE_THESE_ERRORS:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "%s: suppressed errno=%s (%s): %s", return_method_name(),
                 e.errno, getattr(errno, "errorcode", {}).get(e.errno, "?"), p
             )
@@ -4026,13 +4200,13 @@ def safe_stat(path: str | os.PathLike[str],
     try:
         return p.stat() if follow_symlinks else p.lstat()
     except (PermissionError, FileNotFoundError):
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s: access/missing: %s",
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("%s: access/missing: %s",
                                                                           return_method_name(),
                                                                           os.fspath(p))
         return None
     except OSError as e:
         if e.errno in IGNORE_THESE_ERRORS:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "%s: suppressed errno=%s (%s): %s", return_method_name(),
                 e.errno, getattr(errno, "errorcode", {}).get(e.errno, "?"), p
             )
@@ -4147,7 +4321,7 @@ def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
             temp.unlink()
     except OSError as e:
         # If we can't remove it, we'll truncate on open later; free-space check may be conservative.
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Could not remove stale partial file %s: %s", os.fspath(temp), e)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Could not remove stale partial file %s: %s", os.fspath(temp), e)
 
     # Pre-flight: attempt to learn expected size and check free space.
     expected: int | None = None
@@ -4161,7 +4335,7 @@ def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
                 except ValueError:
                     expected = None
     except Exception as e:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("HEAD probe failed (%s); proceeding without pre-known size.", e)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("HEAD probe failed (%s); proceeding without pre-known size.", e)
 
     if expected is not None:
         # Skip re-download if size matches on disk already.
@@ -4179,7 +4353,7 @@ def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
                 else:
                     logging.error(f"File {os.fspath(dest)} exists but has a VERY CONFUSING size mismatch (have {dest_size}, need {expected}).")
             except OSError as e:
-                logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Could not remove stale partial file %s: %s", os.fspath(temp), e)
+                if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Could not remove stale partial file %s: %s", os.fspath(temp), e)
         free_bytes = query_free_space(dest)
         if free_bytes < expected:
             raise SystemExit(f"Not enough disk space: need {human_bytesize(expected)}, have {human_bytesize(free_bytes)}")
@@ -4198,7 +4372,7 @@ def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
                     try:
                         total_i = int(total.strip())
                     except ValueError as e:
-                        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Failed to parse Content-Length: %s", e)
+                        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Failed to parse Content-Length: %s", e)
                 # Re-check space at the moment of download if size is known.
                 if total_i is not None:
                     free_bytes = query_free_space(dest)
@@ -4222,7 +4396,7 @@ def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
                             bucket = pct // 10
                             # Log just once every ~10% but not at 0%
                             if pct and pct % 10 == 0 and bucket != last_bucket:
-                                logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("... %d%% (%s out of %s)", pct, human_bytesize(downloaded), human_bytesize(total_i))
+                                if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("... %d%% (%s out of %s)", pct, human_bytesize(downloaded), human_bytesize(total_i))
                                 last_bucket = bucket
                     f.flush()
                     os.fsync(f.fileno())
@@ -4256,7 +4430,7 @@ def download_file(url: str, dest: str | os.PathLike[str], retries: int = 5,
                 if not succeeded and safe_exists(temp):
                     temp.unlink()
             except OSError as e:
-                logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Failed to remove temporary file %s: %s", os.fspath(temp), e)
+                if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Failed to remove temporary file %s: %s", os.fspath(temp), e)
 
     raise SystemExit(f"Failed to download {url} after {retries} attempts. Last error: {last_err}")
 
@@ -4339,15 +4513,15 @@ def find_ffmpeg() -> str | None:
     for env_key in ("FFMPEG", "FFMPEG_PATH", "IMAGEIO_FFMPEG_EXE"):
         p = os.environ.get(env_key)
         if p:
-            p = ensure_file(p)
-            return os.fspath(p)
+            path_p = ensure_file(p)
+            return os.fspath(path_p)
 
     # 2) On PATH (handles .exe on Windows automatically)
     for name in ("ffmpeg", "ffmpeg.exe"):
         p = shutil.which(name)
         if p:
-            p = ensure_file(p)
-            return os.fspath(p)
+            path_p = ensure_file(p)
+            return os.fspath(path_p)
 
     # 3) Typical Conda/Miniconda/Mambaforge locations
     sp = Path(sys.prefix)  # current Python env prefix
@@ -4369,12 +4543,17 @@ def find_ffmpeg() -> str | None:
     # 5) Optional: imageio-ffmpeg packaged binary if user has it
     try:
         import imageio_ffmpeg  # type: ignore
-        p = imageio_ffmpeg.get_ffmpeg_exe()
-        if p:
-            p = ensure_file(p)
-            return os.fspath(p)
+        p_str: str | None = imageio_ffmpeg.get_ffmpeg_exe()
+        if p_str:
+            p_path = ensure_path(p_str)
+            if safe_is_file(p_path) and os.access(os.fspath(p_path), os.X_OK):
+                return os.fspath(p_str)
+            else:
+                raise ValueError(f"imageio-ffmpeg returned non-executable path: {p_str}")
+        else:
+            raise ValueError(f"imageio-ffmpeg returned {p_str}")
     except Exception as e:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
             "Failed to find imageio-ffmpeg: %s", e
         )
 
@@ -4421,8 +4600,7 @@ def human_bytesize(num: float | int | None, *, suffix: str = "B", si: bool = Fal
     # SI prefixes: 10^N, N =  0,   3 ,   6 ,   9 ,  12 ,  15 ,  18 ,  21 ,  24 ,  27 ,  30
     symbols = ([             "", "k" , "M" , "G" , "T" , "P" , "E" , "Z" , "Y" , "R" , "Q" ]
                if si else [  "", "Ki", "Mi", "Gi", "Ti", "Pi", "Ei", "Zi", "Yi", "Ri", "Qi"])
-    # binary prefixes: 2^N, N=0,  10 ,  20 ,  30 ,  40 ,  50 ,  60 ,  70 ,  80 ,  90 ,  100 
-
+    # binary prefixes: 2^N, N=0,  10 ,  20 ,  30 ,  40 ,  50 ,  60 ,  70 ,  80 ,  90 ,  100
 
     long_prefixes = (
     # 10^N where N = 0,     3 ,     6 ,     9 ,    12 ,    15 ,    18 ,    21  ,     24 ,     27 ,      30
@@ -4453,6 +4631,43 @@ def human_bytesize(num: float | int | None, *, suffix: str = "B", si: bool = Fal
         return f"{sign}{s}{sep}{symbols[i]}{suffix}"
 
 
+class InflectEngine(Protocol):
+    """Protocol for the 'inflect' library's engine interface."""
+
+    def plural_noun(self, word: str, count: int | None = ...) -> str | Literal[False]:
+        """Return the plural form of 'word' if count != 1, else False."""
+        ...
+
+    def plural(self, word: str) -> str:
+        """Return the plural form of 'word'."""
+        ...
+
+
+_INFLECT_ENGINE: InflectEngine | None = None
+
+
+def _get_inflect_engine() -> InflectEngine:
+    """
+    Get or create a singleton inflect engine instance. This function exists to
+    appease type checkers like mypy and to avoid global import-time dependencies.
+
+    Args:
+        None.
+
+    Returns:
+        An instance of the inflect engine.
+
+    Raises:
+        ImportError: If the 'inflect' library is not installed.
+    """
+    global _INFLECT_ENGINE
+    if _INFLECT_ENGINE is None:
+        import inflect  # type: ignore[import-not-found]
+        _INFLECT_ENGINE = inflect.engine()  # type: ignore[assignment]
+    assert _INFLECT_ENGINE is not None
+    return _INFLECT_ENGINE
+
+
 def my_plural(n: int, word: str) -> str:
     """
     Return a pluralized version of 'word' preceded by 'n'.
@@ -4471,6 +4686,9 @@ def my_plural(n: int, word: str) -> str:
         n:    The quantity of the item.
         word: The singular form of the item.
 
+    Returns:
+        A string in the format "{n} {pluralized_word}".
+
     Raises:
         None.
     """
@@ -4478,22 +4696,14 @@ def my_plural(n: int, word: str) -> str:
         return f"{n} {word}"
 
     # 1) Try the open-source 'inflect' library if present
-    try:
-        import inflect  # MIT-licensed, widely used for pluralization
-        engine = getattr(my_plural, "_inflect_engine", None)
-        if engine is None:
-            engine = inflect.engine()
-            my_plural._inflect_engine = engine
-
-        # plural_noun returns False when it can't/shouldn't pluralize
-        plural = engine.plural_noun(word)
-        if not plural:
-            plural = engine.plural(word)
+    try:  # MIT-licensed, widely used for pluralization
+        engine = _get_inflect_engine()
+        plural = engine.plural_noun(word, n) or engine.plural(word)
         if plural:
             return f"{n} {plural}"
     except Exception as e:
         # Fall through to custom logic if inflect isn't available or errors
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
             "my_plural: exception checking inflect library: %s", e
         )
 
@@ -4542,9 +4752,12 @@ def my_plural(n: int, word: str) -> str:
     }
 
     uncountables = {
-        "sheep", "fish", "deer", "series", "species", "aircraft", "moose",
-        "bison", "salmon", "trout", "swine", "rice", "information", "equipment",
-        "money", "news", "offspring", "fruit"
+        "sheep", "deer", "series", "species", "aircraft", "moose",
+        "bison", "swine", "offspring", "spacecraft", "elk", "reindeer",
+        "caribou", "antelope", "quail", "grouse", "cod", "herring",
+        "mackerel", "halibut", "bass", "swordfish", "catfish", "bluefish",
+        "shellfish", "krill", "means", "headquarters", "barracks", "corps",
+        "crossroads", "hovercraft", "watercraft"
     }
 
     def _preserve_simple_case(src: str, target: str) -> str:
@@ -4948,7 +5161,7 @@ def _parse_iso(given_date: str) -> dt.datetime:
     try:
         return isoparse(given_date)
     except ParserError as e:
-        raise ValueError(f"Invalid ISO8601 date '{given_date}': {e}") from e
+        raise ValueError(f"Invalid ISO8601 date '{given_date}'") from e
 
 
 def is_float(s: str) -> bool:
@@ -4978,30 +5191,30 @@ def _should_convert(given_date: AnyDateTimeType, format_str: str | None = None) 
 
     # 1) Numbers, JD/MJD, decimal years, special keywords
     if isinstance(given_date, (int, float)) and not isinstance(given_date, bool):
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Given date is a number: %s, so it will be converted by shifting the clock", given_date)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Given date is a number: %s, so it will be converted by shifting the clock", given_date)
         return True
     if isinstance(given_date, str):
         u = given_date.strip().upper()
         if u in ("J2000", "UNIX", "NOW"):
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Given date is a special keyword: %s, so it will be converted by shifting the clock", u)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Given date is a special keyword: %s, so it will be converted by shifting the clock", u)
             return True
         if format_str and format_str.upper() in ("JD", "MJD"):
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Given date has a format_str: %s, so it will be converted by shifting the clock", format_str)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Given date has a format_str: %s, so it will be converted by shifting the clock", format_str)
             return True
         if _JD_MJD_SIMPLE_RE.fullmatch(given_date):
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Given date is a JD/MJD: %s, so it will be converted by shifting the clock", given_date)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Given date is a JD/MJD: %s, so it will be converted by shifting the clock", given_date)
             return True
         # explicit offset or Z
         if _OFFSET_IN_STR_RE.search(given_date):
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Given date has an explicit offset or Z: %s, so it will be converted by shifting the clock", given_date)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Given date has an explicit offset or Z: %s, so it will be converted by shifting the clock", given_date)
             return True
     # 2) Any datetime/timestamp already aware
     if isinstance(given_date, dt.datetime) and given_date.tzinfo is not None:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Given date is an aware datetime: %s, so it will be converted by shifting the clock", given_date)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Given date is an aware datetime: %s, so it will be converted by shifting the clock", given_date)
         return True
 
     # Otherwise treat it as local‐time → attach only
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Given date is not a number, JD/MJD, or aware datetime: %s, so the timezone will be attached without shifting the clock", given_date)
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Given date is not a number, JD/MJD, or aware datetime: %s, so the timezone will be attached without shifting the clock", given_date)
     return False
 
 
@@ -5030,14 +5243,14 @@ def _finalize_datetime(parsed_dt: dt.datetime, original_input: AnyDateTimeType,
         TypeError:  If the parsed_dt is not a datetime.datetime object.
     """
     if isinstance(tz_arg, str) and tz_arg.strip().upper() == "NAIVE":
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Naive timezone requested, returning datetime %s without any timezone info", parsed_dt)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Naive timezone requested, returning datetime %s without any timezone info", parsed_dt)
         return parsed_dt.replace(tzinfo=None)
     target_tz = parse_timezone(tz_arg)
     if should_convert is not False and (_should_convert(original_input, format_str) or should_convert is True):
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Converting datetime %s to timezone %s by shifting the clock", parsed_dt, target_tz)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Converting datetime %s to timezone %s by shifting the clock", parsed_dt, target_tz)
         return parsed_dt.astimezone(target_tz)
     else:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Attaching timezone %s to datetime %s without shifting the clock", target_tz, parsed_dt)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Attaching timezone %s to datetime %s without shifting the clock", target_tz, parsed_dt)
         return parsed_dt.replace(tzinfo=target_tz)
 
 
@@ -5117,8 +5330,8 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
             parsed_dt = dt.datetime.now(tz=dt.timezone.utc)
 
     # Handle forced or explicit Julian Date (JD) or Modified Julian Date (MJD)
-    m = None
-    prefix = None
+    m: re.Match | None = None
+    prefix: str | None = None
     if parsed_dt is None and isinstance(given_date, str):
         m = _JD_MJD_CAPTURE_RE.fullmatch(given_date)
         if m:
@@ -5136,7 +5349,13 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
         if isinstance(given_date, (int, float)):
             value = float(given_date)
         else:
-            value = float(m.group("value"))
+            if m is not None:
+                value = float(m.group("value"))
+            else:
+                try:
+                    value = float(given_date.strip())
+                except ValueError as e:
+                    raise ValueError(f"Expected a JD/MJD numeric value, got {given_date!r}") from e
 
         # Determine if MJD conversion needed
         use_mjd = bool((format_str and format_str.upper() == "MJD") or (prefix and prefix.upper() == "MJD"))
@@ -5174,7 +5393,7 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
             # Make sure the format string is a valid example of "units (optionally: since/after epoch)"
             # Try to split by since or after, whichever works:
             format_parts = re.split(r'\s+(since|after)\s+', format_str, maxsplit=1)
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Parsing date with format string: '%s' split into parts: %s", format_str, format_parts)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Parsing date with format string: '%s' split into parts: %s", format_str, format_parts)
             if len(format_parts) > 3:
                 raise ValueError(f"Invalid format string: '{format_str}'. Expected at most three parts: 'units', 'since/after', and 'epoch'.")
             # The first part should be acceptable by seconds_in_unit():
@@ -5210,7 +5429,10 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
             np = None
         if np is not None and isinstance(given_date, np.datetime64):
             ts_ns     = given_date.astype("datetime64[ns]").astype("int64")
-            parsed_dt = dt.datetime.fromtimestamp(ts_ns/1e9, tz=parsed_tz)
+            parsed_dt = dt.datetime.fromtimestamp(
+                ts_ns / 1e9,
+                tz=parsed_tz if isinstance(parsed_tz, dt.tzinfo) else None,
+            )
 
     if parsed_dt is None:
         try:
@@ -5225,11 +5447,15 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
     if parsed_dt is None and not isinstance(given_date, str):
         raise TypeError(error_message)
 
+    # From here on, we know it's a str (we raised otherwise)
+    assert isinstance(given_date, str)
+    given_string = given_date
+
     if parsed_dt is None and format_str is not None:
         try:
-            parsed_dt = dt.datetime.strptime(given_date, format_str)
+            parsed_dt = dt.datetime.strptime(given_string, format_str)
         except ValueError as e:
-            raise ValueError(f"Invalid date format '{given_date}' with specified format '{format_str}': {e}") from e
+            raise ValueError(f"Invalid date format '{given_string}' with specified format '{format_str}': {e}") from e
 
     # Try parsing the date string in various formats
     # Start with RFC 2822 format, then ISO8601, then free-form strings
@@ -5240,22 +5466,22 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
         import email.utils
         try:
             # parses "Tue, 25 Jun 2025 14:00:00 GMT"
-            parsed_dt = email.utils.parsedate_to_datetime(given_date)
+            parsed_dt = email.utils.parsedate_to_datetime(given_string)
         except (TypeError, ValueError) as e:
-            errors.append(f"Failed to parse '{given_date}' as an RFC 2822 date: {e}")
+            errors.append(f"Failed to parse '{given_string}' as an RFC 2822 date: {e}")
 
     if parsed_dt is None:
         try:
-            parsed_dt = _parse_iso(given_date)
+            parsed_dt = _parse_iso(given_string)
         except ValueError as e:
-            errors.append(f"Failed to parse '{given_date}' as an ISO8601 date: {e}")
+            errors.append(f"Failed to parse '{given_string}' as an ISO8601 date: {e}")
 
     if parsed_dt is None:
         try:
             from dateutil.parser import parse as parse_fuzzy
-            parsed_dt = parse_fuzzy(given_date, default=dt.datetime(1900, 1, 1))
+            parsed_dt = parse_fuzzy(given_string, default=dt.datetime(1900, 1, 1))
         except ValueError as e:
-            errors.append(f"Failed to parse '{given_date}' as a free-form date string: {e}")
+            errors.append(f"Failed to parse '{given_string}' as a free-form date string: {e}")
 
     if parsed_dt is None:
         if np is None:
@@ -5264,7 +5490,7 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
             errors.append("The pandas package is not installed, so pandas.Timestamp objects cannot be parsed.")
     else:
         # Finalize the datetime object by converting it to the target timezone or just attaching the timezone without shifting the clock
-        return _finalize_datetime(parsed_dt, given_date, format_str, parsed_tz, should_convert)
+        return _finalize_datetime(parsed_dt, given_string, format_str, parsed_tz, should_convert)
 
     raise ValueError(error_message + "\n".join(map(str, errors)) + "\nPlease check the input format and try again.")
 
@@ -5350,7 +5576,7 @@ def _to_jsonable(obj: Any, *, roundtrip: bool, _seen: set[int]) -> Any:
             return {"__type__" : "namespace",
                     "value"    : _to_jsonable(vars(obj), roundtrip=roundtrip, _seen=_seen)} if roundtrip else vars(obj)
     except Exception as e:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
             "Failed to unwrap argparse.Namespace: %s", e
         )
     # datetime / date / time
@@ -5361,7 +5587,7 @@ def _to_jsonable(obj: Any, *, roundtrip: bool, _seen: set[int]) -> Any:
             which = "datetime" if isinstance(obj, dt.datetime) else ("date" if isinstance(obj, dt.date) else "time")
             return {"__type__": which, "value": iso} if roundtrip else iso
     except Exception as e:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
             "Failed to unwrap datetime/date/time: %s", e
         )
     # Decimal
@@ -5370,7 +5596,7 @@ def _to_jsonable(obj: Any, *, roundtrip: bool, _seen: set[int]) -> Any:
         if isinstance(obj, Decimal):
             return {"__type__": "decimal", "value": str(obj)} if roundtrip else float(obj)
     except Exception as e:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
             "Failed to unwrap decimal.Decimal: %s", e
         )
     # bytes-like
@@ -5381,7 +5607,7 @@ def _to_jsonable(obj: Any, *, roundtrip: bool, _seen: set[int]) -> Any:
             kind = "bytes" if isinstance(obj, bytes) else ("bytearray" if isinstance(obj, bytearray) else "memoryview")
             return {"__type__": kind, "value": b64} if roundtrip else b64
         except Exception as e:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "Failed to unwrap bytes/bytearray/memoryview: %s", e
             )
             return str(obj)
@@ -5391,12 +5617,12 @@ def _to_jsonable(obj: Any, *, roundtrip: bool, _seen: set[int]) -> Any:
         if isinstance(obj, re.Pattern):
             return {"__type__": "re_pattern", "pattern": obj.pattern, "flags": obj.flags} if roundtrip else obj.pattern
     except Exception as e:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
             "Failed to unwrap re.Pattern: %s", e
         )
     # Fallback
     stringified = str(obj)
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Object of type %s is not JSON serializable; converting to string: %s", type(obj).__name__, stringified)
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Object of type %s is not JSON serializable; converting to string: %s", type(obj).__name__, stringified)
     return stringified if not roundtrip else {"__type__": "object", "value": stringified}
 
 
@@ -5430,7 +5656,7 @@ def from_jsonable(obj: Any) -> Any:
             import argparse
             return argparse.Namespace(**from_jsonable(obj.get("value", {})))
         except Exception as e:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "Failed to reconstruct argparse.Namespace: %s", e
             )
             return from_jsonable(obj.get("value", {}))
@@ -5445,7 +5671,7 @@ def from_jsonable(obj: Any) -> Any:
                 cls = getattr(cls, p)
             return getattr(cls, obj["name"])
         except Exception as e:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "Failed to reconstruct enum: %s", e
             )
             return obj.get("name")
@@ -5475,7 +5701,7 @@ def from_jsonable(obj: Any) -> Any:
             import base64
             return  bytearray(base64.b64decode(obj.get("value", "").encode("ascii")))
         except Exception as e:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "Failed to unwrap bytearray: %s", e
             )
             return obj.get("value")
@@ -5484,7 +5710,7 @@ def from_jsonable(obj: Any) -> Any:
             import base64
             return memoryview(base64.b64decode(obj.get("value", "").encode("ascii")))
         except Exception as e:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "Failed to unwrap memoryview: %s", e
             )
             return obj.get("value")
@@ -5509,7 +5735,7 @@ def _coerce_log_mode(value: Any) -> int:
         try:
             return int(s)
         except ValueError as e:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug(
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
                 "Failed to coerce log mode from string: %s", e
             )
         # Handle level names like "INFO", "debug", etc. (case-insensitive)
@@ -5556,7 +5782,7 @@ def save_options_to_json(options: Options) -> None:
     with open(options.options_json_filepath, "w", encoding=DEFAULT_ENCODING) as json_file:
         json.dump(payload, json_file, indent=4, ensure_ascii=False)
 
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Options saved to JSON file: %s",
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Options saved to JSON file: %s",
                                                                       os.fspath(options.options_json_filepath))
 
 
@@ -5641,7 +5867,7 @@ def prompt_then_confirm(prompt: str) -> bool:
     return confirmation.casefold() == "yes" or confirmation.casefold() == "y"
 
 
-def prompt_then_choose(prompt: str, choices: list[str], default: str = None) -> str:
+def prompt_then_choose(prompt: str, choices: list[str], default: str | None = None) -> str:
     """
     Show a numbered list of choices and prompt the user to select one.
 
@@ -5693,7 +5919,7 @@ def my_title_case(the_title: str) -> str:
     return " ".join(capitalized_words)
 
 
-def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
+def filename_format(text: str, sep: str = "_", max_length: int | None = None) -> str:
     """
     Turn arbitrary text into an ASCII-only, filesystem‐safe base filename.
     WARNING: Do not include an extension in the text, because this function
@@ -5775,28 +6001,87 @@ def filename_format(text: str, sep: str = "_", max_length: int = None) -> str:
 def if_filepath_then_read(input_string_or_filepath: str | os.PathLike[str],
                           force_string: bool = False) -> str:
     """
-    If 'input_string_or_filepath' is a file path, read its contents and return as a string. If not, return the input_string as is.
+    If given a path, return the file's text; otherwise return the string itself.
+
+    Behavior:
+    - If a real PathLike is passed and 'force_string' is False:
+        * If the path does not exist → raise FileNotFoundError.
+        * If the path exists but is not a regular file → raise IsADirectoryError.
+        * If it is a file → return its contents. On permission or decoding errors,
+          log and return "".
+        * A race after the existence check may still raise FileNotFoundError (re-raised).
+    - If a string is passed:
+        * If it contains a newline or is longer than 4096 chars → treat as literal and return as-is.
+        * Else, if it names an existing file and 'force_string' is False → read and return
+          contents; on read errors (not found/permission/decoding), log and return "".
+        * Else → return the string as-is.
+    - If 'force_string' is True and a PathLike is passed → TypeError.
 
     Args:
-        input_string_or_filepath: The source can be a file path or a string.
-        force_string:             If True, treat 'input_string_or_filepath' as a string even if
-                                  it looks like a file path.
+        input_string_or_filepath: A string to return as-is, or a path to read.
+        force_string:             If True, always treat the input as a string literal (PathLike
+                                  inputs are rejected with TypeError).
 
     Returns:
-        str : The contents of the file if input_string_or_filepath is a file path,
-              or the input_string_or_filepath itself if it is not a file path.
+        The file contents (when reading a file) or the input string/literal path.
 
     Raises:
-        TypeError : If input_string is not a string or a file path, or if force_string is True but input_string_or_filepath is os.PathLike.
+        TypeError:         If a PathLike is given with 'force_string=True', or if the input
+                           is neither str nor PathLike.
+        FileNotFoundError: When a PathLike is given and the path does not exist.
+        IsADirectoryError: When a PathLike is given and the path is not a regular file.
+
+    Notes:
+        For string inputs that look like paths, missing files do not raise; the
+        string is returned unchanged. Permission/decoding errors are logged and
+        result in an empty string.
     """
     fallback_logging_config()
-    # Is "input_string" a file path, and is "force_string" False?
-    # If so, read the file contents.
-    if force_string and isinstance(input_string_or_filepath, os.PathLike):
-        raise TypeError(f"'input_string_or_filepath' was given as a file path ({input_string_or_filepath!r}) but 'force_string' is True, so it cannot be treated as a file path.")
+
+    # If a real PathLike was passed, handle it explicitly (different semantics than str)
+    if isinstance(input_string_or_filepath, os.PathLike):
+        if force_string:
+            raise TypeError(
+                "'input_string_or_filepath' was given as a file path "
+                f"({input_string_or_filepath!r}) but 'force_string' is True."
+            )
+        file_path = ensure_path(input_string_or_filepath)
+
+        # Raise if it doesn't exist (your new requirement)
+        if not safe_exists(file_path):
+            raise FileNotFoundError(os.fspath(file_path))
+
+        # Exists but not a regular file → raise
+        if not safe_is_file(file_path):
+            raise IsADirectoryError(os.fspath(file_path))
+
+        # Read the file
+        try:
+            contents = my_fopen(file_path, suppress_errors=True)
+            if not contents:
+                logging.error("Could not read file: %s", os.fspath(file_path))
+                return ""
+            return contents
+        except FileNotFoundError:
+            # Unlikely now (we checked), but keep for races
+            logging.exception("File not found: %s", os.fspath(file_path))
+            raise
+        except PermissionError:
+            logging.exception("Permission denied: %s", os.fspath(file_path))
+            return ""
+        except UnicodeDecodeError:
+            logging.exception("Could not decode %r.", os.fspath(file_path))
+            return ""
+
+    # From here: input is a str (or we already returned/raised above)
+
     # Heuristics: if it contains newlines or is ridiculously long, it's source.
-    if isinstance(input_string_or_filepath, str) and ("\n" in input_string_or_filepath or len(input_string_or_filepath) > 4096):
+    if isinstance(input_string_or_filepath, str) and (
+        "\n" in input_string_or_filepath or len(input_string_or_filepath) > 4096
+    ):
         return input_string_or_filepath
+
+    # If it's a string that points to an existing file (and not forced-string), read it
     if not force_string and safe_is_file(file_path := ensure_path(input_string_or_filepath)):
         try:
             contents = my_fopen(file_path, suppress_errors=True)
@@ -5806,14 +6091,22 @@ def if_filepath_then_read(input_string_or_filepath: str | os.PathLike[str],
             return contents
         except FileNotFoundError:
             logging.exception("File not found: %s", os.fspath(file_path))
+            return ""
         except PermissionError:
             logging.exception("Permission denied: %s", os.fspath(file_path))
+            return ""
         except UnicodeDecodeError:
             logging.exception("Could not decode %r.", os.fspath(file_path))
-    else:  # Otherwise, treat "input_string" as a string.
-        if not isinstance(input_string_or_filepath, str):
-            raise TypeError(f"Expected 'input_string_or_filepath' to be a string or file path, got {type(input_string_or_filepath).__name__!r}")
-        return input_string_or_filepath  # Just return the input string as is.
+            return ""
+
+    # Otherwise treat it as a literal string
+    if not isinstance(input_string_or_filepath, str):
+        # (If we got here with a non-PathLike, non-str, it's a type error)
+        raise TypeError(
+            "Expected 'input_string_or_filepath' to be a string or file path, "
+            f"got {type(input_string_or_filepath).__name__!r}"
+        )
+    return input_string_or_filepath
 
 
 def compile_code(source_or_filepath: str | os.PathLike[str],
@@ -5836,6 +6129,7 @@ def compile_code(source_or_filepath: str | os.PathLike[str],
     fallback_logging_config()
     # Read from file if source is a file path
     source = if_filepath_then_read(source_or_filepath, force_string=force_source)
+    file_path: str | os.PathLike[str] = ""
     if source != source_or_filepath:
         file_path = ensure_path(source_or_filepath)
     else:
@@ -5846,9 +6140,9 @@ def compile_code(source_or_filepath: str | os.PathLike[str],
         compile(source, file_path, "exec")
     except SyntaxError as e:
         # protect against None offsets
-        lineno = e.lineno or "?"
-        offset = e.offset or 0
-        line = (e.text or "").rstrip("\n")
+        lineno  = e.lineno or "?"
+        offset  = e.offset or 0
+        line    = (e.text or "").rstrip("\n")
         pointer = " " * (offset - 1) + "^" if offset else ""
         logging.error(f"Syntax error in {e.filename!r}, line {lineno}, column {offset}:\n"
                       f"    {line}\n"
@@ -6019,23 +6313,21 @@ def _make_format_checker() -> Type[Any]:
             lines = doc.splitlines()
             # Locate the section headers
             try:
-                params_idx = next(i for i, L in enumerate(lines) if L.strip() == "Args:")
+                args_idx = next(i for i, L in enumerate(lines) if L.strip() == "Args:")
             except StopIteration:
                 self.errors.append((node.__class__.__name__.casefold(), who,
                                     f"{doctype} docstring missing 'Args' section",
                                     node.lineno))
                 return
 
-            try:
-                returns_idx = next(i for i, L in enumerate(lines) if L.strip() == "Returns:")
-            except StopIteration:
+            if not any(L.strip() == "Returns:" for L in lines):
                 self.errors.append((node.__class__.__name__.casefold(), who,
                                     f"{doctype} docstring missing 'Returns' section",
                                     node.lineno))
 
             # Collect documented params: lines immediately under 'Parameters'
             documented = set()
-            for line in lines[params_idx+1:]:
+            for line in lines[args_idx+1:]:
                 if not line.strip():
                     break
                 m = re.match(r'^(\w+)\s*:\s*(.+)$', line)
@@ -6074,9 +6366,7 @@ def _make_format_checker() -> Type[Any]:
                                     node.lineno))
                 return
 
-            try:
-                returns_idx = next(i for i, L in enumerate(lines) if L.strip() == "Returns")
-            except StopIteration:
+            if not any(L.strip() == "Returns:" for L in lines):
                 self.errors.append((node.__class__.__name__.casefold(), who,
                                     f"{doctype} docstring missing 'Returns' section",
                                     node.lineno))
@@ -6117,7 +6407,8 @@ def check_python_formatting(path: str | os.PathLike[str], diff_choice: int = 1) 
         diff_choice: How many context lines to show in the diff (0 = old-style diff, 1 = unified diff with 0 context lines, 2+ = unified diff with 'diff_choice - 1' context lines).
 
     Returns:
-        False if the user chose to quit during any replacement prompts, True otherwise.
+        False if the user chose to quit during any replacement prompts or if there was an error,
+        True otherwise.
 
     Raises:
         FileNotFoundError: If the specified file does not exist.
@@ -6128,7 +6419,7 @@ def check_python_formatting(path: str | os.PathLike[str], diff_choice: int = 1) 
     src  = my_fopen(   path)
     if src is False:
         logging.error("❌ Failed to open file: %s", os.fspath(path))
-        return
+        return False
 
     if compile_code(src):
         logging.info("✅ %s compiled successfully.", os.fspath(path))
@@ -6266,12 +6557,11 @@ def _gather_flake8_issues(options: Options, path: str | os.PathLike[str],
     Raises:
         FileNotFoundError: If the specified file does not exist.
     """
-    if ignore_codes is None:
-        ignore_codes: list[str] = []
+    ignores = list(ignore_codes) if ignore_codes else []
     try:
-        return _gather_via_cli(options, path, max_line_length, ignore_codes)
+        return _gather_via_cli(options, path, max_line_length, ignores)
     except FileNotFoundError:
-        return _gather_via_app(options, path, max_line_length, ignore_codes)
+        return _gather_via_app(options, path, max_line_length, ignores)
 
 
 def _gather_via_cli(options: Options, path: str | os.PathLike[str],
@@ -6478,13 +6768,13 @@ def my_diff(orig_text:     str, changed_text: str,
     orig_path = ensure_path(orig_path)
     if not changed_path:
         changed_path = orig_path
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("At the top of the function %s(), diff_choice=%s", return_method_name(), diff_choice)
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("At the top of the function %s(), diff_choice=%s", return_method_name(), diff_choice)
     orig_lines    =    orig_text.splitlines(keepends=True)
     changed_lines = changed_text.splitlines(keepends=True)
     the_digits    = max(len(str(len(orig_lines))), len(str(len(changed_lines))))
     last_removed  = None  # there is no last removed line initially
     # shared buffer for the current hunk's deletes/inserts
-    hunk_entries: list[tuple[str, str, int, int]] = []
+    hunk_entries: list[tuple[str, str, int | None, int | None]] = []
     # each entry is (tag, text, orig_lineno, new_lineno)
     # orig_lineno or new_lineno will be None for pure inserts/deletes.
 
@@ -6510,6 +6800,8 @@ def my_diff(orig_text:     str, changed_text: str,
                     new_text = inserts[di][1]
                     new_nln  = inserts[di][3]
                     new_vis  = _vis_trailing_ws(new_text)
+                    # Prove to mypy we're inside a hunk (line numbers present)
+                    assert dln is not None and new_nln is not None, "Line numbers should be set in a hunk (dln, new_nln)"
                     # Mark the paired '+' as consumed, regardless of identical/different.
                     consumed_new_line_numbers.add(new_nln)
                     # If identical after visibility transform, emit nothing (no context).
@@ -6544,8 +6836,10 @@ def my_diff(orig_text:     str, changed_text: str,
             logging.info(f"< {orig_lineno:>{the_digits}}: {highlighted_old}")
             last_removed = None
 
+    orig_lineno: int | None = None
+    new_lineno:  int | None = None
     if diff_choice == 0:  # old style diff (difflib.Differ)
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Using old-style diff for %s with %d original and %d fixed lines.", os.fspath(orig_path), len(orig_lines), len(changed_lines))
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Using old-style diff for %s with %d original and %d fixed lines.", os.fspath(orig_path), len(orig_lines), len(changed_lines))
         orig_lineno = 1
         new_lineno  = 1
         for line in difflib.Differ().compare(orig_lines, changed_lines):
@@ -6569,20 +6863,22 @@ def my_diff(orig_text:     str, changed_text: str,
         process_hunk()
         flush_removed(orig_lineno)
     elif diff_choice >= 1:  # unified or context diff
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Using unified diff for %s with %d original and %d fixed lines.", os.fspath(orig_path), len(orig_lines), len(changed_lines))
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Using unified diff for %s with %d original and %d fixed lines.", os.fspath(orig_path), len(orig_lines), len(changed_lines))
         ctx  = max(diff_choice - 1, 0)
         diff = difflib.unified_diff(
             orig_lines, changed_lines,
             fromfile=os.fspath(orig_path), tofile=os.fspath(changed_path),
             n=ctx, lineterm=""
         )
-        header_re = re.compile(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
-        orig_lineno = new_lineno = None
+        header_re:   re.Pattern = re.compile(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
         for line in diff:
             if line.startswith("@@"):  # hunk header?
                 # flush any leftover from the prior hunk
                 process_hunk()
-                m           = header_re.match(line)
+                m = header_re.match(line)
+                if not m:
+                    logging.error("Failed to parse hunk header line: %s", line)
+                    continue
                 orig_lineno = int(m.group(1))
                 new_lineno  = int(m.group(2))
                 continue
@@ -6591,19 +6887,24 @@ def my_diff(orig_text:     str, changed_text: str,
             tag, body = line[0], line[1:].rstrip("\n")
             if tag == " ":  # context line: flush and emit
                 process_hunk()
-                flush_removed(orig_lineno)
+                if orig_lineno is not None:
+                    flush_removed(orig_lineno)
+                assert orig_lineno is not None and new_lineno is not None, "Line numbers should be set in a hunk (orig_lineno, new_lineno)"
                 logging.info(f"  {orig_lineno:>{the_digits}}: {_vis_trailing_ws(body)}")
                 orig_lineno += 1
                 new_lineno  += 1
             elif tag == "-":  # buffer a delete
                 hunk_entries.append(("-", body, orig_lineno, None))
+                assert orig_lineno is not None, "Line numbers should be set in a hunk (orig_lineno)"
                 orig_lineno += 1
             elif tag == "+":  # buffer an insert
                 hunk_entries.append(("+", body, None, new_lineno))
+                assert new_lineno is not None, "Line numbers should be set in a hunk (new_lineno)"
                 new_lineno += 1
         # final flush
         process_hunk()
-        flush_removed(orig_lineno)
+        if orig_lineno is not None:
+            flush_removed(orig_lineno)
     else:
         logging.error("Unsupported diff_choice = %d. Must be a non-negative integer.", diff_choice)
 
@@ -6688,7 +6989,7 @@ def diff_and_confirm(orig_text: str, changed_text: str,
         ValueError: If the specified path is not a file. The function which raises this exception is my_fopen().
     """
     fallback_logging_config()
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("At the top of the function %s(), diff_choice=%s", return_method_name(), diff_choice)
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("At the top of the function %s(), diff_choice=%s", return_method_name(), diff_choice)
     path = ensure_file(path)
     my_diff(orig_text, changed_text, path, diff_choice=diff_choice,
             changed_color=changed_color, deleted_color=deleted_color, added_color=added_color)
@@ -6749,7 +7050,7 @@ def ask_and_autopep8(path: str | os.PathLike[str], code: str,
     import autopep8
     fallback_logging_config()
     path = ensure_file(path)
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("At the top of the function %s(), diff_choice=%s", return_method_name(), diff_choice)
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("At the top of the function %s(), diff_choice=%s", return_method_name(), diff_choice)
     # The number of blank lines expected in various contexts.
     blank_line_overrides = {
         "E301" : 1,  # expected 1 blank line, found 0
@@ -6758,6 +7059,8 @@ def ask_and_autopep8(path: str | os.PathLike[str], code: str,
         "E305" : 2,  # expected 2 blank lines after class/method
     }
     orig_text = my_fopen(path)
+    if not orig_text:
+        raise ValueError("Empty file: %s", os.fspath(path))
     changed_text = orig_text
     for level in (0, 1, 2):  # try with 0, 1, then 2 "-a" flags
         flags = ["-a"] * level
@@ -6891,6 +7194,7 @@ def multireplace(options: Options, verbose: bool = True) -> None:
         NotADirectoryError: If the specified path is not a directory.
     """
     fallback_logging_config()
+    assert options.args is not None  # to appease mypy
     try:
         _validate_glob_pattern(options.args.glob_pattern)
     except Exception as e:
@@ -6903,9 +7207,9 @@ def multireplace(options: Options, verbose: bool = True) -> None:
         logging.error(str(e))
         sys.exit(2)
 
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Directory: %s", dir)
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Glob pattern: %s", options.args.glob_pattern)
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Recursive: %s", options.args.recursive)
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Directory: %s", dir)
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Glob pattern: %s", options.args.glob_pattern)
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Recursive: %s", options.args.recursive)
 
     files = _collect_files(dir, options.args.glob_pattern, options.args.recursive)
 
@@ -6920,7 +7224,7 @@ def multireplace(options: Options, verbose: bool = True) -> None:
         for i, f in enumerate(files, start=1):
             logging.info(f"{i:>{max_digits}}/{num_files}: {f}")
         logging.info("==========================================")
-    
+
     for f in files:
         try:
             if not ask_and_replace(old_str=options.args.old_str,
@@ -6968,19 +7272,19 @@ def interactive_flake8(options: Options,
     """
     fallback_logging_config()
     path = ensure_file(path)
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("At the top of the function %s(), diff_choice=%s", return_method_name(), diff_choice)
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("At the top of the function %s(), diff_choice=%s", return_method_name(), diff_choice)
     if ignore_codes is None:
-        ignore_codes: list[str] = []
+        ignore_codes = []
     if not run_flake8(options, path, ignore_codes=ignore_codes, max_line_length=max_line_length):
         logging.info("No flake8 errors—nothing to do.")
         return True
     codes = _gather_flake8_issues(options, path, ignore_codes=ignore_codes, max_line_length=max_line_length)
     fixable_codes = get_autopep8_fixable_codes()
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Autopep8 can fix these codes: %s", fixable_codes)
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Autopep8 can fix these codes: %s", fixable_codes)
     touched_code = False
     for code, desc in codes.items():
         if code not in fixable_codes:
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Skipping %s: no autopep8 fixer", code)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Skipping %s: no autopep8 fixer", code)
             continue
         logging.info("\n→ %s: %s", ANSI_RED + code + ANSI_RESET, ANSI_YELLOW + desc + ANSI_RESET)
         if not ask_and_autopep8(path, code, desc, diff_choice=diff_choice,
@@ -6999,11 +7303,11 @@ def run_mypy(options: Options,
              path: str | os.PathLike[str]) -> None:
     """
     Run basic mypy static analysis on the specified file.
-    
+
     Args:
         options: The parsed command-line options. (Currently unused but included for consistency.)
         path:    Path to the Python file to analyze.
-    
+
     Returns:
         None.
     """
@@ -7299,7 +7603,7 @@ def main() -> None:
     parse_arguments(options)
     memory_handler = ud.configure_logging(options.my_name, log_level=options.log_mode,
                                           rawlog=True)
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Directory: %s", options.args.directory)
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Directory: %s", options.args.directory)
     state = {
         "excluded_dirs"   : options.args.exclude_dirs,
         "already_printed" : set(),
@@ -7333,7 +7637,7 @@ import univ_defs as ud
 __version__: str = "0.1.1"
 
 
-class Options():
+class Options:
     """Class that has all global options in one place."""
 
     def __init__(self) -> None:
@@ -7623,7 +7927,7 @@ def verify_script(options: Options, thepath: str | os.PathLike[str], thescript: 
         thepath.write_text(thescript, encoding=DEFAULT_ENCODING)
 
 
-def decode_utf8(raw_bytes: bytes, path: str = "input string") -> str | None:
+def decode_utf8(raw_bytes: bytes, path_str: str = "input string") -> str | None:
     """
     If the file at 'path' is valid UTF-8 without lone C1 controls,
     return the decoded string. Otherwise, return None.
@@ -7632,16 +7936,16 @@ def decode_utf8(raw_bytes: bytes, path: str = "input string") -> str | None:
     try:
         text = raw_bytes.decode("utf-8", errors="strict")
     except UnicodeDecodeError:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s failed to decode as UTF‑8.", path)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("%s failed to decode as UTF‑8.", path_str, exc_info=True)
         return None
     if any(0x0080 <= ord(ch) <= 0x009F for ch in text):
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s contains lone C1 controls, not valid UTF-8.", os.fspath(path))
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("%s contains lone C1 controls, not valid UTF-8.", path_str)
         return None
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s decoded as valid UTF‑8.", os.fspath(path))
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("%s decoded as valid UTF‑8.", path_str)
     return text
 
 
-def decode_cp1252(raw_bytes: bytes, path: str = "input string") -> str | None:
+def decode_cp1252(raw_bytes: bytes, path_str: str = "input string") -> str | None:
     """
     Attempt to decode CP1252 bytes and return as a string.
     If it fails, return None.
@@ -7649,11 +7953,11 @@ def decode_cp1252(raw_bytes: bytes, path: str = "input string") -> str | None:
     fallback_logging_config()
     try:
         text = raw_bytes.decode("cp1252", errors="strict")
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s decoded as valid CP1252.",
-                                                                          os.fspath(path))
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("%s decoded as valid CP1252.",
+                                                                          path_str)
         return text
     except UnicodeDecodeError:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%s failed to decode as CP1252.", os.fspath(path), exc_info=True)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("%s failed to decode as CP1252.", path_str, exc_info=True)
         return None
 
 
@@ -7664,9 +7968,9 @@ def contains_mojibake(text: str) -> bool:
     try:
         mojibake_present = ftfy.badness.is_bad(text)
     except Exception:  # Catch any unexpected errors from ftfy without crashing
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Failed to check for mojibake.", exc_info=True)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Failed to check for mojibake.", exc_info=True)
         mojibake_present = False
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Mojibake present: %s", mojibake_present)
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Mojibake present: %s", mojibake_present)
     # I HAVEN'T TRIED THIS NEXT LINE, BUT IT MIGHT CAUSE FEWER FALSE POSITIVES:
     # return ftfy.badness(text) > 1
     return mojibake_present
@@ -7679,7 +7983,7 @@ def fix_text(current_text: str, path: str | os.PathLike[str], raw_bytes: bytes) 
     import ftfy
     fallback_logging_config()
     path = ensure_file(path)
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Checking %s for mojibake.",
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Checking %s for mojibake.",
                                                                       os.fspath(path))
     if not contains_mojibake(current_text):
         return None
@@ -7695,7 +7999,7 @@ def fix_text(current_text: str, path: str | os.PathLike[str], raw_bytes: bytes) 
             mangled_original = raw_bytes.decode("cp1252", errors="replace")
             my_diff(mangled_original, fixed, path)
         except Exception:  # Catch any unexpected errors from decoding but don't crash.
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Could not simulate browser mangling in %s.", os.fspath(path), exc_info=True)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Could not simulate browser mangling in %s.", os.fspath(path), exc_info=True)
     return fixed
 
 
@@ -7740,7 +8044,7 @@ def ensure_utf8_meta(html: str) -> str:
 
 def my_atomic_write(filepath: str | Path | os.PathLike[str], data: str | bytes | bytearray,
                     write_mode: Literal["w", "a"], encoding: str = DEFAULT_ENCODING,
-                    lock_timeout: float = None,  # seconds to wait for lock (None = forever)
+                    lock_timeout: float | None = None,  # seconds to wait for lock (None = forever)
                     ) -> None:
     """
     Atomically write 'data' to 'filepath' with an advisory lock.
@@ -7780,8 +8084,8 @@ def my_atomic_write(filepath: str | Path | os.PathLike[str], data: str | bytes |
             with atomic_write(path, mode=mode, overwrite=(write_mode == "w"),
                               encoding=text_enc, preserve_mode=True) as f:
                 f.write(data)
-    except Timeout:
-        raise RuntimeError(f"Could not acquire lock on {lock_path_str!r} within {lock_timeout} seconds")
+    except Timeout as e:
+        raise RuntimeError(f"Could not acquire lock on {lock_path_str!r} within {lock_timeout} seconds") from e
 
 
 def fix_mojibake(filepath: str | os.PathLike[str], make_backup: bool = True,
@@ -7804,8 +8108,8 @@ def fix_mojibake(filepath: str | os.PathLike[str], make_backup: bool = True,
         logging.error(f"Failed to read {os.fspath(filepath)}.", exc_info=True)
         return
 
-    original_text =      decode_utf8(raw_bytes, filepath) \
-                    or decode_cp1252(raw_bytes, filepath)
+    original_text =      decode_utf8(raw_bytes, os.fspath(filepath)) \
+                    or decode_cp1252(raw_bytes, os.fspath(filepath))
     if original_text is None:
         return
 
@@ -7845,7 +8149,7 @@ def treeview_new_files(directory:      str | os.PathLike[str],
                        last_mtime: float | None = None, maxlines: int = 0,
                        use_colors: bool = True, print_root: bool = True,
                        prefix: str = "", is_last: bool = True, level: int = 0,
-                       state: dict = None, probe_only: bool = False) -> bool:
+                       state: dict[str, Any] | None = None, probe_only: bool = False) -> bool:
     """
     Recursively scan the directory, print the contents of files newer than last_file_path (if provided- if so store its modification date in last_mtime). Return True if any relevant files are found.
 
@@ -7886,7 +8190,7 @@ def treeview_new_files(directory:      str | os.PathLike[str],
 
     if last_file_path is None:
         last_mtime = 0
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%sNo last file path provided, considering all files.", prefix)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("%sNo last file path provided, considering all files.", prefix)
     else:
         last_file_path = ensure_path(last_file_path)
         if not safe_exists(last_file_path):
@@ -7898,7 +8202,7 @@ def treeview_new_files(directory:      str | os.PathLike[str],
                           prefix, os.fspath(last_file_path))
             return False
         last_mtime_readable = dt.datetime.fromtimestamp(last_mtime).strftime("%Y-%m-%d %H:%M:%S")
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("%sLast file path: %s (mtime: %s)",
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("%sLast file path: %s (mtime: %s)",
                                                                           prefix,
                                                                           os.fspath(last_file_path), last_mtime_readable)
 
@@ -7911,7 +8215,8 @@ def treeview_new_files(directory:      str | os.PathLike[str],
 
     # Get the modification time of the directory itself
     dir_mtime      = safe_mtime(directory)
-    current_is_new = dir_mtime > (last_mtime or 0)
+    lm: float      = 0.0 if last_mtime is None else last_mtime
+    current_is_new = (dir_mtime is not None) and (dir_mtime > lm)
 
     if state is None:
         state = {"excluded_dirs"   : {"__pycache__"},
@@ -7956,7 +8261,7 @@ def treeview_new_files(directory:      str | os.PathLike[str],
     for entry in entries:
         if safe_is_file(entry):
             file_mtime = safe_mtime(entry)
-            if file_mtime > last_mtime:
+            if file_mtime and file_mtime > last_mtime:
                 relevant_entries.append(entry)
                 has_relevant_files = True
         elif safe_is_dir(entry):
@@ -7973,7 +8278,7 @@ def treeview_new_files(directory:      str | os.PathLike[str],
                 probe_only=True             # probe mode: do not print contents
             )
             # Consider the subdirectory's own mtime
-            sub_is_new = safe_mtime(entry) > last_mtime
+            sub_is_new = (smt := safe_mtime(entry)) is not None and smt > last_mtime
             if sub_has_relevant or sub_is_new:
                 subdirectories.append(entry)
             if sub_has_relevant:
@@ -8070,6 +8375,7 @@ def ensure_daemon_running() -> None:
         if not launcher.success:
             my_critical_error("Failed to launch Docker Desktop. Please start it from your Applications folder.")
         # Wait for the daemon to start...
+        import time
         for _ in range(10):
             time.sleep(3)
             info = my_popen(["docker", "info"])
@@ -8097,7 +8403,7 @@ def ensure_image_built(image: str, *,
 
     if build_cmd is None:
         if dockerfile is None:
-            my_critical_error(f"Image {image} missing and no build_cmd/dockerfile provided")
+            raise ValueError(f"Image {image} missing and no build_cmd/dockerfile provided")
         try:
             first = open(dockerfile, "r").readline().strip()
         except OSError:
@@ -8122,6 +8428,18 @@ def run_with_docker_fixes(base_args: list[str], *,
     """
     Run a command (typically 'docker run ...') and if it fails, attempt to fix
     common Docker issues (like Docker not installed or daemon not running) and retry.
+
+    Args:
+        base_args:    The command and its arguments to run (e.g., ['docker', 'run', ...]).
+        ensure_build: An optional function to ensure a Docker image is built.
+                      If provided, it will be called if the initial command fails.
+        extra_fixes:  An optional iterable of additional fix functions to try if the command fails.
+
+    Returns:
+        The result of the successful command, or None if all fixes fail.
+
+    Raises:
+        RuntimeError: If all fixes fail and the command still does not succeed.
     """
     fixes = [ensure_docker_installed, ensure_daemon_running]
     if ensure_build is not None:
@@ -8140,7 +8458,7 @@ def run_with_docker_fixes(base_args: list[str], *,
     last = my_popen(base_args)
     if last.success:
         return last
-    my_critical_error(f"After applying all fixes, still failed:\n{last.stderr}")
+    raise RuntimeError(f"After applying all Docker fixes, still failed:\n{last.stderr}")
 
 
 def check_if_command_exists(command: str) -> bool:
@@ -8164,6 +8482,7 @@ def open_terminal_and_run_command(the_command: str, close_after: bool = False,
     import subprocess
     fallback_logging_config()
     logging.info("Opening terminal and running '%s'...", the_command)
+    terminal_args: list[str] = []
     if sys.platform.startswith("linux"):
         terminal_args = ["gnome-terminal"]
     else:
@@ -8210,6 +8529,7 @@ def get_effective_free_memory() -> float:
 
         effective_free_memory = (mem_free_kb + buffers_kb + cached_kb) * 1024
     else:
+        effective_free_memory = 0.0  # to appease mypy
         raise NotImplementedError(f"The function {return_method_name()} is only implemented for Linux, not for {sys.platform}")
     return effective_free_memory
 
@@ -8291,6 +8611,7 @@ def open_filemanager_with_dirs(directories: list[str | os.PathLike[str]]) -> Non
     if sys.platform.startswith("linux"):
         filemanager_command = "nemo"
     else:
+        filemanager_command = ""  # to appease mypy
         logging.error(f"The function {return_method_name()} is only implemented for Linux systems, not for {sys.platform}")
         return
     logging.info("Opening file manager with specified directories...")
@@ -8327,7 +8648,7 @@ def detect_country(force_wtfismyip: bool = False) -> str | None:
     import json
     thecountryname = None
     if not force_wtfismyip:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("force_wtfismyip=%s.", force_wtfismyip)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("force_wtfismyip=%s.", force_wtfismyip)
         try:
             if "IPINFO_API_TOKEN" in os.environ:
                 ipinfo_access_token = os.environ['IPINFO_API_TOKEN']
@@ -8340,19 +8661,19 @@ def detect_country(force_wtfismyip: bool = False) -> str | None:
             # handler = ipinfo.getHandler(ipinfo_access_token,
             #                             request_options={"timeout": ipinfo_timeout_seconds})
             # details = handler.getDetails()
-            # logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("IPinfo DETAILS:\n%s", details)
+            # if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("IPinfo DETAILS:\n%s", details)
             # thecountryname = details.country
             the_command = ["curl", f"https://api.ipinfo.io/lite/8.8.8.8?token={ipinfo_access_token}"]
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Running command: %s", " ".join(the_command))
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Running command: %s", " ".join(the_command))
             result = subprocess.run(the_command, capture_output=True,
                                     text=True, timeout=5)
             if result.returncode != 0:
                 logging.error("curl command failed with return code %d", result.returncode)
                 raise Exception("Curl command failed")
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("curl output: %s", result.stdout)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("curl output: %s", result.stdout)
             dct = json.loads(result.stdout)
             thecountryname = dct.get("country", "")
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Detected country from curl: %s", thecountryname)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Detected country from curl: %s", thecountryname)
         except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception) as e:
             logging.warning("IPinfo exception: %s\nFalling back to wtfismyip.com.", e)
 
@@ -8362,7 +8683,7 @@ def detect_country(force_wtfismyip: bool = False) -> str | None:
             resp.raise_for_status()
             dct = resp.json()
             thecountryname = dct.get("YourFuckingCountry", "")
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Detailed results: %s", dct)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Detailed results: %s", dct)
         except requests.exceptions.RequestException as e:
             logging.error("Country detection failed (network error): %s", e)
             return None
@@ -8412,10 +8733,10 @@ def set_system_volume(percent: int, tolerance: int = 1,
             raise ValueError("change_mute must be 'mute', 'unmute', or None")
     # First, try using pulsectl to set the volume.
     if not force_pactl:
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("force_pactl=%s.", force_pactl)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("force_pactl=%s.", force_pactl)
         try:
             from pulsectl import Pulse, PulseError
-            logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pulsectl] Attempting to set the volume to %d%% using pulsectl...", percent)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("[pulsectl] Attempting to set the volume to %d%% using pulsectl...", percent)
             with Pulse("volume-setter") as pulse:
                 default_name = pulse.server_info().default_sink_name
                 sink = pulse.get_sink_by_name(default_name)
@@ -8453,27 +8774,27 @@ def set_system_volume(percent: int, tolerance: int = 1,
             logging.error("[pulsectl] Unexpected error: %s; falling back to pactl...", e)
 
     # Fallback to pactl if pulsectl is not available or fails
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pactl] Attempting to set the volume to %d%% using pactl...", percent)
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("[pactl] Attempting to set the volume to %d%% using pactl...", percent)
     the_command = ["pactl", "suspend-sink", "@DEFAULT_SINK@", "0"]
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pactl] Running command: %s", " ".join(the_command))
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("[pactl] Running command: %s", " ".join(the_command))
     result = subprocess.run(the_command, check=True, capture_output=True, text=True)
     if result.stderr:
         raise RuntimeError(f"[pactl] Error waking up sink from suspension: {result.stderr.strip()}")
     the_command = ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{percent}%"]
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pactl] Running command: %s", " ".join(the_command))
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("[pactl] Running command: %s", " ".join(the_command))
     result = subprocess.run(the_command, check=True, capture_output=True, text=True)
     if result.stderr:
         raise RuntimeError(f"[pactl] Error setting volume: {result.stderr.strip()}")
     # Set mute if requested
     if mute_arg is not None:
         cmd = ["pactl", "set-sink-mute", "@DEFAULT_SINK@", str(mute_arg)]
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pactl] %s", " ".join(cmd))
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("[pactl] %s", " ".join(cmd))
         mute_result = subprocess.run(cmd, check=True, capture_output=True, text=True)
         if mute_result.stderr:
             raise RuntimeError(f"[pactl] Error setting mute: {mute_result.stderr.strip()}")
         # Verify mute state
         mute_check_cmd = ["pactl", "get-sink-mute", "@DEFAULT_SINK@"]
-        logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pactl] Running command: %s", " ".join(mute_check_cmd))
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("[pactl] Running command: %s", " ".join(mute_check_cmd))
         mute_result = subprocess.run(mute_check_cmd, check=True, capture_output=True, text=True)
         if mute_result.stderr:
             raise RuntimeError(f"[pactl] Error getting mute state: {mute_result.stderr.strip()}")
@@ -8485,7 +8806,7 @@ def set_system_volume(percent: int, tolerance: int = 1,
         logging.info("[pactl] Audio %s", 'muted' if mute_arg else 'unmuted')
     # Verify volume setting with pactl
     the_command = ["pactl", "get-sink-volume", "@DEFAULT_SINK@"]
-    logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("[pactl] Running command: %s", " ".join(the_command))
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("[pactl] Running command: %s", " ".join(the_command))
     result = subprocess.run(the_command, check=True, capture_output=True, text=True)
     if result.stderr:
         raise RuntimeError(f"[pactl] Error getting volume: {result.stderr.strip()}")
@@ -8516,19 +8837,21 @@ def open_dir_in_VLC(the_dir: str | os.PathLike[str], sort_choice: str = "sort_by
     if the_dir is None:
         raise ValueError("The directory path cannot be None.")
     the_dir = ensure_dir(the_dir)
-    # start_flag = "--start-paused" if no_start else False # The "--start-paused" flag forces you to press play in VLC EACH TIME YOU GO TO A NEW PLAYLIST ENTRY!
-    start_flag = "--no-playlist-autostart" if no_start else False
+    # start_flag: str | None = "--start-paused" if no_start else None  # Note: the "--start-paused" flag forces you to press play in VLC EACH TIME YOU GO TO A NEW PLAYLIST ENTRY!
+    start_flag: str | None = "--no-playlist-autostart" if no_start else None
     # List to store files with their modification times
     files_with_times: list[tuple[float, Path]] = []
     dirs_with_times:  list[tuple[float, Path]] = []  # Only used if not recursive
     entries:                    Iterable[Path] = the_dir.rglob("*") if recursive else the_dir.iterdir()
     for p in entries:
-        if safe_is_file(p):
+        if p and safe_is_file(p):
             if p.suffix.casefold() in PLAYLIST_EXTENSIONS_SET:
                 continue  # Exclude playlist files
-            files_with_times.append((safe_mtime(p), p))
-        elif not recursive and safe_is_dir(p):
-            dirs_with_times.append((safe_mtime(p), p))
+            if (file_mtime := safe_mtime(p)) is not None:
+                files_with_times.append((file_mtime, p))
+        elif not recursive and p and safe_is_dir(p):
+            if (dir_mtime := safe_mtime(p)) is not None:
+                dirs_with_times.append((dir_mtime, p))
     if sort_choice == "sort_by_name":
         # Sort files by name, case-insensitively
         files_with_times.sort(   key=lambda x: x[1].name.casefold())
@@ -8563,10 +8886,10 @@ def open_in_vlc(path: str | os.PathLike[str], no_start: bool = False) -> None:
         path:     The file or directory path to open in VLC.
         no_start: If True, VLC will open the file or playlist but not start playback automatically
                     (default: False).
-    
+
     Returns:
         None: The function performs the action of opening VLC and does not return any value.
-    
+
     Raises:
         FileNotFoundError: If the specified path does not exist.
     """
@@ -8635,6 +8958,9 @@ def remove_prefix_from_html_title(filepath: str | os.PathLike[str], prefix: str)
         logging.warning("File '%s' is not an HTML or HTM file.", os.fspath(filepath))
         return False
     html = my_fopen(filepath)
+    if not html:
+        logging.warning("File '%s' is empty or could not be read.", os.fspath(filepath))
+        return False
     title_start = html.find("<title>") + len("<title>")
     title_end   = html.find("</title>", title_start)
     if title_start == -1 or title_end == -1:
@@ -8787,14 +9113,14 @@ TEXT_ENCODINGS_SET: Final[frozenset[str]] = frozenset(TEXT_ENCODINGS)  # sets ar
 #             names.add(codecs.lookup(m.name).name)
 #         except LookupError as e:
 #             # Skip helpers like 'aliases' or any non-codec modules
-#             logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Skipping module %s: %s", m.name, e)
+#             if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Skipping module %s: %s", m.name, e)
 #     # 2) Try all alias keys and targets
 #     for n in set(alias_map) | set(alias_map.values()):
 #         try:
 #             names.add(codecs.lookup(n).name)
 #         except LookupError as e:
 #             # Skip platform-specific codecs not present here (e.g., 'mbcs' on Linux/macOS)
-#             logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Skipping alias %s: %s", n, e)
+#             if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Skipping alias %s: %s", n, e)
 #     return sorted(names)
 # # Example usage
 # encs = all_encodings()
@@ -8808,7 +9134,7 @@ TEXT_ENCODINGS_SET: Final[frozenset[str]] = frozenset(TEXT_ENCODINGS)  # sets ar
 #         try:
 #             codecs.lookup(n)
 #         except LookupError as e:
-#             logging.getLogger().isEnabledFor(logging.DEBUG) and logging.debug("Invalid encoding '%s': %s", n, e)
+#             if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Invalid encoding '%s': %s", n, e)
 #             bad.append(n)
 #     return bad
 # bad = invalid_encodings(TEXT_ENCODINGS)
@@ -8945,7 +9271,7 @@ BOOK_EXTENSIONS: Final[tuple[str, ...]] = (
     ".tex",      # LaTeX source
     ".rst",      # reStructuredText
     ".md",       # Markdown
-    ".markdown", # Markdown (long extension)
+    ".markdown",  # Markdown (long extension)
 
     # Desktop publishing / layout sources
     ".indd",     # Adobe InDesign document
