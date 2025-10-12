@@ -50,7 +50,7 @@ class Options(ud.Options):
         self.bad_imports:              set[str] = set()
         self.all_imports:              set[str] = set()
         self.total_imports:                 int = 0
-        self.custom_modules:     dict[str, str] = {}
+        self.custom_modules:    dict[str, Path] = {}  # Maps custom module names to their file Paths
         self.subfolders:              list[str] = []
         self.samedir_files:          list[Path] = []
         self.pip_list:                list[str] = []
@@ -4293,10 +4293,8 @@ class SysPathVisitor(ast.NodeVisitor):
            node.func.value.value.id == "sys" and \
            node.func.value.attr == "path" and \
            node.func.attr in {"append", "insert"}:
-            if node.args:
-                path = safe_eval(ast.unparse(node.args[-1]))
-                if path:
-                    self.paths.add(path)
+            if node.args and (path := safe_eval(ast.unparse(node.args[-1]))):
+                self.paths.add(path)
         self.generic_visit(node)
 
 
@@ -4383,14 +4381,14 @@ class ImportFunctionCollector(ast.NodeVisitor):
     """Visitor class to collect function and import information from a module."""
 
     def __init__(self, options: Options, module_name: str,
-                 file_path: str) -> None:
+                 file_path: str | os.PathLike[str]) -> None:
         """Initialize the import function collector."""
         self.module_info:                      ModuleInfo = ModuleInfo(module_name)
         self.current_function:                 str | None = None
         self.current_class:                    str | None = None
         self.aliases:                      dict[str, str] = {}
         self.options:                             Options = options
-        self.file_path:                               str = file_path
+        self.file_path:                              Path = ud.ensure_path(file_path)
         self.base_classes:           dict[str, list[str]] = {}
         self.attr_types: defaultdict[str, dict[str, str]] = defaultdict(dict)  # {class_name: {attr_name: "QualifiedTypeName"}}
         self._param_types:                 dict[str, str] = {}  # param name -> "QualifiedTypeName"
@@ -4742,9 +4740,10 @@ class ImportFunctionCollector(ast.NodeVisitor):
         """
         try:
             # Resolve relative to the file we're analyzing
-            base_dir = Path(self.file_path).parent
+            base_dir = self.file_path.parent
             p = (base_dir / path_str).expanduser().resolve() if not os.path.isabs(path_str) else Path(path_str).expanduser().resolve()
-        except Exception:
+        except Exception as e:
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Failed to resolve path %s given base_dir %s: %s", path_str, os.fspath(base_dir), e)
             return
         # Only accept .py files or a directory with __init__.py
         if p.suffix == ".py" and ud.safe_exists(p):
@@ -4865,7 +4864,7 @@ def build_call_graph(modules_info: dict[str, ModuleInfo]) -> dict[str, set[str]]
 def collect_used_imports(start_module: str, start_func: str,
                          call_graph:   dict[str, set[str]],
                          modules_info: dict[str, ModuleInfo],
-                         visited: set[str] = None) -> set[str]:
+                         visited: set[str] | None = None) -> set[str]:
     """Collect all imports used in a function and its callees."""
     if visited is None:
         visited = set()
@@ -4904,23 +4903,27 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
         None - modifies options to include all imports and I/O operations found in the script.
 
     Raises:
-        None, but logs errors if the provided path is not a valid Python script or if parsing fails.
+        FileNotFoundError: If the first_path does not exist.
+        IsADirectoryError: If the first_path exists but is a directory.
+        ValueError:        If the first_path exists but is not a regular file.
     """
+    from collections import deque  # Allows for efficient first in, first out processing of modules
     first_path = ud.ensure_file(first_path)
     if not ud.is_python_script(first_path) or not ud.compile_code(first_path):
         logging.error(f"Skipping invalid Python script: {first_path}")
         return
-    options.read_files                        = []
-    options.write_files                       = []
-    options.download_urls                     = []
-    options.upload_urls                       = []
-    processed_modules:  set[Path]             = set()
-    modules_info:       dict[str, ModuleInfo] = {}
-    modules_to_process: list[Path]            = [first_path]
-    module_contents:    dict[str, str]        = {}
-    module_trees:       dict[str, ast.AST]    = {}
+    options.read_files                  = []
+    options.write_files                 = []
+    options.download_urls               = []
+    options.upload_urls                 = []
+    processed_paths:          set[Path] = set()
+    processed_names:           set[str] = set()
+    modules_info: dict[str, ModuleInfo] = {}
+    modules_to_process:     deque[Path] = deque([first_path])
+    module_contents:     dict[str, str] = {}
+    module_trees:    dict[str, ast.AST] = {}
     while modules_to_process:
-        module_path = modules_to_process.pop()
+        module_path = modules_to_process.popleft()  # first in, first out
         if not options.rawlog: logging.info("Processing module: %s where %s", module_path, type(module_path))
         if ud.safe_is_dir(module_path):
             pkg_dir = module_path
@@ -4929,28 +4932,33 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
                 # 1) Parse the package __init__.py
                 module_path = init_py
                 # 2) Also enqueue all other .py modules in that same folder
-                for fname in pkg_dir.iterdir():
-                    if ud.is_python_script(fname) and fname != "__init__.py":
-                        path = pkg_dir / fname
-                        if path not in modules_to_process and path not in processed_modules:
-                            modules_to_process.append(path)
+                for p in pkg_dir.iterdir():
+                    if ud.is_python_script(p) and p.name != "__init__.py":
+                        if p not in modules_to_process and p not in processed_paths:
+                            modules_to_process.append(p)
             else:
                 logging.error(f"No __init__.py in package directory {pkg_dir}, skipping.")
                 continue
-        module_name = module_path.stem
-        if module_name in processed_modules:
+        elif not ud.safe_is_file(module_path):
+            logging.error(f"Skipping {module_path} because it is not a file or directory.")
             continue
-        processed_modules.add(module_name)
+        if module_path in processed_paths:
+            continue
+        processed_paths.add(module_path)
+        module_name = module_path.stem
+        if module_name in processed_names:
+            continue
+        processed_names.add(module_name)
         file_content = ud.my_fopen(module_path, rawlog=options.rawlog)
         if not file_content:
             logging.error(f"Could not read file: {module_path}")
             continue
-        tree = ast.parse(file_content, module_path)
+        tree = ast.parse(file_content, os.fspath(module_path))
         if not tree:
             logging.error(f"Failed to parse the file: {module_path}")
             continue
         module_contents[module_name] = file_content
-        module_trees[module_name]    = tree
+        module_trees[   module_name] = tree
         collector                    = ImportFunctionCollector(options, module_name, module_path)
         collector.visit(tree)
         module_info                  = collector.module_info
@@ -4962,9 +4970,9 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
                 continue  # Skip standard modules
             resolved = process_import(options, import_name, module_path)
             if resolved:
-                module_file_path = options.custom_modules.get(import_name)
-                if module_file_path and module_file_path not in processed_modules:
-                    modules_to_process.append(module_file_path)
+                possible_module_file_path = options.custom_modules.get(import_name)
+                if possible_module_file_path is not None and (actual_module_file_path := ud.ensure_path(possible_module_file_path)) and ud.safe_is_file(actual_module_file_path) and actual_module_file_path not in processed_paths and actual_module_file_path not in modules_to_process:
+                    modules_to_process.append(actual_module_file_path)
             else:
                 options.all_imports.add(import_name)
     if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Modules processed so far:")
@@ -5014,11 +5022,14 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
             processed_used_imports.add(import_name)
             process_import(options, import_name, first_path)
             if import_name in options.custom_modules:
-                # It's a local module we previously discovered—enqueue it for parsing
-                module_file_path = options.custom_modules[import_name]
-                if import_name not in processed_modules:
+                if import_name not in processed_names:
+                    # It's a known local module that we haven't processed yet
+                    module_file_path = ud.ensure_path(options.custom_modules[import_name])
+                    if not ud.safe_is_file(module_file_path):
+                        logging.error(f"Custom module path for {import_name} is not a file: {module_file_path}")
+                        continue
                     modules_to_process.append(module_file_path)
-                    processed_modules.add(import_name)
+                    processed_names.add(import_name)
                     new_modules_found = True
                     # Process the new module
                     file_content = ud.my_fopen(module_file_path, rawlog=options.rawlog)
@@ -5043,9 +5054,9 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
                             continue
                         resolved = process_import(options, new_import, module_file_path)
                         if resolved:
-                            module_file_path = options.custom_modules.get(new_import)
-                            if module_file_path and new_import not in processed_modules:
-                                modules_to_process.append(module_file_path)
+                            possible_module_file_path = options.custom_modules.get(new_import)
+                            if possible_module_file_path is not None and (actual_module_file_path := ud.ensure_path(possible_module_file_path)) and ud.safe_is_file(actual_module_file_path) and actual_module_file_path not in processed_paths and actual_module_file_path not in modules_to_process:
+                                modules_to_process.append(actual_module_file_path)
                     call_graph = build_call_graph(modules_info)
             else:
                 # If not a local module, add to options.all_imports
@@ -5081,13 +5092,13 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
         if discovered_operations:
             logging.info("Found %s operations:", " and ".join(discovered_operations))
             if options.read_files:
-                logging.info("Files read:\n" + "\n".join(os.fspath(f) for f in options.read_files))
+                logging.info("Files read:\n"    + "\n".join(os.fspath(f) for f in options.read_files))
             if options.write_files:
                 logging.info("Files written:\n" + "\n".join(os.fspath(f) for f in options.write_files))
             if options.download_urls:
                 logging.info("Download URLs:\n" + "\n".join(os.fspath(u) for u in options.download_urls))
             if options.upload_urls:
-                logging.info("Upload URLs:\n" + "\n".join(os.fspath(u) for u in options.upload_urls))
+                logging.info("Upload URLs:\n"   + "\n".join(os.fspath(u) for u in options.upload_urls))
         else:
             logging.info("Found no file or network operations in the python script (%s) or custom modules (%s).",
                          options.python_script, ", ".join(options.loaded_custom_modules))
@@ -5208,7 +5219,7 @@ def split_imports(options: Options) -> None:
             package_name = options.module_aliases.get(imp, imp)
             if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Checking if import %s is installed or uninstalled", imp)
             if imp in options.custom_modules.keys():
-                if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Custom module %s has path %s", imp, options.custom_modules[imp])
+                if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Custom module %s has path %s", imp, os.fspath(options.custom_modules[imp]))
                 status_str = f"{ud.ANSI_CYAN}YES - custom module{ud.ANSI_RESET}"
             elif check_packages_in_venv(options, package=package_name,
                                         venv_dir=venv_dir):
