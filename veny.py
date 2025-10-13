@@ -4811,27 +4811,35 @@ class ImportFunctionCollector(ast.NodeVisitor):
         return (mod, loc)
 
 
+_SEP: str = "::"  # Path-safe separator to distinguish class methods
+
+
 def split_function_name(called_func: str, default_module: str) -> tuple[str, str]:
-    """Split a fully qualified function name into module and function parts. If there's no dot, the default_module is used as the module."""
+    """
+    Split a fully qualified function id into (module_key, func_part).
+
+    Preferred separator is _SEP (path-safe). Fall back to the first dot
+    for legacy strings that still look like 'module.func'.
+    """
+    if _SEP in called_func:
+        m, f = called_func.split(_SEP, 1)
+        return m, f
+    # legacy fallback
     parts = called_func.split(".")
     if len(parts) > 1:
-        called_module = parts[0]
-        called_name = ".".join(parts[1:])
-    else:
-        called_module = default_module
-        called_name = called_func
-    return called_module, called_name
+        return parts[0], ".".join(parts[1:])
+    return default_module, called_func
 
 
 def build_call_graph(modules_info: dict[str, ModuleInfo]) -> dict[str, set[str]]:
     """Build a call graph from the function calls in the modules."""
     call_graph = {}
-    for module_name, module_info in modules_info.items():
+    for module_key, module_info in modules_info.items():
         for func_name, func_info in module_info.functions.items():
-            full_func_name = f"{module_name}.{func_name}"
+            full_func_name = f"{module_key}{_SEP}{func_name}"
             call_graph[full_func_name] = set()
             for called_func in func_info.function_calls:
-                called_module, called_name = split_function_name(called_func, module_name)
+                called_module, called_name = split_function_name(called_func, module_key)
                 # If target looks like Class.method and isn't present, try the base class.
                 if called_module in modules_info:
                     mi = modules_info[called_module]
@@ -4843,17 +4851,22 @@ def build_call_graph(modules_info: dict[str, ModuleInfo]) -> dict[str, set[str]]
                                 base = bases[0]  # you currently assume single inheritance
                                 # If base is defined in the same module, qualify it; else keep as-is (e.g., "ud.LLMs")
                                 if base in mi.classes:
-                                    called_full_name = f"{called_module}.{base}.{meth}"
+                                    called_full_name = f"{called_module}{_SEP}{base}.{meth}"
                                 else:
-                                    called_full_name = f"{base}.{meth}"
+                                    # base may be qualified like "ud.LLMs"
+                                    if "." in base:
+                                        base_mod, base_sym = base.split(".", 1)   # "ud", "LLMs"
+                                        called_full_name = f"{base_mod}{_SEP}{base_sym}.{meth}"  # "ud::LLMs.meth"
+                                    else:
+                                        called_full_name = f"{base}{_SEP}{meth}"
                                 call_graph[full_func_name].add(called_full_name)
                                 continue
                 # Check if called_name is a class in the module
                 if called_module in modules_info and called_name in modules_info[called_module].classes:
                     # Class instantiation, call __init__
-                    called_full_name = f"{called_module}.{called_name}.__init__"
+                    called_full_name = f"{called_module}{_SEP}{called_name}.__init__"
                 else:
-                    called_full_name = f"{called_module}.{called_name}"
+                    called_full_name = f"{called_module}{_SEP}{called_name}"
                 call_graph[full_func_name].add(called_full_name)
     if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Call graph constructed:")
     for func, calls in call_graph.items():
@@ -4868,7 +4881,7 @@ def collect_used_imports(start_module: str, start_func: str,
     """Collect all imports used in a function and its callees."""
     if visited is None:
         visited = set()
-    full_func_name: str = f"{start_module}.{start_func}"
+    full_func_name: str = f"{start_module}{_SEP}{start_func}"
     if full_func_name in visited:
         if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Already visited %s, skipping.", full_func_name)
         return set()
@@ -4917,7 +4930,6 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
     options.download_urls               = []
     options.upload_urls                 = []
     processed_paths:          set[Path] = set()
-    processed_names:           set[str] = set()
     modules_info: dict[str, ModuleInfo] = {}
     modules_to_process:     deque[Path] = deque([first_path])
     module_contents:     dict[str, str] = {}
@@ -4945,25 +4957,22 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
         if module_path in processed_paths:
             continue
         processed_paths.add(module_path)
-        module_name = module_path.stem
-        if module_name in processed_names:
-            continue
-        processed_names.add(module_name)
+        module_key   = os.fspath(module_path.resolve())
         file_content = ud.my_fopen(module_path, rawlog=options.rawlog)
         if not file_content:
             logging.error(f"Could not read file: {module_path}")
             continue
-        tree = ast.parse(file_content, os.fspath(module_path))
+        tree = ast.parse(file_content, module_key)
         if not tree:
             logging.error(f"Failed to parse the file: {module_path}")
             continue
-        module_contents[module_name] = file_content
-        module_trees[   module_name] = tree
-        collector                    = ImportFunctionCollector(options, module_name, module_path)
+        module_contents[module_key] = file_content
+        module_trees[   module_key] = tree
+        collector                   = ImportFunctionCollector(options, module_key, module_path)
         collector.visit(tree)
-        module_info                  = collector.module_info
-        module_info.base_classes     = collector.base_classes
-        modules_info[module_name]    = module_info
+        module_info                 = collector.module_info
+        module_info.base_classes    = collector.base_classes
+        modules_info[module_key]    = module_info
         # Process only top-level imports to find local modules
         for import_name in module_info.top_level_imports:
             if import_name in options.standard_modules:
@@ -4984,12 +4993,12 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
     used_imports:  set[str] = set()
     visited_funcs: set[str] = set()
 
-    def collect_imports_from_module(module_name: str) -> None:
+    def collect_imports_from_module(module_key: str) -> None:
         """Recursively collect used imports from a module."""
-        module_info = modules_info[module_name]
+        module_info = modules_info[module_key]
         used_imports.update(module_info.top_level_imports)
         for func_name in module_info.top_level_calls:
-            called_module, called_name = split_function_name(func_name, module_name)
+            called_module, called_name = split_function_name(func_name, module_key)
             if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Collecting used imports for module '%s' and func_name '%s'", called_module, called_name)
             used_imports.update(
                 collect_used_imports(
@@ -5001,12 +5010,14 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
                 )
             )
             if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Used imports collected from '%s' in '%s': %s", called_name, called_module, used_imports)
-        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Used imports after collecting from module %s: %s", module_name, used_imports)
-    collect_imports_from_module(first_path.stem)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Used imports after collecting from module %s: %s", module_key, used_imports)
+
     # Scan the *initial* script (first_path) everywhere:
-    first_module = first_path.stem
-    init_src  = module_contents[first_module]
-    init_tree = module_trees[   first_module]
+    first_module_key = os.fspath(first_path.resolve())
+    collect_imports_from_module(first_module_key)
+    init_src  = module_contents[first_module_key]
+    init_tree = module_trees[   first_module_key]
+
     FileOperationsVisitor(options,    init_src).visit(init_tree)
     NetworkOperationsVisitor(options, init_src).visit(init_tree)
 
@@ -5022,58 +5033,59 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
             processed_used_imports.add(import_name)
             process_import(options, import_name, first_path)
             if import_name in options.custom_modules:
-                if import_name not in processed_names:
-                    # It's a known local module that we haven't processed yet
-                    module_file_path = ud.ensure_path(options.custom_modules[import_name])
-                    if not ud.safe_is_file(module_file_path):
-                        logging.error(f"Custom module path for {import_name} is not a file: {module_file_path}")
+                # It's a known local module that we haven't processed yet
+                module_file_path = ud.ensure_path(options.custom_modules[import_name])
+                if not ud.safe_is_file(module_file_path):
+                    logging.error(f"Custom module path for {import_name} is not a file: {module_file_path}")
+                    continue
+                new_module_key = os.fspath(module_file_path.resolve())
+                if new_module_key in modules_info or module_file_path in processed_paths:
+                    continue  # already parsed or seen
+                modules_to_process.append(module_file_path)
+                new_modules_found = True
+                # Process the new module
+                file_content = ud.my_fopen(module_file_path, rawlog=options.rawlog)
+                if not file_content:
+                    logging.error(f"Could not read file: {module_file_path}")
+                    continue
+                tree = ast.parse(file_content, new_module_key)
+                if not tree:
+                    logging.error(f"Failed to parse the file: {module_file_path}")
+                    continue
+                module_contents[import_name] = file_content
+                module_trees[   import_name] = tree
+                collector = ImportFunctionCollector(options, import_name, module_file_path)
+                collector.visit(tree)
+                module_info               = collector.module_info
+                module_info.base_classes  = collector.base_classes
+                modules_info[import_name] = module_info
+                used_imports.update(module_info.top_level_imports)
+                # Process top-level imports to find more local modules
+                for new_import in module_info.top_level_imports:
+                    if new_import in options.standard_modules:
                         continue
-                    modules_to_process.append(module_file_path)
-                    processed_names.add(import_name)
-                    new_modules_found = True
-                    # Process the new module
-                    file_content = ud.my_fopen(module_file_path, rawlog=options.rawlog)
-                    if not file_content:
-                        logging.error(f"Could not read file: {module_file_path}")
-                        continue
-                    tree = ast.parse(file_content, module_file_path)
-                    if not tree:
-                        logging.error(f"Failed to parse the file: {module_file_path}")
-                        continue
-                    module_contents[import_name] = file_content
-                    module_trees[   import_name] = tree
-                    collector = ImportFunctionCollector(options, import_name, module_file_path)
-                    collector.visit(tree)
-                    module_info               = collector.module_info
-                    module_info.base_classes  = collector.base_classes
-                    modules_info[import_name] = module_info
-                    used_imports.update(module_info.top_level_imports)
-                    # Process top-level imports to find more local modules
-                    for new_import in module_info.top_level_imports:
-                        if new_import in options.standard_modules:
-                            continue
-                        resolved = process_import(options, new_import, module_file_path)
-                        if resolved:
-                            possible_module_file_path = options.custom_modules.get(new_import)
-                            if possible_module_file_path is not None and (actual_module_file_path := ud.ensure_path(possible_module_file_path)) and ud.safe_is_file(actual_module_file_path) and actual_module_file_path not in processed_paths and actual_module_file_path not in modules_to_process:
-                                modules_to_process.append(actual_module_file_path)
-                    call_graph = build_call_graph(modules_info)
+                    resolved = process_import(options, new_import, module_file_path)
+                    if resolved:
+                        possible_module_file_path = options.custom_modules.get(new_import)
+                        if possible_module_file_path is not None and (actual_module_file_path := ud.ensure_path(possible_module_file_path)) and ud.safe_is_file(actual_module_file_path) and actual_module_file_path not in processed_paths and actual_module_file_path not in modules_to_process:
+                            modules_to_process.append(actual_module_file_path)
+                call_graph = build_call_graph(modules_info)
             else:
                 # If not a local module, add to options.all_imports
                 options.all_imports.add(import_name)
     # For every *other* local module, do:
     #   (1) top-level only, plus
     #   (2) only in the function bodies that actually got visited
-    for module_name, src in module_contents.items():
-        if module_name == first_module:
+    for module_key, src in module_contents.items():
+        if module_key == first_module_key:
             continue
         # Record any I/O at module scope
-        TopLevelFileOperationsVisitor(options,    src).visit(module_trees[module_name])
-        TopLevelNetworkOperationsVisitor(options, src).visit(module_trees[module_name])
+        TopLevelFileOperationsVisitor(options,    src).visit(module_trees[module_key])
+        TopLevelNetworkOperationsVisitor(options, src).visit(module_trees[module_key])
         # Record any I/O in each reachable function or class method
         for full in visited_funcs:
-            mod, func = full.split(".", 1)
-            if mod != module_name:
+            mod, func = split_function_name(full, default_module="")
+            if mod != module_key:
                 continue
             func_info = modules_info[mod].functions.get(func)
             if not func_info:
@@ -5872,8 +5884,8 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
         # Extract the part of the folder name after the date/time:
         pretty_list = folder.name.split("-")[4:]
         # Create a known_packages set from the pretty_list:
-        known_packages = set()
-        number_unknown_packages = 0
+        known_packages:     set[str] = set()
+        number_unknown_packages: int = 0
         for item in pretty_list:
             if item == "and":
                 # Extract the number of unknown packages from the last part of the pretty_list:
@@ -5886,7 +5898,7 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
     # Loop through possibly valid venv folders and compare requirements in detail.
     final_venv_folders: dict[Path, dict[str, int]] = {}
     for folder in venv_folders:
-        this_requirements_file = options.my_dir / folder / "requirements.txt"
+        this_requirements_file: Path = options.my_dir / folder / "requirements.txt"
         with open(this_requirements_file, "r") as file:
             requirements = set(file.read().splitlines())
         if options.uninstalled_imports.issubset(requirements):
