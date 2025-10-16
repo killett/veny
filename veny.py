@@ -57,6 +57,7 @@ class Options(ud.Options):
         self.loaded_custom_modules:    set[str] = set()
         self.pretty_list:                   str = ""  # A pretty-printed string listing "all" imports
         self.timestamp:                     str = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        self.sys_path_hints:          set[Path] = set()  # Filled by SysPathVisitor
         self.python_script:         Path | None = None
         self.script_name:                   str = ""  # python_script without the .py extension
         self.script_dir:            Path | None = None
@@ -4131,7 +4132,7 @@ def transform_call(node: ast.Call, pathlib_aliases: set[str]) -> str | None:
         if isinstance(func.value, ast.Call):
             inner = func.value
             if is_pathlib_ctor(inner.func, pathlib_aliases, allow_pure=False) and len(inner.args) == 1:
-                arg = _safe_eval_node(inner.args[0])
+                arg = _safe_eval_node(inner.args[0], pathlib_aliases=pathlib_aliases)
                 if isinstance(arg, str):
                     # Recompute using canonical 'Path' and same method name
                     return str(getattr(Path(arg), func.attr)())
@@ -4142,15 +4143,15 @@ def transform_call(node: ast.Call, pathlib_aliases: set[str]) -> str | None:
         if isinstance(func.value, ast.Call):
             inner = func.value
             if is_pathlib_ctor(inner.func, pathlib_aliases, allow_pure=True) and len(inner.args) == 1:
-                base = _safe_eval_node(inner.args[0])
-                parts = [_safe_eval_node(a) for a in node.args]
+                base  =  _safe_eval_node(inner.args[0], pathlib_aliases=pathlib_aliases)
+                parts = [_safe_eval_node(a,             pathlib_aliases=pathlib_aliases) for a in node.args]
                 if isinstance(base, str) and all(isinstance(p, str) for p in parts):
                     return os.fspath(Path(base).joinpath(*parts))
 
     return None
 
 
-def _safe_eval_node(node: ast.AST) -> Any:
+def _safe_eval_node(node: ast.AST, pathlib_aliases: set[str] | None = None) -> Any:
     """
     Recursively evaluate a restricted subset of AST nodes:
     - Constants (strings, numbers, booleans, None)
@@ -4159,11 +4160,22 @@ def _safe_eval_node(node: ast.AST) -> Any:
     - os.path.(abspath|join|dirname|realpath)(<literal strings>)
     - pathlib.Path(<literal strings>).(resolve|absolute)() and .joinpath(<literal strings>...)
     - The "/" operator for joining pathlib Paths.
+
+    Args:
+        node:            The AST node to evaluate.
+        pathlib_aliases: Optional set of local names that refer to pathlib classes.
+    
+    Returns:
+        The evaluated Python object.
+    
+    Raises:
+        ValueError: If the node contains unsupported syntax.
     """
+    aliases = pathlib_aliases or set()
     # --- support "/" operator for path-like objects ---
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-        left  = _safe_eval_node(node.left)
-        right = _safe_eval_node(node.right)
+        left  = _safe_eval_node(node.left, pathlib_aliases=aliases)
+        right = _safe_eval_node(node.right, pathlib_aliases=aliases)
         # accept strings or any PathLike (Path, etc.)
         if isinstance(left, (str, os.PathLike)) and isinstance(right, (str, os.PathLike)):
             # Path(left) / right → Path; str(...) to get the string path
@@ -4177,12 +4189,12 @@ def _safe_eval_node(node: ast.AST) -> Any:
 
     # --- composite literals ---
     if isinstance(node, ast.List):
-        return [_safe_eval_node(elt) for elt in node.elts]
+        return [_safe_eval_node(elt, pathlib_aliases=aliases) for elt in node.elts]
     if isinstance(node, ast.Tuple):
-        return tuple(_safe_eval_node(elt) for elt in node.elts)
+        return tuple(_safe_eval_node(elt, pathlib_aliases=aliases) for elt in node.elts)
     if isinstance(node, ast.Dict):
         return {
-            _safe_eval_node(k): _safe_eval_node(v)
+            _safe_eval_node(k, pathlib_aliases=aliases): _safe_eval_node(v, pathlib_aliases=aliases)
             for k, v in zip(node.keys, node.values)
         }
 
@@ -4211,19 +4223,18 @@ def _safe_eval_node(node: ast.AST) -> Any:
             method = func.attr
             allowed = {"abspath", "join", "dirname", "realpath"}
             if method in allowed:
-                arg_vals = [_safe_eval_node(arg) for arg in node.args]
+                arg_vals = [_safe_eval_node(arg, pathlib_aliases=aliases) for arg in node.args]
                 if all(isinstance(v, str) for v in arg_vals):
                     path_fn = getattr(os.path, method)
                     return path_fn(*arg_vals)
 
         # pathlib.Path(...).resolve()/absolute()
-        pathlib_aliases = collect_pathlib_aliases(node)
         if isinstance(node.func, ast.Attribute) and node.func.attr in {"resolve", "absolute"}:
             func = node.func
             if isinstance(func.value, ast.Call):
                 inner = func.value
-                if is_pathlib_ctor(inner.func, pathlib_aliases, allow_pure=False) and len(inner.args) == 1:
-                    arg = _safe_eval_node(inner.args[0])
+                if is_pathlib_ctor(inner.func, aliases, allow_pure=False) and len(inner.args) == 1:
+                    arg = _safe_eval_node(inner.args[0], pathlib_aliases=aliases)
                     if isinstance(arg, str):
                         # Recompute using canonical 'Path' and same method name
                         return os.fspath(getattr(Path(arg), func.attr)())
@@ -4233,9 +4244,9 @@ def _safe_eval_node(node: ast.AST) -> Any:
             func = node.func
             if isinstance(func.value, ast.Call):
                 inner = func.value
-                if is_pathlib_ctor(inner.func, pathlib_aliases, allow_pure=True) and len(inner.args) == 1:
-                    base = _safe_eval_node(inner.args[0])
-                    parts = [_safe_eval_node(a) for a in node.args]
+                if is_pathlib_ctor(inner.func, aliases, allow_pure=True) and len(inner.args) == 1:
+                    base  =  _safe_eval_node(inner.args[0], pathlib_aliases=aliases)
+                    parts = [_safe_eval_node(a,             pathlib_aliases=aliases) for a in node.args]
                     if isinstance(base, str) and all(isinstance(p, str) for p in parts):
                         return os.fspath(Path(base).joinpath(*parts))
 
@@ -4246,21 +4257,31 @@ def _safe_eval_node(node: ast.AST) -> Any:
     raise ValueError(f"Unsupported expression: {ast.dump(node)}")
 
 
-def safe_eval(expr: str) -> Any | None:
+def safe_eval(expr: str, pathlib_aliases: set[str] | None = None) -> Any | None:
     """
     Safely evaluate a Python expression string containing only:
-      - literals (str, int, float, bool, None)
-      - lists, tuples, dicts of the above
-      - os.getcwd()
-      - os.path.(abspath|join|dirname|realpath)(<literal strings>)
-      - pathlib.Path(<literal strings>).(resolve|absolute)() and
-        .joinpath(<literal strings>...) and the "/" operator for joining paths.
-    Returns the evaluated Python object, or None on unsupported syntax.
+        - literals (str, int, float, bool, None)
+        - lists, tuples, dicts of the above
+        - os.getcwd()
+        - os.path.(abspath|join|dirname|realpath)(<literal strings>)
+        - pathlib.Path(<literal strings>).(resolve|absolute)() and
+          .joinpath(<literal strings>...) and the "/" operator for joining paths.
+        - The "/" operator for joining pathlib Paths.
+
+    Args:
+        expr:            The expression string to evaluate.
+        pathlib_aliases: Optional set of local names that refer to pathlib classes.
+
+    Returns:
+        The evaluated Python object, or None on unsupported syntax.
+
+    Raises:
+        None: All errors are caught and None is returned.
     """
     try:
         # Parse in "eval" mode so we get an Expression node
         tree = ast.parse(expr, mode="eval")
-        return _safe_eval_node(tree.body)  # tree.body is the root expr
+        return _safe_eval_node(tree.body, pathlib_aliases=pathlib_aliases)  # tree.body is the root expr
     except (SyntaxError, ValueError) as e:
         if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("%s: Unsupported expression: %r: %s", ud.return_method_name(), expr, e)
         return None
@@ -4269,17 +4290,18 @@ def safe_eval(expr: str) -> Any | None:
 class SysPathVisitor(ast.NodeVisitor):
     """Visitor class to extract sys.path modifications."""
 
-    def __init__(self) -> None:
+    def __init__(self, pathlib_aliases: set[str] | None = None) -> None:
         """Initialize the sys.path visitor."""
         self.paths = set()
+        self._aliases = pathlib_aliases or set()
 
     def visit_Assign(self, node: ast.Assign) -> None:
         """Visit an assignment statement and check if it's modifying sys.path."""
-        if isinstance(node.targets[0], ast.Attribute) and \
-           isinstance(node.targets[0].value, ast.Name) and \
-           node.targets[0].value.id == "sys" and \
-           node.targets[0].attr == "path":
-            paths = safe_eval(ast.unparse(node.value))
+        if node.targets and isinstance(node.targets[0], ast.Attribute) and \
+        isinstance(node.targets[0].value, ast.Name) and \
+        node.targets[0].value.id == "sys" and \
+        node.targets[0].attr     == "path":
+            paths = safe_eval(ast.unparse(node.value), pathlib_aliases=self._aliases)
             if isinstance(paths, list):
                 for path in paths:
                     self.paths.add(path)
@@ -4287,13 +4309,13 @@ class SysPathVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         """Visit a function call and check if it's modifying sys.path."""
-        if isinstance(node.func, ast.Attribute) and \
-           isinstance(node.func.value, ast.Attribute) and \
-           isinstance(node.func.value.value, ast.Name) and \
+        if isinstance(node.func,             ast.Attribute) and \
+           isinstance(node.func.value,       ast.Attribute) and \
+           isinstance(node.func.value.value, ast.Name     ) and \
            node.func.value.value.id == "sys" and \
            node.func.value.attr == "path" and \
            node.func.attr in {"append", "insert"}:
-            if node.args and (path := safe_eval(ast.unparse(node.args[-1]))):
+            if node.args and (path := safe_eval(ast.unparse(node.args[-1]), pathlib_aliases=self._aliases)):
                 self.paths.add(path)
         self.generic_visit(node)
 
@@ -4347,6 +4369,24 @@ def process_import(options: Options, module_name: str, file_path: str | os.PathL
             options.loaded_custom_modules.add(module_name)
             if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Resolved via custom_modules: %s → %s", module_name, module_file)
         return True
+
+    # --- fall back to sys.path hints (folders added at runtime) ---
+    for root in getattr(options, "sys_path_hints", set()):
+        # Look for a single-file module
+        candidate = (root / f"{module_path_str}.py").expanduser().resolve()
+        if ud.safe_is_file(candidate):
+            options.custom_modules[module_name] = candidate
+            options.loaded_custom_modules.add(module_name)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Resolved via sys.path hint (file): %s → %s", module_name, candidate)
+            return True
+
+        # Look for a package dir with __init__.py
+        pkg = (root / module_path_str).expanduser().resolve()
+        if ud.safe_is_dir(pkg) and ud.safe_is_file(pkg / "__init__.py"):
+            options.custom_modules[module_name] = pkg
+            options.loaded_custom_modules.add(module_name)
+            if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Resolved via sys.path hint (package): %s → %s", module_name, pkg)
+            return True
 
     if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Could not resolve local import, treating as external: %s", module_name)
     return False
@@ -4463,6 +4503,10 @@ class ImportFunctionCollector(ast.NodeVisitor):
         self.generic_visit(node)
         self.current_class = prev_class
 
+    def _qual(self, tail: str) -> str:
+        """Prepend the current module name + '_SEP' to the input string."""
+        return f"{self.module_info.module_name}{_SEP}{tail}"
+
     def extract_module_name_from_import(self, node: ast.Call) -> str | None:
         """Extract the module name from a dynamic import using __import__."""
         if node.args:
@@ -4503,7 +4547,7 @@ class ImportFunctionCollector(ast.NodeVisitor):
             return
         # Case 2: class defined here passed as a constructor -> treat as __init__
         if "." not in ref and ref in self.module_info.classes:
-            self._record_call(f"{self.module_info.module_name}.{ref}.__init__")
+            self._record_call(self._qual(f"{ref}.__init__"))
             return
         # Case 3: qualified like other_module.func
         if "." in ref:
@@ -4526,7 +4570,7 @@ class ImportFunctionCollector(ast.NodeVisitor):
                 if t:
                     # Qualify local classes with the current module
                     if t in self.module_info.classes:
-                        func_name = f"{self.module_info.module_name}.{t}.{method_tail}"
+                        func_name = self._qual(f"{t}.{method_tail}")
                     else:
                         # t might already be qualified by an alias (e.g., "ud.LLMs")
                         func_name = f"{t}.{method_tail}"
@@ -4537,11 +4581,11 @@ class ImportFunctionCollector(ast.NodeVisitor):
                 if func_name in self.module_info.classes:
                     # func_name is exactly the class name, treat as constructor
                     if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("%s is identified as a class. Converting to __init__ call.", func_name)
-                    func_name = f"{self.module_info.module_name}.{func_name}.__init__"
+                    func_name = self._qual(f"{func_name}.__init__")
                 else:
                     # It's a method/attribute call on a class from this module
                     if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("%s is a method/attribute on a class from the same module. Qualifying with module name.", func_name)
-                    func_name = f"{self.module_info.module_name}.{func_name}"
+                    func_name = self._qual(func_name)
             else:
                 if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("%s is not a class, leaving as-is.", func_name)
             # If func_name corresponds to a class in this module, treat it as calling __init__
@@ -4970,6 +5014,17 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
         module_trees[   module_key] = tree
         collector                   = ImportFunctionCollector(options, module_key, module_path)
         collector.visit(tree)
+        # --- discover runtime sys.path hints from this module ---
+        aliases = collect_pathlib_aliases(tree)   # tree is the module AST
+        spv = SysPathVisitor(aliases)
+        spv.visit(tree)
+        base_dir = module_path.parent
+        for p in spv.paths:
+            if not p:
+                continue
+            P = (base_dir / p).expanduser().resolve() if not os.path.isabs(p) else Path(p).expanduser().resolve()
+            if ud.safe_is_dir(P):
+                options.sys_path_hints.add(P)
         module_info                 = collector.module_info
         module_info.base_classes    = collector.base_classes
         modules_info[module_key]    = module_info
@@ -4985,8 +5040,8 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
             else:
                 options.all_imports.add(import_name)
     if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Modules processed so far:")
-    for m_name, m_info in modules_info.items():
-        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Module: %s, Classes: %s, Functions: %s", m_name, m_info.classes, list(m_info.functions.keys()))
+    for module_key, m_info in modules_info.items():
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Module: %s, Classes: %s, Functions: %s", module_key, m_info.classes, list(m_info.functions.keys()))
     # Now build the call graph
     call_graph = build_call_graph(modules_info)
     # Collect used imports starting from the first module
@@ -5039,7 +5094,9 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
                     logging.error(f"Custom module path for {import_name} is not a file: {module_file_path}")
                     continue
                 new_module_key = os.fspath(module_file_path.resolve())
-                if new_module_key in modules_info or module_file_path in processed_paths:
+                if new_module_key in modules_info or \
+                   module_file_path in processed_paths or \
+                   module_file_path in modules_to_process:
                     continue  # already parsed or seen
                 modules_to_process.append(module_file_path)
                 new_modules_found = True
@@ -5052,13 +5109,13 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
                 if not tree:
                     logging.error(f"Failed to parse the file: {module_file_path}")
                     continue
-                module_contents[import_name] = file_content
-                module_trees[   import_name] = tree
-                collector = ImportFunctionCollector(options, import_name, module_file_path)
+                module_contents[new_module_key] = file_content
+                module_trees[   new_module_key] = tree
+                collector = ImportFunctionCollector(options, new_module_key, module_file_path)
                 collector.visit(tree)
                 module_info               = collector.module_info
                 module_info.base_classes  = collector.base_classes
-                modules_info[import_name] = module_info
+                modules_info[new_module_key] = module_info
                 used_imports.update(module_info.top_level_imports)
                 # Process top-level imports to find more local modules
                 for new_import in module_info.top_level_imports:
@@ -5067,8 +5124,13 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
                     resolved = process_import(options, new_import, module_file_path)
                     if resolved:
                         possible_module_file_path = options.custom_modules.get(new_import)
-                        if possible_module_file_path is not None and (actual_module_file_path := ud.ensure_path(possible_module_file_path)) and ud.safe_is_file(actual_module_file_path) and actual_module_file_path not in processed_paths and actual_module_file_path not in modules_to_process:
-                            modules_to_process.append(actual_module_file_path)
+                        if possible_module_file_path is not None:
+                            actual_module_file_path = ud.ensure_path(possible_module_file_path)
+                            if ud.safe_is_file(actual_module_file_path):
+                                next_key = os.fspath(actual_module_file_path.resolve())
+                                if next_key not in modules_info and actual_module_file_path not in processed_paths and actual_module_file_path not in modules_to_process:
+                                    modules_to_process.append(actual_module_file_path)
+
                 call_graph = build_call_graph(modules_info)
             else:
                 # If not a local module, add to options.all_imports
