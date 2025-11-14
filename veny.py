@@ -2381,7 +2381,7 @@ def parse_arguments(options: Options) -> None:
 def main() -> None:
     """Main function."""
     start_time = dt.datetime.now()
-    options = Options()
+    options: Options = Options()
     parse_arguments(options)
     script_string       = getattr(options.args, "script",       None)
     options.script_args = getattr(options.args, "script_args",    [])
@@ -4947,6 +4947,83 @@ def collect_used_imports(start_module: str, start_func: str,
     return imports
 
 
+def _analyze_module(options:         Options,
+                    module_path:     Path,
+                    modules_info:    dict[str, ModuleInfo],
+                    module_contents: dict[str, str],
+                    module_trees:    dict[str, ast.AST],
+                    *,
+                    do_sys_path_scan: bool) -> tuple[str, ModuleInfo] | None:
+    """
+    Read, parse, and analyze one module file.
+    - Optionally scans for sys.path mutations (current behavior: only for the first loop).
+    - Updates modules_info / module_contents / module_trees.
+    Returns (module_key, module_info) or None on failure.
+    """
+    module_path = ud.ensure_path(module_path)
+    module_key  = os.fspath(module_path.resolve())
+
+    file_content = ud.my_fopen(module_path, rawlog=options.rawlog)
+    if not file_content:
+        logging.error(f"Could not read file: {module_path}")
+        return None
+
+    try:
+        tree = ast.parse(file_content, module_key)
+    except Exception:
+        logging.error(f"Failed to parse the file: {module_path}")
+        return None
+
+    module_contents[module_key] = file_content
+    module_trees[   module_key] = tree
+
+    collector = ImportFunctionCollector(options, module_key, module_path)
+    collector.visit(tree)
+
+    # Keep behavior identical: only the first loop does sys.path scanning.
+    if do_sys_path_scan:
+        aliases = collect_pathlib_aliases(tree)
+        spv = SysPathVisitor(aliases)
+        spv.visit(tree)
+        base_dir = module_path.parent
+        for p in spv.paths:
+            if not p:
+                continue
+            P = (base_dir / p).expanduser().resolve() if not os.path.isabs(p) else Path(p).expanduser().resolve()
+            if ud.safe_is_dir(P):
+                options.sys_path_hints.add(P)
+
+    module_info = collector.module_info
+    module_info.base_classes = collector.base_classes
+    modules_info[module_key] = module_info
+    return module_key, module_info
+
+
+def _enqueue_top_level_imports(options:           Options,
+                               module_path:          Path,
+                               import_names:     set[str],
+                               processed_paths: set[Path],
+                               modules_to_process: "collections.deque[Path]") -> None:
+    """
+    Given top-level imports for a module, run your existing resolution logic and
+    enqueue any newly found local modules/packages for the first pass queue.
+    """
+    for import_name in import_names:
+        if import_name in options.standard_modules:
+            continue  # Skip standard modules
+        resolved = process_import(options, import_name, module_path)
+        if not resolved:
+            options.all_imports.add(import_name)
+            continue
+        possible_module_file_path = options.custom_modules.get(import_name)
+        if possible_module_file_path is None:
+            continue
+        actual_module_file_path = ud.ensure_path(possible_module_file_path)
+        if ud.safe_is_file(actual_module_file_path):
+            if actual_module_file_path not in processed_paths and actual_module_file_path not in modules_to_process:
+                modules_to_process.append(actual_module_file_path)
+
+
 def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLike[str]) -> None:
     """
     Find all imports and I/O in the script (including functions and classes
@@ -5001,44 +5078,17 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
         if module_path in processed_paths:
             continue
         processed_paths.add(module_path)
-        module_key   = os.fspath(module_path.resolve())
-        file_content = ud.my_fopen(module_path, rawlog=options.rawlog)
-        if not file_content:
-            logging.error(f"Could not read file: {module_path}")
+        result = _analyze_module(options, module_path, modules_info, module_contents,
+                                 module_trees, do_sys_path_scan=True)
+        if result is None:
             continue
-        tree = ast.parse(file_content, module_key)
-        if not tree:
-            logging.error(f"Failed to parse the file: {module_path}")
-            continue
-        module_contents[module_key] = file_content
-        module_trees[   module_key] = tree
-        collector                   = ImportFunctionCollector(options, module_key, module_path)
-        collector.visit(tree)
-        # --- discover runtime sys.path hints from this module ---
-        aliases = collect_pathlib_aliases(tree)   # tree is the module AST
-        spv = SysPathVisitor(aliases)
-        spv.visit(tree)
-        base_dir = module_path.parent
-        for p in spv.paths:
-            if not p:
-                continue
-            P = (base_dir / p).expanduser().resolve() if not os.path.isabs(p) else Path(p).expanduser().resolve()
-            if ud.safe_is_dir(P):
-                options.sys_path_hints.add(P)
-        module_info                 = collector.module_info
-        module_info.base_classes    = collector.base_classes
-        modules_info[module_key]    = module_info
-        # Process only top-level imports to find local modules
-        for import_name in module_info.top_level_imports:
-            if import_name in options.standard_modules:
-                continue  # Skip standard modules
-            resolved = process_import(options, import_name, module_path)
-            if resolved:
-                possible_module_file_path = options.custom_modules.get(import_name)
-                if possible_module_file_path is not None and (actual_module_file_path := ud.ensure_path(possible_module_file_path)) and ud.safe_is_file(actual_module_file_path) and actual_module_file_path not in processed_paths and actual_module_file_path not in modules_to_process:
-                    modules_to_process.append(actual_module_file_path)
-            else:
-                options.all_imports.add(import_name)
+        module_key, module_info = result
+        _enqueue_top_level_imports(
+            options, module_path,
+            module_info.top_level_imports,
+            processed_paths,
+            modules_to_process,
+        )
     if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Modules processed so far:")
     for module_key, m_info in modules_info.items():
         if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Module: %s, Classes: %s, Functions: %s", module_key, m_info.classes, list(m_info.functions.keys()))
@@ -5100,37 +5150,20 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
                     continue  # already parsed or seen
                 modules_to_process.append(module_file_path)
                 new_modules_found = True
-                # Process the new module
-                file_content = ud.my_fopen(module_file_path, rawlog=options.rawlog)
-                if not file_content:
-                    logging.error(f"Could not read file: {module_file_path}")
+                result = _analyze_module(
+                    options, module_file_path, modules_info, module_contents, module_trees,
+                    do_sys_path_scan=False,  # keep behavior identical to your current code
+                )
+                if result is None:
                     continue
-                tree = ast.parse(file_content, new_module_key)
-                if not tree:
-                    logging.error(f"Failed to parse the file: {module_file_path}")
-                    continue
-                module_contents[new_module_key] = file_content
-                module_trees[   new_module_key] = tree
-                collector = ImportFunctionCollector(options, new_module_key, module_file_path)
-                collector.visit(tree)
-                module_info               = collector.module_info
-                module_info.base_classes  = collector.base_classes
-                modules_info[new_module_key] = module_info
+                new_module_key, module_info = result
                 used_imports.update(module_info.top_level_imports)
-                # Process top-level imports to find more local modules
-                for new_import in module_info.top_level_imports:
-                    if new_import in options.standard_modules:
-                        continue
-                    resolved = process_import(options, new_import, module_file_path)
-                    if resolved:
-                        possible_module_file_path = options.custom_modules.get(new_import)
-                        if possible_module_file_path is not None:
-                            actual_module_file_path = ud.ensure_path(possible_module_file_path)
-                            if ud.safe_is_file(actual_module_file_path):
-                                next_key = os.fspath(actual_module_file_path.resolve())
-                                if next_key not in modules_info and actual_module_file_path not in processed_paths and actual_module_file_path not in modules_to_process:
-                                    modules_to_process.append(actual_module_file_path)
-
+                _enqueue_top_level_imports(
+                    options, module_file_path,
+                    module_info.top_level_imports,
+                    processed_paths,
+                    modules_to_process,
+                )
                 call_graph = build_call_graph(modules_info)
             else:
                 # If not a local module, add to options.all_imports
