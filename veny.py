@@ -13,17 +13,17 @@ import copy
 import shutil
 import venv
 import pickle
-from pathlib import Path  # Preferred over os.path for path manipulations.
-from typing import Any, Final
+from pathlib     import Path  # Preferred over os.path for path manipulations.
+from typing      import Any, Final
 import logging
 import tempfile
 import shlex  # For safely quoting shell commands
-from functools import lru_cache  # For caching results of expensive function calls
+from functools   import lru_cache  # For caching results of expensive function calls
 from collections import defaultdict
 
 import univ_defs as ud
 
-__version__: str = "0.2.0"
+__version__: str = "0.2.1"
 
 
 class Options(ud.Options):
@@ -4921,10 +4921,28 @@ def build_call_graph(modules_info: dict[str, ModuleInfo]) -> dict[str, set[str]]
 def collect_used_imports(start_module: str, start_func: str,
                          call_graph:   dict[str, set[str]],
                          modules_info: dict[str, ModuleInfo],
-                         visited: set[str] | None = None) -> set[str]:
-    """Collect all imports used in a function and its callees."""
+                         visited: set[str] | None = None,
+                         alias_to_key: dict[str, str] | None = None) -> set[str]:
+    """
+    Collect all imports used in a function and its callees.
+    
+
+    Args:
+        start_module: The module where the function is defined.
+        start_func:   The function name to start collecting imports from.
+        call_graph:   A dictionary representing the call graph of functions.
+        modules_info: A dictionary mapping module keys to ModuleInfo objects.
+        visited:      A set of fully qualified function names that have already been visited.
+        alias_to_key: A dictionary mapping module aliases to their file-path-based keys.
+
+    Returns:
+        A set of import statements used in the function and its callees.
+    """
     if visited is None:
         visited = set()
+    # Resolve alias-based module name to file-path-based key
+    if alias_to_key and start_module not in modules_info:
+        start_module = alias_to_key.get(start_module, start_module)
     full_func_name: str = f"{start_module}{_SEP}{start_func}"
     if full_func_name in visited:
         if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Already visited %s, skipping.", full_func_name)
@@ -4943,22 +4961,35 @@ def collect_used_imports(start_module: str, start_func: str,
     edges = call_graph.get(full_func_name, set())
     for called_full in edges:
         called_module, called_name = split_function_name(called_full, start_module)
-        imports.update(collect_used_imports(called_module, called_name, call_graph, modules_info, visited))
+        imports.update(collect_used_imports(called_module, called_name, call_graph, modules_info, visited, alias_to_key))
     return imports
 
 
-def _analyze_module(options:         Options,
-                    module_path:     Path,
-                    modules_info:    dict[str, ModuleInfo],
-                    module_contents: dict[str, str],
-                    module_trees:    dict[str, ast.AST],
-                    *,
+def _analyze_module(options:          Options,
+                    module_path:      Path,
+                    modules_info:     dict[str, ModuleInfo],
+                    module_contents:  dict[str, str],
+                    module_trees:     dict[str, ast.AST],
                     do_sys_path_scan: bool) -> tuple[str, ModuleInfo] | None:
     """
     Read, parse, and analyze one module file.
     - Optionally scans for sys.path mutations (current behavior: only for the first loop).
     - Updates modules_info / module_contents / module_trees.
-    Returns (module_key, module_info) or None on failure.
+
+    Args:
+        options:          Options object containing configuration and state. Contains:
+            - options.standard_modules: Set of standard library module names.
+            - options.custom_modules:   Dictionary mapping custom module names to their file paths.
+            - options.sys_path_hints:   Set of Path objects representing directories to add to sys.path.
+            - options.rawlog:           Boolean indicating whether to log raw file contents.
+        module_path:      Path to the module file to analyze.
+        modules_info:     Dictionary mapping module keys to ModuleInfo objects.
+        module_contents:  Dictionary mapping module keys to their source code.
+        module_trees:     Dictionary mapping module keys to their ASTs.
+        do_sys_path_scan: Whether to scan for sys.path mutations in this module.
+
+    Returns:
+        (module_key, module_info) or None on failure.
     """
     module_path = ud.ensure_path(module_path)
     module_key  = os.fspath(module_path.resolve())
@@ -5094,6 +5125,14 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
         if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Module: %s, Classes: %s, Functions: %s", module_key, m_info.classes, list(m_info.functions.keys()))
     # Now build the call graph
     call_graph = build_call_graph(modules_info)
+
+    # Build alias → file-path-key mapping for local modules
+    _alias_to_key: dict[str, str] = {}
+    for _mod_name, _mod_path in options.custom_modules.items():
+        _p = ud.ensure_path(_mod_path)
+        if ud.safe_is_file(_p):
+            _alias_to_key[_mod_name] = os.fspath(_p.resolve())
+
     # Collect used imports starting from the first module
     used_imports:  set[str] = set()
     visited_funcs: set[str] = set()
@@ -5111,7 +5150,8 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
                     called_name,    # Use the extracted function name
                     call_graph,
                     modules_info,
-                    visited_funcs
+                    visited_funcs,
+                    _alias_to_key
                 )
             )
             if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Used imports collected from '%s' in '%s': %s", called_name, called_module, used_imports)
@@ -5997,14 +6037,13 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
         with open(this_requirements_file, "r") as file:
             requirements = set(file.read().splitlines())
         if options.uninstalled_imports.issubset(requirements):
-            this_timestamp = folder.name.split("-")[2]+"-"+folder.name.split("-")[3]
-            try:
-                ts_int = int(this_timestamp)
-            except ValueError:
+            match = re.search(r'(\d{8})-(\d{6})', folder.name)
+            if not match:
                 if logging.getLogger().isEnabledFor(logging.DEBUG):
-                    logging.debug("Skipping folder %s because timestamp %s is not an integer.",
-                                  os.fspath(folder), this_timestamp)
+                    logging.debug("Skipping folder %s because no YYYYMMDD-HHMMSS timestamp was found.",
+                                os.fspath(folder))
                 continue
+            ts_int = int(match.group(1) + match.group(2))
             final_venv_folders[folder] = {"timestamp"    : ts_int,
                                           "num_packages" : len(requirements)}
     if not final_venv_folders:

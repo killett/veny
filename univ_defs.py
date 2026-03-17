@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# Written by Emmy Killett (she/her), ChatGPT 4o (it/its), ChatGPT o1-preview (it/its), ChatGPT o3-mini-high (it/its), ChatGPT o4-mini-high (it/its), ChatGPT 5 Thinking (it/its), and GitHub Copilot (it/its).
+# Written by Emmy Killett
 from __future__         import annotations  # For Python 3.7+ compatibility with type annotations
 import os
 import sys
@@ -16,17 +16,12 @@ import errno
 import re  # Used to precompile regexes for performance
 
 # Version of univ_defs.py:
-__version__: Final[str] = "0.2.1"
+__version__: Final[str] = "0.2.2"
 
 # Version of python which should be used in scripts that import this module.
 # Python 3.12 is supported until 2028-10. https://devguide.python.org/versions/
 # The next version (Python 3.13) will leave the bugfix phase around 2026-10.
 PY_VERSION: Final[float] = 3.12
-
-# Further down, this COMPUTER_NAME is obtained by calling get_computer_name().
-# Then IS_NASA_COMPUTER is set based on whether COMPUTER_NAME starts with any of NASA_COMPUTER_NAME_PREFIXES.
-# JPL computers often have names starting with "MT" which stands for "ManTech"
-NASA_COMPUTER_NAME_PREFIXES: Final[tuple[str, ...]] = ("RAYL", "NASA", "JPL", "MT")  # NASA computers start with these prefixes and can only use "cleared" LLMs.
 
 # Default encoding used for reading and writing text files:
 DEFAULT_ENCODING: str = "utf-8"
@@ -398,7 +393,7 @@ def my_fopen(file_path: str | os.PathLike[str],
              suppress_errors: bool = False,
              rawlog:          bool = False,
              numlines:  int | None = None,
-             verbose:         bool = True) -> str | Literal[False]:
+             verbose:         bool = True) -> str | None:
     """
     Attempt to read a text file with various encodings and return the file content if successful. Optionally, specify numlines to limit the number of lines read.
 
@@ -410,8 +405,8 @@ def my_fopen(file_path: str | os.PathLike[str],
         verbose:         If True, log messages about the file reading process (default: True).
 
     Returns:
-        The content of the file as a string.
-        Returns Literal[False]:
+        The content of the file as a string, or:
+        Returns None:
          - if the file does not exist
          - is empty
          - is a non-text file (video, audio, image, archive)
@@ -746,7 +741,11 @@ def analyze_computer_name_results(results: dict[str, str], rawlog: bool = False)
 
 
 COMPUTER_NAME: str = get_computer_name(rawlog=True)
-NASA_CASEFOLDED_COMPUTER_NAME_PREFIXES: Final[tuple[str, ...]] = tuple(p.casefold() for p in NASA_COMPUTER_NAME_PREFIXES)
+# NASA computers start with these prefixes and can only use "cleared" LLMs.
+# JPL computers often have names starting with "MT" which stands for "ManTech"
+NASA_COMPUTER_NAME_PREFIXES:            Final[tuple[str, ...]] = ("RAYL", "NASA", "JPL", "MT")
+NASA_CASEFOLDED_COMPUTER_NAME_PREFIXES: Final[tuple[str, ...]] = tuple(p.casefold() for p in
+                                                                       NASA_COMPUTER_NAME_PREFIXES)
 IS_NASA_COMPUTER: bool = COMPUTER_NAME.casefold().startswith(NASA_CASEFOLDED_COMPUTER_NAME_PREFIXES)
 
 
@@ -1773,7 +1772,7 @@ class LLMs:
                 "only_local_models"   : cfg.only_local_models,
                 "only_cleared_models" : cfg.only_cleared_models,
             },
-            "considered": considered,
+            "considered"     : considered,
         }
 
     def _call_with_backoff(self, litellm_mod: Any, **kwargs: Any) -> Any:
@@ -1816,7 +1815,7 @@ class LLMs:
 
         # With Tenacity
         max_attempts = int(getattr(cfg, "rate_retry_max_attempts", 6))
-        max_wait     = int(getattr(cfg, "rate_retry_max_wait", 60))
+        max_wait     = int(getattr(cfg, "rate_retry_max_wait",    60))
 
         @retry(
             retry=retry_if_exception(_is_rate_limit_exc),           # only 429-ish
@@ -4495,7 +4494,7 @@ def ensure_even_dimensions(image_path: str | os.PathLike[str]) -> None:
 
 def find_ffmpeg() -> str | None:
     """
-    Return a full path to an ffmpeg executable if found, else None.
+    Return a full path string to an ffmpeg executable if found, else None.
     Tries: env vars, PATH, common Conda and Windows/Cygwin/MSYS installs,
     and (optionally) imageio-ffmpeg if available.
 
@@ -4576,7 +4575,9 @@ def human_bytesize(num: float | int | None, *, suffix: str = "B", si: bool = Fal
                              suffix is "B", "bytes" is appended in the output. Otherwise, the suffix is appended to the long name.
         si:                  If True, use powers of 1000 with SI prefixes (k, M, G, ... up to R, Q).
                              If False, use powers of 1024 with IEC prefixes (Ki, Mi, Gi, ... up to Ri, Qi).
-        precision:           Digits to show after the decimal point.
+        precision:           If >= 0, digits to show after the decimal point.
+                             If < 0, constrains the total returned string length to `-precision`
+                             (width-constrained mode; `long_units` is forced False).
         space:               If True, inserts a space between the number and the unit (ignored when long_units is True).
         trim_trailing_zeros: If True, removes trailing zeros and any dangling decimal point.
         long_units:          If True, spell out unit names ("bytes", "kibibytes", ... "quebibytes"/"quettabytes").
@@ -4592,8 +4593,8 @@ def human_bytesize(num: float | int | None, *, suffix: str = "B", si: bool = Fal
     """
     if num is None:
         return "None"
-    if precision < 0:
-        raise ValueError("precision must be non-negative")
+    # precision >= 0: decimal places mode
+    # precision < 0: fixed total-width mode (handled below)
     if suffix and not isinstance(suffix, str):
         suffix = str(suffix)
     step = 1000.0 if si else 1024.0
@@ -4615,8 +4616,44 @@ def human_bytesize(num: float | int | None, *, suffix: str = "B", si: bool = Fal
         n /= step
         i += 1
 
+    # Width-constrained mode: precision = -N means total output width must be N.
+    if precision < 0:
+        long_units = False  # forced off in width-constrained mode
+        total_width = -precision
+
+        sep = " " if space else ""
+        unit = f"{symbols[i]}{suffix}"
+
+        # Remaining width available for the numeric portion (including sign/decimal point)
+        numeric_width = total_width - len(sep) - len(unit)
+        if numeric_width <= 0:
+            raise ValueError(
+                f"precision={precision} is too small: no room for numeric part "
+                f"(unit='{unit}', space={space})"
+            )
+
+        # Fit the numeric part into numeric_width, maximizing decimals.
+        # Right-justify so decimal points line up across values of the same width.
+        for dec in range(numeric_width, -1, -1):
+            s_num = f"{n:.{dec}f}"
+            if trim_trailing_zeros and "." in s_num:
+                s_num = s_num.rstrip("0").rstrip(".")
+
+            candidate_num = f"{sign}{s_num}"
+            if len(candidate_num) <= numeric_width:
+                return f"{candidate_num.rjust(numeric_width)}{sep}{unit}"
+
+        # Even integer form doesn't fit (e.g., 1023 MiB into a 3-char numeric field).
+        s_int = f"{n:.0f}"
+        min_needed = len(sign) + len(s_int) + len(sep) + len(unit)
+        raise ValueError(
+            f"precision={precision} is too small for this value; "
+            f"need at least {-min_needed} or less (space={space}, si={si})"
+        )
+
     s = f"{n:.{precision}f}"
-    if trim_trailing_zeros:
+
+    if trim_trailing_zeros and "." in s:
         s = s.rstrip("0").rstrip(".")
 
     if long_units:
@@ -5181,6 +5218,9 @@ _JD_MJD_CAPTURE_RE: re.Pattern = re.compile(r"\s*(?P<prefix>JD|MJD)?\s*(?P<value
 # This regex is used to check if a string has an explicit offset or Z at the end (indicating that the date should be converted by shifting the clock):
 _OFFSET_IN_STR_RE: re.Pattern  = re.compile(r"(Z|[+-]\d{2}:\d{2}|[+-]\d{4})$")
 
+# Julian Date at 1970-01-01T00:00:00 UTC
+_JD_UNIX_EPOCH: float = 2_440_587.5
+
 # Enclose the type alias annotation in quotes because not all of these types have been imported yet.
 AnyDateTimeType: TypeAlias = "str | float | int | np.datetime64 | pd.Timestamp | dt.datetime"
 
@@ -5309,7 +5349,6 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
     Raises:
         ValueError:  If the given_date cannot be parsed into a datetime object, or if the timezone is invalid.
         TypeError:   If the given_date is not a string, float, int, numpy.datetime64, pandas.Timestamp, or datetime.datetime object.
-        ImportError: If the 'jdcal' library is not installed and the given_date is a Julian Date or Modified Julian Date.
     """
     import datetime as dt
     fallback_logging_config()  # Ensure logging is configured
@@ -5339,12 +5378,6 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
 
     # Trigger JD/MJD branch only if format_str equals "JD" or "MJD", or prefix was provided
     if parsed_dt is None and (prefix is not None or (format_str and (format_str.upper() == "JD" or format_str.upper() == "MJD"))):
-
-        try:
-            import jdcal
-        except ImportError:
-            raise ImportError("The jdcal python library is required to parse Julian/MJD dates")
-
         # Determine raw value
         if isinstance(given_date, (int, float)):
             value = float(given_date)
@@ -5360,23 +5393,10 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
         # Determine if MJD conversion needed
         use_mjd = bool((format_str and format_str.upper() == "MJD") or (prefix and prefix.upper() == "MJD"))
 
-        # Convert MJD to JD if necessary
-        jd_val = value + (2_400_000.5 if use_mjd else 0.0)
-
-        # Split into integer day and fraction
-        int_part                   = int(jd_val)
-        frac_part                  = jd_val - int_part
-        year, month, day, day_frac = jdcal.jd2gcal(int_part, frac_part)
-
-        # Convert day fraction to hours, minutes, seconds, microseconds
-        day_int     = int(day)
-        frac_of_day = (day + day_frac) - day_int
-        hours       = int(frac_of_day * 24)
-        mins        = int((frac_of_day * 24 - hours) * 60)
-        secs_frac   = (frac_of_day * 24 - hours) * 60 - mins
-        secs        = int(secs_frac * 60)
-        micros      = int((secs_frac * 60 - secs) * 1e6)
-        parsed_dt   = dt.datetime(year, month, day_int, hours, mins, secs, micros, tzinfo=dt.timezone.utc)
+        # Convert MJD to JD if necessary, then to datetime via timedelta from Unix epoch
+        jd_val    = value + (2_400_000.5 if use_mjd else 0.0)
+        unix_secs = (jd_val - _JD_UNIX_EPOCH) * 86_400
+        parsed_dt = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc) + dt.timedelta(seconds=unix_secs)
 
     # Check if the given_date is a string that can be parsed as a float
     if parsed_dt is None and isinstance(given_date, str) and is_float(given_date):
@@ -5447,7 +5467,11 @@ def parse_datetime(given_date: AnyDateTimeType, timezone: str | dt.tzinfo | None
     if parsed_dt is None and not isinstance(given_date, str):
         raise TypeError(error_message)
 
-    # From here on, we know it's a str (we raised otherwise)
+    if parsed_dt is not None:
+        # Finalize the datetime object by converting it to the target timezone or just attaching the timezone without shifting the clock
+        return _finalize_datetime(parsed_dt, given_date, format_str, parsed_tz, should_convert)
+
+    # From here on, we know it's a str (we raised or otherwise handled non-str types above)
     assert isinstance(given_date, str)
     given_string = given_date
 
@@ -6041,10 +6065,8 @@ def if_filepath_then_read(input_string_or_filepath: str | os.PathLike[str],
     # If a real PathLike was passed, handle it explicitly (different semantics than str)
     if isinstance(input_string_or_filepath, os.PathLike):
         if force_string:
-            raise TypeError(
-                "'input_string_or_filepath' was given as a file path "
-                f"({input_string_or_filepath!r}) but 'force_string' is True."
-            )
+            raise TypeError("'input_string_or_filepath' was given as a file path "
+                            f"({input_string_or_filepath!r}) but 'force_string' is True.")
         file_path = ensure_path(input_string_or_filepath)
 
         # Raise if it doesn't exist (your new requirement)
@@ -6102,10 +6124,8 @@ def if_filepath_then_read(input_string_or_filepath: str | os.PathLike[str],
     # Otherwise treat it as a literal string
     if not isinstance(input_string_or_filepath, str):
         # (If we got here with a non-PathLike, non-str, it's a type error)
-        raise TypeError(
-            "Expected 'input_string_or_filepath' to be a string or file path, "
-            f"got {type(input_string_or_filepath).__name__!r}"
-        )
+        raise TypeError("Expected 'input_string_or_filepath' to be a string or file path, "
+                        f"got {type(input_string_or_filepath).__name__!r}")
     return input_string_or_filepath
 
 
@@ -6417,7 +6437,7 @@ def check_python_formatting(path: str | os.PathLike[str], diff_choice: int = 1) 
     fallback_logging_config()
     path = ensure_file(path)
     src  = my_fopen(   path)
-    if src is False:
+    if not src:
         logging.error("❌ Failed to open file: %s", os.fspath(path))
         return False
 
@@ -7123,7 +7143,7 @@ def ask_and_replace(old_str: str, new_str: str,
     fallback_logging_config()
     path         = ensure_file(path, verbose=verbose)
     orig_text    = my_fopen(path, verbose=verbose)
-    if orig_text is False:
+    if not orig_text:
         if verbose:
             logging.info("Skipping empty file: %s", os.fspath(path))
         return True  # skip empty files silently. continue processing other files by returning True.
@@ -7398,7 +7418,7 @@ def parse_arguments(options: Options) -> None:
 
 def main() -> None:
     """Main function."""
-    options = Options()
+    options: Options = Options()
     parse_arguments(options)
     memory_handler = ud.configure_logging(options.my_name, log_level=options.log_mode,
                                           rawlog=True)
@@ -7470,7 +7490,7 @@ def parse_arguments(options: Options) -> None:
 
 def main() -> None:
     """Main function."""
-    options = Options()
+    options: Options = Options()
     parse_arguments(options)
     memory_handler = ud.configure_logging(options.my_name, log_level=options.log_mode,
                                           rawlog=True)
@@ -7538,7 +7558,7 @@ def parse_arguments(options: Options) -> None:
 
 def main() -> None:
     """Main function."""
-    options = Options()
+    options: Options = Options()
     parse_arguments(options)
     memory_handler = ud.configure_logging(options.my_name, log_level=options.log_mode,
                                           rawlog=True)
@@ -7599,7 +7619,7 @@ def parse_arguments(options: Options) -> None:
 
 def main() -> None:
     """Main function."""
-    options = Options()
+    options: Options = Options()
     parse_arguments(options)
     memory_handler = ud.configure_logging(options.my_name, log_level=options.log_mode,
                                           rawlog=True)
@@ -7850,7 +7870,7 @@ def main() -> None:
     """
     Main function.
     """
-    options = Options()
+    options: Options = Options()
     parse_arguments(options)
     logging.basicConfig(level=options.log_mode,
                         format="%(asctime)s - %(levelname)s - %(message)s",
@@ -8544,7 +8564,7 @@ def kill_process(pname: str) -> None:
         process_ids = []
         try:
             process_list = subprocess.check_output(["pgrep", "-f", pname]).decode(DEFAULT_ENCODING)
-            process_ids = process_list.splitlines()
+            process_ids  = process_list.splitlines()
         except subprocess.CalledProcessError as e:
             raise ValueError(f"Failed to find process with name {pname}. Make sure the process name is correct and unique: {e}") from e
 
@@ -8845,8 +8865,8 @@ def open_dir_in_VLC(the_dir: str | os.PathLike[str], sort_choice: str = "sort_by
     entries:                    Iterable[Path] = the_dir.rglob("*") if recursive else the_dir.iterdir()
     for p in entries:
         if p and safe_is_file(p):
-            if p.suffix.casefold() in PLAYLIST_EXTENSIONS_SET:
-                continue  # Exclude playlist files
+            if p.suffix.casefold() not in VIDEO_EXTENSIONS_SET:
+                continue  # Exclude files that are not video files
             if (file_mtime := safe_mtime(p)) is not None:
                 files_with_times.append((file_mtime, p))
         elif not recursive and p and safe_is_dir(p):
@@ -8900,6 +8920,218 @@ def open_in_vlc(path: str | os.PathLike[str], no_start: bool = False) -> None:
         open_dir_in_VLC(     path, no_start=no_start)
     else:  # Open every file as if it's a playlist.
         open_playlist_in_VLC(path, no_start=no_start)
+
+
+def get_video_duration_seconds(path: str | os.PathLike[str],
+                               timeout: float = 10.0) -> float:
+    """
+    Return the duration of a video file in seconds, using fast and reliable probes.
+
+    The function prefers `ffprobe` (from FFmpeg) for speed and accuracy, falls back to
+    `mediainfo` if available, and finally attempts an OpenCV-based estimate if neither
+    CLI is present. All filesystem paths are handled via `pathlib.Path`.
+
+    Args:
+        path:    Path to the video file (string path or os.PathLike). Converted to Path.
+        timeout: Per-process timeout (in seconds) for external probes.
+
+    Returns:
+        The duration of the video in seconds as a float.
+
+    Raises:
+        FileNotFoundError: If the given path does not exist or is not a file.
+        RuntimeError:      If duration could not be determined by any available method.
+        ValueError:        If a probe returns an invalid or non-positive duration.
+    """
+    import json
+    import shutil
+    import subprocess
+
+    p: Path = ensure_path(path)
+    if not safe_is_file(p):
+        raise FileNotFoundError(f"No such file: {os.fspath(p)}")
+
+    def _run(cmd: list[str]) -> tuple[int, str, str]:
+        """Helper: run a subprocess safely"""
+        proc = subprocess.run(cmd,
+                              capture_output=True,
+                              text=True,
+                              timeout=timeout,
+                              check=False)
+        return proc.returncode, proc.stdout, proc.stderr
+
+    # ------------------------------------
+    # 1) Try ffprobe (fast & very reliable)
+    # ------------------------------------
+    if shutil.which("ffprobe"):
+        # Ask for JSON to simplify parsing. format.duration is typically present and precise.
+        # -v error: suppress logs; -hide_banner: quiet banner; -show_format: include container info.
+        cmd_ffprobe: list[str] = ["ffprobe",
+                                  "-v", "error",
+                                  "-hide_banner",
+                                  "-print_format", "json",
+                                  "-show_format",
+                                  os.fspath(p)]
+        rc, out, err = _run(cmd_ffprobe)
+        if rc == 0 and out.strip():
+            try:
+                data: dict[str, Any] = json.loads(out)
+                # Preferred: container-level duration
+                dur_str: str | None = None
+                if isinstance(data.get("format"), dict):
+                    dur_val = data["format"].get("duration")
+                    if isinstance(dur_val, (int, float)):
+                        duration = float(dur_val)
+                        if duration > 0:
+                            return duration
+                    elif isinstance(dur_val, str):  # sometimes it's a string
+                        try:
+                            duration = float(dur_val)
+                            if duration > 0:
+                                return duration
+                        except ValueError:
+                            pass
+
+                # Fallback: check individual streams for a duration and take the max > 0
+                max_stream_dur: float = 0.0
+                streams = data.get("streams")
+                if isinstance(streams, list):
+                    for s in streams:
+                        dur = s.get("duration")
+                        if isinstance(dur, (int, float)) and dur > 0:
+                            max_stream_dur = max(max_stream_dur, float(dur))
+                        elif isinstance(dur, str):
+                            try:
+                                f = float(dur)
+                                if f > 0:
+                                    max_stream_dur = max(max_stream_dur, f)
+                            except ValueError:
+                                pass
+                if max_stream_dur > 0:
+                    return max_stream_dur
+            except json.JSONDecodeError:
+                pass  # Will try next method
+
+    # -----------------------------------
+    # 2) Try mediainfo (another solid CLI)
+    # -----------------------------------
+    if shutil.which("mediainfo"):
+        # JSON output is consistent; "General" track has Duration in ms.
+        cmd_mediainfo: list[str] = ["mediainfo", "--Output=JSON", os.fspath(p)]
+        rc, out, err = _run(cmd_mediainfo)
+        if rc == 0 and out.strip():
+            try:
+                data: dict[str, Any] = json.loads(out)
+                media  = data.get("media", {})
+                tracks = media.get("track", [])
+                if isinstance(tracks, list):
+                    # Prefer "General" duration (milliseconds). If absent, use max of track durations.
+                    general_ms: float = 0.0
+                    max_ms: float = 0.0
+                    for t in tracks:
+                        if not isinstance(t, dict):
+                            continue
+                        ttype = t.get("@type")
+                        # Keys can be "Duration" (ms) or "Duration/String".
+                        dur_ms_val = t.get("Duration")
+                        if isinstance(dur_ms_val, (int, float)):
+                            ms = float(dur_ms_val)
+                        elif isinstance(dur_ms_val, str):
+                            try:
+                                ms = float(dur_ms_val)
+                            except ValueError:
+                                ms = 0.0
+                        else:
+                            ms = 0.0
+
+                        if ttype == "General" and ms > 0:
+                            general_ms = ms
+                        max_ms = max(max_ms, ms)
+
+                    chosen_ms: float = general_ms if general_ms > 0 else max_ms
+                    if chosen_ms > 0:
+                        return chosen_ms / 1000.0
+            except json.JSONDecodeError:
+                pass  # Try last-resort method
+
+    # ---------------------------------------
+    # 3) Last resort: OpenCV (if available)
+    # ---------------------------------------
+    # Note: Not as robust as ffprobe/mediainfo; good fallback when those CLIs aren't installed.
+    try:
+        import cv2  # type: ignore
+
+        cap = cv2.VideoCapture(os.fspath(p))
+        try:
+            if not cap.isOpened():
+                raise RuntimeError("OpenCV could not open the file.")
+            frames: float = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0
+            fps:    float = cap.get(cv2.CAP_PROP_FPS)         or 0.0
+            if frames > 0 and fps > 0:
+                return frames / fps
+        finally:
+            cap.release()
+    except Exception:
+        # ImportError or any cv2 failure — ignore and raise below.
+        pass
+
+    # If we reach here, we couldn't determine the duration.
+    raise RuntimeError("Unable to determine video duration. "
+                       "Install FFmpeg (`ffprobe`) or MediaInfo (`mediainfo`) for best results.")
+
+
+def extract_and_concatenate_segments(input_file: str | os.PathLike[str],
+                                     timestamps: list,
+                                     output_name_or_path: str | os.PathLike[str],
+                                     subtitle_file: str | os.PathLike[str]) -> None:
+    """Extracts segments from a video file and concatenates them into a new file."""
+    import subprocess
+    input_file      = ensure_path(input_file)
+    subtitle_file   = ensure_path(subtitle_file)
+    input_dir       = input_file.parent
+    if type(output_name_or_path) is str:
+        output_path = input_dir / output_name_or_path
+    else:
+        output_path = output_name_or_path
+    ffmpeg_path_str = find_ffmpeg()
+    if not ffmpeg_path_str:
+        raise RuntimeError("ffmpeg is not installed or not found in PATH. Please install ffmpeg to use this function.")
+
+    print(f"Extracting segments from:\n{input_file} and saving to:\n{os.fspath(output_path)} with subtitles from:\n{subtitle_file}")
+    # Create filter complex command for extracting and concatenating segments
+    filter_complex = ""
+    inputs = ""
+    for i, (start, end) in enumerate(timestamps):
+        filter_complex += f"[0:v]trim=start={start}:end={end},setpts=PTS-STARTPTS[v{i}];"
+        filter_complex += f"[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS[a{i}];"
+        inputs += f"[v{i}][a{i}]"
+
+    filter_complex += f"{inputs}concat=n={len(timestamps)}:v=1:a=1[outv][outa]"
+
+    # Command to extract segments and concatenate them
+    command = [
+        ffmpeg_path_str,
+        "-i", os.fspath(input_file),
+        "-filter_complex", filter_complex,
+        "-map", "[outv]",
+        "-map", "[outa]",
+        "-c:v", "libx264",
+        "-c:a", "aac",
+        os.fspath(output_path)
+    ]
+    subprocess.run(command, check=True)
+
+    # Command to add subtitles as a separate track
+    # print("!!! WARNING!!! NEED TO FIX THE OUTPUT_PATH HERE TO AVOID OVERWRITING THE VIDEO FILE!")
+    # command = [
+    #     ffmpeg_path_str,
+    #     "-i", os.fspath(output_path),
+    #     "-i", os.fspath(subtitle_file),
+    #     "-c", "copy",
+    #     "-c:s", "mov_text",
+    #     os.fspath(output_path)
+    # ]
+    #subprocess.run(command, check=True)
 
 
 def remove_prefix_from_filename(filepath: str | os.PathLike[str], prefix: str) -> bool:
@@ -9006,6 +9238,9 @@ def combine_html_files(file_paths:  list[str | os.PathLike[str]],
     for file_path in file_paths:
         file_path     = ensure_file(file_path)
         file_contents = my_fopen(file_path)
+        if not file_contents:
+            logging.warning("File '%s' is empty or could not be read; skipping.", os.fspath(file_path))
+            continue
         try:
             soup = BeautifulSoup(file_contents, "html.parser")
             # Extract <head> from the first Chapter1.html
@@ -9285,24 +9520,30 @@ BOOK_EXTENSIONS_SET: Final[frozenset[str]] = frozenset(BOOK_EXTENSIONS)
 
 # A comprehensive list of video file extensions.
 VIDEO_EXTENSIONS: Final[tuple[str, ...]] = (
-    ".mp4",   ".mkv",   ".mov",   ".avi",    ".mpg",   ".mpeg",
-    ".wmv",   ".m4v",   ".flv",   ".divx",   ".vob",   ".iso",
-    ".3gp",   ".webm",  ".mts",   ".m2ts",   ".ts",    ".ogv",
-    ".rm",    ".rmvb",  ".asf",   ".f4v",    ".mxf",   ".dv",
-    ".swf",   ".m2v",   ".svi",   ".mpe",    ".ogm",   ".bik",
-    ".xvid",  ".yuv",   ".qt",    ".gvi",    ".viv",   ".fli",
-    ".mjpg",  ".mjpeg", ".amv",   ".drc",    ".flc",   ".vp6",
-    ".ivf",   ".mps",   ".vro",   ".hevc",   ".h265",  ".264",
-    ".str",   ".evo",   ".3g2",   ".h264",   ".av1",   ".ogx",
-    ".mlv",   ".ps",    ".mp2v",  ".dvs",    ".gxf",   ".webp",
-    ".vp8",   ".trp",   ".f4p",   ".mk3d",   ".3gpp",  ".mod",
-    ".tod",   ".cine",  ".arf",   ".wrf",    ".braw",  ".jmf",
-    ".r3d",   ".dpx",   ".mpv",   ".rmx",    ".smk",   ".mj2",
-    ".scm",   ".ivr",   ".xesc",  ".wtv",    ".dcr",   ".ismv",
-    ".vc1",   ".vcd",   ".bin",   ".sfd",    ".m2t",   ".m2p",
-    ".m1v",   ".y4m",   ".dif",   ".dvr-ms", ".tivo",  ".nuv",
-    ".nsv",   ".nut",   ".bk2",   ".usm",    ".xmv",   ".thp",
-    ".pmf",   ".h263",  ".h261",  ".vp9",
+    ".mp4",    ".mkv",   ".mov",   ".avi",    ".mpg",   ".mpeg",
+    ".wmv",    ".m4v",   ".flv",   ".divx",   ".vob",   ".iso",
+    ".3gp",    ".webm",  ".mts",   ".m2ts",   ".ts",    ".ogv",
+    ".rm",     ".rmvb",  ".asf",   ".f4v",    ".mxf",   ".dv",
+    ".swf",    ".m2v",   ".svi",   ".mpe",    ".ogm",   ".bik",
+    ".xvid",   ".yuv",   ".qt",    ".gvi",    ".viv",   ".fli",
+    ".mjpg",   ".mjpeg", ".amv",   ".drc",    ".flc",   ".vp6",
+    ".ivf",    ".mps",   ".vro",   ".hevc",   ".h265",  ".264",
+    ".str",    ".evo",   ".3g2",   ".h264",   ".av1",   ".ogx",
+    ".mlv",    ".ps",    ".mp2v",  ".dvs",    ".gxf",   ".webp",
+    ".vp8",    ".trp",   ".f4p",   ".mk3d",   ".3gpp",  ".mod",
+    ".tod",    ".cine",  ".arf",   ".wrf",    ".braw",  ".jmf",
+    ".r3d",    ".dpx",   ".mpv",   ".rmx",    ".smk",   ".mj2",
+    ".scm",    ".ivr",   ".xesc",  ".wtv",    ".dcr",   ".ismv",
+    ".vc1",    ".vcd",   ".bin",   ".sfd",    ".m2t",   ".m2p",
+    ".m1v",    ".y4m",   ".dif",   ".dvr-ms", ".tivo",  ".nuv",
+    ".nsv",    ".nut",   ".bk2",   ".usm",    ".xmv",   ".thp",
+    ".pmf",    ".h263",  ".h261",  ".vp9",    ".mdf",   ".mds",  # Media Descriptor File and Sidecar
+    ".nrg",    ".img",   ".toast", ".ccd",    ".b5t",   ".bup",  # Disc/image files
+    ".b6t",    ".bwt",   ".cue",   ".ifo",
+    ".tp",     ".pvr",   ".rec",   ".tsp",    ".g64",   ".g64x",  # PVR / DVR / CCTV
+    ".dav",    ".sec",   ".bvr",   ".dvr",
+    ".moflex", ".rpl",   ".mve",  # Game/cutscenes
+    ".es",     ".mpv2",  # Raw streams / pro dumps
 )
 VIDEO_EXTENSIONS_SET: Final[frozenset[str]] = frozenset(VIDEO_EXTENSIONS)
 # assert len(VIDEO_EXTENSIONS_SET) == len(VIDEO_EXTENSIONS), "Duplicate video extensions?"
@@ -9379,7 +9620,8 @@ PLAYLIST_EXTENSIONS: Final[tuple[str, ...]] = (
     ".m3u",    ".m3u8",    ".pls",  ".xspf",  ".asx",    ".wpl",
     ".zpl",    ".b4s",     ".cue",  ".smil",  ".smi",    ".ram",
     ".wax",    ".wmx",     ".wvx",  ".fpl",   ".mpcpl",  ".dpl",
-    ".aimppl", ".aimppl4", ".pla",  ".xml",
+    ".aimppl", ".aimppl4", ".pla",  ".xml",   ".f4m",    ".ism",
+    ".ismv",   ".isml",    ".ismc", ".mpd",
 )
 PLAYLIST_EXTENSIONS_SET: Final[frozenset[str]] = frozenset(PLAYLIST_EXTENSIONS)
 # assert len(PLAYLIST_EXTENSIONS_SET) == len(PLAYLIST_EXTENSIONS), "Duplicate playlist extensions?"
