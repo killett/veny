@@ -35,27 +35,27 @@ ANSI_RESET:  str = "\033[0m"
 
 # All the formatting rules to ignore when running flake8 to check Python formatting.
 IGNORED_CODES: list[str] = [
-    "W503",  # line break before binary operator (W503 and W504 are mutually exclusive, so ignore both)
-    "W504",  # line break  after binary operator (W503 and W504 are mutually exclusive, so ignore both)
+    "W503",  # line break before binary operator                   (W503 and W504 are mutually exclusive, so ignore both)
+    "W504",  # line break  after binary operator                   (W503 and W504 are mutually exclusive, so ignore both)
     "E117",  # over-indented line (comment)                        (I like to play with indentation so this cramps my style)
     "E127",  # continuation line over-indented for visual indent   (I like to play with indentation so this cramps my style)
     "E122",  # continuation line missing indentation or outdented  (I like to play with indentation so this cramps my style)
     "E128",  # continuation line under-indented for visual indent  (I like to play with indentation so this cramps my style)
-    "E201",  # whitespace after "("
-    "E202",  # whitespace before ")"
-    "E203",  # whitespace before ":"
-    "E211",  # whitespace before "("
-    "E221",  # multiple spaces before operator
-    "E222",  # multiple spaces after  operator
-    "E226",  # missing whitespace around arithmetic operator        (the fix doesn't work on the right side even with --aggressive)
-    "E227",  # missing whitespace around bitwise or shift operator  (the fix doesn't work on the right side even with --aggressive)
-    "E241",  # multiple spaces after ","
-    "E251",  # unexpected spaces around keyword / parameter equals
-    "E262",  # inline comment should start with "# "
-    "E271",  # multiple spaces  after keyword
-    "E272",  # multiple spaces before keyword
-    "E701",  # multiple statements on one line (colon)
-    "E702",  # multiple statements on one line (semicolon)
+    "E201",  # whitespace after "("                                (I like to play with white space so this cramps my style)
+    "E202",  # whitespace before ")"                               (I like to play with white space so this cramps my style)
+    "E203",  # whitespace before ":"                               (I like to play with white space so this cramps my style)
+    "E211",  # whitespace before "("                               (I like to play with white space so this cramps my style)
+    "E221",  # multiple spaces before operator                     (I like to play with white space so this cramps my style)
+    "E222",  # multiple spaces after  operator                     (I like to play with white space so this cramps my style)
+    "E226",  # missing whitespace around arithmetic operator       (the fix doesn't work on the right side even with --aggressive)
+    "E227",  # missing whitespace around bitwise or shift operator (the fix doesn't work on the right side even with --aggressive)
+    "E241",  # multiple spaces after ","                           (I like to play with white space so this cramps my style)
+    "E251",  # unexpected spaces around keyword / parameter equals (I like to play with white space so this cramps my style)
+    "E262",  # inline comment should start with "# "               (*shrug* I don't wanna)
+    "E271",  # multiple spaces  after keyword                      (I like to play with white space so this cramps my style)
+    "E272",  # multiple spaces before keyword                      (I like to play with white space so this cramps my style)
+    "E701",  # multiple statements on one line (colon)             (I like to group commands together: this cramps my style)
+    "E702",  # multiple statements on one line (semicolon)         (I like to group commands together: this cramps my style)
 ]
 
 # Check for some characters that I personally dislike in Python source code:
@@ -3930,6 +3930,37 @@ def find_additional_alias_files(options: Options) -> None:
         else:
             logging.error(f"Additional alias file {this_file} does not exist for shell {options.shell}.")
     options.additional_alias_files = valid_files
+
+
+def check_python_version(command: str) -> bool:
+    """Check if the given Python command is available and has a version of PY_VERSION or higher."""
+    import subprocess
+    preferred_major = int(PY_VERSION)
+    preferred_minor = int((PY_VERSION - preferred_major) * 100)
+    result = subprocess.run([command, "--version"], capture_output=True, text=True)
+    if result.returncode == 0:
+        version = result.stdout.strip().split()[1]
+        major, minor = map(int, version.split(".")[:2])
+        if major == preferred_major and minor >= preferred_minor:
+            return True
+    return False
+
+
+def find_preferred_python_version() -> str | None:
+    """Find the command for the preferred version of python (stored here as PY_VERSION)."""
+    # Check if the preferred python command (only specifying integer part of the preferred version) exists and returns a valid path
+    import subprocess
+    preferred_major       = int(PY_VERSION)
+    preferred_python_path = subprocess.run(["which", f"python{preferred_major}"],
+                                           capture_output=True, text=True).stdout.strip()
+    if preferred_python_path and check_python_version(f"python{preferred_major}"):
+        return os.path.basename(preferred_python_path)
+    # Check if the preferred python command (with complete version specified) exists and returns a valid path
+    preferred_python_path = subprocess.run(["which", f"python{PY_VERSION}"],
+                                           capture_output=True, text=True).stdout.strip()
+    if preferred_python_path and check_python_version(f"python{PY_VERSION}"):
+        return os.path.basename(preferred_python_path)
+    return None
 
 
 def ensure_path(path: str | os.PathLike[str], absolute: bool = True) -> Path:
@@ -7903,12 +7934,13 @@ if __name__ == "__main__":
 SETUP_CARTOPY_SCRIPT: str = r'''import os
 import matplotlib.pyplot as plt
 import cartopy
-cartopy.config['data_dir'] = os.getenv('CARTOPY_DATA_DIR', cartopy.config.get('data_dir'))
+cartopy.config["data_dir"] = os.getenv("CARTOPY_DATA_DIR", cartopy.config.get("data_dir"))
 
-fig, ax = plt.subplots(subplot_kw={'projection': cartopy.crs.PlateCarree()})
-ax.coastlines('110m')    # Explicitly specify resolution to ensure pre-loading
-ax.add_feature(cartopy.feature.OCEAN)  # Example color; adjust as needed
-ax.add_feature(cartopy.feature.LAND)   # Example color; adjust as needed
+fig, ax = plt.subplots(subplot_kw={"projection": cartopy.crs.PlateCarree()})
+# Explicitly specify resolution and add the ocean and land features to ensure pre-loading
+ax.coastlines("110m")
+ax.add_feature(cartopy.feature.OCEAN)
+ax.add_feature(cartopy.feature.LAND)
 
 # Force feature download
 temp_filename = "cartopy_test_map.png"

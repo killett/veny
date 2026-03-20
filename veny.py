@@ -23,7 +23,7 @@ from collections import defaultdict
 
 import univ_defs as ud
 
-__version__: str = "0.2.1"
+__version__: str = "0.2.2"
 
 
 class Options(ud.Options):
@@ -2407,7 +2407,7 @@ def main() -> None:
     memory_handler = ud.configure_logging(options.my_name, log_level=options.log_mode,
                                           rawlog=options.rawlog)
 
-    options.python_command = find_preferred_python_version()
+    options.python_command = ud.find_preferred_python_version()
     if options.python_command:
         if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Python %s is available at: %s", ud.PY_VERSION, options.python_command)
     else:
@@ -2538,7 +2538,7 @@ def main() -> None:
         if match_dir is None:
             if not options.rawlog: logging.info("Creating new virtual environment '%s'...", options.venv_name)
             if setup_virtualenv(options):
-                match_dir = options.venv_dir
+                match_dir        = options.venv_dir
                 created_new_venv = True
             else:
                 ud.my_critical_error("Failed to create a virtual environment.", choose_breakpoint=True)
@@ -2802,7 +2802,6 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         """Visit Call nodes to find file operations."""
-        return
         if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("FileVisiting Call node: %s", ast.dump(node))
         if self._process_open(        node): return
         if self._process_pathlib(     node): return
@@ -3534,7 +3533,6 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         """Visit Call nodes to find network operations."""
-        return
         if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("NetworkVisiting Call node: %s", ast.dump(node))
         if self._process_requests(       node): return
         if self._process_urllib(         node): return
@@ -4875,7 +4873,13 @@ def split_function_name(called_func: str, default_module: str) -> tuple[str, str
     return default_module, called_func
 
 
-def build_call_graph(modules_info: dict[str, ModuleInfo]) -> dict[str, set[str]]:
+def _resolve(name: str, alias_to_key: dict[str, str] | None) -> str:
+    """Resolve an alias-based module name to its file-path-based key."""
+    return alias_to_key.get(name, name) if alias_to_key else name
+
+
+def build_call_graph(modules_info: dict[str, ModuleInfo],
+                     alias_to_key: dict[str, str] | None = None) -> dict[str, set[str]]:
     """Build a call graph from the function calls in the modules."""
     call_graph = {}
     for module_key, module_info in modules_info.items():
@@ -4884,6 +4888,8 @@ def build_call_graph(modules_info: dict[str, ModuleInfo]) -> dict[str, set[str]]
             call_graph[full_func_name] = set()
             for called_func in func_info.function_calls:
                 called_module, called_name = split_function_name(called_func, module_key)
+                called_module = _resolve(called_module, alias_to_key)
+
                 # If target looks like Class.method and isn't present, try the base class.
                 if called_module in modules_info:
                     mi = modules_info[called_module]
@@ -4892,22 +4898,20 @@ def build_call_graph(modules_info: dict[str, ModuleInfo]) -> dict[str, set[str]]
                         if called_name not in mi.functions and cls in mi.base_classes:
                             bases = mi.base_classes.get(cls, [])
                             if bases:
-                                base = bases[0]  # you currently assume single inheritance
-                                # If base is defined in the same module, qualify it; else keep as-is (e.g., "ud.LLMs")
+                                base = bases[0]
                                 if base in mi.classes:
                                     called_full_name = f"{called_module}{_SEP}{base}.{meth}"
                                 else:
-                                    # base may be qualified like "ud.LLMs"
                                     if "." in base:
-                                        base_mod, base_sym = base.split(".", 1)   # "ud", "LLMs"
-                                        called_full_name = f"{base_mod}{_SEP}{base_sym}.{meth}"  # "ud::LLMs.meth"
+                                        base_mod, base_sym = base.split(".", 1)
+                                        called_full_name = f"{_resolve(base_mod, alias_to_key)}{_SEP}{base_sym}.{meth}"
                                     else:
                                         called_full_name = f"{base}{_SEP}{meth}"
                                 call_graph[full_func_name].add(called_full_name)
                                 continue
+
                 # Check if called_name is a class in the module
                 if called_module in modules_info and called_name in modules_info[called_module].classes:
-                    # Class instantiation, call __init__
                     called_full_name = f"{called_module}{_SEP}{called_name}.__init__"
                 else:
                     called_full_name = f"{called_module}{_SEP}{called_name}"
@@ -4941,8 +4945,7 @@ def collect_used_imports(start_module: str, start_func: str,
     if visited is None:
         visited = set()
     # Resolve alias-based module name to file-path-based key
-    if alias_to_key and start_module not in modules_info:
-        start_module = alias_to_key.get(start_module, start_module)
+    start_module        = _resolve(start_module, alias_to_key)
     full_func_name: str = f"{start_module}{_SEP}{start_func}"
     if full_func_name in visited:
         if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Already visited %s, skipping.", full_func_name)
@@ -4961,7 +4964,8 @@ def collect_used_imports(start_module: str, start_func: str,
     edges = call_graph.get(full_func_name, set())
     for called_full in edges:
         called_module, called_name = split_function_name(called_full, start_module)
-        imports.update(collect_used_imports(called_module, called_name, call_graph, modules_info, visited, alias_to_key))
+        imports.update(collect_used_imports(called_module, called_name, call_graph,
+                                            modules_info, visited, alias_to_key))
     return imports
 
 
@@ -5123,8 +5127,6 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
     if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Modules processed so far:")
     for module_key, m_info in modules_info.items():
         if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Module: %s, Classes: %s, Functions: %s", module_key, m_info.classes, list(m_info.functions.keys()))
-    # Now build the call graph
-    call_graph = build_call_graph(modules_info)
 
     # Build alias → file-path-key mapping for local modules
     _alias_to_key: dict[str, str] = {}
@@ -5132,6 +5134,9 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
         _p = ud.ensure_path(_mod_path)
         if ud.safe_is_file(_p):
             _alias_to_key[_mod_name] = os.fspath(_p.resolve())
+
+    # Now build the call graph
+    call_graph = build_call_graph(modules_info, alias_to_key=_alias_to_key)
 
     # Collect used imports starting from the first module
     used_imports:  set[str] = set()
@@ -5187,24 +5192,30 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
                 if new_module_key in modules_info or \
                    module_file_path in processed_paths or \
                    module_file_path in modules_to_process:
-                    continue  # already parsed or seen
+                    # Already parsed, but still trace its top-level calls
+                    if new_module_key in modules_info:
+                        old_size = len(used_imports)
+                        collect_imports_from_module(new_module_key)
+                        if len(used_imports) > old_size:
+                            new_modules_found = True
+                    continue  # don't re-analyze
                 modules_to_process.append(module_file_path)
                 new_modules_found = True
-                result = _analyze_module(
-                    options, module_file_path, modules_info, module_contents, module_trees,
-                    do_sys_path_scan=False,  # keep behavior identical to your current code
-                )
+                result = _analyze_module(options, module_file_path, modules_info,
+                                         module_contents, module_trees, do_sys_path_scan=False)
                 if result is None:
                     continue
                 new_module_key, module_info = result
-                used_imports.update(module_info.top_level_imports)
-                _enqueue_top_level_imports(
-                    options, module_file_path,
-                    module_info.top_level_imports,
-                    processed_paths,
-                    modules_to_process,
-                )
-                call_graph = build_call_graph(modules_info)
+                # Rebuild alias map and call graph with the new module included
+                _p = ud.ensure_path(module_file_path)
+                if ud.safe_is_file(_p):
+                    _alias_to_key[import_name] = os.fspath(_p.resolve())
+                call_graph = build_call_graph(modules_info, _alias_to_key)
+                collect_imports_from_module(new_module_key)
+                _enqueue_top_level_imports(options, module_file_path,
+                                           module_info.top_level_imports,
+                                           processed_paths,
+                                           modules_to_process)
             else:
                 # If not a local module, add to options.all_imports
                 options.all_imports.add(import_name)
@@ -5220,7 +5231,7 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
         # Record any I/O in each reachable function or class method
         for full in visited_funcs:
             mod, func = split_function_name(full, default_module="")
-            if mod != module_key:
+            if _resolve(mod, _alias_to_key) != module_key:
                 continue
             func_info = modules_info[mod].functions.get(func)
             if not func_info:
@@ -5605,10 +5616,10 @@ def recover_pip_versions(output: str, options: Options) -> None:
     if hasattr(output, "read"):
         output = output.read()
     current_version_pattern = re.compile(r"Current pip version: (.+)")
-    new_version_pattern = re.compile(r"New pip version: (.+)")
+    new_version_pattern     = re.compile(r"New     pip version: (.+)")
 
     current_version_match = current_version_pattern.search(output)
-    new_version_match = new_version_pattern.search(output)
+    new_version_match     = new_version_pattern.search(    output)
 
     if current_version_match:
         options.current_pip_version = current_version_match.group(1)
@@ -5722,8 +5733,8 @@ def parse_extra_requirements(options: Options) -> None:
         if line and not line.startswith("#"):
             match = pattern.match(line)
             if match:
-                package = match.group(1)
-                version_spec = match.group(2).strip() if match.group(2) else ""
+                package                             = match.group(1)
+                version_spec                        = match.group(2).strip() if match.group(2) else ""
                 options.extra_requirements[package] = version_spec
 
 
@@ -6303,35 +6314,6 @@ def dict_of_custom_modules(options: Options) -> dict[str, Path]:
             logging.info("Saving custom modules to %s", custom_filename)
         pickle.dump(custom_modules, f_out, protocol=pickle.HIGHEST_PROTOCOL)  # Use highest protocol for efficiency because we don't need backward compatibility for caching purposes
     return custom_modules
-
-
-def check_python_version(command: str) -> bool:
-    """Check if the given Python command is available and has a version of PY_VERSION or higher."""
-    preferred_major = int(ud.PY_VERSION)
-    preferred_minor = int((ud.PY_VERSION - preferred_major) * 100)
-    result = subprocess.run([command, "--version"], capture_output=True, text=True)
-    if result.returncode == 0:
-        version = result.stdout.strip().split()[1]
-        major, minor = map(int, version.split(".")[:2])
-        if major == preferred_major and minor >= preferred_minor:
-            return True
-    return False
-
-
-def find_preferred_python_version() -> str | None:
-    """Find the command for the preferred version of python (stored in univ_defs.py as PY_VERSION)."""
-    # Check if the preferred python command (only specifying integer part of the preferred version) exists and returns a valid path
-    preferred_major       = int(ud.PY_VERSION)
-    preferred_python_path = subprocess.run(["which", f"python{preferred_major}"],
-                                           capture_output=True, text=True).stdout.strip()
-    if preferred_python_path and check_python_version(f"python{preferred_major}"):
-        return os.path.basename(preferred_python_path)
-    # Check if the preferred python command (with complete version specified) exists and returns a valid path
-    preferred_python_path = subprocess.run(["which", f"python{ud.PY_VERSION}"],
-                                           capture_output=True, text=True).stdout.strip()
-    if preferred_python_path and check_python_version(f"python{ud.PY_VERSION}"):
-        return os.path.basename(preferred_python_path)
-    return None
 
 
 if __name__ == "__main__":
