@@ -11,8 +11,9 @@ derived `StdlibIndex` resolver.
   (7 tasks, written 2026-08-12)
 - Task tracker: `docs/superpowers/plans/2026-08-12-stdlib-index.md.tasks.json`
 
-**Next action:** execute Task 1 of the implementation plan (create
-`stdlib_index.py` with the `StdlibIndex` dataclass and the test scaffolding).
+**Next action:** stdlib work is complete through Task 7. The implementation
+plan is fully executed on branch `stdlib-index`. Pick the next architectural
+problem in veny; candidates are recorded under Deferred items.
 
 ## Cross-cutting decisions
 
@@ -47,6 +48,26 @@ derived `StdlibIndex` resolver.
 - The repository is a flat two-script layout (`veny.py` + `univ_defs.py`),
   not the `src/` package layout described in the global CLAUDE.md. New modules
   must travel alongside those two files.
+- `pixi run lint` and `pixi run typecheck` fail repo-wide on pre-existing
+  `veny.py` / `univ_defs.py` errors (1171 ruff, 158 mypy as of 2026-08-12).
+  Verify new work with commands scoped to the files you touched.
+- `.git/hooks/pre-commit` is not installed, so `git commit` does not run the
+  hooks. Run `pixi run pre-commit run --files <paths>` by hand.
+- veny's standard-library skips are silent for top-level imports: the
+  `Skipping standard library import` debug line only fires inside
+  `process_import`, which top-level imports bypass (`_enqueue_top_level_imports`
+  and the used-imports loop in `find_imports_and_IO_in_script` both `continue`
+  past stdlib names before `process_import` is ever called). Verify stdlib
+  classification by a name's *absence* from the bad and uninstalled sets, not
+  by that log line. Predates the stdlib_index plan.
+- veny normalizes dotted imports (e.g. `xml.etree.ElementTree`) to their first
+  component (`xml`) before any stdlib classification happens
+  (`ImportFunctionCollector.visit_Import`), so a dotted name never appears
+  verbatim in the logs — only its top-level component does.
+- A `--justprint` run leaves `.veny_custom_modules_*.pkl` and a `logs/`
+  directory in the working tree. `.gitignore` does **not** cover either as of
+  2026-08-12 — check `git status` and stage explicitly (never `git add -A`)
+  before committing anything after a run.
 
 ## Deferred items
 
