@@ -7,9 +7,11 @@
 
 - Design doc: `docs/superpowers/specs/2026-08-12-module-alias-resolver-design.md`
   (approved 2026-08-12)
-- Implementation plan: not yet written
+- Implementation plan: `docs/superpowers/plans/2026-08-12-module-alias-resolver.md`
+  (8 tasks, written 2026-08-12)
+- Task tracker: `docs/superpowers/plans/2026-08-12-module-alias-resolver.md.tasks.json`
 
-**Next action:** write the implementation plan from the approved design.
+**Next action:** execute Task 1 (data model and ranking in `alias_index.py`).
 
 **Previous topic (complete):** the `StdlibIndex` resolver.
 
