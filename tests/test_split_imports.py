@@ -1,3 +1,5 @@
+import logging
+
 import stdlib_index
 import veny
 
@@ -39,3 +41,22 @@ def test_split_imports_wires_python2_table_end_to_end():
     veny.split_imports(options)
     assert options.bad_imports == {"httplib", "_private_thing"}
     assert options.all_imports == set()
+
+
+def test_tkinter_produces_one_system_package_warning(caplog):
+    options = veny.Options()
+    options.seen_stdlib_imports = {"tkinter", "os"}
+    with caplog.at_level(logging.WARNING):
+        veny.warn_about_system_packages(options)
+    messages = [record.getMessage() for record in caplog.records]
+    assert len(messages) == 1
+    assert "tkinter" in messages[0]
+    assert "python3-tk" in messages[0]
+
+
+def test_no_warning_when_no_hint_module_was_seen(caplog):
+    options = veny.Options()
+    options.seen_stdlib_imports = {"os", "sys"}
+    with caplog.at_level(logging.WARNING):
+        veny.warn_about_system_packages(options)
+    assert caplog.records == []

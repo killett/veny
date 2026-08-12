@@ -1578,6 +1578,7 @@ def main() -> None:
         logging.info("Uninstalled imports: %s", options.uninstalled_imports)
         if options.bad_imports:
             logging.warning("Bad imports: %s", options.bad_imports)
+        warn_about_system_packages(options)
         if options.samedir_files:
             logging.info("Imported files in the same directory as the script: %s", list(map(os.fspath, options.samedir_files)))
         if options.subfolders:
@@ -4445,6 +4446,17 @@ def _compute_bad_imports(all_imports: set[str], known_bad: set[str],
     bad = (known_bad | py2_only) & all_imports
     bad.update({imp for imp in all_imports if imp.startswith("_")})
     return bad
+
+
+def warn_about_system_packages(options: Options) -> None:
+    """Warn once for each standard-library import that needs an operating-system package.
+
+    Args:
+        options: Options object; reads options.seen_stdlib_imports.
+    """
+    for name, system_package in stdlib_index.hints_for(options.seen_stdlib_imports).items():
+        logging.warning("%s is in the standard library but needs the %s system package "
+                        "before it will import.", name, system_package)
 
 
 def split_imports(options: Options) -> None:
