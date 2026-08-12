@@ -1,0 +1,26 @@
+.claude-project-id
+
+.sandbox_settings.json
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# pixi environment (recreate with `pixi install`; pixi.lock is the record)
+.pixi/
+
+# veny run byproducts: the custom-module cache it pickles into the working
+# directory, and the log directory it creates. Both are per-run state.
+.veny_custom_modules_*.pkl
+logs/
+
+# superpowers subagent-driven-development scratch workspace
+.superpowers/
