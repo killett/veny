@@ -31,3 +31,11 @@ def test_seaborn_tkinter_and_msvcrt_are_no_longer_blocked():
         "bayesOpt",
         "non_existent_module",
     }
+
+
+def test_split_imports_wires_python2_table_end_to_end():
+    options = veny.Options()
+    options.all_imports = {"httplib", "_private_thing"}
+    veny.split_imports(options)
+    assert options.bad_imports == {"httplib", "_private_thing"}
+    assert options.all_imports == set()
