@@ -19,8 +19,8 @@ problem in veny; candidates are recorded under Deferred items.
 
 - **Standard-library membership is a property of the *target* interpreter,**
   not of the interpreter running veny. `options.python_command` is resolved
-  early (`veny.py:2410`), before any import analysis, so the target can be
-  probed without a virtual environment. Decided 2026-08-12.
+  early in `main()` (`veny.py:1478`), before any import analysis, so the
+  target can be probed without a virtual environment. Decided 2026-08-12.
 - **No third-party dependency may be required to run veny.** veny is a
   bootstrapping tool that must work on a bare interpreter, so packages such as
   `stdlib_list` are ruled out on principle, not on preference. Decided
@@ -71,8 +71,9 @@ problem in veny; candidates are recorded under Deferred items.
 
 ## Deferred items
 
-- `univ_defs.py` is 9,711 lines and `veny.py` is 6,320 lines. Both are overdue
-  for splitting. Not in scope for the stdlib work.
+- `univ_defs.py` is 9,711 lines and `veny.py` is 5,427 lines (down from 6,320
+  before this plan removed the hardcoded stdlib list). Both are overdue for
+  splitting. Not in scope for the stdlib work.
 - `known_bad_imports` retains six project-specific local module names,
   hardcoded. If that list grows, move it to a config file under
   `options.my_dir`.
