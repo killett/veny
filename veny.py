@@ -1350,9 +1350,10 @@ If you're using the bash shell, follow these steps to add the alias manually:
             "zmq": "pyzmq",
             "zopyx": "zopyx.textindexng3"}
         self.reversed_module_aliases = {v: k for k, v in self.module_aliases.items()}
-        # Set of known bad imports that should be ignored.
-        self.known_bad_imports: set[str] = {"__builtin__", "snakeClass", "GPUampcor", "pathfinding_salvo_rework", "seaborn", "DQN", "bayesOpt", "tkinter", "msvcrt", "BaseHTTPServer", "urlparse", "tkFileDialog", "tkMessageBox", "ConfigParser", "Cookie", "HTMLParser", "Queue", "SocketServer", "StringIO", "Tkinter", "UserDict", "cPickle", "cStringIO", "cookielib", "htmlentitydefs", "httplib", "tkFont", "urllib2", "non_existent_module"}  # "BaseHTTPServer", "urlparse", "tkFileDialog", "tkMessageBox", "ConfigParser", "Cookie", "HTMLParser", "Queue", "SocketServer", "StringIO", "Tkinter", "UserDict", "cPickle", "cStringIO", "cookielib", "htmlentitydefs", "httplib", "tkFont", "tkMessageBox", "urllib2" are Python 2 modules - we don't want to try to install them. A more general approach would involve importing stdlib_list and using that to filter out stdlib modules from Python 2 and Python 3: https://pypi.org/project/stdlib-list/
-        # https://chatgpt.com/share/687000fd-be84-8006-a7f4-06af4b1e0eda
+        # Project-specific module names that are not on PyPI and never will be. Python 2
+        # names and system-package cases now live in stdlib_index.py instead.
+        self.known_bad_imports: set[str] = {"snakeClass", "GPUampcor", "pathfinding_salvo_rework",
+                                            "DQN", "bayesOpt", "non_existent_module"}
         # List of unusual imports that are not standard library modules or packages.
         self.unusual_imports: list[str] = ["a", "an", "dl", "the", "it", "x", "xx", "above", "another", "__builtin__", "within"]
         # List of directories to stay out of when searching for local custom imports because they're filled with standard library modules or other irrelevant files.
@@ -4429,10 +4430,27 @@ else:
     return "packages imported successfully" in result.stdout
 
 
+def _compute_bad_imports(all_imports: set[str], known_bad: set[str],
+                         py2_only: frozenset[str]) -> set[str]:
+    """Return the imports that must never be handed to pip.
+
+    Args:
+        all_imports: Every import name found in the analysed scripts.
+        known_bad:   Project-specific names that are not on PyPI.
+        py2_only:    Python 2 standard-library names, from stdlib_index.
+
+    Returns:
+        The subset of all_imports that pip must not be asked to install.
+    """
+    bad = (known_bad | py2_only) & all_imports
+    bad.update({imp for imp in all_imports if imp.startswith("_")})
+    return bad
+
+
 def split_imports(options: Options) -> None:
     """Split imports into installed, uninstalled, and bad imports."""
-    options.bad_imports = options.known_bad_imports.intersection(options.all_imports)
-    options.bad_imports.update({imp for imp in options.all_imports if imp.startswith("_")})
+    options.bad_imports = _compute_bad_imports(options.all_imports, options.known_bad_imports,
+                                               stdlib_index.PYTHON2_ONLY)
     if options.bad_imports:
         if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Identified bad imports: %s", options.bad_imports)
     options.all_imports = options.all_imports - options.bad_imports
