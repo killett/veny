@@ -18,6 +18,9 @@ from __future__ import annotations
 import enum
 import json
 import logging
+import os
+import subprocess
+import sys
 import time
 import tomllib
 from collections.abc import Iterable
@@ -328,3 +331,81 @@ class AliasCache:
             )
         except OSError as exc:
             logging.warning("Could not write the alias cache %s (%s).", self.path, exc)
+
+
+_PROBE_TIMEOUT: Final[float] = 10.0
+
+_PROBE_CODE: Final[str] = (
+    "import sys, json; "
+    "from importlib.metadata import packages_distributions; "
+    "print(json.dumps({'version': list(sys.version_info[:2]), "
+    "'packages': packages_distributions()}))"
+)
+
+
+def _running_tag() -> str:
+    """Return the running interpreter's version tag.
+
+    Returns:
+        A tag such as "3.12".
+    """
+    return f"{sys.version_info.major}.{sys.version_info.minor}"
+
+
+def probe_interpreter(
+    python: str | os.PathLike[str], timeout: float = _PROBE_TIMEOUT
+) -> tuple[str, dict[str, list[str]]]:
+    """Ask an interpreter for its version and which distributions provide which imports.
+
+    importlib.metadata.packages_distributions() answers the reverse question
+    exactly -- top-level import name to distribution names -- but only for
+    distributions installed in that interpreter. Any failure degrades to an
+    empty mapping with a warning, because a missing probe is absent information,
+    not contradicted information.
+
+    Args:
+        python:  Path or command name of the interpreter to probe.
+        timeout: Seconds to wait before giving up.
+
+    Returns:
+        The interpreter's version tag and its top-level-name to distribution
+        mapping. On failure, the running interpreter's tag and an empty mapping.
+    """
+    command = [os.fspath(python), "-c", _PROBE_CODE]
+    try:
+        result = subprocess.run(  # noqa: S603
+            command, capture_output=True, text=True, check=False, timeout=timeout
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logging.warning(
+            "Could not run %s to list its installed distributions (%s); "
+            "alias resolution will rely on other evidence.",
+            python,
+            exc,
+        )
+        return _running_tag(), {}
+    if result.returncode != 0:
+        logging.warning(
+            "%s exited with %d while listing its installed distributions (%s); "
+            "alias resolution will rely on other evidence.",
+            python,
+            result.returncode,
+            result.stderr.strip(),
+        )
+        return _running_tag(), {}
+    try:
+        payload = json.loads(result.stdout)
+        major, minor = payload["version"]
+        packages = {
+            str(key): [str(name) for name in value]
+            for key, value in payload["packages"].items()
+        }
+    except (ValueError, KeyError, TypeError) as exc:
+        logging.warning(
+            "Could not read the installed distribution list from %s (%s); "
+            "alias resolution will rely on other evidence.",
+            python,
+            exc,
+        )
+        return _running_tag(), {}
+    return f"{int(major)}.{int(minor)}", packages

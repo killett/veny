@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 
 import pytest
 
@@ -184,3 +186,55 @@ def test_corrupt_entry_missing_pip_name_is_quarantined(tmp_path):
     assert cache.get("cv2") is None
     quarantined = list(tmp_path.glob("cache.json.corrupt-*"))
     assert len(quarantined) == 1
+
+
+def test_probe_reads_version_and_distributions(monkeypatch):
+    payload = '{"version": [3, 12], "packages": {"cv2": ["opencv-python"]}}'
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout=payload, stderr="")
+
+    monkeypatch.setattr(alias_index.subprocess, "run", fake_run)
+    tag, packages = alias_index.probe_interpreter("/usr/bin/python3")
+    assert tag == "3.12"
+    assert packages == {"cv2": ["opencv-python"]}
+    assert len(calls) == 1
+
+
+def test_probe_degrades_when_the_interpreter_cannot_run(monkeypatch, caplog):
+    # veny's job is to keep going; a missing probe must not stop a run.
+    def fake_run(command, **kwargs):
+        raise OSError("no such executable")
+
+    monkeypatch.setattr(alias_index.subprocess, "run", fake_run)
+    with caplog.at_level("WARNING"):
+        tag, packages = alias_index.probe_interpreter("/nope/python3")
+    assert packages == {}
+    assert tag == f"{sys.version_info.major}.{sys.version_info.minor}"
+    assert "no such executable" in caplog.text
+
+
+def test_probe_degrades_on_unparseable_output(monkeypatch):
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(command, 0, stdout="not json", stderr="")
+
+    monkeypatch.setattr(alias_index.subprocess, "run", fake_run)
+    _, packages = alias_index.probe_interpreter("/usr/bin/python3")
+    assert packages == {}
+
+
+def test_probe_degrades_on_nonzero_exit(monkeypatch):
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="boom")
+
+    monkeypatch.setattr(alias_index.subprocess, "run", fake_run)
+    _, packages = alias_index.probe_interpreter("/usr/bin/python3")
+    assert packages == {}
+
+
+def test_probe_of_the_running_interpreter_reports_its_own_version():
+    # Integration check that the probe code itself is valid Python.
+    tag, _ = alias_index.probe_interpreter(sys.executable)
+    assert tag == f"{sys.version_info.major}.{sys.version_info.minor}"
