@@ -2,18 +2,21 @@
 
 ## Current work
 
-**Topic:** Replace the hardcoded standard-library list in `veny.py` with a
-derived `StdlibIndex` resolver.
+**Topic:** Replace the hardcoded module-alias table in `veny.py` with a derived
+`AliasIndex` resolver.
+
+- Design doc: `docs/superpowers/specs/2026-08-12-module-alias-resolver-design.md`
+  (approved 2026-08-12)
+- Implementation plan: not yet written
+
+**Next action:** write the implementation plan from the approved design.
+
+**Previous topic (complete):** the `StdlibIndex` resolver.
 
 - Design doc: `docs/superpowers/specs/2026-08-12-stdlib-index-design.md`
-  (approved 2026-08-12)
 - Implementation plan: `docs/superpowers/plans/2026-08-12-stdlib-index.md`
-  (7 tasks, written 2026-08-12)
+  (7 tasks, all executed on branch `stdlib-index`)
 - Task tracker: `docs/superpowers/plans/2026-08-12-stdlib-index.md.tasks.json`
-
-**Next action:** stdlib work is complete through Task 7. The implementation
-plan is fully executed on branch `stdlib-index`. Pick the next architectural
-problem in veny; candidates are recorded under Deferred items.
 
 ## Cross-cutting decisions
 
@@ -86,9 +89,11 @@ problem in veny; candidates are recorded under Deferred items.
 - `known_bad_imports` retains six project-specific local module names,
   hardcoded. If that list grows, move it to a config file under
   `options.my_dir`.
-- Full rework of the `split_imports` classification pipeline (module aliases,
-  `also_needs`, installed/uninstalled) was considered and deferred — too large
-  a blast radius for a codebase with no test suite yet.
+- `also_needs` (`veny.py:120`) maps a package to further packages it needs. It
+  is a different relation from the import-to-package aliases and is explicitly
+  out of scope for the AliasIndex design; it remains hardcoded and deferred.
+  (The module-alias half of this formerly-deferred item became active work on
+  2026-08-12 — see Current work.)
 - The repository had no `tests/` directory before this work. The stdlib work
   creates the first tests; broader coverage remains open.
 - `univ_defs.to_jsonable` has no handler for `StdlibIndex`, so
