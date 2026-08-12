@@ -238,3 +238,26 @@ def test_probe_of_the_running_interpreter_reports_its_own_version():
     # Integration check that the probe code itself is valid Python.
     tag, _ = alias_index.probe_interpreter(sys.executable)
     assert tag == f"{sys.version_info.major}.{sys.version_info.minor}"
+
+
+def test_probe_degrades_on_timeout(monkeypatch, caplog):
+    def fake_run(command, **kwargs):
+        raise subprocess.TimeoutExpired(command, timeout=kwargs.get("timeout", 10))
+
+    monkeypatch.setattr(alias_index.subprocess, "run", fake_run)
+    with caplog.at_level("WARNING"):
+        _, packages = alias_index.probe_interpreter("/usr/bin/python3")
+    assert packages == {}
+    assert "Could not run" in caplog.text
+
+
+def test_probe_degrades_on_malformed_payload(monkeypatch):
+    # If packages is a list instead of dict, validation should catch it.
+    payload = '{"version": [3, 12], "packages": ["not", "a", "dict"]}'
+
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(command, 0, stdout=payload, stderr="")
+
+    monkeypatch.setattr(alias_index.subprocess, "run", fake_run)
+    _, packages = alias_index.probe_interpreter("/usr/bin/python3")
+    assert packages == {}

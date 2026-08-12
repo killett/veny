@@ -395,12 +395,29 @@ def probe_interpreter(
         return _running_tag(), {}
     try:
         payload = json.loads(result.stdout)
+        if not isinstance(payload, dict):
+            raise ValueError("Probe payload must be a dict")
+        if (
+            not isinstance(payload.get("version"), (list, tuple))
+            or len(payload.get("version", [])) != 2
+        ):
+            raise ValueError("Probe version must be a 2-element sequence")
         major, minor = payload["version"]
-        packages = {
-            str(key): [str(name) for name in value]
-            for key, value in payload["packages"].items()
-        }
-    except (ValueError, KeyError, TypeError) as exc:
+        major = int(major)
+        minor = int(minor)
+
+        if not isinstance(payload.get("packages"), dict):
+            raise ValueError("Probe packages must be a dict")
+        packages = {}
+        for key, value in payload["packages"].items():
+            if not isinstance(key, str):
+                raise ValueError("Package keys must be strings")
+            if not isinstance(value, list) or not all(
+                isinstance(name, str) for name in value
+            ):
+                raise ValueError("Package values must be lists of strings")
+            packages[key] = value
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
         logging.warning(
             "Could not read the installed distribution list from %s (%s); "
             "alias resolution will rely on other evidence.",
@@ -408,4 +425,4 @@ def probe_interpreter(
             exc,
         )
         return _running_tag(), {}
-    return f"{int(major)}.{int(minor)}", packages
+    return f"{major}.{minor}", packages
