@@ -129,3 +129,19 @@ def test_resolve_of_other_interpreter_uses_that_interpreters_truth(monkeypatch):
 
 def test_resolve_of_none_uses_running_interpreter():
     assert stdlib_index.resolve(None).source == "running"
+
+
+def test_python2_only_names_are_not_python3_stdlib():
+    overlap = stdlib_index.PYTHON2_ONLY & stdlib_index.for_running_interpreter().names
+    assert overlap == frozenset()
+
+
+def test_system_package_hint_keys_are_stdlib_names():
+    running = stdlib_index.for_running_interpreter()
+    for name in stdlib_index.NEEDS_SYSTEM_PACKAGE:
+        assert name in running.names
+
+
+def test_hints_for_returns_only_names_that_were_seen():
+    assert stdlib_index.hints_for({"tkinter", "os"}) == {"tkinter": "python3-tk"}
+    assert stdlib_index.hints_for({"os", "sys"}) == {}

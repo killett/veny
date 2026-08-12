@@ -18,6 +18,7 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Final
@@ -178,3 +179,55 @@ def resolve(python: str | os.PathLike[str] | None) -> StdlibIndex:
     if python is None or _is_running_interpreter(python):
         return for_running_interpreter()
     return for_interpreter(os.fspath(python))
+
+
+# Python 2 standard-library names. They are not installable under any Python 3,
+# so veny must never hand them to pip. This is a fact about Python, not about
+# any one user's projects -- which is why it lives here and not in veny.py.
+PYTHON2_ONLY: Final[frozenset[str]] = frozenset(
+    {
+        "BaseHTTPServer",
+        "ConfigParser",
+        "Cookie",
+        "HTMLParser",
+        "Queue",
+        "SocketServer",
+        "StringIO",
+        "Tkinter",
+        "UserDict",
+        "__builtin__",
+        "cPickle",
+        "cStringIO",
+        "cookielib",
+        "htmlentitydefs",
+        "httplib",
+        "tkFileDialog",
+        "tkFont",
+        "tkMessageBox",
+        "urllib2",
+        "urlparse",
+    }
+)
+
+# Standard-library modules that still need an operating-system package before
+# they will import. They must NOT be pip-installed; the user needs a system
+# package instead, so veny warns rather than blocking or installing.
+NEEDS_SYSTEM_PACKAGE: Final[dict[str, str]] = {
+    "tkinter": "python3-tk",
+}
+
+
+def hints_for(import_names: Iterable[str]) -> dict[str, str]:
+    """Map the seen standard-library imports that need a system package to that package.
+
+    Args:
+        import_names: Import names that were skipped as standard library.
+
+    Returns:
+        A mapping of import name to the system package that provides it,
+        containing only names that appear in import_names.
+    """
+    seen = set(import_names)
+    return {
+        name: package for name, package in NEEDS_SYSTEM_PACKAGE.items() if name in seen
+    }
