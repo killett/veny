@@ -163,8 +163,14 @@ evidence.
   answering the reverse question exactly rather than by inference. Multiple
   distributions for one name produce multiple candidates. Does not stop the walk.
 - **T3 seed.** The curated in-repo exceptions (`osgeo` → `gdal`,
-  `cv2` → `opencv-python`, `netCDF4` → `netcdf4`, and the rest of the
-  hand-added set). Contributes a candidate; does not stop the walk, so a seed
+  `cv2` → `opencv-python`, `netCDF4` → `netcdf4`, `yaml` → `PyYAML`,
+  `zmq` → `pyzmq`, and the rest). The seed is curated by *correctness and
+  reachability*, not by provenance: entries from the old hand-added block that
+  are broken (`jnp` → `jax.numpy`, which is not a PyPI project) or unreachable
+  (`mypy.api` → `mypy`, whose dotted key can never match after veny normalizes
+  imports to their first component) are left out, while correct high-traffic
+  aliases are included regardless of which part of the old table they appeared
+  in. Its size is the constraint: a short list of exceptions, never a table. Contributes a candidate; does not stop the walk, so a seed
   entry can never silently outrank stronger evidence. A user who needs a seed
   entry to win can say so in the override file.
 - **T4 PyPI.** Two probes, both yielding `PYPI_CONFIRMED`:

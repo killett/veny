@@ -57,7 +57,7 @@
 - [ ] `Source` is an `IntEnum` with exactly `OVERRIDE=0`, `CACHE=1`, `INSTALLED=2`, `SEED=3`, `PYPI_CONFIRMED=4`, and no heuristic member
 - [ ] `rank()` sorts by `(source, pip_name)` and is stable across calls
 - [ ] `rank()` deduplicates by `pip_name`, keeping the strongest-evidence occurrence
-- [ ] `SEED` contains the hand-added aliases carried over from `veny.py:136-146`
+- [ ] `SEED` is a curated set of exceptions that are both correct and reachable — derived from the hand-added block at `veny.py:136-146`, but **not a verbatim copy** of it (see the note below the code block for what was dropped and added, and why)
 - [ ] `alias_index.py` imports nothing from `veny` or `univ_defs`
 
 **Verify:** `pixi run python -m pytest tests/test_alias_index.py -v` → all pass
@@ -243,6 +243,24 @@ SEED: Final[dict[str, str]] = {
     "zmq": "pyzmq",
 }
 ```
+
+**Why `SEED` is not a verbatim copy of `veny.py:136-146`** (ruled on 2026-08-12):
+
+- **`jnp` → `jax.numpy` dropped: broken data.** `jax.numpy` is not a PyPI
+  project, so `pip install jax.numpy` fails. The correct pip name is `jax`.
+  Rather than silently repair a value nobody has exercised, the entry is left
+  out — the PyPI tier resolves `jax` correctly once it exists.
+- **`mypy.api` → `mypy` dropped: unreachable.** veny normalizes dotted imports
+  to their first component before any classification, so a key containing a dot
+  can never match. It is also an identity mapping, so it earns nothing.
+- **`yaml` → `PyYAML` and `zmq` → `pyzmq` added.** Both are correct,
+  high-traffic aliases that no other tier resolves with an empty cache and no
+  network. They appear in the deleted bulk table too, but they are here on
+  their merits, not as a reintroduction of it.
+
+The distinction that matters: `SEED` is curated by correctness and reachability,
+not by provenance. Its size is the constraint — a short list of exceptions, never
+a mapping table.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
