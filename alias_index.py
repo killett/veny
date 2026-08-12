@@ -196,11 +196,32 @@ class AliasCache:
             )
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("Cache payload must be a dict")
+            if not isinstance(payload.get("entries"), dict):
+                raise ValueError("Cache entries must be a dict")
+            for key, value in payload["entries"].items():
+                if not isinstance(key, str):
+                    raise ValueError("Entry keys must be strings")
+                if not isinstance(value, dict):
+                    raise ValueError("Entry values must be dicts")
+                if not isinstance(value.get("pip_name"), str):
+                    raise ValueError("Entry pip_name must be a string")
+                if not isinstance(value.get("python"), str):
+                    raise ValueError("Entry python version must be a string")
+            rejections_data = payload.get("rejections", {})
+            if not isinstance(rejections_data, dict):
+                raise ValueError("Cache rejections must be a dict")
+            for key, value in rejections_data.items():
+                if not isinstance(key, str):
+                    raise ValueError("Rejection keys must be strings")
+                if not isinstance(value, list) or not all(
+                    isinstance(v, str) for v in value
+                ):
+                    raise ValueError("Rejection values must be lists of strings")
             entries = dict(payload["entries"])
-            rejections = {
-                key: list(value) for key, value in payload.get("rejections", {}).items()
-            }
-        except (OSError, ValueError, KeyError, TypeError) as exc:
+            rejections = {key: list(value) for key, value in rejections_data.items()}
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             quarantine = path.with_name(
                 f"{path.name}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}"
             )

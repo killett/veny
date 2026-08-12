@@ -154,3 +154,33 @@ def test_cache_file_is_written_as_readable_json(tmp_path):
     AliasCache.load(path, interpreter_tag="3.12").confirm("cv2", "opencv-python")
     payload = json.loads(path.read_text())
     assert payload["entries"]["cv2"]["pip_name"] == "opencv-python"
+
+
+def test_corrupt_rejections_not_a_dict_is_quarantined(tmp_path):
+    # Rejections as a list crashes .items() during load without shape validation.
+    path = tmp_path / "cache.json"
+    path.write_text('{"entries": {}, "rejections": ["not", "a", "dict"]}')
+    cache = AliasCache.load(path, interpreter_tag="3.12")
+    assert cache.get("anything") is None
+    quarantined = list(tmp_path.glob("cache.json.corrupt-*"))
+    assert len(quarantined) == 1
+
+
+def test_corrupt_entry_value_not_a_dict_is_quarantined(tmp_path):
+    # Entry value as a string crashes .get() on the affected key.
+    path = tmp_path / "cache.json"
+    path.write_text('{"entries": {"cv2": "not-a-dict"}, "rejections": {}}')
+    cache = AliasCache.load(path, interpreter_tag="3.12")
+    assert cache.get("cv2") is None
+    quarantined = list(tmp_path.glob("cache.json.corrupt-*"))
+    assert len(quarantined) == 1
+
+
+def test_corrupt_entry_missing_pip_name_is_quarantined(tmp_path):
+    # Entry dict without pip_name key crashes on access during load.
+    path = tmp_path / "cache.json"
+    path.write_text('{"entries": {"cv2": {"python": "3.12"}}, "rejections": {}}')
+    cache = AliasCache.load(path, interpreter_tag="3.12")
+    assert cache.get("cv2") is None
+    quarantined = list(tmp_path.glob("cache.json.corrupt-*"))
+    assert len(quarantined) == 1
