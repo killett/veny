@@ -297,7 +297,7 @@ git commit -m "feat: add AliasIndex data model with deterministic candidate rank
 
 **Acceptance Criteria:**
 - [ ] `load_overrides()` returns `{}` for a missing file and raises `AliasOverrideError` for malformed TOML
-- [ ] `AliasCache.load()` on a corrupt file renames it to `<name>.corrupt-<timestamp>` and starts empty rather than raising
+- [ ] `AliasCache.load()` on a corrupt file renames it to `<name>.corrupt-<timestamp>` and starts empty rather than raising. **Corrupt means any unusable file, not only invalid JSON**: validate the payload's shape inside the same `try` that triggers quarantine — top level a dict; `entries` a dict of string keys to dicts carrying string `pip_name` and string `python`; `rejections` a dict of string keys to lists of strings. Anything else takes the quarantine path, so nothing malformed can reach `get()` or `rejected_names()`
 - [ ] A cache entry recorded under one interpreter tag is ignored under a different tag
 - [ ] `confirm()` writes through to disk immediately and round-trips
 - [ ] `reject()` persists only `import_failed` rejections; `install_failed` is not persisted
@@ -588,10 +588,19 @@ class AliasCache:
             logging.warning("Could not write the alias cache %s (%s).", self.path, exc)
 ```
 
+> **The `AliasCache.load()` shown above is not sufficient on its own** (found in
+> review, 2026-08-12). It survives invalid JSON but not valid JSON of the wrong
+> shape: `rejections` as a list raises `AttributeError` out of `load()` itself
+> (not in the caught tuple), and an `entries` value that is a string, or a dict
+> missing `pip_name`, crashes later inside `get()` — far from the corrupt file.
+> Add the shape validation named in the acceptance criteria inside the same
+> `try` block, and cover each case with a test asserting the file was
+> quarantined and `get()` returns `None` rather than raising.
+
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `pixi run python -m pytest tests/test_alias_index.py -v`
-Expected: PASS (16 tests)
+Expected: PASS (16 tests, plus the shape-corruption tests above)
 
 - [ ] **Step 5: Check the touched files only**
 
