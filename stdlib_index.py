@@ -9,14 +9,15 @@ docs/superpowers/specs/2026-08-12-stdlib-index-design.md for the rationale.
 This module deliberately imports nothing from veny or univ_defs, so it can be
 tested on its own and so the dependency direction stays one-way.
 """
+
 from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
 from typing import Final
 
-SOURCE_RUNNING:  Final[str] = "running"
-SOURCE_PROBE:    Final[str] = "probe"
+SOURCE_RUNNING: Final[str] = "running"
+SOURCE_PROBE: Final[str] = "probe"
 SOURCE_DEGRADED: Final[str] = "degraded"
 
 
@@ -30,9 +31,9 @@ class StdlibIndex:
         source:         One of SOURCE_RUNNING, SOURCE_PROBE, SOURCE_DEGRADED.
     """
 
-    names:          frozenset[str]
+    names: frozenset[str]
     python_version: tuple[int, int]
-    source:         str
+    source: str
 
     def __contains__(self, import_name: object) -> bool:
         """Return True if an import name resolves to the standard library.
@@ -57,6 +58,8 @@ def for_running_interpreter() -> StdlibIndex:
     Returns:
         A StdlibIndex tagged with SOURCE_RUNNING.
     """
-    return StdlibIndex(names=frozenset(sys.stdlib_module_names),
-                       python_version=(sys.version_info.major, sys.version_info.minor),
-                       source=SOURCE_RUNNING)
+    return StdlibIndex(
+        names=frozenset(sys.stdlib_module_names),
+        python_version=(sys.version_info.major, sys.version_info.minor),
+        source=SOURCE_RUNNING,
+    )

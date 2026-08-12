@@ -10,7 +10,9 @@ from stdlib_index import StdlibIndex
 def clear_probe_cache():
     """Keep lru_cache state from leaking between tests (used from Task 2 onward)."""
     yield
-    if hasattr(stdlib_index, "for_interpreter") and hasattr(stdlib_index.for_interpreter, "cache_clear"):
+    if hasattr(stdlib_index, "for_interpreter") and hasattr(
+        stdlib_index.for_interpreter, "cache_clear"
+    ):
         stdlib_index.for_interpreter.cache_clear()
 
 
