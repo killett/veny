@@ -60,3 +60,11 @@ def test_no_warning_when_no_hint_module_was_seen(caplog):
     with caplog.at_level(logging.WARNING):
         veny.warn_about_system_packages(options)
     assert caplog.records == []
+
+
+def test_process_import_records_a_stdlib_skip(tmp_path):
+    options = veny.Options()
+    script = tmp_path / "user_script.py"
+    script.write_text("import tkinter\n")
+    assert veny.process_import(options, "tkinter", script) is False
+    assert "tkinter" in options.seen_stdlib_imports
