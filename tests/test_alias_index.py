@@ -55,6 +55,17 @@ def test_source_has_no_unverified_heuristic_tier():
 
 
 def test_seed_carries_the_hand_added_aliases():
-    assert alias_index.SEED["cv2"] == "opencv-python"
-    assert alias_index.SEED["osgeo"] == "gdal"
-    assert alias_index.SEED["netCDF4"] == "netcdf4"
+    # Weak sample assertions would miss dropped or altered entries; compare the full dict.
+    expected = {
+        "osgeo": "gdal",
+        "ffmpeg": "ffmpeg-python",
+        "cv2": "opencv-python",
+        "netCDF4": "netcdf4",
+        "skill_metrics": "SkillMetrics",
+        "bugbear": "flake8-bugbear",
+        "whisper": "openai-whisper",
+        "speedtest": "speedtest-cli",
+        "yaml": "PyYAML",
+        "zmq": "pyzmq",
+    }
+    assert alias_index.SEED == expected

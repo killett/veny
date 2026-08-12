@@ -91,6 +91,9 @@ def rank(candidates: Iterable[Candidate]) -> tuple[Candidate, ...]:
 # Import names whose pip name veny cannot derive, kept because they are worth
 # resolving with no network and an empty cache. This is a short list of known
 # exceptions, NOT a mapping table: anything not here is derived at run time.
+# Curation is by correctness and reachability, not historical provenance.
+# Exclusions: jnp→jax.numpy dropped (pip install jax.numpy fails);
+# mypy.api→mypy dropped (dotted key unreachable after first-component normalization).
 SEED: Final[dict[str, str]] = {
     "osgeo": "gdal",
     "ffmpeg": "ffmpeg-python",
