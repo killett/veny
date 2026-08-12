@@ -16,6 +16,7 @@ installs anything: it produces ranked candidates and veny verifies them.
 from __future__ import annotations
 
 import enum
+import io
 import json
 import logging
 import os
@@ -23,10 +24,13 @@ import subprocess
 import sys
 import time
 import tomllib
+import urllib.error
+import urllib.request
+import zipfile
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Final, Protocol
 
 
 class Source(enum.IntEnum):
@@ -426,3 +430,252 @@ def probe_interpreter(
         )
         return _running_tag(), {}
     return f"{major}.{minor}", packages
+
+
+PYPI_JSON_URL: Final[str] = "https://pypi.org/pypi/{name}/json"
+MAX_WHEEL_BYTES: Final[int] = 5 * 1024 * 1024
+_FIRST_WINDOW: Final[int] = 64 * 1024
+_WIDE_WINDOW: Final[int] = 1024 * 1024
+_CONNECT_TIMEOUT: Final[float] = 5.0
+_READ_TIMEOUT: Final[float] = 10.0
+_EXCLUDED_SUFFIXES: Final[tuple[str, ...]] = (".dist-info", ".data")
+
+
+class FetchError(Exception):
+    """Raised by a fetcher when a URL cannot be retrieved."""
+
+
+class Fetcher(Protocol):
+    """Minimal HTTP surface the PyPI client needs, so tests can inject a fake."""
+
+    def get(
+        self, url: str, headers: dict[str, str] | None = None
+    ) -> tuple[int, dict[str, str], bytes]:
+        """Retrieve a URL.
+
+        Args:
+            url:     The absolute URL to retrieve.
+            headers: Request headers, such as Range.
+
+        Returns:
+            The status code, response headers, and body bytes.
+
+        Raises:
+            FetchError: If the URL cannot be retrieved.
+        """
+        ...
+
+
+class UrllibFetcher:
+    """A Fetcher backed by urllib, so veny needs no third-party HTTP library."""
+
+    def get(
+        self, url: str, headers: dict[str, str] | None = None
+    ) -> tuple[int, dict[str, str], bytes]:
+        """Retrieve a URL with a bounded timeout.
+
+        Args:
+            url:     The absolute URL to retrieve.
+            headers: Request headers, such as Range.
+
+        Returns:
+            The status code, response headers, and body bytes.
+
+        Raises:
+            FetchError: On any network or protocol failure.
+        """
+        request = urllib.request.Request(url, headers=headers or {})  # noqa: S310
+        try:
+            with urllib.request.urlopen(request, timeout=_READ_TIMEOUT) as response:  # noqa: S310
+                return int(response.status), dict(response.headers), response.read()
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            raise FetchError(str(exc)) from exc
+
+
+def _top_levels_from_names(member_names: Iterable[str]) -> frozenset[str]:
+    """Reduce zip member paths to the top-level import names a wheel provides.
+
+    Args:
+        member_names: Archive member paths, as stored in the central directory.
+
+    Returns:
+        The top-level names, excluding packaging metadata directories.
+    """
+    found: set[str] = set()
+    for member in member_names:
+        head, _, tail = member.replace("\\", "/").partition("/")
+        if (
+            not head
+            or head.startswith("__pycache__")
+            or head.endswith(_EXCLUDED_SUFFIXES)
+        ):
+            continue
+        if tail:
+            found.add(head)
+        elif head.endswith(".py"):
+            found.add(head.removesuffix(".py"))
+    return frozenset(found)
+
+
+class PyPIClient:
+    """Answers whether a PyPI project declares a given top-level import name.
+
+    The answer comes from the wheel's zip central directory, which lists every
+    member path and sits at the end of the file. A suffix Range request reads it
+    without transferring the wheel body, so confirming a candidate costs one
+    JSON request plus tens of kilobytes.
+    """
+
+    def __init__(self, fetcher: Fetcher | None = None) -> None:
+        """Store the fetcher and start an empty per-project cache.
+
+        Args:
+            fetcher: HTTP surface to use. Defaults to UrllibFetcher.
+        """
+        self._fetcher: Fetcher = fetcher if fetcher is not None else UrllibFetcher()
+        self._cache: dict[str, frozenset[str] | None] = {}
+
+    def top_levels(self, name: str) -> frozenset[str] | None:
+        """Return the top-level names the project's smallest wheel declares.
+
+        Args:
+            name: The PyPI project name.
+
+        Returns:
+            The declared top-level names, or None when the project does not
+            exist, ships no wheel, or cannot be inspected within the size cap.
+        """
+        if name not in self._cache:
+            self._cache[name] = self._inspect(name)
+        return self._cache[name]
+
+    def _inspect(self, name: str) -> frozenset[str] | None:
+        """Fetch project metadata and read its smallest wheel's member listing.
+
+        Args:
+            name: The PyPI project name.
+
+        Returns:
+            The declared top-level names, or None if anything prevents inspection.
+        """
+        try:
+            _, _, body = self._fetcher.get(PYPI_JSON_URL.format(name=name))
+            payload = json.loads(body)
+        except (FetchError, ValueError) as exc:
+            logging.debug("No PyPI metadata for %s (%s).", name, exc)
+            return None
+        if not isinstance(payload, dict) or not isinstance(payload.get("urls"), list):
+            logging.debug("Malformed PyPI metadata for %s.", name)
+            return None
+        wheels = []
+        for entry in payload["urls"]:
+            if (
+                not isinstance(entry, dict)
+                or not isinstance(entry.get("filename"), str)
+                or not isinstance(entry.get("url"), str)
+                or not isinstance(entry.get("size"), int)
+            ):
+                logging.debug("Malformed PyPI file entry for %s.", name)
+                return None
+            if entry["filename"].endswith(".whl"):
+                wheels.append(entry)
+        if not wheels:
+            logging.debug(
+                "Project %s ships no wheel, so its top-level names cannot be read.",
+                name,
+            )
+            return None
+        smallest = min(wheels, key=lambda entry: entry["size"])
+        try:
+            return self._read_member_names(smallest["url"], smallest["size"])
+        except (FetchError, zipfile.BadZipFile) as exc:
+            logging.debug("Could not read the wheel listing for %s (%s).", name, exc)
+            return None
+
+    def _read_member_names(self, url: str, size: int) -> frozenset[str] | None:
+        """Read a remote wheel's member listing without downloading its body.
+
+        Args:
+            url:  Absolute URL of the wheel.
+            size: Wheel size in bytes, as reported by PyPI.
+
+        Returns:
+            The top-level names, or None when the server refuses Range on a
+            wheel larger than MAX_WHEEL_BYTES.
+
+        Raises:
+            FetchError: If the wheel cannot be retrieved.
+        """
+        for window in (_FIRST_WINDOW, _WIDE_WINDOW):
+            status, _, chunk = self._fetcher.get(
+                url, headers={"Range": f"bytes=-{window}"}
+            )
+            if status != 206:
+                if size > MAX_WHEEL_BYTES:
+                    logging.debug(
+                        "Server ignored Range for %s and the wheel is %d bytes; abandoning it.",
+                        url,
+                        size,
+                    )
+                    return None
+                return _top_levels_from_names(_names_from_zip_bytes(chunk))
+            names = _names_from_tail(chunk)
+            if names is not None:
+                return _top_levels_from_names(names)
+        logging.debug("Could not locate the central directory of %s.", url)
+        return None
+
+
+def _names_from_zip_bytes(blob: bytes) -> tuple[str, ...]:
+    """List member names of a complete zip archive held in memory.
+
+    Args:
+        blob: The whole archive.
+
+    Returns:
+        Member names.
+    """
+    with zipfile.ZipFile(io.BytesIO(blob)) as archive:
+        return tuple(archive.namelist())
+
+
+_EOCD_SIGNATURE: Final[bytes] = b"PK\x05\x06"
+_CENTRAL_SIGNATURE: Final[bytes] = b"PK\x01\x02"
+
+
+def _names_from_tail(tail: bytes) -> tuple[str, ...] | None:
+    """Parse member names from a zip's trailing bytes.
+
+    A zip's central directory lists every member path and ends immediately
+    before the end-of-central-directory record, so the whole listing can be read
+    from the tail alone and no member is ever decompressed.
+
+    Args:
+        tail: The trailing bytes of the archive.
+
+    Returns:
+        Member names, or None if the end-of-central-directory record is not in
+        tail, or the directory it points at is not fully inside tail. Either way
+        the caller should retry with a wider window.
+    """
+    marker = tail.rfind(_EOCD_SIGNATURE)
+    if marker < 0:
+        return None
+    directory_size = int.from_bytes(tail[marker + 12 : marker + 16], "little")
+    start = marker - directory_size
+    if start < 0:
+        return None
+    names: list[str] = []
+    cursor = start
+    while tail[cursor : cursor + 4] == _CENTRAL_SIGNATURE:
+        name_length = int.from_bytes(tail[cursor + 28 : cursor + 30], "little")
+        extra_length = int.from_bytes(tail[cursor + 30 : cursor + 32], "little")
+        comment_length = int.from_bytes(tail[cursor + 32 : cursor + 34], "little")
+        name_start = cursor + 46
+        names.append(
+            tail[name_start : name_start + name_length].decode("utf-8", "replace")
+        )
+        cursor = name_start + name_length + extra_length + comment_length
+    if not names:
+        return None
+    return tuple(names)

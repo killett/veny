@@ -1,11 +1,20 @@
+import io
 import json
 import subprocess
 import sys
+import zipfile
 
 import pytest
 
 import alias_index
-from alias_index import AliasCache, AliasOverrideError, Candidate, Source
+from alias_index import (
+    MAX_WHEEL_BYTES,
+    AliasCache,
+    AliasOverrideError,
+    Candidate,
+    PyPIClient,
+    Source,
+)
 
 
 def _candidate(pip_name, source, evidence="test"):
@@ -261,3 +270,171 @@ def test_probe_degrades_on_malformed_payload(monkeypatch):
     monkeypatch.setattr(alias_index.subprocess, "run", fake_run)
     _, packages = alias_index.probe_interpreter("/usr/bin/python3")
     assert packages == {}
+
+
+def _wheel_bytes(names, comment=b""):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name in names:
+            archive.writestr(name, b"x")
+        archive.comment = comment
+    return buffer.getvalue()
+
+
+class _FakeFetcher:
+    """Serves one JSON document and one wheel, recording every request."""
+
+    def __init__(self, json_payload, wheel, honour_range=True):
+        self.json_payload = json_payload
+        self.wheel = wheel
+        self.honour_range = honour_range
+        self.requests = []
+
+    def get(self, url, headers=None):
+        self.requests.append((url, dict(headers or {})))
+        if url.endswith("/json"):
+            if self.json_payload is None:
+                raise alias_index.FetchError("404")
+            return 200, {}, json.dumps(self.json_payload).encode()
+        range_header = (headers or {}).get("Range")
+        if range_header and self.honour_range:
+            start = int(range_header.removeprefix("bytes=").split("-")[0] or 0)
+            if range_header.startswith("bytes=-"):
+                length = int(range_header.removeprefix("bytes=-"))
+                return 206, {}, self.wheel[-length:]
+            end = range_header.split("-")[1]
+            stop = int(end) + 1 if end else len(self.wheel)
+            return 206, {}, self.wheel[start:stop]
+        return 200, {}, self.wheel
+
+
+def _json_for(wheel, extra_files=()):
+    files = [
+        {
+            "filename": "pkg-1.0-py3-none-any.whl",
+            "url": "https://files/pkg.whl",
+            "packagetype": "bdist_wheel",
+            "size": len(wheel),
+        }
+    ]
+    files.extend(extra_files)
+    return {"urls": files}
+
+
+def test_top_levels_are_read_from_the_wheel_listing():
+    wheel = _wheel_bytes(
+        ["cv2/__init__.py", "cv2/data.py", "pkg-1.0.dist-info/METADATA"]
+    )
+    fetcher = _FakeFetcher(_json_for(wheel), wheel)
+    assert PyPIClient(fetcher).top_levels("opencv-python") == frozenset({"cv2"})
+
+
+def test_dist_info_and_data_members_are_excluded():
+    # Without exclusion, every wheel would "provide" a top level named
+    # "<project>-<version>.dist-info", matching nothing and confirming nonsense.
+    wheel = _wheel_bytes(
+        [
+            "thing/__init__.py",
+            "pkg-1.0.dist-info/RECORD",
+            "pkg-1.0.data/scripts/run",
+            "__pycache__/stale.pyc",
+        ]
+    )
+    fetcher = _FakeFetcher(_json_for(wheel), wheel)
+    assert PyPIClient(fetcher).top_levels("thing") == frozenset({"thing"})
+
+
+def test_single_file_module_contributes_its_stem():
+    # six.py and its kin ship as one top-level file, not a package directory.
+    wheel = _wheel_bytes(["six.py", "pkg-1.0.dist-info/METADATA"])
+    fetcher = _FakeFetcher(_json_for(wheel), wheel)
+    assert PyPIClient(fetcher).top_levels("six") == frozenset({"six"})
+
+
+def test_smallest_wheel_is_chosen():
+    wheel = _wheel_bytes(["small/__init__.py"])
+    payload = _json_for(
+        wheel,
+        extra_files=[
+            {
+                "filename": "pkg-1.0-cp312-manylinux.whl",
+                "url": "https://files/big.whl",
+                "packagetype": "bdist_wheel",
+                "size": len(wheel) * 100,
+            },
+        ],
+    )
+    fetcher = _FakeFetcher(payload, wheel)
+    PyPIClient(fetcher).top_levels("pkg")
+    assert any(url == "https://files/pkg.whl" for url, _ in fetcher.requests)
+    assert not any(url == "https://files/big.whl" for url, _ in fetcher.requests)
+
+
+def test_range_request_avoids_transferring_the_whole_wheel():
+    wheel = _wheel_bytes([f"pkg/mod{i}.py" for i in range(200)])
+    fetcher = _FakeFetcher(_json_for(wheel), wheel)
+    PyPIClient(fetcher).top_levels("pkg")
+    wheel_requests = [
+        headers for url, headers in fetcher.requests if url.endswith(".whl")
+    ]
+    assert wheel_requests
+    assert all("Range" in headers for headers in wheel_requests)
+
+
+def test_oversized_wheel_is_abandoned_when_range_is_ignored():
+    # Fail closed: an unprovable candidate must not be attempted, and veny must
+    # not silently download 200 MB to find out.
+    wheel = _wheel_bytes(["pkg/__init__.py"])
+    payload = _json_for(wheel)
+    payload["urls"][0]["size"] = MAX_WHEEL_BYTES + 1
+    fetcher = _FakeFetcher(payload, wheel, honour_range=False)
+    assert PyPIClient(fetcher).top_levels("pkg") is None
+
+
+def test_small_wheel_is_accepted_when_range_is_ignored():
+    wheel = _wheel_bytes(["pkg/__init__.py"])
+    fetcher = _FakeFetcher(_json_for(wheel), wheel, honour_range=False)
+    assert PyPIClient(fetcher).top_levels("pkg") == frozenset({"pkg"})
+
+
+def test_central_directory_outside_the_first_window_is_still_found():
+    # A long archive comment pushes the end-of-central-directory record out of
+    # the initial suffix read; a single-window parser would silently return None.
+    wheel = _wheel_bytes(["pkg/__init__.py"], comment=b"c" * 70_000)
+    fetcher = _FakeFetcher(_json_for(wheel), wheel)
+    assert PyPIClient(fetcher).top_levels("pkg") == frozenset({"pkg"})
+
+
+def test_missing_project_returns_none():
+    fetcher = _FakeFetcher(None, b"")
+    assert PyPIClient(fetcher).top_levels("does-not-exist") is None
+
+
+def test_project_without_wheels_returns_none():
+    # sdist-only projects cannot be inspected without building them.
+    fetcher = _FakeFetcher(
+        {
+            "urls": [
+                {
+                    "filename": "pkg-1.0.tar.gz",
+                    "url": "https://files/pkg.tar.gz",
+                    "packagetype": "sdist",
+                    "size": 10,
+                }
+            ]
+        },
+        b"",
+    )
+    assert PyPIClient(fetcher).top_levels("pkg") is None
+
+
+def test_results_are_cached_per_project():
+    # resolve() asks about the same name from several generators; re-fetching
+    # would multiply network cost by the number of mutations.
+    wheel = _wheel_bytes(["pkg/__init__.py"])
+    fetcher = _FakeFetcher(_json_for(wheel), wheel)
+    client = PyPIClient(fetcher)
+    client.top_levels("pkg")
+    before = len(fetcher.requests)
+    client.top_levels("pkg")
+    assert len(fetcher.requests) == before
