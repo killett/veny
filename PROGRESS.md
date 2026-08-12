@@ -7,10 +7,12 @@ derived `StdlibIndex` resolver.
 
 - Design doc: `docs/superpowers/specs/2026-08-12-stdlib-index-design.md`
   (approved 2026-08-12)
-- Implementation plan: not yet written
-- Task tracker: not yet created
+- Implementation plan: `docs/superpowers/plans/2026-08-12-stdlib-index.md`
+  (7 tasks, written 2026-08-12)
+- Task tracker: `docs/superpowers/plans/2026-08-12-stdlib-index.md.tasks.json`
 
-**Next action:** write the implementation plan from the approved design doc.
+**Next action:** execute Task 1 of the implementation plan (create
+`stdlib_index.py` with the `StdlibIndex` dataclass and the test scaffolding).
 
 ## Cross-cutting decisions
 
