@@ -65,9 +65,9 @@ problem in veny; candidates are recorded under Deferred items.
   (`ImportFunctionCollector.visit_Import`), so a dotted name never appears
   verbatim in the logs — only its top-level component does.
 - A `--justprint` run leaves `.veny_custom_modules_*.pkl` and a `logs/`
-  directory in the working tree. `.gitignore` does **not** cover either as of
-  2026-08-12 — check `git status` and stage explicitly (never `git add -A`)
-  before committing anything after a run.
+  directory in the working tree. Both are ignored as of 2026-08-12, along with
+  `__pycache__/`, the tool caches, and `.pixi/`. Still prefer staging paths
+  explicitly over `git add -A` after a run.
 - `known_bad_imports` is **not** a usable escape hatch for a name that IS in
   `sys.stdlib_module_names`. `process_import` checks `options.stdlib` first
   and returns before `split_imports` ever consults `known_bad_imports`, so
