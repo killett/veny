@@ -1,5 +1,9 @@
+import json
+
+import pytest
+
 import alias_index
-from alias_index import Candidate, Source
+from alias_index import AliasCache, AliasOverrideError, Candidate, Source
 
 
 def _candidate(pip_name, source, evidence="test"):
@@ -69,3 +73,84 @@ def test_seed_carries_the_hand_added_aliases():
         "zmq": "pyzmq",
     }
     assert alias_index.SEED == expected
+
+
+def test_missing_override_file_is_not_an_error(tmp_path):
+    # Most users never write one; treating absence as failure would break them.
+    assert alias_index.load_overrides(tmp_path / "nope.toml") == {}
+
+
+def test_override_file_is_read(tmp_path):
+    path = tmp_path / "module_aliases.toml"
+    path.write_text('[aliases]\ncv2 = "my-fork-of-opencv"\n')
+    assert alias_index.load_overrides(path) == {"cv2": "my-fork-of-opencv"}
+
+
+def test_malformed_override_file_raises(tmp_path):
+    # Continuing here would resolve names contrary to what the user wrote --
+    # the exact silent-wrongness this design exists to remove.
+    path = tmp_path / "module_aliases.toml"
+    path.write_text("[aliases\ncv2 = broken")
+    with pytest.raises(AliasOverrideError) as excinfo:
+        alias_index.load_overrides(path)
+    assert str(path) in str(excinfo.value)
+
+
+def test_corrupt_cache_is_quarantined_not_fatal(tmp_path):
+    # A cache is regenerable; refusing to run because of one would be absurd.
+    # The bad file is kept, because a corrupt cache is evidence of a bug.
+    path = tmp_path / "module_aliases_cache.json"
+    path.write_text("{not json at all")
+    cache = AliasCache.load(path, interpreter_tag="3.12")
+    assert cache.get("anything") is None
+    quarantined = list(tmp_path.glob("module_aliases_cache.json.corrupt-*"))
+    assert len(quarantined) == 1
+    assert quarantined[0].read_text() == "{not json at all"
+
+
+def test_confirm_round_trips_through_disk(tmp_path):
+    path = tmp_path / "cache.json"
+    AliasCache.load(path, interpreter_tag="3.12").confirm("cv2", "opencv-python")
+    reloaded = AliasCache.load(path, interpreter_tag="3.12")
+    assert reloaded.get("cv2") == "opencv-python"
+
+
+def test_entry_from_another_interpreter_is_ignored(tmp_path):
+    # A name verified under 3.12 must not silently govern a 3.13 run, where a
+    # different distribution may provide it.
+    path = tmp_path / "cache.json"
+    AliasCache.load(path, interpreter_tag="3.12").confirm("cv2", "opencv-python")
+    assert AliasCache.load(path, interpreter_tag="3.13").get("cv2") is None
+
+
+def test_import_failure_is_persisted_as_a_rejection(tmp_path):
+    # "Installed but did not provide the module" is a fact about the package,
+    # so re-attempting it on the next run wastes an install every time.
+    path = tmp_path / "cache.json"
+    AliasCache.load(path, interpreter_tag="3.12").reject("cv2", "cv2", "import_failed")
+    reloaded = AliasCache.load(path, interpreter_tag="3.12")
+    assert reloaded.rejected_names("cv2") == frozenset({"cv2"})
+
+
+def test_install_failure_is_not_persisted(tmp_path):
+    # An install can fail for transient reasons (network, index outage);
+    # persisting that would permanently blacklist a correct package.
+    path = tmp_path / "cache.json"
+    AliasCache.load(path, interpreter_tag="3.12").reject("cv2", "cv2", "install_failed")
+    reloaded = AliasCache.load(path, interpreter_tag="3.12")
+    assert reloaded.rejected_names("cv2") == frozenset()
+
+
+def test_unknown_rejection_kind_raises(tmp_path):
+    # Guards against a typo'd kind silently behaving like install_failed.
+    cache = AliasCache.load(tmp_path / "cache.json", interpreter_tag="3.12")
+    with pytest.raises(ValueError):
+        cache.reject("cv2", "cv2", "exploded")
+
+
+def test_cache_file_is_written_as_readable_json(tmp_path):
+    # The file is user-inspectable by design; a pickle or a blob would not be.
+    path = tmp_path / "cache.json"
+    AliasCache.load(path, interpreter_tag="3.12").confirm("cv2", "opencv-python")
+    payload = json.loads(path.read_text())
+    assert payload["entries"]["cv2"]["pip_name"] == "opencv-python"
