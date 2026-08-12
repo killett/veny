@@ -132,6 +132,9 @@ def test_resolve_of_none_uses_running_interpreter():
 
 
 def test_python2_only_names_are_not_python3_stdlib():
+    assert len(stdlib_index.PYTHON2_ONLY) == 20
+    assert "httplib" in stdlib_index.PYTHON2_ONLY
+    assert "Tkinter" in stdlib_index.PYTHON2_ONLY
     overlap = stdlib_index.PYTHON2_ONLY & stdlib_index.for_running_interpreter().names
     assert overlap == frozenset()
 
