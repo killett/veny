@@ -14,7 +14,7 @@ import shutil
 import venv
 import pickle
 from pathlib     import Path  # Preferred over os.path for path manipulations.
-from typing      import Any, Final
+from typing      import Any
 import logging
 import tempfile
 import shlex  # For safely quoting shell commands

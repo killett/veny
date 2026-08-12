@@ -68,6 +68,15 @@ problem in veny; candidates are recorded under Deferred items.
   directory in the working tree. `.gitignore` does **not** cover either as of
   2026-08-12 — check `git status` and stage explicitly (never `git add -A`)
   before committing anything after a run.
+- `known_bad_imports` is **not** a usable escape hatch for a name that IS in
+  `sys.stdlib_module_names`. `process_import` checks `options.stdlib` first
+  and returns before `split_imports` ever consults `known_bad_imports`, so
+  adding a genuine stdlib name to that set has no effect — blocking it
+  requires a change in `stdlib_index.py` instead. The design doc's proposed
+  remedy of "one entry in `known_bad_imports`" for the `test`-module edge
+  case works only because `test` is deliberately excluded from
+  `sys.stdlib_module_names` (see the gotcha above); it does not generalize to
+  any name that CPython actually reports as standard library.
 
 ## Deferred items
 
@@ -82,6 +91,17 @@ problem in veny; candidates are recorded under Deferred items.
   a blast radius for a codebase with no test suite yet.
 - The repository had no `tests/` directory before this work. The stdlib work
   creates the first tests; broader coverage remains open.
+- `univ_defs.to_jsonable` has no handler for `StdlibIndex`, so
+  `save_options_to_json` serializes `options.stdlib` via `repr()` as a plain
+  string rather than structured data. Nothing raises today because every
+  current caller of `load_last_used_options` reads only `.venv_dir` /
+  `.venv_python` off the restored options — but if a restored `options.stdlib`
+  were ever used for membership testing, the `repr()` string would silently
+  do substring matching instead of the real lookup (`"ma" in restored` is
+  `True` because the string representation contains "ma" somewhere), giving
+  wrong stdlib classifications with no error. Fix by adding a `to_jsonable`
+  handler for `StdlibIndex` before any caller starts reading other fields off
+  restored options.
 
 ## Open questions
 

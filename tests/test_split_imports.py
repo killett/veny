@@ -68,3 +68,20 @@ def test_process_import_records_a_stdlib_skip(tmp_path):
     script.write_text("import tkinter\n")
     assert veny.process_import(options, "tkinter", script) is False
     assert "tkinter" in options.seen_stdlib_imports
+
+
+def test_enqueue_top_level_imports_records_stdlib_and_skips_enqueue(tmp_path):
+    from collections import deque
+
+    options = veny.Options()
+    module_path = tmp_path / "user_script.py"
+    module_path.write_text("import tkinter\n")
+    processed_paths: set = set()
+    modules_to_process: deque = deque()
+
+    veny._enqueue_top_level_imports(
+        options, module_path, {"tkinter"}, processed_paths, modules_to_process
+    )
+
+    assert "tkinter" in options.seen_stdlib_imports
+    assert len(modules_to_process) == 0
