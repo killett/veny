@@ -818,6 +818,7 @@ git commit -m "feat: probe the target interpreter for installed distributions"
 - [ ] A server that ignores Range is accepted only below `MAX_WHEEL_BYTES` (5 MB); otherwise the candidate is abandoned (returns `None`)
 - [ ] `.dist-info`, `.data`, and `__pycache__` members are excluded; top-level single-file modules contribute their name without the `.py` suffix
 - [ ] Network errors return `None` and log at debug level, never raise
+- [ ] **Malformed PyPI metadata returns `None` rather than raising.** Validate the payload's shape before use — top level a dict, `urls` a list of dicts, each candidate file's `filename`/`url` strings and `size` an int. Do not rely on the caught-exception tuple alone: this same defect class (valid JSON of the wrong shape raising an uncaught `AttributeError` or `TypeError`) was found in review in both Task 2 and Task 3
 - [ ] A wheel whose central directory is not in the first window triggers exactly one widened re-read
 
 **Verify:** `pixi run python -m pytest tests/test_alias_index.py -v` → all pass
