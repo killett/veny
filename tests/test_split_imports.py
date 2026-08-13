@@ -2,6 +2,7 @@ import logging
 
 import stdlib_index
 import veny
+from alias_index import Candidate, Resolution, Source
 
 
 def test_python2_name_is_classified_bad():
@@ -85,3 +86,102 @@ def test_enqueue_top_level_imports_records_stdlib_and_skips_enqueue(tmp_path):
 
     assert "tkinter" in options.seen_stdlib_imports
     assert len(modules_to_process) == 0
+
+
+class _RecordingIndex:
+    def __init__(self):
+        self.confirmed = []
+        self.rejected = []
+
+    def confirm(self, import_name, pip_name):
+        self.confirmed.append((import_name, pip_name))
+
+    def reject(self, import_name, pip_name, kind):
+        self.rejected.append((import_name, pip_name, kind))
+
+
+def _resolution(*pip_names):
+    return Resolution(
+        import_name="thing",
+        candidates=tuple(
+            Candidate(pip_name=name, source=Source.PYPI_CONFIRMED, evidence="test")
+            for name in pip_names
+        ),
+    )
+
+
+def test_first_working_candidate_is_confirmed():
+    index = _RecordingIndex()
+    winner = veny.resolve_and_verify(
+        _resolution("wrong", "right"),
+        index,
+        installer=lambda name: True,
+        importer=lambda name: name == "right",
+        uninstaller=lambda name: None,
+    )
+    assert winner.pip_name == "right"
+    assert index.confirmed == [("thing", "right")]
+
+
+def test_candidate_that_installs_but_does_not_import_is_uninstalled():
+    # Leaving it behind pollutes the venv and can shadow the correct package.
+    removed = []
+    index = _RecordingIndex()
+    veny.resolve_and_verify(
+        _resolution("wrong", "right"),
+        index,
+        installer=lambda name: True,
+        importer=lambda name: name == "right",
+        uninstaller=removed.append,
+    )
+    assert removed == ["wrong"]
+    assert ("thing", "wrong", "import_failed") in index.rejected
+
+
+def test_failed_install_is_recorded_but_not_uninstalled():
+    # Nothing was installed, and the failure may be transient, so it must not
+    # be persisted as a fact about the package.
+    removed = []
+    index = _RecordingIndex()
+    veny.resolve_and_verify(
+        _resolution("broken", "right"),
+        index,
+        installer=lambda name: name != "broken",
+        importer=lambda name: True,
+        uninstaller=removed.append,
+    )
+    assert removed == []
+    assert ("thing", "broken", "install_failed") in index.rejected
+
+
+def test_attempts_are_bounded():
+    # One obscure import must not stall a run behind unbounded pip attempts.
+    tried = []
+
+    def installer(name):
+        tried.append(name)
+        return True
+
+    result = veny.resolve_and_verify(
+        _resolution("a", "b", "c", "d", "e"),
+        _RecordingIndex(),
+        installer=installer,
+        importer=lambda name: False,
+        uninstaller=lambda name: None,
+        max_attempts=3,
+    )
+    assert result is None
+    assert tried == ["a", "b", "c"]
+
+
+def test_empty_resolution_never_touches_the_installer():
+    tried = []
+    result = veny.resolve_and_verify(
+        Resolution("thing", ()),
+        _RecordingIndex(),
+        installer=tried.append,
+        importer=lambda name: True,
+        uninstaller=lambda name: None,
+    )
+    assert result is None
+    assert tried == []

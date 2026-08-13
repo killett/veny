@@ -20,7 +20,9 @@ import tempfile
 import shlex  # For safely quoting shell commands
 from functools   import lru_cache  # For caching results of expensive function calls
 from collections import defaultdict
+from collections.abc import Callable
 
+import alias_index
 import stdlib_index
 import univ_defs as ud
 
@@ -4367,6 +4369,53 @@ def add_dependencies(options: Options) -> None:
                         logging.info("Adding nested dependencies for %s: %s", package, new_dependencies)
                     options.uninstalled_imports.update(new_dependencies)
                     added = True
+
+
+def resolve_and_verify(
+    resolution: alias_index.Resolution,
+    index: alias_index.AliasIndex,
+    installer: Callable[[str], bool],
+    importer: Callable[[str], bool],
+    uninstaller: Callable[[str], None],
+    max_attempts: int = 3,
+) -> alias_index.Candidate | None:
+    """Install candidates in rank order until one actually provides the import.
+
+    The resolver produces ranked guesses; only installing and importing proves
+    one right. A candidate that installs without providing the import name is
+    uninstalled, so a rejected package cannot pollute the environment or shadow
+    the correct one on a later attempt.
+
+    Args:
+        resolution:   The ranked candidates for one import name.
+        index:        The AliasIndex to record the outcome in.
+        installer:    Installs a pip name, returning True on success.
+        importer:     Called with the just-installed pip name; returns True
+                       if resolution.import_name now imports.
+        uninstaller:  Removes a pip name that was installed but rejected.
+        max_attempts: How many candidates to try before giving up.
+
+    Returns:
+        The verified candidate, or None if none of the attempts worked.
+    """
+    for candidate in resolution.candidates[:max_attempts]:
+        logging.debug(
+            "Trying %s for import %s (%s)",
+            candidate.pip_name, resolution.import_name, candidate.evidence,
+        )
+        if not installer(candidate.pip_name):
+            index.reject(resolution.import_name, candidate.pip_name, "install_failed")
+            continue
+        if importer(candidate.pip_name):
+            index.confirm(resolution.import_name, candidate.pip_name)
+            return candidate
+        logging.debug(
+            "%s installed but did not provide %s; removing it.",
+            candidate.pip_name, resolution.import_name,
+        )
+        uninstaller(candidate.pip_name)
+        index.reject(resolution.import_name, candidate.pip_name, "import_failed")
+    return None
 
 
 def check_packages_in_venv(options: Options, package: str | None = None,
