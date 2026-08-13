@@ -20,6 +20,7 @@ import io
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import time
@@ -80,24 +81,48 @@ class Resolution:
     candidates: tuple[Candidate, ...]
 
 
-def rank(candidates: Iterable[Candidate]) -> tuple[Candidate, ...]:
-    """Deduplicate candidates by pip name and order them deterministically.
+def _normalize_pip_name(name: str) -> str:
+    """Reduce a pip project name to its PEP 503 normalized form.
 
-    A pip name found by several tiers is kept once, at its strongest evidence.
+    PyPI treats runs of ``-``, ``_``, and ``.`` as equivalent and matches
+    case-insensitively, so "skill-metrics" and "skill_metrics" name the same
+    project. This form is for comparison only -- pip always receives a
+    candidate's original ``pip_name``, never this normalized string.
+
+    Args:
+        name: A pip project name.
+
+    Returns:
+        The normalized form, per PEP 503.
+    """
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def rank(candidates: Iterable[Candidate]) -> tuple[Candidate, ...]:
+    """Deduplicate candidates by project identity and order them deterministically.
+
+    Two spellings of one project (e.g. "skill-metrics" and "skill_metrics")
+    are the same PyPI project and must collapse to a single candidate: Task 6
+    attempts at most 3 candidates, and two spellings of one project would
+    burn two of those three attempts re-installing the same thing. Dedup
+    keys on the PEP 503 normalized name; the surviving candidate keeps its
+    original ``pip_name`` string, since that is what is passed to pip.
     Ordering is (source, pip_name) so that identical inputs always produce an
     identical order, which keeps runs reproducible and logs comparable.
 
     Args:
-        candidates: Candidates in any order, possibly with repeated pip names.
+        candidates: Candidates in any order, possibly naming the same project
+            under different tiers or different spellings.
 
     Returns:
         Ranked, deduplicated candidates.
     """
     strongest: dict[str, Candidate] = {}
     for candidate in candidates:
-        existing = strongest.get(candidate.pip_name)
+        key = _normalize_pip_name(candidate.pip_name)
+        existing = strongest.get(key)
         if existing is None or candidate.source < existing.source:
-            strongest[candidate.pip_name] = candidate
+            strongest[key] = candidate
     return tuple(sorted(strongest.values(), key=lambda c: (int(c.source), c.pip_name)))
 
 
@@ -778,10 +803,15 @@ class AliasIndex:
     def resolve(self, import_name: str) -> Resolution:
         """Return ranked candidate pip names for an import name.
 
-        Overrides and cache hits short-circuit, because both are settled facts:
-        one is the user's stated intent, the other was verified by installing
-        and importing. Every other tier contributes without stopping the walk,
-        so weaker evidence can never hide stronger evidence.
+        Overrides short-circuit unconditionally: an override is the user's
+        stated intent and outranks even a recorded failure. A cache hit is
+        also a settled fact -- it was verified by installing and importing --
+        but only while nothing has since proven it wrong; if the cached name
+        was later rejected (e.g. a broken native dependency, a yanked
+        release), it must not keep being re-offered, so the cache branch is
+        checked against the recorded rejections before it short-circuits.
+        Every other tier contributes without stopping the walk, so weaker
+        evidence can never hide stronger evidence.
 
         Args:
             import_name: The import name as written in the user's source.
@@ -802,7 +832,7 @@ class AliasIndex:
                 ),
             )
         cached = self.cache.get(import_name)
-        if cached is not None:
+        if cached is not None and cached not in self.cache.rejected_names(import_name):
             return Resolution(
                 import_name,
                 (

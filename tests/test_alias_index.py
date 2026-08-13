@@ -57,6 +57,20 @@ def test_duplicate_pip_name_keeps_strongest_source():
     assert ranked[0].source is Source.INSTALLED
 
 
+def test_pep503_equivalent_spellings_collapse_to_one_candidate():
+    # PyPI normalizes runs of "-", "_", "." and case, so "skill-metrics" and
+    # "skill_metrics" name the same project. Task 6 attempts at most 3
+    # candidates; two spellings of one project must not consume two of them.
+    ranked = alias_index.rank(
+        [
+            _candidate("skill-metrics", Source.PYPI_CONFIRMED),
+            _candidate("skill_metrics", Source.PYPI_CONFIRMED),
+        ]
+    )
+    assert len(ranked) == 1
+    assert ranked[0].pip_name in ("skill-metrics", "skill_metrics")
+
+
 def test_rank_returns_a_tuple_not_a_generator():
     # Callers iterate candidates more than once; a generator would silently
     # yield nothing on the second pass.
@@ -665,6 +679,24 @@ def test_rejected_candidate_is_filtered_out(tmp_path):
     assert index.resolve("numpy").candidates == ()
 
 
+def test_rejected_cache_hit_falls_through_to_the_rest_of_the_walk(tmp_path):
+    # AliasCache.confirm() clears rejections for a name, but AliasCache.reject()
+    # does not clear a confirmed entry -- so run 1 can confirm a name and a
+    # later run's import can fail for a real reason (a broken native
+    # dependency, a yanked release) and persist that rejection, while the
+    # cache would still answer with the very name that just failed unless
+    # the cache branch itself is checked against rejections. Installed
+    # evidence is present here to prove the walk actually falls through to
+    # it, not merely that the rejected cache hit disappears.
+    pypi = _StubPyPI({})
+    index = _index(tmp_path, installed={"cv2": ["opencv-python-headless"]}, pypi=pypi)
+    index.confirm("cv2", "opencv-python")
+    index.reject("cv2", "opencv-python", "import_failed")
+    names = [c.pip_name for c in index.resolve("cv2").candidates]
+    assert names == ["opencv-python-headless"]
+    assert "opencv-python" not in names
+
+
 def test_offline_index_still_resolves_from_local_evidence(tmp_path):
     index = _index(tmp_path, installed={"cv2": ["opencv-python"]}, pypi=None)
     assert [c.pip_name for c in index.resolve("cv2").candidates] == ["opencv-python"]
@@ -685,3 +717,26 @@ def test_build_wires_the_pieces_together(tmp_path, monkeypatch):
     assert index.overrides == {"foo": "bar"}
     assert index.pypi is None
     assert [c.pip_name for c in index.resolve("cv2").candidates] == ["opencv-python"]
+    # Pin that build() wires the *probed* tag through, not the running
+    # interpreter's own tag -- a regression that swapped in _running_tag()
+    # would still pass every other assertion here (the stub returns "3.12",
+    # which only coincidentally differs from the test runner's own version
+    # in the general case) while silently making cache entries valid across
+    # interpreter versions, defeating the point of tagging them at all.
+    assert index.cache.interpreter_tag == "3.12"
+    assert index.cache.path == tmp_path / alias_index.CACHE_FILENAME
+
+
+def test_empty_spawns_no_probe_and_touches_no_network(tmp_path, monkeypatch):
+    # Options() is constructed before the target interpreter is known, and in
+    # every test, so empty() must not pay for a probe subprocess or a
+    # network call. Both potential culprits are made to raise, so any code
+    # path that reaches either fails the test instead of silently degrading.
+    def _boom(*args, **kwargs):
+        raise AssertionError("empty() must not run a probe or touch the network")
+
+    monkeypatch.setattr(alias_index, "probe_interpreter", _boom)
+    monkeypatch.setattr(subprocess, "run", _boom)
+    index = alias_index.empty(tmp_path)
+    assert index.installed == {}
+    assert index.pypi is None
