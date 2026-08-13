@@ -223,6 +223,8 @@ def parse_arguments(options: Options) -> None:
                         help=f"Do not add timestamps or INFO level to log messages, and do not add extra INFO level log statements. Just produce the same output that would be seen when running the program without {options.my_name}.")
     parser.add_argument("--justprint", action="store_true",
                         help="Don't run the script, just print its package requirements.")
+    parser.add_argument("--offline", action="store_true",
+                        help="Never contact PyPI while working out which package provides an import. Import names are resolved from the override file, the cache, the target interpreter's installed packages and the built-in exceptions only.")
     parser.add_argument("script", nargs="?",
                         help="The script to run.")
     parser.add_argument("script_args", nargs=argparse.REMAINDER,
@@ -244,6 +246,28 @@ def parse_arguments(options: Options) -> None:
 
     if getattr(options.args, "debug", False):
         options.log_mode = logging.DEBUG
+
+
+def build_alias_index(options: Options) -> alias_index.AliasIndex:
+    """Rebuild the alias index against the interpreter that will run the user's script.
+
+    Options() seeds it with alias_index.empty(), whose cache is tagged with
+    *veny's own* interpreter version; leaving that in place would let a cache
+    entry recorded under one Python version short-circuit resolution for a
+    target on another.
+
+    Args:
+        options: Options object; reads options.python_command, options.my_dir
+                 and the --offline flag.
+
+    Returns:
+        An index for the target interpreter, offline if the user asked for it.
+
+    Raises:
+        AliasOverrideError: If the override file exists but cannot be read.
+    """
+    return alias_index.build(options.python_command, options.my_dir,
+                             offline=getattr(options.args, "offline", False))
 
 
 def main() -> None:
@@ -285,13 +309,8 @@ def main() -> None:
         "Standard library index: %d names from Python %d.%d (source: %s)",
         len(options.stdlib.names), options.stdlib.python_version[0],
         options.stdlib.python_version[1], options.stdlib.source)
-    # Rebuild the alias index against the interpreter that will actually run the
-    # user's script. Options() seeded it with alias_index.empty(), whose cache is
-    # tagged with *veny's own* interpreter version; leaving that in place would
-    # let a cache entry recorded under one Python version short-circuit
-    # resolution for a target on another. This must happen before anything
-    # resolves, i.e. before list_packages() below.
-    options.aliases = alias_index.build(options.python_command, options.my_dir)
+    # This must happen before anything resolves, i.e. before list_packages() below.
+    options.aliases = build_alias_index(options)
     if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
         "Alias index: %d overrides, %d cached names, tagged %s",
         len(options.aliases.overrides), len(options.aliases.cache.entries),

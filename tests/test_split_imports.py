@@ -1,5 +1,6 @@
 import logging
 import subprocess
+import sys
 import venv
 from pathlib import Path
 
@@ -322,6 +323,35 @@ def test_split_imports_falls_back_to_the_import_name_when_nothing_resolves(monke
     assert options.uninstalled_imports == {
         veny.ResolvedImport(import_name="mysterylib", pip_name="mysterylib")
     }
+
+
+def test_the_offline_argument_keeps_the_index_off_the_network(monkeypatch, tmp_path):
+    # build() has taken an offline flag since it was written and nothing ever
+    # passed True, so there was no way to stop veny opening PyPI sockets --
+    # on a plane, behind a blocked index, or in a sandbox without egress.
+    options = veny.Options()
+    options.my_dir = tmp_path
+    options.python_command = None
+    monkeypatch.setattr(sys, "argv", ["veny.py", "--offline", "script.py"])
+
+    veny.parse_arguments(options)
+
+    assert options.args.offline is True
+    assert veny.build_alias_index(options).pypi is None
+
+
+def test_the_index_reaches_pypi_by_default(monkeypatch, tmp_path):
+    # The flag must be opt-in: defaulting to offline would silently drop the
+    # only tier that can resolve a name veny has never seen before.
+    options = veny.Options()
+    options.my_dir = tmp_path
+    options.python_command = None
+    monkeypatch.setattr(sys, "argv", ["veny.py", "script.py"])
+
+    veny.parse_arguments(options)
+
+    assert options.args.offline is False
+    assert veny.build_alias_index(options).pypi is not None
 
 
 class _CountingIndex:
