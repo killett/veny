@@ -180,7 +180,16 @@ SEED: Final[dict[str, str]] = {
 OVERRIDES_FILENAME: Final[str] = "module_aliases.toml"
 CACHE_FILENAME: Final[str] = "module_aliases_cache.json"
 
-_REJECTION_KINDS: Final[frozenset[str]] = frozenset({"import_failed", "install_failed"})
+_REJECTION_KINDS: Final[frozenset[str]] = frozenset(
+    {"import_failed", "install_failed", "import_unavailable"}
+)
+
+# Only a durable fact about the package itself is worth remembering. A failed
+# install may be a network blip, and an import that failed because *this
+# machine* lacks a shared library says nothing about the package: the same
+# release imports fine once the operating-system package is installed, and on
+# any other machine that already has it.
+_PERSISTED_REJECTION_KINDS: Final[frozenset[str]] = frozenset({"import_failed"})
 
 
 class AliasOverrideError(Exception):
@@ -378,16 +387,22 @@ class AliasCache:
     def reject(self, import_name: str, pip_name: str, kind: str) -> None:
         """Record a failed attempt, persisting only deterministic failures.
 
-        An "installed but did not import" result is a fact about the package and
-        is persisted. A failed install may be transient -- a network blip or an
-        index outage -- so persisting it would permanently blacklist a package
-        that is actually correct. Nothing at all is persisted when the target
-        interpreter's version is unknown, for the same reason as confirm().
+        An "installed but does not contain this module" result is a fact about
+        the package and is persisted. A failed install may be transient -- a
+        network blip or an index outage -- so persisting it would permanently
+        blacklist a package that is actually correct. An import that failed
+        because this machine lacks a shared library ("import_unavailable") is a
+        fact about the machine, not the package: the same release imports fine
+        once the operating-system package is installed, so persisting it would
+        suppress the correct package here forever. Nothing at all is persisted
+        when the target interpreter's version is unknown, for the same reason as
+        confirm().
 
         Args:
             import_name: The import name being resolved.
             pip_name:    The candidate that failed.
-            kind:        Either "import_failed" or "install_failed".
+            kind:        One of "import_failed", "install_failed" or
+                         "import_unavailable".
 
         Raises:
             ValueError: If kind is not a recognised rejection kind.
@@ -396,7 +411,7 @@ class AliasCache:
             raise ValueError(
                 f"Unknown rejection kind {kind!r}; expected one of {sorted(_REJECTION_KINDS)}."
             )
-        if kind == "install_failed":
+        if kind not in _PERSISTED_REJECTION_KINDS:
             return
         if self.interpreter_tag is None:
             logging.debug(

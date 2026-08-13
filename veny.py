@@ -21,6 +21,7 @@ import shlex  # For safely quoting shell commands
 from functools   import lru_cache  # For caching results of expensive function calls
 from collections import defaultdict
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 
 import alias_index
 import stdlib_index
@@ -3237,11 +3238,95 @@ def add_dependencies(options: Options) -> None:
                     added = True
 
 
+# Import errors that are facts about *this machine*, not about the package: the
+# distribution installed and contains the module, but a shared library it links
+# against is not present. The same release imports fine once the operating-system
+# package is installed, so such a failure must never be remembered as a fault of
+# the package. stdlib_index.NEEDS_SYSTEM_PACKAGE models the same class of problem
+# and answers it with a report rather than a suppression; so does this.
+MACHINE_SCOPED_IMPORT_MARKERS: tuple[str, ...] = (
+    "cannot open shared object file",
+    "undefined symbol",
+    "DLL load failed",
+)
+
+_SHARED_LIBRARY_PATTERN = re.compile(r"[\w.+-]+\.(?:so(?:\.[\w.]+)?|dylib|dll)",
+                                     re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class ImportOutcome:
+    """The result of asking a venv to import one name.
+
+    Attributes:
+        imported:       Whether the import succeeded.
+        rejection_kind: The alias_index rejection kind a failure warrants --
+                        "import_failed" when the package does not contain the
+                        module, "import_unavailable" when this machine cannot
+                        load it. Empty when the import succeeded.
+        detail:         The ImportError text, for reporting.
+    """
+
+    imported: bool
+    rejection_kind: str
+    detail: str
+
+
+def import_error_detail(output: str) -> str:
+    """Pull the ImportError text out of a venv import check's stdout.
+
+    Args:
+        output: The check's stdout.
+
+    Returns:
+        The reported import errors, one per line, or an empty string.
+    """
+    return "\n".join(line.removeprefix("Import error: ") for line in output.splitlines()
+                     if line.startswith("Import error: "))
+
+
+def import_outcome_in_venv(options: Options, import_name: str,
+                           venv_dir: str | os.PathLike[str] | None = None) -> ImportOutcome:
+    """Import one name inside the venv and classify any failure.
+
+    "Installed but does not contain this module" and "installed, contains it,
+    but this machine cannot load it" look identical from a boolean check, and
+    only the first is a fact about the package. Persisting the second suppresses
+    the correct package on this machine forever -- including after the user
+    installs the missing system library.
+
+    A machine-scoped failure is reported to the user, naming the library, because
+    an unexplained dead end is the worst of the available outcomes.
+
+    Args:
+        options:     Options object containing settings and paths.
+        import_name: The import name to try, as written in the user's source.
+        venv_dir:    Optional venv to check in. Defaults to options.venv_dir.
+
+    Returns:
+        The outcome, carrying the rejection kind any failure warrants.
+    """
+    imported, output = run_import_check_in_venv(venv_python_for(options, venv_dir),
+                                                [[import_name]])
+    if imported:
+        return ImportOutcome(imported=True, rejection_kind="", detail="")
+    detail = import_error_detail(output)
+    if not any(marker in detail for marker in MACHINE_SCOPED_IMPORT_MARKERS):
+        return ImportOutcome(imported=False, rejection_kind="import_failed", detail=detail)
+    library = _SHARED_LIBRARY_PATTERN.search(detail)
+    logging.warning("%s is installed but will not import on this machine: %s. That is a "
+                    "missing system library (%s), not the wrong package -- install the "
+                    "operating-system package that provides it. veny will not hold this "
+                    "against the package.",
+                    import_name, detail, library.group(0) if library else "unknown")
+    return ImportOutcome(imported=False, rejection_kind="import_unavailable", detail=detail)
+
+
 def resolve_and_verify(
     resolution: alias_index.Resolution,
     index: alias_index.AliasIndex,
     installer: Callable[[str], bool],
-    importer: Callable[[str], bool],
+    importer: Callable[[str], bool | ImportOutcome],
     uninstaller: Callable[[str], None],
     max_attempts: int = 3,
 ) -> alias_index.Candidate | None:
@@ -3252,11 +3337,17 @@ def resolve_and_verify(
     uninstalled, so a rejected package cannot pollute the environment or shadow
     the correct one on a later attempt.
 
+    An importer that returns an ImportOutcome also says *why* a failure happened,
+    and that decides whether the rejection is remembered: a package that does not
+    contain the module is a durable fact, while one this machine cannot load is
+    not. A plain bool importer is still accepted and is read as the durable kind.
+
     Args:
         resolution:   The ranked candidates for one import name.
         index:        The AliasIndex to record the outcome in.
         installer:    Installs a pip name, returning True on success.
-        importer:     Returns True if the import name now imports.
+        importer:     Returns whether the import name now imports, as a bool or
+                      as an ImportOutcome carrying the rejection kind to use.
         uninstaller:  Removes a pip name that was installed but rejected.
         max_attempts: How many candidates to try before giving up.
 
@@ -3271,7 +3362,8 @@ def resolve_and_verify(
         if not installer(candidate.pip_name):
             index.reject(resolution.import_name, candidate.pip_name, "install_failed")
             continue
-        if importer(resolution.import_name):
+        outcome = importer(resolution.import_name)
+        if outcome.imported if isinstance(outcome, ImportOutcome) else outcome:
             index.confirm(resolution.import_name, candidate.pip_name)
             return candidate
         logging.debug(
@@ -3279,8 +3371,87 @@ def resolve_and_verify(
             candidate.pip_name, resolution.import_name,
         )
         uninstaller(candidate.pip_name)
-        index.reject(resolution.import_name, candidate.pip_name, "import_failed")
+        index.reject(resolution.import_name, candidate.pip_name,
+                     outcome.rejection_kind if isinstance(outcome, ImportOutcome) else "import_failed")
     return None
+
+
+def venv_python_for(options: Options, venv_dir: str | os.PathLike[str] | None = None) -> Path:
+    """Return the interpreter inside a virtual environment.
+
+    Args:
+        options:  Options object; used when venv_dir is None.
+        venv_dir: The venv to look in, or None to use options.venv_dir.
+
+    Returns:
+        The path to that venv's python.
+    """
+    if venv_dir is None:
+        assert options.venv_dir is not None, "options.venv_dir must be set"
+        venv_dir = options.venv_dir
+    else:
+        venv_dir = ud.ensure_dir(venv_dir)
+    if sys.platform == "win32":
+        return (venv_dir / "Scripts" / "python.exe").absolute()
+    # Do NOT use resolve() here because this is a symlink and resolve() would break it
+    return (venv_dir / "bin" / "python").absolute()
+
+
+def run_import_check_in_venv(venv_python: Path,
+                             alternatives: list[list[str]]) -> tuple[bool, str]:
+    """Ask a venv's own interpreter to import each group of alternative names.
+
+    Args:
+        venv_python:  The venv interpreter to run the check in.
+        alternatives: One group per thing to check. A group passes if any one of
+                      its names imports.
+
+    Returns:
+        Whether every group imported, and the check's stdout -- which carries the
+        ImportError text behind each failure, so a caller can tell a package that
+        does not contain the module from one that is present but unusable on this
+        machine. Discarding that text is what made a missing system library look
+        like a fault of the package.
+    """
+    python_code = f"""
+import sys
+from importlib import import_module
+successes = []
+failures = []
+details = []
+counter = 0
+for alternatives in {alternatives!r}:
+    counter += 1
+    ok = False
+    for package in alternatives:
+        try:
+            import_module(package)
+            ok = True
+            break
+        except ImportError as exc:
+            details.append(package + ": " + str(exc))
+            continue
+    if ok:
+        successes.append(alternatives[0])
+    else:
+        failures.append(alternatives[0])
+if failures:
+    print("Failed packages: " + ", ".join(failures))
+    for detail in details:
+        print("Import error: " + detail)
+    sys.exit(1)
+elif len(successes) != counter:
+    print(f"Warning: No failures, but only recorded {{len(successes)}} successes out of {{counter}}.")
+    sys.exit(2)
+else:
+    print(f"All {{len(successes)}} (out of {{counter}}) packages imported successfully.")
+    sys.exit(0)
+"""
+    the_command = [os.fspath(venv_python), "-c", python_code]
+    result = subprocess.run(the_command, capture_output=True, text=True, check=False)
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("check_packages_in_venv stdout:\n%s", result.stdout)
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("check_packages_in_venv stderr:\n%s", result.stderr)
+    return "packages imported successfully" in result.stdout, result.stdout
 
 
 def source_import_names(options: Options) -> set[str]:
@@ -3347,15 +3518,7 @@ def check_packages_in_venv(options: Options, record: ResolvedImport | None = Non
     Raises:
         None:       This function does not raise exceptions, but logs errors if the import fails.
     """
-    if venv_dir is None:
-        assert options.venv_dir is not None, "options.venv_dir must be set"
-        venv_dir = options.venv_dir
-    else:
-        venv_dir = ud.ensure_dir(venv_dir)
-    if sys.platform == "win32":
-        venv_python = (venv_dir / "Scripts" / "python.exe").absolute()
-    else:  # Do NOT use resolve() here because this is a symlink and resolve() would break it
-        venv_python = (venv_dir / "bin" / "python").absolute()
+    venv_python = venv_python_for(options, venv_dir)
     if record is not None:
         # alternatives: one name per entry to try; passes if any one imports.
         alternatives = [[record.import_name]]
@@ -3394,42 +3557,8 @@ def check_packages_in_venv(options: Options, record: ResolvedImport | None = Non
             else:
                 alternatives.append([entry.import_name])
     if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Packages to check in venv: %s", alternatives)
-    python_code = f"""
-import sys
-from importlib import import_module
-successes = []
-failures = []
-counter = 0
-for alternatives in {alternatives!r}:
-    counter += 1
-    ok = False
-    for package in alternatives:
-        try:
-            import_module(package)
-            ok = True
-            break
-        except ImportError:
-            continue
-    if ok:
-        successes.append(alternatives[0])
-    else:
-        failures.append(alternatives[0])
-if failures:
-    print("Failed packages: " + ", ".join(failures))
-    sys.exit(1)
-elif len(successes) != counter:
-    print(f"Warning: No failures, but only recorded {{len(successes)}} successes out of {{counter}}.")
-    sys.exit(2)
-else:
-    print(f"All {{len(successes)}} (out of {{counter}}) packages imported successfully.")
-    sys.exit(0)
-"""
-    the_command = [os.fspath(venv_python), "-c", python_code]
-    result = subprocess.run(the_command, capture_output=True, text=True, check=False)
-    # if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("check_packages_in_venv command:\n%s", " ".join(shlex.quote(str(arg)) for arg in the_command))
-    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("check_packages_in_venv stdout:\n%s", result.stdout)
-    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("check_packages_in_venv stderr:\n%s", result.stderr)
-    return "packages imported successfully" in result.stdout
+    imported, _ = run_import_check_in_venv(venv_python, alternatives)
+    return imported
 
 
 def _compute_bad_imports(all_imports: set[str], known_bad: set[str],
@@ -3992,22 +4121,30 @@ def uninstall_from_venv(options: Options, pip_name: str) -> None:
 
 
 def repair_unsatisfied_import(options: Options, record: ResolvedImport,
-                              installed_distributions: dict[str, frozenset[str]]) -> ResolvedImport:
+                              installed_distributions: dict[str, frozenset[str]],
+                              outcome: ImportOutcome) -> ResolvedImport:
     """Try the remaining ranked candidates for an import the venv does not provide.
 
     The candidate that just failed is recorded first, and which kind of failure
-    it was matters: a pip name the venv's metadata knows did install and simply
-    does not provide this import, which is a durable fact about the package and
-    is remembered; a pip name the metadata does not know never installed at all,
-    which may be a network blip and is deliberately not remembered. Recording it
-    before re-resolving is also what removes it from the ranked list that comes
-    back, so the next attempt is genuinely a different project.
+    it was matters. A pip name the venv's metadata does not know never installed
+    at all, which may be a network blip and is deliberately not remembered.
+    A pip name the metadata does know installed, and then either does not contain
+    the module (a durable fact about the package, remembered) or contains it but
+    will not load here for want of a system library (a fact about the machine,
+    not remembered -- see ImportOutcome). Recording it before re-resolving is
+    also what removes a remembered failure from the ranked list that comes back,
+    so the next attempt is genuinely a different project.
+
+    The uninstall happens either way: a package that cannot be imported here is
+    no use here, and the next candidate may well be the one that works (opencv's
+    headless build needs no libGL).
 
     Args:
         options:                 Options object; reads and updates options.aliases.
         record:                  The record whose import name the venv does not provide.
         installed_distributions: Normalized distribution name -> the import names
                                  it provides, from the venv's own metadata.
+        outcome:                 Why the import failed, from import_outcome_in_venv.
 
     Returns:
         A record naming the package that actually provided the import, or the
@@ -4015,7 +4152,7 @@ def repair_unsatisfied_import(options: Options, record: ResolvedImport,
     """
     if alias_index.normalize_pip_name(record.pip_name) in installed_distributions:
         uninstall_from_venv(options, record.pip_name)
-        options.aliases.reject(record.import_name, record.pip_name, "import_failed")
+        options.aliases.reject(record.import_name, record.pip_name, outcome.rejection_kind)
     else:
         options.aliases.reject(record.import_name, record.pip_name, "install_failed")
 
@@ -4023,10 +4160,9 @@ def repair_unsatisfied_import(options: Options, record: ResolvedImport,
         """Install a candidate, returning success rather than raising."""
         return install_into_venv(options, pip_name)
 
-    def importer(import_name: str) -> bool:
-        """Report whether the *import* name now imports inside the venv."""
-        return check_packages_in_venv(options, record=ResolvedImport(import_name=import_name,
-                                                                     pip_name=import_name))
+    def importer(import_name: str) -> ImportOutcome:
+        """Report whether the *import* name now imports inside the venv, and why not."""
+        return import_outcome_in_venv(options, import_name)
 
     def uninstaller(pip_name: str) -> None:
         """Remove a candidate that installed without providing the import."""
@@ -4109,10 +4245,13 @@ def verify_and_repair_imports(options: Options) -> None:
         return
     repaired: dict[ResolvedImport, ResolvedImport] = {}
     for record in records:
-        if check_packages_in_venv(options, record=record):
+        # The outcome, not just a bool: whether a failure is remembered depends
+        # on whether it was the package's fault or this machine's.
+        outcome = import_outcome_in_venv(options, record.import_name)
+        if outcome.imported:
             confirm_if_attributable(options, record, installed_distributions)
             continue
-        replacement = repair_unsatisfied_import(options, record, installed_distributions)
+        replacement = repair_unsatisfied_import(options, record, installed_distributions, outcome)
         if replacement != record:
             repaired[record] = replacement
     if repaired:

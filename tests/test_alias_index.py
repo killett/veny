@@ -276,6 +276,33 @@ def test_a_probe_failure_reports_an_unknown_interpreter_tag(monkeypatch):
     assert packages == {}
 
 
+def test_a_machine_scoped_import_failure_is_not_persisted(tmp_path):
+    # "opencv-python installed, but libGL.so.1 is missing" is a fact about the
+    # machine, not about the package. Persisting it as a rejection makes
+    # resolve() filter the correct package on this machine forever -- including
+    # after the user installs libgl1 -- and the cache outranks every tier except
+    # OVERRIDE. stdlib_index.NEEDS_SYSTEM_PACKAGE models the same class of
+    # problem and answers it with a report, not a suppression.
+    path = tmp_path / "cache.json"
+    cache = AliasCache.load(path, interpreter_tag="3.12")
+    cache.reject("cv2", "opencv-python", "import_unavailable")
+    assert cache.rejected_names("cv2") == frozenset()
+    assert not path.exists()
+
+
+def test_a_package_that_simply_lacks_the_import_is_still_persisted(tmp_path):
+    # The distinction has to stay sharp: a package that installs and genuinely
+    # does not contain the module is a durable fact and must keep being
+    # remembered, or every run re-attempts the same wrong package.
+    path = tmp_path / "cache.json"
+    cache = AliasCache.load(path, interpreter_tag="3.12")
+    cache.reject("cv2", "opencv", "import_failed")
+    assert cache.rejected_names("cv2") == frozenset({"opencv"})
+    assert AliasCache.load(path, interpreter_tag="3.12").rejected_names("cv2") == frozenset(
+        {"opencv"}
+    )
+
+
 def test_an_unknown_interpreter_tag_matches_no_cache_entry(tmp_path):
     # An entry was recorded under a known version; an unknown version is not
     # evidence that it applies, so the read must miss rather than guess.

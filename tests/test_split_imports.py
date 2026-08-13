@@ -578,7 +578,7 @@ def test_check_packages_in_venv_probes_the_venv_once_per_call(monkeypatch, tmp_p
     assert len(probe_calls) == 1
 
 
-def _run_check_against_fake_venv(monkeypatch, importable: set[str]):
+def _run_check_against_fake_venv(monkeypatch, importable: set[str], errors=None):
     """Simulate a real venv by executing the generated script for real.
 
     The generated script's own pass/fail logic (including the "any
@@ -590,6 +590,8 @@ def _run_check_against_fake_venv(monkeypatch, importable: set[str]):
     Args:
         monkeypatch: pytest's monkeypatch fixture.
         importable: Names that "import" successfully in the fake venv.
+        errors: Optional import name -> ImportError message, for the cases where
+            *why* an import failed is what is under test.
     """
     import contextlib
     import importlib
@@ -597,7 +599,7 @@ def _run_check_against_fake_venv(monkeypatch, importable: set[str]):
 
     def fake_import_module(name: str) -> None:
         if name not in importable:
-            raise ImportError(name)
+            raise ImportError((errors or {}).get(name, name))
 
     monkeypatch.setattr(importlib, "import_module", fake_import_module)
 
@@ -765,10 +767,13 @@ class _FakeInstalledVenv:
     still sitting in the venv. So this double additionally answers the probe.
     """
 
-    def __init__(self, provides, installed=(), install_failures=()):
+    def __init__(self, provides, installed=(), install_failures=(), unusable=()):
         self.provides = dict(provides)  # pip name -> the import name it supplies
         self.installed = list(installed)  # pip names currently installed
         self.install_failures = set(install_failures)
+        # Pip names that install and declare their import name, but whose import
+        # fails here because the machine lacks a shared library.
+        self.unusable = set(unusable)
         self.attempted = []  # pip names the installer was asked to install
         self.uninstalled = []  # pip names removed
         self.import_checks = []  # names the per-record import check was given
@@ -786,7 +791,30 @@ class _FakeInstalledVenv:
             self.installed.remove(pip_name)
 
     def imports(self, import_name):
-        return any(self.provides.get(p) == import_name for p in self.installed)
+        return any(
+            self.provides.get(p) == import_name and p not in self.unusable
+            for p in self.installed
+        )
+
+    def outcome(self, options, import_name, venv_dir=None):
+        """Stand in for import_outcome_in_venv."""
+        self.import_checks.append(import_name)
+        if self.imports(import_name):
+            return veny.ImportOutcome(imported=True, rejection_kind="", detail="")
+        if any(
+            self.provides.get(p) == import_name and p in self.unusable
+            for p in self.installed
+        ):
+            return veny.ImportOutcome(
+                imported=False,
+                rejection_kind="import_unavailable",
+                detail="libGL.so.1: cannot open shared object file",
+            )
+        return veny.ImportOutcome(
+            imported=False,
+            rejection_kind="import_failed",
+            detail=f"No module named {import_name!r}",
+        )
 
     def probe(self, python, timeout=30.0):
         packages: dict[str, list[str]] = {}
@@ -914,6 +942,7 @@ def test_an_import_provided_by_another_distribution_is_not_confirmed(
         installed=["wrong-pkg", "other-pkg"],
     )
     monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
+    monkeypatch.setattr(veny, "import_outcome_in_venv", fake.outcome)
     monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
     monkeypatch.setattr(veny, "install_into_venv", fake.install)
     monkeypatch.setattr(veny, "uninstall_from_venv", fake.uninstall)
@@ -957,6 +986,7 @@ def test_an_import_the_batch_install_did_not_provide_is_repaired(
         installed=["wrong-pkg"],
     )
     monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
+    monkeypatch.setattr(veny, "import_outcome_in_venv", fake.outcome)
     monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
     monkeypatch.setattr(veny, "install_into_venv", fake.install)
     monkeypatch.setattr(veny, "uninstall_from_venv", fake.uninstall)
@@ -989,6 +1019,7 @@ def test_the_repair_path_import_checks_the_import_name_never_the_pip_name(
         installed=["wrong-pkg"],
     )
     monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
+    monkeypatch.setattr(veny, "import_outcome_in_venv", fake.outcome)
     monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
     monkeypatch.setattr(veny, "install_into_venv", fake.install)
     monkeypatch.setattr(veny, "uninstall_from_venv", fake.uninstall)
@@ -1015,6 +1046,7 @@ def test_a_record_carrying_a_pip_spelling_is_never_repaired(monkeypatch, tmp_pat
         provides={"opencv-python": "cv2"}, installed=["opencv-python"]
     )
     monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
+    monkeypatch.setattr(veny, "import_outcome_in_venv", fake.outcome)
     monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
     monkeypatch.setattr(veny, "install_into_venv", fake.install)
     monkeypatch.setattr(veny, "uninstall_from_venv", fake.uninstall)
@@ -1034,6 +1066,7 @@ def test_a_repair_that_cannot_succeed_leaves_the_run_going(monkeypatch, tmp_path
     options = _options_with_venv(tmp_path, index, [record])
     fake = _FakeInstalledVenv(provides={}, install_failures={"mystery"})
     monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
+    monkeypatch.setattr(veny, "import_outcome_in_venv", fake.outcome)
     monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
     monkeypatch.setattr(veny, "install_into_venv", fake.install)
     monkeypatch.setattr(veny, "uninstall_from_venv", fake.uninstall)
@@ -1044,6 +1077,144 @@ def test_a_repair_that_cannot_succeed_leaves_the_run_going(monkeypatch, tmp_path
     # A failed install may be transient, so it must not be persisted as a fact
     # about the package.
     assert index.cache.rejected_names("mystery") == frozenset()
+
+
+def test_a_missing_shared_library_is_classified_as_machine_scoped(
+    monkeypatch, tmp_path
+):
+    # The discriminating text arrives on the ImportError and used to be thrown
+    # away one line later by "except ImportError: continue".
+    options = veny.Options()
+    options.my_dir = tmp_path
+    options.set_venv_dir(tmp_path / "venv")
+    _run_check_against_fake_venv(
+        monkeypatch,
+        importable=set(),
+        errors={
+            "cv2": "libGL.so.1: cannot open shared object file: No such file or directory"
+        },
+    )
+
+    outcome = veny.import_outcome_in_venv(options, "cv2")
+
+    assert outcome.imported is False
+    assert outcome.rejection_kind == "import_unavailable"
+    assert "libGL.so.1" in outcome.detail
+
+
+def test_an_absent_module_is_still_classified_as_a_package_fault(
+    monkeypatch, tmp_path
+):
+    # The distinction must stay sharp in both directions: a package that
+    # installs and genuinely does not contain the module is a durable fact, and
+    # must keep being remembered so it is not re-attempted every run.
+    options = veny.Options()
+    options.my_dir = tmp_path
+    options.set_venv_dir(tmp_path / "venv")
+    _run_check_against_fake_venv(
+        monkeypatch, importable=set(), errors={"thing": "No module named 'thing'"}
+    )
+
+    outcome = veny.import_outcome_in_venv(options, "thing")
+
+    assert outcome.imported is False
+    assert outcome.rejection_kind == "import_failed"
+
+
+def test_a_working_import_reports_no_rejection(monkeypatch, tmp_path):
+    options = veny.Options()
+    options.my_dir = tmp_path
+    options.set_venv_dir(tmp_path / "venv")
+    _run_check_against_fake_venv(monkeypatch, importable={"cv2"})
+
+    outcome = veny.import_outcome_in_venv(options, "cv2")
+
+    assert outcome.imported is True
+
+
+def test_a_missing_shared_library_is_reported_to_the_user(
+    monkeypatch, tmp_path, caplog
+):
+    # stdlib_index.NEEDS_SYSTEM_PACKAGE answers this class of problem with a
+    # report rather than a suppression. Silently trying the next candidate turns
+    # "you need to install libgl1" into an unexplained dead end.
+    options = veny.Options()
+    options.my_dir = tmp_path
+    options.set_venv_dir(tmp_path / "venv")
+    _run_check_against_fake_venv(
+        monkeypatch,
+        importable=set(),
+        errors={
+            "cv2": "libGL.so.1: cannot open shared object file: No such file or directory"
+        },
+    )
+
+    with caplog.at_level(logging.WARNING):
+        veny.import_outcome_in_venv(options, "cv2")
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("libGL.so.1" in message for message in messages), messages
+    assert any("cv2" in message for message in messages), messages
+
+
+def test_a_machine_scoped_failure_leaves_no_persisted_rejection(
+    monkeypatch, tmp_path
+):
+    # opencv-python installed correctly and declares cv2; this machine just
+    # lacks libGL.so.1. The in-session retry is still right -- headless may
+    # genuinely be the answer -- but persisting a rejection suppresses the
+    # correct package on this machine on every later run, including after the
+    # user installs libgl1. The cache outranks every tier except OVERRIDE.
+    index = _live_index(tmp_path, seed={"cv2": "opencv-python-headless"})
+    record = veny.ResolvedImport(import_name="cv2", pip_name="opencv-python")
+    options = _options_with_venv(tmp_path, index, [record])
+    fake = _FakeInstalledVenv(
+        provides={"opencv-python": "cv2", "opencv-python-headless": "cv2"},
+        installed=["opencv-python"],
+        unusable={"opencv-python"},
+    )
+    monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
+    monkeypatch.setattr(veny, "import_outcome_in_venv", fake.outcome)
+    monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
+    monkeypatch.setattr(veny, "install_into_venv", fake.install)
+    monkeypatch.setattr(veny, "uninstall_from_venv", fake.uninstall)
+
+    veny.verify_and_repair_imports(options)
+
+    # Still removed, and the next candidate still tried.
+    assert fake.uninstalled == ["opencv-python"]
+    assert fake.attempted == ["opencv-python-headless"]
+    # But nothing about opencv-python is remembered.
+    assert index.cache.rejected_names("cv2") == frozenset()
+    assert not any(
+        "opencv-python" == name
+        for names in index.cache.rejections.values()
+        for name in names
+    )
+
+
+def test_a_package_that_lacks_the_import_is_still_rejected_durably(
+    monkeypatch, tmp_path
+):
+    # The guard against over-correcting: an ordinary "installed but does not
+    # contain it" failure must still be persisted, or every run re-attempts the
+    # same wrong package.
+    index = _live_index(tmp_path, seed={"thing": "right-pkg"})
+    record = veny.ResolvedImport(import_name="thing", pip_name="wrong-pkg")
+    options = _options_with_venv(tmp_path, index, [record])
+    fake = _FakeInstalledVenv(
+        provides={"wrong-pkg": "something-else", "right-pkg": "thing"},
+        installed=["wrong-pkg"],
+    )
+    monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
+    monkeypatch.setattr(veny, "import_outcome_in_venv", fake.outcome)
+    monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
+    monkeypatch.setattr(veny, "install_into_venv", fake.install)
+    monkeypatch.setattr(veny, "uninstall_from_venv", fake.uninstall)
+
+    veny.verify_and_repair_imports(options)
+
+    assert index.cache.rejected_names("thing") == frozenset({"wrong-pkg"})
 
 
 def test_the_repair_installer_reports_failure_instead_of_exiting(
