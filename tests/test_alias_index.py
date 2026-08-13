@@ -290,22 +290,22 @@ class _FakeFetcher:
         self.honour_range = honour_range
         self.requests = []
 
-    def get(self, url, headers=None):
+    def get(self, url, headers=None, *, max_bytes=None):
         self.requests.append((url, dict(headers or {})))
         if url.endswith("/json"):
             if self.json_payload is None:
                 raise alias_index.FetchError("404")
-            return 200, {}, json.dumps(self.json_payload).encode()
+            body = json.dumps(self.json_payload).encode()
+            return 200, {}, body if max_bytes is None else body[:max_bytes]
         range_header = (headers or {}).get("Range")
         if range_header and self.honour_range:
-            start = int(range_header.removeprefix("bytes=").split("-")[0] or 0)
-            if range_header.startswith("bytes=-"):
-                length = int(range_header.removeprefix("bytes=-"))
-                return 206, {}, self.wheel[-length:]
-            end = range_header.split("-")[1]
-            stop = int(end) + 1 if end else len(self.wheel)
-            return 206, {}, self.wheel[start:stop]
-        return 200, {}, self.wheel
+            # veny only ever sends an absolute tail range now (files.pythonhosted.org
+            # answers a suffix range, bytes=-N, with 501 Unsupported client range).
+            start_str, end_str = range_header.removeprefix("bytes=").split("-")
+            body = self.wheel[int(start_str) : int(end_str) + 1]
+            return 206, {}, body if max_bytes is None else body[:max_bytes]
+        body = self.wheel
+        return 200, {}, body if max_bytes is None else body[:max_bytes]
 
 
 def _json_for(wheel, extra_files=()):
@@ -538,3 +538,46 @@ def test_corrupt_central_directory_returns_none_not_empty_frozenset():
         + b"\x00" * 2
     )
     assert alias_index._names_from_tail(garbage + eocd) is None
+
+
+def test_range_header_is_an_absolute_tail_range():
+    # files.pythonhosted.org answers a suffix range (bytes=-N) with
+    # 501 Unsupported client range; veny must compute an absolute range from
+    # the wheel's declared size instead (bytes=start-end, end == size - 1).
+    wheel = _wheel_bytes([f"pkg/mod{i}.py" for i in range(200)])
+    fetcher = _FakeFetcher(_json_for(wheel), wheel)
+    PyPIClient(fetcher).top_levels("pkg")
+    wheel_requests = [
+        headers for url, headers in fetcher.requests if url.endswith(".whl")
+    ]
+    assert wheel_requests
+    for headers in wheel_requests:
+        range_header = headers["Range"]
+        assert not range_header.startswith("bytes=-")
+        start_str, end_str = range_header.removeprefix("bytes=").split("-")
+        assert int(start_str) >= 0
+        assert int(end_str) == len(wheel) - 1
+
+
+def test_non_positive_declared_size_returns_none():
+    # A declared size of 0 (or negative) cannot produce a usable Range;
+    # treat it as "cannot inspect" rather than sending a malformed header.
+    wheel = _wheel_bytes(["pkg/__init__.py"])
+    payload = _json_for(wheel)
+    payload["urls"][0]["size"] = 0
+    fetcher = _FakeFetcher(payload, wheel)
+    assert PyPIClient(fetcher).top_levels("pkg") is None
+    assert not any(url.endswith(".whl") for url, _ in fetcher.requests)
+
+
+def test_metadata_larger_than_max_wheel_bytes_is_not_truncated():
+    # UrllibFetcher.get is shared by the metadata and wheel requests but must
+    # not share a byte cap: real projects' /pypi/<name>/json bodies routinely
+    # exceed MAX_WHEEL_BYTES on their own (grpcio is 8.8 MB; botocore, awscli,
+    # numpy, and boto3 all clear 3 MB), so capping the metadata read at
+    # MAX_WHEEL_BYTES would silently blind those projects.
+    wheel = _wheel_bytes(["pkg/__init__.py"])
+    payload = _json_for(wheel)
+    payload["padding"] = "x" * (MAX_WHEEL_BYTES + 1024)
+    fetcher = _FakeFetcher(payload, wheel)
+    assert PyPIClient(fetcher).top_levels("pkg") == frozenset({"pkg"})

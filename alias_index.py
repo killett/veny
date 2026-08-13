@@ -435,6 +435,11 @@ def probe_interpreter(
 
 PYPI_JSON_URL: Final[str] = "https://pypi.org/pypi/{name}/json"
 MAX_WHEEL_BYTES: Final[int] = 5 * 1024 * 1024
+# The metadata and wheel requests share UrllibFetcher.get but must not share a
+# byte cap: a project's /pypi/<name>/json body routinely exceeds MAX_WHEEL_BYTES
+# on its own (grpcio is 8.8 MB; botocore, awscli, numpy, and boto3 all clear
+# 3 MB), so capping it at MAX_WHEEL_BYTES silently blinds those projects.
+MAX_METADATA_BYTES: Final[int] = 32 * 1024 * 1024
 _FIRST_WINDOW: Final[int] = 64 * 1024
 _WIDE_WINDOW: Final[int] = 1024 * 1024
 _CONNECT_TIMEOUT: Final[float] = 5.0
@@ -450,13 +455,17 @@ class Fetcher(Protocol):
     """Minimal HTTP surface the PyPI client needs, so tests can inject a fake."""
 
     def get(
-        self, url: str, headers: dict[str, str] | None = None
+        self, url: str, headers: dict[str, str] | None = None, *, max_bytes: int
     ) -> tuple[int, dict[str, str], bytes]:
         """Retrieve a URL.
 
         Args:
-            url:     The absolute URL to retrieve.
-            headers: Request headers, such as Range.
+            url:       The absolute URL to retrieve.
+            headers:   Request headers, such as Range.
+            max_bytes: Upper bound on bytes read from the response body. The
+                caller chooses this per request -- a wheel body and a JSON
+                metadata body have very different legitimate sizes -- so
+                nothing here should default to a one-size-fits-all cap.
 
         Returns:
             The status code, response headers, and body bytes.
@@ -471,13 +480,17 @@ class UrllibFetcher:
     """A Fetcher backed by urllib, so veny needs no third-party HTTP library."""
 
     def get(
-        self, url: str, headers: dict[str, str] | None = None
+        self, url: str, headers: dict[str, str] | None = None, *, max_bytes: int
     ) -> tuple[int, dict[str, str], bytes]:
-        """Retrieve a URL with a bounded timeout.
+        """Retrieve a URL with a bounded timeout and a bounded read.
 
         Args:
-            url:     The absolute URL to retrieve.
-            headers: Request headers, such as Range.
+            url:       The absolute URL to retrieve.
+            headers:   Request headers, such as Range.
+            max_bytes: Upper bound on bytes read from the response body, so a
+                server that ignores a Range header (or serves an
+                unexpectedly large body) cannot make this method transfer
+                more than the caller is willing to receive.
 
         Returns:
             The status code, response headers, and body bytes.
@@ -490,10 +503,7 @@ class UrllibFetcher:
         request = urllib.request.Request(url, headers=headers or {})  # noqa: S310
         try:
             with urllib.request.urlopen(request, timeout=_READ_TIMEOUT) as response:  # noqa: S310
-                # Bounded even when a server ignores Range and sends a full
-                # body: the point of MAX_WHEEL_BYTES is to cap what veny
-                # transfers, not just what it is willing to accept afterward.
-                body = response.read(MAX_WHEEL_BYTES + 1)
+                body = response.read(max_bytes)
                 return int(response.status), dict(response.headers), body
         except (urllib.error.URLError, OSError, ValueError) as exc:
             raise FetchError(str(exc)) from exc
@@ -528,9 +538,12 @@ class PyPIClient:
     """Answers whether a PyPI project declares a given top-level import name.
 
     The answer comes from the wheel's zip central directory, which lists every
-    member path and sits at the end of the file. A suffix Range request reads it
-    without transferring the wheel body, so confirming a candidate costs one
-    JSON request plus tens of kilobytes.
+    member path and sits at the end of the file. An absolute tail Range request
+    (computed from the wheel's declared size) reads it without transferring the
+    wheel body, so confirming a candidate costs one JSON request plus tens of
+    kilobytes. A suffix Range request (``bytes=-N``) would be simpler, but
+    files.pythonhosted.org answers that form with ``501 Unsupported client
+    range``; only the absolute form (``bytes=start-end``) works against it.
     """
 
     def __init__(self, fetcher: Fetcher | None = None) -> None:
@@ -567,7 +580,7 @@ class PyPIClient:
         """
         url = PYPI_JSON_URL.format(name=urllib.parse.quote(name, safe=""))
         try:
-            _, _, body = self._fetcher.get(url)
+            _, _, body = self._fetcher.get(url, max_bytes=MAX_METADATA_BYTES)
             payload = json.loads(body)
         except (FetchError, ValueError) as exc:
             logging.debug("No PyPI metadata for %s (%s).", name, exc)
@@ -604,20 +617,33 @@ class PyPIClient:
     def _read_member_names(self, url: str, size: int) -> frozenset[str] | None:
         """Read a remote wheel's member listing without downloading its body.
 
+        files.pythonhosted.org answers a suffix Range (``bytes=-N``) with
+        ``501 Unsupported client range``, so the tail is instead requested as
+        an absolute range computed from the wheel's declared size: for a
+        window W, ``bytes={max(0, size - W)}-{size - 1}``.
+
         Args:
             url:  Absolute URL of the wheel.
             size: Wheel size in bytes, as reported by PyPI.
 
         Returns:
-            The top-level names, or None when the server refuses Range on a
-            wheel larger than MAX_WHEEL_BYTES.
+            The top-level names, or None when size is not usable, or the
+            server refuses Range on a wheel larger than MAX_WHEEL_BYTES.
 
         Raises:
             FetchError: If the wheel cannot be retrieved.
         """
+        if size <= 0:
+            logging.debug(
+                "Wheel size for %s is not usable (%d); skipping it.", url, size
+            )
+            return None
         for window in (_FIRST_WINDOW, _WIDE_WINDOW):
+            start = max(0, size - window)
             status, _, chunk = self._fetcher.get(
-                url, headers={"Range": f"bytes=-{window}"}
+                url,
+                headers={"Range": f"bytes={start}-{size - 1}"},
+                max_bytes=MAX_WHEEL_BYTES + 1,
             )
             if status != 206:
                 # size is PyPI's claim; len(chunk) is what was actually
