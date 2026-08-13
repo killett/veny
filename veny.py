@@ -4390,8 +4390,7 @@ def resolve_and_verify(
         resolution:   The ranked candidates for one import name.
         index:        The AliasIndex to record the outcome in.
         installer:    Installs a pip name, returning True on success.
-        importer:     Called with the just-installed pip name; returns True
-                       if resolution.import_name now imports.
+        importer:     Returns True if the import name now imports.
         uninstaller:  Removes a pip name that was installed but rejected.
         max_attempts: How many candidates to try before giving up.
 
@@ -4406,7 +4405,7 @@ def resolve_and_verify(
         if not installer(candidate.pip_name):
             index.reject(resolution.import_name, candidate.pip_name, "install_failed")
             continue
-        if importer(candidate.pip_name):
+        if importer(resolution.import_name):
             index.confirm(resolution.import_name, candidate.pip_name)
             return candidate
         logging.debug(

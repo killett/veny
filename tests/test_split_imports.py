@@ -110,68 +110,114 @@ def _resolution(*pip_names):
     )
 
 
+class _FakeVenv:
+    """Models install-then-import: the importer answers from what is installed.
+
+    This is the real contract: pip installs a *distribution* name (e.g.
+    "opencv-python"); the importer is then asked whether an *import* name
+    (e.g. "cv2") works. Those are frequently different strings, so a fake
+    that can only answer by comparing its argument to a pip name (as a
+    stateless `lambda name: name == "right"` would) models something the
+    real system never does. This double instead tracks which pip names are
+    currently installed and answers ``imports()`` by looking up what they
+    provide.
+    """
+
+    def __init__(self, provides, install_failures=()):
+        self.provides = provides  # pip_name -> the import name it supplies
+        self.install_failures = set(install_failures)
+        self.attempted = []  # pip names the installer was asked to install, in order
+        self.installed = []  # pip names currently installed
+        self.uninstalled = []  # pip names removed after a failed import
+
+    def install(self, pip_name):
+        self.attempted.append(pip_name)
+        if pip_name in self.install_failures:
+            return False
+        self.installed.append(pip_name)
+        return True
+
+    def imports(self, import_name):
+        return any(self.provides.get(p) == import_name for p in self.installed)
+
+    def uninstall(self, pip_name):
+        self.installed.remove(pip_name)
+        self.uninstalled.append(pip_name)
+
+
 def test_first_working_candidate_is_confirmed():
     index = _RecordingIndex()
+    venv = _FakeVenv(provides={"wrong": "something-else", "right": "thing"})
+    import_calls = []
+
+    def importer(name):
+        import_calls.append(name)
+        return venv.imports(name)
+
     winner = veny.resolve_and_verify(
         _resolution("wrong", "right"),
         index,
-        installer=lambda name: True,
-        importer=lambda name: name == "right",
-        uninstaller=lambda name: None,
+        installer=venv.install,
+        importer=importer,
+        uninstaller=venv.uninstall,
     )
     assert winner.pip_name == "right"
     assert index.confirmed == [("thing", "right")]
+    # Pins the real contract: the importer is always asked about the import
+    # name ("thing"), never about a candidate's pip name ("wrong"/"right").
+    assert import_calls == ["thing", "thing"]
 
 
 def test_candidate_that_installs_but_does_not_import_is_uninstalled():
     # Leaving it behind pollutes the venv and can shadow the correct package.
-    removed = []
     index = _RecordingIndex()
+    venv = _FakeVenv(provides={"wrong": "something-else", "right": "thing"})
     veny.resolve_and_verify(
         _resolution("wrong", "right"),
         index,
-        installer=lambda name: True,
-        importer=lambda name: name == "right",
-        uninstaller=removed.append,
+        installer=venv.install,
+        importer=venv.imports,
+        uninstaller=venv.uninstall,
     )
-    assert removed == ["wrong"]
+    assert venv.uninstalled == ["wrong"]
     assert ("thing", "wrong", "import_failed") in index.rejected
 
 
 def test_failed_install_is_recorded_but_not_uninstalled():
     # Nothing was installed, and the failure may be transient, so it must not
     # be persisted as a fact about the package.
-    removed = []
     index = _RecordingIndex()
+    venv = _FakeVenv(
+        provides={"right": "thing"},
+        install_failures={"broken"},
+    )
     veny.resolve_and_verify(
         _resolution("broken", "right"),
         index,
-        installer=lambda name: name != "broken",
-        importer=lambda name: True,
-        uninstaller=removed.append,
+        installer=venv.install,
+        importer=venv.imports,
+        uninstaller=venv.uninstall,
     )
-    assert removed == []
+    assert venv.uninstalled == []
     assert ("thing", "broken", "install_failed") in index.rejected
 
 
 def test_attempts_are_bounded():
     # One obscure import must not stall a run behind unbounded pip attempts.
-    tried = []
-
-    def installer(name):
-        tried.append(name)
-        return True
+    # None of these candidates provide "thing", so every one that installs
+    # is rejected and the loop must stop after max_attempts regardless.
+    venv = _FakeVenv(provides={})
 
     result = veny.resolve_and_verify(
         _resolution("a", "b", "c", "d", "e"),
         _RecordingIndex(),
-        installer=installer,
-        importer=lambda name: False,
-        uninstaller=lambda name: None,
+        installer=venv.install,
+        importer=venv.imports,
+        uninstaller=venv.uninstall,
         max_attempts=3,
     )
     assert result is None
-    assert tried == ["a", "b", "c"]
+    assert venv.attempted == ["a", "b", "c"]
 
 
 def test_empty_resolution_never_touches_the_installer():
