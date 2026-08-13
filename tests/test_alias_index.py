@@ -277,6 +277,42 @@ def test_probe_degrades_on_nonzero_exit(monkeypatch):
     assert packages == {}
 
 
+def test_probe_without_a_target_interpreter_spawns_nothing(monkeypatch):
+    # ud.find_preferred_python_version() returns None when the preferred Python
+    # is absent from PATH -- the bare-machine bootstrap case veny exists to
+    # serve. os.fspath(None) raises TypeError, and it is called *outside* the
+    # try, so the crash escapes probe_interpreter and aborts the whole run
+    # before any work is done. Nothing may be spawned either: there is no
+    # interpreter to ask.
+    def _boom(*args, **kwargs):
+        raise AssertionError("there is no interpreter to probe")
+
+    monkeypatch.setattr("alias_index.subprocess.run", _boom)
+    tag, packages = alias_index.probe_interpreter(None)
+    assert tag == f"{sys.version_info.major}.{sys.version_info.minor}"
+    assert packages == {}
+
+
+def test_build_without_a_target_interpreter_returns_a_usable_index(
+    tmp_path, monkeypatch
+):
+    # veny.py passes ud.find_preferred_python_version() straight into build(),
+    # so build(None) is reached on exactly the machine that has no preferred
+    # Python installed. It must degrade to the running interpreter -- which is
+    # the one veny will build the venv with -- not raise.
+    def _boom(*args, **kwargs):
+        raise AssertionError("there is no interpreter to probe")
+
+    monkeypatch.setattr("alias_index.subprocess.run", _boom)
+    index = alias_index.build(None, tmp_path, offline=True)
+    assert index.installed == {}
+    assert index.cache.interpreter_tag == (
+        f"{sys.version_info.major}.{sys.version_info.minor}"
+    )
+    # Still a working index, not a husk: the seed tier must still answer.
+    assert [c.pip_name for c in index.resolve("cv2").candidates] == ["opencv-python"]
+
+
 def test_probe_of_the_running_interpreter_reports_its_own_version():
     # Integration check that the probe code itself is valid Python.
     tag, _ = alias_index.probe_interpreter(sys.executable)

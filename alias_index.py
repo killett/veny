@@ -407,7 +407,7 @@ def _running_tag() -> str:
 
 
 def probe_interpreter(
-    python: str | os.PathLike[str], timeout: float = _PROBE_TIMEOUT
+    python: str | os.PathLike[str] | None, timeout: float = _PROBE_TIMEOUT
 ) -> tuple[str, dict[str, list[str]]]:
     """Ask an interpreter for its version and which distributions provide which imports.
 
@@ -417,14 +417,24 @@ def probe_interpreter(
     empty mapping with a warning, because a missing probe is absent information,
     not contradicted information.
 
+    No target at all is a different case from a target that could not be
+    probed. veny reaches it when the preferred Python is absent from PATH, and
+    it then builds the venv with the interpreter running veny itself, so the
+    running tag is the correct answer rather than a degraded guess. This
+    mirrors stdlib_index.resolve(None).
+
     Args:
-        python:  Path or command name of the interpreter to probe.
+        python:  Path or command name of the interpreter to probe, or None when
+            no target interpreter has been chosen.
         timeout: Seconds to wait before giving up.
 
     Returns:
         The interpreter's version tag and its top-level-name to distribution
-        mapping. On failure, the running interpreter's tag and an empty mapping.
+        mapping. With no target, the running interpreter's tag and an empty
+        mapping.
     """
+    if python is None:
+        return _running_tag(), {}
     command = [os.fspath(python), "-c", _PROBE_CODE]
     try:
         result = subprocess.run(  # noqa: S603
@@ -685,12 +695,13 @@ class AliasIndex:
 
 
 def build(
-    python: str | os.PathLike[str], my_dir: Path, *, offline: bool = False
+    python: str | os.PathLike[str] | None, my_dir: Path, *, offline: bool = False
 ) -> AliasIndex:
     """Assemble an AliasIndex for one target interpreter.
 
     Args:
-        python:  The interpreter that will run the user's script.
+        python:  The interpreter that will run the user's script, or None when
+            no preferred interpreter was found on this machine.
         my_dir:  veny's own directory, where the stores live.
         offline: Skip the PyPI tier entirely.
 
