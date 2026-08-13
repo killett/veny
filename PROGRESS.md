@@ -67,6 +67,20 @@ deferred list.
 
 ## Gotchas
 
+- A passing check proves the **behaviour**, not the **attribution**. "The
+  import works" is not "this package provided it": it may come from a transitive
+  dependency while the record's own pip name resolved wrongly-but-installably.
+  Before recording a durable fact about X, check that the evidence is about X.
+  (`veny.confirm_if_attributable` — the cache outranks every tier except
+  OVERRIDE on every later run, so an unattributed confirm is durable
+  misinformation.)
+- Before remembering a failure, ask whose fault it is. An import that fails
+  because *this machine* lacks `libGL.so.1` says nothing about the package, and
+  persisting it as a package rejection suppresses the correct package here
+  forever — including after the user installs the system library. veny keeps
+  machine-scoped failures (`import_unavailable`) in-session only and *reports*
+  them, following `stdlib_index.NEEDS_SYSTEM_PACKAGE`. The evidence for the
+  distinction is usually already in hand: the exception text.
 - A defect that lives in the **seam between two tasks** is invisible to
   per-task review, because each task is individually correct. Task 6 built
   `resolve_and_verify` and tested it; Task 8 wired resolution into
@@ -207,7 +221,7 @@ deferred list.
   now done — see the completed alias-resolver plan under Current work.
   `also_needs` itself was never part of that plan and stays open.)
 - The repository had no `tests/` directory before the stdlib work. Coverage
-  now stands at 137 tests (`tests/test_alias_index.py`,
+  now stands at 147 tests (`tests/test_alias_index.py`,
   `tests/test_pypi_client.py`, `tests/test_split_imports.py`,
   `tests/test_stdlib_index.py`); broader coverage of `veny.py` /
   `univ_defs.py` beyond what these plans touched remains open.
