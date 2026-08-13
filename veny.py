@@ -3264,8 +3264,34 @@ def resolve_and_verify(
     return None
 
 
+def source_import_names(options: Options) -> set[str]:
+    """Return the import names that were actually written in the user's source.
+
+    Only these can be verified by importing them. requirement_records() (--reqs)
+    and resolve_records() (dependencies) both produce records whose import_name
+    is really a pip name -- "opencv-python", not "cv2" -- because a requirements
+    line is a pip name and nothing maps it backwards. import_module() can never
+    succeed on one of those, so treating its failure as evidence would condemn a
+    package that installed perfectly well.
+
+    Args:
+        options: Options object; reads options.all_imports, options.args and
+                 options.extra_requirements.
+
+    Returns:
+        The import names found in the analysed scripts.
+    """
+    names = set(options.all_imports)
+    if getattr(options.args, "reqs", False):
+        # split_imports() folds the requirements file's entries into
+        # all_imports, but those are pip spellings, not import names.
+        names -= set(options.extra_requirements)
+    return names
+
+
 def check_packages_in_venv(options: Options, record: ResolvedImport | None = None,
-                           venv_dir: str | os.PathLike[str] | None = None) -> bool:
+                           venv_dir: str | os.PathLike[str] | None = None,
+                           source_names: set[str] | None = None) -> bool:
     """
     Check if packages can be imported in the specified virtual environment.
 
@@ -3275,9 +3301,11 @@ def check_packages_in_venv(options: Options, record: ResolvedImport | None = Non
     with another and silently returned the pip name for anything it did not know.
 
     With no record (the bulk branch), it probes the venv's own interpreter once
-    for its installed distributions. A record whose own import_name is among the
-    names that distribution declares is checked under that name alone: it came
-    from the user's source, so it is exactly what must import. Only a record
+    for its installed distributions. A record naming an import the user actually
+    wrote -- or one the installed distribution declares -- is checked under that
+    name alone: that exact name is what has to import, and widening it to the
+    distribution's other top-level names would be fail-open (setuptools declares
+    _distutils_hack, which imports whether or not setuptools does). Only a record
     carrying a pip spelling rather than an import name (a --reqs line, a
     dependency name) is checked against the distribution's declared top-level
     names, any one of which passing is a pass -- that metadata is all there is
@@ -3286,9 +3314,13 @@ def check_packages_in_venv(options: Options, record: ResolvedImport | None = Non
     the check is never skipped.
 
     Args:
-        options:    Options object containing settings and paths.
-        record:     Optional resolved import to check. If None, checks all uninstalled imports.
-        venv_dir:   Optional path to the virtual environment directory. If None, uses options.venv_dir.
+        options:      Options object containing settings and paths.
+        record:       Optional resolved import to check. If None, checks all uninstalled imports.
+        venv_dir:     Optional path to the virtual environment directory. If None, uses options.venv_dir.
+        source_names: Optional import names known to come from the user's source.
+                      Defaults to options' own. check_venv_dir() passes the live
+                      run's names, because the Options it validates was loaded
+                      from JSON and carries someone else's.
 
     Returns:
         bool:       True if all packages can be imported successfully, False otherwise.
@@ -3320,19 +3352,23 @@ def check_packages_in_venv(options: Options, record: ResolvedImport | None = Non
         # distribution rather than only what a curated table happened to know.
         _, venv_distributions = alias_index.probe_interpreter(venv_python)
         import_names_by_dist = alias_index.import_names_by_distribution(venv_distributions)
+        if source_names is None:
+            source_names = source_import_names(options)
         alternatives = []
         for entry in sorted(options.uninstalled_imports, key=lambda r: r.import_name):
             top_levels = import_names_by_dist.get(alias_index.normalize_pip_name(entry.pip_name))
-            # The record's own import_name being one the distribution declares
-            # means it came from the user's source: that exact name is what has
-            # to import, and widening to the distribution's whole top-level
-            # list would be fail-open (setuptools declares _distutils_hack,
-            # which imports whether or not setuptools does). Only when the
-            # record carries a pip spelling instead of an import name (a --reqs
-            # line, a dependency name) is the metadata all there is to go on.
-            # Not found, or the probe degraded to an empty mapping: fall back
-            # to the import_name -- today's behaviour. Never skip the check.
-            if top_levels and entry.import_name in top_levels:
+            # A name the user wrote is what must import, full stop -- checking
+            # the whole top-level list of whatever its pip_name happened to
+            # install is fail-open twice over: a wrongly resolved pip_name
+            # passes on the name it does provide, and setuptools passes on
+            # _distutils_hack whether or not setuptools itself imports. The
+            # metadata is consulted as a second way of recognising a source
+            # name, and is the sole answer only for a record carrying a pip
+            # spelling instead of an import name (a --reqs line, a dependency
+            # name). Distribution not found, or the probe degraded to an empty
+            # mapping: fall back to the import_name -- today's behaviour.
+            # Never skip the check.
+            if entry.import_name in source_names or (top_levels and entry.import_name in top_levels):
                 alternatives.append([entry.import_name])
             elif top_levels:
                 alternatives.append(sorted(top_levels))
@@ -3848,6 +3884,173 @@ def write_requirements_file_with_extras(options: Options) -> None:
             options.pretty_requirements += pretty_package
 
 
+def run_pip_in_venv(options: Options, *args: str) -> subprocess.CompletedProcess[str] | None:
+    """Run one pip command inside the venv without ever raising.
+
+    Every caller here is on a verification path, where the whole point is to
+    report what happened rather than to end the run, so a missing interpreter or
+    an unrunnable pip is reported as "no result" instead of an exception.
+
+    Args:
+        options: Options object; reads options.venv_python.
+        *args:   The pip arguments, e.g. "install", "cv2".
+
+    Returns:
+        The completed process, or None if pip could not be run at all.
+    """
+    if options.venv_python is None:
+        logging.error("Cannot run pip %s: no virtual environment interpreter is set.", args[0])
+        return None
+    the_command = [os.fspath(options.venv_python), "-m", "pip", *args]
+    logging.info("Running pip: %s", " ".join(shlex.quote(str(arg)) for arg in the_command))
+    try:
+        return subprocess.run(the_command, capture_output=True, text=True,  # noqa: S603
+                              check=False)
+    except OSError:
+        logging.exception("Could not run pip %s.", args[0])
+        return None
+
+
+def install_into_venv(options: Options, pip_name: str) -> bool:
+    """Install one package into the venv, reporting failure instead of ending the run.
+
+    install_package(), the batch path's installer, calls ud.my_critical_error()
+    -- which exits -- when a download fails. Verifying one import must never be
+    able to kill the whole run, so this installer reports False for every
+    failure instead. It offers the wheels already downloaded to packages_dir but,
+    unlike the batch install, does not pass --no-index: a candidate reached by
+    the verification loop is by definition one that was never downloaded.
+
+    Args:
+        options:  Options object; reads options.venv_python and options.packages_dir.
+        pip_name: The package to install.
+
+    Returns:
+        True if pip reported success.
+    """
+    local_wheels = ["--find-links", os.fspath(options.packages_dir)] if options.packages_dir else []
+    result = run_pip_in_venv(options, "install", pip_name, *local_wheels)
+    if result is None:
+        return False
+    if result.returncode != 0:
+        logging.error("Failed to install %s. Error: %s", pip_name, result.stderr.strip())
+        return False
+    return True
+
+
+def uninstall_from_venv(options: Options, pip_name: str) -> None:
+    """Remove a package that installed but did not provide the import it was tried for.
+
+    Leaving it behind pollutes the venv and can shadow the correct package on a
+    later attempt.
+
+    Args:
+        options:  Options object; reads options.venv_python.
+        pip_name: The package to remove.
+    """
+    result = run_pip_in_venv(options, "uninstall", "-y", pip_name)
+    if result is not None and result.returncode != 0:
+        logging.warning("Could not uninstall %s. Error: %s", pip_name, result.stderr.strip())
+
+
+def repair_unsatisfied_import(options: Options, record: ResolvedImport,
+                              installed_distributions: dict[str, frozenset[str]]) -> ResolvedImport:
+    """Try the remaining ranked candidates for an import the venv does not provide.
+
+    The candidate that just failed is recorded first, and which kind of failure
+    it was matters: a pip name the venv's metadata knows did install and simply
+    does not provide this import, which is a durable fact about the package and
+    is remembered; a pip name the metadata does not know never installed at all,
+    which may be a network blip and is deliberately not remembered. Recording it
+    before re-resolving is also what removes it from the ranked list that comes
+    back, so the next attempt is genuinely a different project.
+
+    Args:
+        options:                 Options object; reads and updates options.aliases.
+        record:                  The record whose import name the venv does not provide.
+        installed_distributions: Normalized distribution name -> the import names
+                                 it provides, from the venv's own metadata.
+
+    Returns:
+        A record naming the package that actually provided the import, or the
+        original record unchanged when nothing did.
+    """
+    if alias_index.normalize_pip_name(record.pip_name) in installed_distributions:
+        uninstall_from_venv(options, record.pip_name)
+        options.aliases.reject(record.import_name, record.pip_name, "import_failed")
+    else:
+        options.aliases.reject(record.import_name, record.pip_name, "install_failed")
+
+    def installer(pip_name: str) -> bool:
+        """Install a candidate, returning success rather than raising."""
+        return install_into_venv(options, pip_name)
+
+    def importer(import_name: str) -> bool:
+        """Report whether the *import* name now imports inside the venv."""
+        return check_packages_in_venv(options, record=ResolvedImport(import_name=import_name,
+                                                                     pip_name=import_name))
+
+    def uninstaller(pip_name: str) -> None:
+        """Remove a candidate that installed without providing the import."""
+        uninstall_from_venv(options, pip_name)
+
+    winner = resolve_and_verify(options.aliases.resolve(record.import_name), options.aliases,
+                                installer=installer, importer=importer, uninstaller=uninstaller)
+    if winner is None:
+        logging.error("Could not find a package that provides the import %s.", record.import_name)
+        return record
+    if not options.rawlog:
+        logging.info("%s provides the import %s (%s).",
+                     winner.pip_name, record.import_name, winner.evidence)
+    return ResolvedImport(import_name=record.import_name, pip_name=winner.pip_name)
+
+
+def verify_and_repair_imports(options: Options) -> None:
+    """Record what the install actually provided, and repair what it did not.
+
+    The batch install installs each record's pip_name -- candidates[0] and
+    nothing else -- so without this pass a wrong first candidate is final:
+    ranking past position 0 has no production effect, confirm() and reject() are
+    never called, ~/veny/module_aliases_cache.json is never written, and two of
+    the five evidence tiers (CACHE and the rejection filter) are unreachable in
+    the shipped product.
+
+    Only imports the user actually wrote are verified this way, because only
+    those are import names; see source_import_names(). Nothing here aborts the
+    run -- an import that cannot be satisfied is left exactly as it was, for
+    check_packages_in_venv() to report honestly.
+
+    Args:
+        options: Options object; reads options.uninstalled_imports and
+                 options.aliases, and replaces any record that was repaired.
+    """
+    from_source = source_import_names(options)
+    records = [record for record in sorted(options.uninstalled_imports, key=lambda r: r.import_name)
+               if record.import_name in from_source]
+    if not records:
+        return
+    if check_packages_in_venv(options):
+        # Every source-derived record is checked under its own import name, so
+        # a bulk pass means each one of them really did import.
+        for record in records:
+            options.aliases.confirm(record.import_name, record.pip_name)
+        return
+    _, venv_distributions   = alias_index.probe_interpreter(options.venv_python)
+    installed_distributions = alias_index.import_names_by_distribution(venv_distributions)
+    repaired: dict[ResolvedImport, ResolvedImport] = {}
+    for record in records:
+        if check_packages_in_venv(options, record=record):
+            options.aliases.confirm(record.import_name, record.pip_name)
+            continue
+        replacement = repair_unsatisfied_import(options, record, installed_distributions)
+        if replacement != record:
+            repaired[record] = replacement
+    if repaired:
+        options.uninstalled_imports = (options.uninstalled_imports - set(repaired)) | set(repaired.values())
+        # Keep the venv's own requirements.txt describing what is really installed.
+        write_requirements_file_with_extras(options)
+
+
 def setup_virtualenv(options: Options) -> bool:
     """Setup a virtual environment and install packages."""
     use_pip_list(options)
@@ -3878,6 +4081,11 @@ def setup_virtualenv(options: Options) -> bool:
         if not install_packages_individually(options):
             logging.error("Failed to install packages individually.")
 
+    # Verify each import the user wrote, repairing the ones the install did not
+    # satisfy, before the check that decides whether this venv gets to drop its
+    # "failed-" prefix. This is also the only place that ever writes the alias
+    # cache, so it must run on the successful path too, not just on failure.
+    verify_and_repair_imports(options)
     # Check that all packages can be imported in the venv.
     return check_packages_in_venv(options)
 
@@ -4045,7 +4253,14 @@ def check_venv_dir(options: Options, options_from_cache: Options) -> bool:
             if options.uninstalled_imports.issubset(options_from_cache.uninstalled_imports):
                 options_from_cache.uninstalled_imports = options.uninstalled_imports
                 options_from_cache.installed_imports   = options.installed_imports
-                if check_packages_in_venv(options_from_cache):
+                # options_from_cache was loaded from JSON and carries whatever
+                # all_imports the run that wrote it had, so the live run's
+                # source names are passed in explicitly. Without them a record
+                # whose pip_name resolved wrongly would be judged against the
+                # top-level names of whatever that pip_name installed, and a
+                # venv that cannot run this script would be reused.
+                if check_packages_in_venv(options_from_cache,
+                                          source_names=source_import_names(options)):
                     return True
                 else:
                     logging.error("The cached venv directory %s failed check_packages_in_venv.",

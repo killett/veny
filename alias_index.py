@@ -224,20 +224,27 @@ class AliasCache:
     fact rather than a guess. The file is safe to delete at any time; the only
     cost is a slower next run.
 
+    A None interpreter_tag means the target interpreter's version could not be
+    determined, and makes the cache inert: no entry ever matches on read, and
+    nothing is written. A result is only a fact about the version it was
+    verified on, so filing one under an unknown version -- or serving one to an
+    unknown version -- is how cross-version poisoning starts.
+
     Attributes:
         path:            Where the cache is stored.
-        interpreter_tag: Version tag entries must match to be used, e.g. "3.12".
+        interpreter_tag: Version tag entries must match to be used, e.g. "3.12",
+                         or None when the target interpreter is unknown.
         entries:         import name -> {"pip_name": str, "python": str}.
         rejections:      import name -> {pip names that installed but did not import}.
     """
 
     path: Path
-    interpreter_tag: str
+    interpreter_tag: str | None
     entries: dict[str, dict[str, str]]
     rejections: dict[str, list[str]]
 
     @classmethod
-    def load(cls, path: Path, interpreter_tag: str) -> AliasCache:
+    def load(cls, path: Path, interpreter_tag: str | None) -> AliasCache:
         """Read the cache, quarantining it if it cannot be parsed.
 
         Args:
@@ -309,9 +316,11 @@ class AliasCache:
             import_name: The import name to look up.
 
         Returns:
-            The pip name, or None when absent or recorded under a different
-            interpreter version.
+            The pip name, or None when absent, recorded under a different
+            interpreter version, or when the target version is unknown.
         """
+        if self.interpreter_tag is None:
+            return None
         entry = self.entries.get(import_name)
         if entry is None or entry.get("python") != self.interpreter_tag:
             return None
@@ -331,10 +340,20 @@ class AliasCache:
     def confirm(self, import_name: str, pip_name: str) -> None:
         """Record that pip_name installed and provided import_name, and save.
 
+        Nothing is recorded when the target interpreter's version is unknown:
+        the entry could only be tagged with a version it was not verified on.
+
         Args:
             import_name: The import name that was satisfied.
             pip_name:    The pip package that satisfied it.
         """
+        if self.interpreter_tag is None:
+            logging.debug(
+                "Not caching %s -> %s: the target interpreter's version is unknown.",
+                import_name,
+                pip_name,
+            )
+            return
         self.entries[import_name] = {
             "pip_name": pip_name,
             "python": self.interpreter_tag,
@@ -354,7 +373,8 @@ class AliasCache:
         An "installed but did not import" result is a fact about the package and
         is persisted. A failed install may be transient -- a network blip or an
         index outage -- so persisting it would permanently blacklist a package
-        that is actually correct.
+        that is actually correct. Nothing at all is persisted when the target
+        interpreter's version is unknown, for the same reason as confirm().
 
         Args:
             import_name: The import name being resolved.
@@ -369,6 +389,14 @@ class AliasCache:
                 f"Unknown rejection kind {kind!r}; expected one of {sorted(_REJECTION_KINDS)}."
             )
         if kind == "install_failed":
+            return
+        if self.interpreter_tag is None:
+            logging.debug(
+                "Not recording the rejection of %s for %s: the target "
+                "interpreter's version is unknown.",
+                pip_name,
+                import_name,
+            )
             return
         recorded = self.rejections.setdefault(import_name, [])
         if pip_name not in recorded:
@@ -408,7 +436,7 @@ def _running_tag() -> str:
 
 def probe_interpreter(
     python: str | os.PathLike[str] | None, timeout: float = _PROBE_TIMEOUT
-) -> tuple[str, dict[str, list[str]]]:
+) -> tuple[str | None, dict[str, list[str]]]:
     """Ask an interpreter for its version and which distributions provide which imports.
 
     importlib.metadata.packages_distributions() answers the reverse question
@@ -447,7 +475,7 @@ def probe_interpreter(
             python,
             exc,
         )
-        return _running_tag(), {}
+        return None, {}
     if result.returncode != 0:
         logging.warning(
             "%s exited with %d while listing its installed distributions (%s); "
@@ -456,7 +484,7 @@ def probe_interpreter(
             result.returncode,
             result.stderr.strip(),
         )
-        return _running_tag(), {}
+        return None, {}
     try:
         payload = json.loads(result.stdout)
         if not isinstance(payload, dict):
@@ -488,7 +516,7 @@ def probe_interpreter(
             python,
             exc,
         )
-        return _running_tag(), {}
+        return None, {}
     return f"{major}.{minor}", packages
 
 

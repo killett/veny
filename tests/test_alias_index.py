@@ -255,8 +255,64 @@ def test_probe_degrades_when_the_interpreter_cannot_run(monkeypatch, caplog):
     with caplog.at_level("WARNING"):
         tag, packages = alias_index.probe_interpreter("/nope/python3")
     assert packages == {}
-    assert tag == f"{sys.version_info.major}.{sys.version_info.minor}"
+    # A target was named but could not be probed, so its version is unknown --
+    # not "whatever veny happens to be running". See
+    # test_a_probe_failure_reports_an_unknown_interpreter_tag.
+    assert tag is None
     assert "no such executable" in caplog.text
+
+
+def test_a_probe_failure_reports_an_unknown_interpreter_tag(monkeypatch):
+    # Returning the *running* interpreter's tag on failure makes build()
+    # silently equivalent to empty(): a result verified under veny's own Python
+    # would then be served to a target on a different version. That is
+    # cross-version cache poisoning the moment anything writes the cache.
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="boom")
+
+    monkeypatch.setattr("alias_index.subprocess.run", fake_run)
+    tag, packages = alias_index.probe_interpreter("/usr/bin/python3")
+    assert tag is None
+    assert packages == {}
+
+
+def test_an_unknown_interpreter_tag_matches_no_cache_entry(tmp_path):
+    # An entry was recorded under a known version; an unknown version is not
+    # evidence that it applies, so the read must miss rather than guess.
+    path = tmp_path / "cache.json"
+    AliasCache.load(path, interpreter_tag="3.12").confirm("cv2", "opencv-python")
+    assert AliasCache.load(path, interpreter_tag=None).get("cv2") is None
+
+
+def test_an_unknown_interpreter_tag_writes_nothing(tmp_path):
+    # A result cannot be filed under a version nobody knows: writing it would
+    # tag it with a version it was not verified on, poisoning later runs.
+    path = tmp_path / "cache.json"
+    cache = AliasCache.load(path, interpreter_tag=None)
+    cache.confirm("cv2", "opencv-python")
+    cache.reject("cv2", "opencv-python-headless", "import_failed")
+    assert not path.exists()
+    assert cache.entries == {}
+    assert cache.rejections == {}
+
+
+def test_an_unknown_tag_does_not_erase_what_another_version_recorded(tmp_path):
+    # Skipping the write must mean "leave the file alone", not "save an empty
+    # cache over the top of it".
+    path = tmp_path / "cache.json"
+    AliasCache.load(path, interpreter_tag="3.12").confirm("cv2", "opencv-python")
+    AliasCache.load(path, interpreter_tag=None).confirm("yaml", "PyYAML")
+    assert AliasCache.load(path, interpreter_tag="3.12").get("cv2") == "opencv-python"
+
+
+def test_build_leaves_the_cache_inert_when_the_probe_fails(tmp_path, monkeypatch):
+    # build() must carry the unknown tag through rather than substituting its
+    # own, which is what made a degraded probe indistinguishable from empty().
+    monkeypatch.setattr(alias_index, "probe_interpreter", lambda python: (None, {}))
+    index = alias_index.build("/nope/python3", tmp_path, offline=True)
+    assert index.cache.interpreter_tag is None
+    index.confirm("cv2", "opencv-python")
+    assert not (tmp_path / alias_index.CACHE_FILENAME).exists()
 
 
 def test_probe_degrades_on_unparseable_output(monkeypatch):

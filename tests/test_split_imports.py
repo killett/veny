@@ -593,6 +593,60 @@ def test_check_packages_in_venv_bulk_branch_checks_the_records_own_import_name(
     assert veny.check_packages_in_venv(options, venv_dir=tmp_path) is False
 
 
+def test_check_packages_in_venv_bulk_branch_fails_an_unprovided_source_import(
+    monkeypatch, tmp_path
+):
+    # The other half of the fail-open hole, and the exact case the repair pass
+    # exists for: the record's pip_name resolved *wrongly*, so it installed a
+    # distribution that declares some other top-level name. Judging the record
+    # by that distribution's metadata passes it -- the wrong package imports
+    # fine, it just is not what the user wrote. The name in the user's source
+    # is the one that has to import.
+    options = veny.Options()
+    options.all_imports = {"thing"}
+    options.uninstalled_imports = {
+        veny.ResolvedImport(import_name="thing", pip_name="wrong-pkg"),
+    }
+    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
+    monkeypatch.setattr(
+        alias_index,
+        "probe_interpreter",
+        lambda python, timeout=30.0: ("3.12", {"something_else": ["wrong-pkg"]}),
+    )
+    _run_check_against_fake_venv(monkeypatch, importable={"something_else"})
+
+    assert veny.check_packages_in_venv(options, venv_dir=tmp_path) is False
+
+
+def test_check_venv_dir_judges_a_cached_venv_by_the_live_runs_source_imports(
+    monkeypatch, tmp_path
+):
+    # check_venv_dir validates an Options loaded from a previous run's JSON,
+    # which carries that run's all_imports -- or none at all. Reading the
+    # source names off it would leave the cached-venv gate judging every record
+    # by installed metadata alone, and veny would reuse a venv that cannot run
+    # this script.
+    cached_dir = tmp_path / "cached-venv"
+    cached_dir.mkdir()
+    record = veny.ResolvedImport(import_name="thing", pip_name="wrong-pkg")
+    options = veny.Options()
+    options.all_imports = {"thing"}
+    options.uninstalled_imports = {record}
+    options_from_cache = veny.Options()
+    options_from_cache.all_imports = set()
+    options_from_cache.uninstalled_imports = {record}
+    options_from_cache.set_venv_dir(cached_dir)
+    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
+    monkeypatch.setattr(
+        alias_index,
+        "probe_interpreter",
+        lambda python, timeout=30.0: ("3.12", {"something_else": ["wrong-pkg"]}),
+    )
+    _run_check_against_fake_venv(monkeypatch, importable={"something_else"})
+
+    assert veny.check_venv_dir(options, options_from_cache) is False
+
+
 def test_check_packages_in_venv_still_fails_a_genuinely_missing_package(
     monkeypatch, tmp_path
 ):
@@ -612,6 +666,272 @@ def test_check_packages_in_venv_still_fails_a_genuinely_missing_package(
     _run_check_against_fake_venv(monkeypatch, importable=set())
 
     assert veny.check_packages_in_venv(options, venv_dir=tmp_path) is False
+
+
+class _FakeInstalledVenv:
+    """Models a venv well enough to install into, import from, and probe.
+
+    The contract under test is the same one _FakeVenv models for
+    resolve_and_verify -- pip installs a *distribution* name, the importer is
+    asked about an *import* name -- but the repair path also reads the venv's
+    installed-distribution metadata to decide whether a failed candidate is
+    still sitting in the venv. So this double additionally answers the probe.
+    """
+
+    def __init__(self, provides, installed=(), install_failures=()):
+        self.provides = dict(provides)  # pip name -> the import name it supplies
+        self.installed = list(installed)  # pip names currently installed
+        self.install_failures = set(install_failures)
+        self.attempted = []  # pip names the installer was asked to install
+        self.uninstalled = []  # pip names removed
+        self.import_checks = []  # names the per-record import check was given
+
+    def install(self, options, pip_name):
+        self.attempted.append(pip_name)
+        if pip_name in self.install_failures:
+            return False
+        self.installed.append(pip_name)
+        return True
+
+    def uninstall(self, options, pip_name):
+        self.uninstalled.append(pip_name)
+        if pip_name in self.installed:
+            self.installed.remove(pip_name)
+
+    def imports(self, import_name):
+        return any(self.provides.get(p) == import_name for p in self.installed)
+
+    def probe(self, python, timeout=30.0):
+        packages: dict[str, list[str]] = {}
+        for pip_name in self.installed:
+            packages.setdefault(self.provides.get(pip_name, pip_name), []).append(
+                pip_name
+            )
+        return "3.12", packages
+
+    def check(self, options, record=None, venv_dir=None):
+        """Stand in for check_packages_in_venv, per record and in bulk."""
+        if record is not None:
+            self.import_checks.append(record.import_name)
+            return self.imports(record.import_name)
+        return all(
+            self.imports(entry.import_name)
+            or (
+                # Mirrors the real bulk branch: a record carrying a pip
+                # spelling rather than a source import name is judged by what
+                # its distribution declares instead.
+                entry.import_name not in options.all_imports
+                and entry.pip_name in self.installed
+            )
+            for entry in options.uninstalled_imports
+        )
+
+
+def _options_with_venv(tmp_path, index, records):
+    """Build an Options far enough along to run the post-install verification."""
+    options = veny.Options()
+    options.my_dir = tmp_path
+    options.packages_dir = tmp_path / "packages"
+    options.aliases = index
+    options.all_imports = {record.import_name for record in records}
+    options.uninstalled_imports = set(records)
+    options.set_venv_dir(tmp_path / "venv")
+    return options
+
+
+def _live_index(tmp_path, **kwargs):
+    """An AliasIndex with a real on-disk cache, so confirm()/reject() are visible."""
+    fields = {
+        "overrides": {},
+        "cache": alias_index.AliasCache.load(
+            tmp_path / "alias_cache.json", interpreter_tag="3.12"
+        ),
+        "installed": {},
+        "pypi": None,
+        "seed": {},
+    }
+    fields.update(kwargs)
+    return alias_index.AliasIndex(**fields)
+
+
+def test_setup_virtualenv_verifies_every_import_before_reporting_success(
+    monkeypatch, tmp_path
+):
+    # The seam this task exists to close: resolve_and_verify was built and
+    # tested but never called from production, so the cache was never written
+    # and two of the five evidence tiers were unreachable. Nothing inside
+    # either function could catch that -- only a test of the join can.
+    options = veny.Options()
+    options.my_dir = tmp_path
+    options.uninstalled_imports = {
+        veny.ResolvedImport(import_name="thing", pip_name="thing-pkg")
+    }
+    calls = []
+    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
+    monkeypatch.setattr(veny, "write_requirements_file_with_extras", lambda opts: None)
+    monkeypatch.setattr(veny, "download_packages", lambda opts: True)
+    monkeypatch.setattr(veny, "install_packages_simultaneously", lambda opts: True)
+    monkeypatch.setattr(subprocess, "check_call", lambda *a, **k: 0)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: None)
+
+    def fake_verify(opts):
+        calls.append("verify")
+
+    def fake_check(opts, record=None, venv_dir=None):
+        calls.append("check")
+        return True
+
+    monkeypatch.setattr(veny, "verify_and_repair_imports", fake_verify)
+    monkeypatch.setattr(veny, "check_packages_in_venv", fake_check)
+
+    assert veny.setup_virtualenv(options) is True
+    # Verification has to happen before the gate that drops the "failed-"
+    # prefix, or its repairs cannot affect the answer.
+    assert calls == ["verify", "check"]
+
+
+def test_a_verified_import_is_written_to_the_alias_cache(monkeypatch, tmp_path):
+    # Nothing called confirm(), so ~/veny/module_aliases_cache.json was never
+    # written, Source.CACHE never fired, and every run re-resolved every import
+    # over the network forever.
+    index = _live_index(tmp_path)
+    record = veny.ResolvedImport(import_name="yaml", pip_name="PyYAML")
+    options = _options_with_venv(tmp_path, index, [record])
+    fake = _FakeInstalledVenv(provides={"PyYAML": "yaml"}, installed=["PyYAML"])
+    monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
+    monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
+
+    veny.verify_and_repair_imports(options)
+
+    assert index.cache.get("yaml") == "PyYAML"
+    reloaded = alias_index.AliasCache.load(
+        tmp_path / "alias_cache.json", interpreter_tag="3.12"
+    )
+    assert reloaded.get("yaml") == "PyYAML"
+
+
+def test_an_import_the_batch_install_did_not_provide_is_repaired(
+    monkeypatch, tmp_path
+):
+    # The batch install installs candidates[0] and nothing else, so a wrong
+    # first candidate used to be final: ranking past position 0 had no
+    # production effect at all.
+    index = _live_index(tmp_path, seed={"thing": "right-pkg"})
+    record = veny.ResolvedImport(import_name="thing", pip_name="wrong-pkg")
+    options = _options_with_venv(tmp_path, index, [record])
+    # wrong-pkg installed fine during the batch; it just does not provide "thing".
+    fake = _FakeInstalledVenv(
+        provides={"wrong-pkg": "something-else", "right-pkg": "thing"},
+        installed=["wrong-pkg"],
+    )
+    monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
+    monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
+    monkeypatch.setattr(veny, "install_into_venv", fake.install)
+    monkeypatch.setattr(veny, "uninstall_from_venv", fake.uninstall)
+
+    veny.verify_and_repair_imports(options)
+
+    assert fake.attempted == ["right-pkg"]
+    # The package that installed without providing the import must not be left
+    # behind: it pollutes the venv and can shadow the correct package.
+    assert fake.uninstalled == ["wrong-pkg"]
+    assert index.cache.get("thing") == "right-pkg"
+    assert "wrong-pkg" in index.cache.rejected_names("thing")
+    # The record now names the package that actually provided the import.
+    assert options.uninstalled_imports == {
+        veny.ResolvedImport(import_name="thing", pip_name="right-pkg")
+    }
+
+
+def test_the_repair_path_import_checks_the_import_name_never_the_pip_name(
+    monkeypatch, tmp_path
+):
+    # Exactly the defect found and fixed in Task 6. import_module("right-pkg")
+    # always fails, so checking the pip name would reject every correct
+    # candidate and uninstall it again.
+    index = _live_index(tmp_path, seed={"thing": "right-pkg"})
+    record = veny.ResolvedImport(import_name="thing", pip_name="wrong-pkg")
+    options = _options_with_venv(tmp_path, index, [record])
+    fake = _FakeInstalledVenv(
+        provides={"wrong-pkg": "something-else", "right-pkg": "thing"},
+        installed=["wrong-pkg"],
+    )
+    monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
+    monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
+    monkeypatch.setattr(veny, "install_into_venv", fake.install)
+    monkeypatch.setattr(veny, "uninstall_from_venv", fake.uninstall)
+
+    veny.verify_and_repair_imports(options)
+
+    assert fake.import_checks
+    assert set(fake.import_checks) == {"thing"}
+
+
+def test_a_record_carrying_a_pip_spelling_is_never_repaired(monkeypatch, tmp_path):
+    # requirement_records() (--reqs) and resolve_records() (dependencies) both
+    # produce records whose import_name is a pip name, e.g.
+    # ("opencv-python", "opencv-python"). import_module("opencv-python") always
+    # fails, so treating that as a failed import would uninstall a package that
+    # installed perfectly well and is exactly what the user asked for.
+    index = _live_index(tmp_path)
+    record = veny.ResolvedImport(
+        import_name="opencv-python", pip_name="opencv-python"
+    )
+    options = _options_with_venv(tmp_path, index, [record])
+    options.all_imports = set()  # nothing in the user's source
+    fake = _FakeInstalledVenv(
+        provides={"opencv-python": "cv2"}, installed=["opencv-python"]
+    )
+    monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
+    monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
+    monkeypatch.setattr(veny, "install_into_venv", fake.install)
+    monkeypatch.setattr(veny, "uninstall_from_venv", fake.uninstall)
+
+    veny.verify_and_repair_imports(options)
+
+    assert fake.uninstalled == []
+    assert fake.attempted == []
+    assert index.cache.entries == {}
+
+
+def test_a_repair_that_cannot_succeed_leaves_the_run_going(monkeypatch, tmp_path):
+    # veny's job is to get as far as it can and report honestly. An import
+    # nothing can satisfy must not raise out of the verification pass.
+    index = _live_index(tmp_path)
+    record = veny.ResolvedImport(import_name="mystery", pip_name="mystery")
+    options = _options_with_venv(tmp_path, index, [record])
+    fake = _FakeInstalledVenv(provides={}, install_failures={"mystery"})
+    monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
+    monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
+    monkeypatch.setattr(veny, "install_into_venv", fake.install)
+    monkeypatch.setattr(veny, "uninstall_from_venv", fake.uninstall)
+
+    veny.verify_and_repair_imports(options)
+
+    assert options.uninstalled_imports == {record}
+    # A failed install may be transient, so it must not be persisted as a fact
+    # about the package.
+    assert index.cache.rejected_names("mystery") == frozenset()
+
+
+def test_the_repair_installer_reports_failure_instead_of_exiting(
+    monkeypatch, tmp_path
+):
+    # install_package(), the batch path's installer, calls ud.my_critical_error()
+    # -- i.e. sys.exit() -- when a download fails. resolve_and_verify's
+    # installer must not be able to end the run: one unverifiable import is not
+    # a reason to kill everything.
+    options = veny.Options()
+    options.my_dir = tmp_path
+    options.packages_dir = tmp_path / "packages"
+    options.set_venv_dir(tmp_path / "venv")
+
+    def fake_run(command, *args, **kwargs):
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="no such package")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert veny.install_into_venv(options, "nonexistent-package") is False
 
 
 def test_alias_index_is_serialized_as_structured_data():
