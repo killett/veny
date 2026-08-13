@@ -3295,24 +3295,49 @@ def check_packages_in_venv(options: Options, record: ResolvedImport | None = Non
     else:  # Do NOT use resolve() here because this is a symlink and resolve() would break it
         venv_python = (venv_dir / "bin" / "python").absolute()
     if record is not None:
-        packages = [record.import_name]
+        # alternatives: one name per entry to try; passes if any one imports.
+        alternatives = [[record.import_name]]
     else:
         use_pip_list(options)
-        packages = sorted(entry.import_name for entry in options.uninstalled_imports)
-    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Packages to check in venv: %s", packages)
+        # Ask the venv what it actually has, instead of import-checking every
+        # record under its pip spelling: requirement_records() sets
+        # import_name == pip_name for --reqs entries (a requirements line is
+        # a pip name and nothing maps it backwards), and import_module()
+        # always fails on a pip spelling like "opencv-python". Probing once
+        # here and inverting the result answers "what does this distribution
+        # actually import as?" from the installed artifact, covering every
+        # distribution rather than only what a curated table happened to know.
+        _, venv_distributions = alias_index.probe_interpreter(venv_python)
+        import_names_by_dist = alias_index.import_names_by_distribution(venv_distributions)
+        alternatives = []
+        for entry in sorted(options.uninstalled_imports, key=lambda r: r.import_name):
+            top_levels = import_names_by_dist.get(alias_index._normalize_pip_name(entry.pip_name))
+            # Found: check what the venv says this distribution provides (any
+            # one importing is a pass). Not found, or the probe degraded to an
+            # empty mapping: fall back to the import_name -- today's behaviour.
+            # Never skip the check.
+            alternatives.append(sorted(top_levels) if top_levels else [entry.import_name])
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Packages to check in venv: %s", alternatives)
     python_code = f"""
 import sys
 from importlib import import_module
 successes = []
 failures = []
 counter = 0
-for package in {packages!r}:
+for alternatives in {alternatives!r}:
     counter += 1
-    try:
-        import_module(package)
-        successes.append(package)
-    except ImportError:
-        failures.append(package)
+    ok = False
+    for package in alternatives:
+        try:
+            import_module(package)
+            ok = True
+            break
+        except ImportError:
+            continue
+    if ok:
+        successes.append(alternatives[0])
+    else:
+        failures.append(alternatives[0])
 if failures:
     print("Failed packages: " + ", ".join(failures))
     sys.exit(1)

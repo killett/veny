@@ -306,6 +306,36 @@ def test_probe_degrades_on_malformed_payload(monkeypatch):
     assert packages == {}
 
 
+def test_import_names_by_distribution_inverts_the_mapping():
+    # probe_interpreter answers "import name -> distributions"; the venv
+    # check needs the reverse to look a pip name up and find its import name.
+    packages = {"cv2": ["opencv-python"]}
+    inverted = alias_index.import_names_by_distribution(packages)
+    assert inverted == {"opencv-python": frozenset({"cv2"})}
+
+
+def test_import_names_by_distribution_collects_every_top_level_for_one_dist():
+    # Some distributions (e.g. protobuf-style umbrella packages) provide
+    # several top-level import names; all of them must survive the inversion,
+    # not just the last one seen.
+    packages = {"cv2": ["opencv-python"], "cv2_extra": ["opencv-python"]}
+    inverted = alias_index.import_names_by_distribution(packages)
+    assert inverted == {"opencv-python": frozenset({"cv2", "cv2_extra"})}
+
+
+def test_import_names_by_distribution_normalizes_keys():
+    # PyPI treats "opencv-python" and "opencv_python" as the same project.
+    # A caller looking up either spelling must find the same entry.
+    packages = {"cv2": ["opencv_python"]}
+    inverted = alias_index.import_names_by_distribution(packages)
+    assert "opencv-python" in inverted
+    assert inverted["opencv-python"] == frozenset({"cv2"})
+
+
+def test_import_names_by_distribution_on_empty_input_is_empty():
+    assert alias_index.import_names_by_distribution({}) == {}
+
+
 class _StubPyPI:
     """Stands in for PyPIClient with a fixed project-to-top-levels table."""
 

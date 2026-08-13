@@ -479,6 +479,34 @@ def probe_interpreter(
     return f"{major}.{minor}", packages
 
 
+def import_names_by_distribution(
+    packages: dict[str, list[str]],
+) -> dict[str, frozenset[str]]:
+    """Invert a packages_distributions() mapping.
+
+    ``probe_interpreter`` answers "what distributions provide this import
+    name?"; the venv check needs the reverse -- "what import names does this
+    distribution provide?" -- so that a pip name like ``opencv-python`` can be
+    checked against the ``cv2`` it actually installs, instead of against its
+    own pip spelling.
+
+    Args:
+        packages: Top-level import name -> distribution names, as
+            probe_interpreter returns.
+
+    Returns:
+        Normalized distribution name -> the top-level import names it provides.
+        Keys are normalized with _normalize_pip_name so that a lookup by any
+        PEP 503 equivalent spelling succeeds.
+    """
+    inverted: dict[str, set[str]] = {}
+    for import_name, distributions in packages.items():
+        for distribution in distributions:
+            key = _normalize_pip_name(distribution)
+            inverted.setdefault(key, set()).add(import_name)
+    return {key: frozenset(names) for key, names in inverted.items()}
+
+
 def mutations(import_name: str) -> tuple[str, ...]:
     """Generate plausible PyPI project names for an import name.
 

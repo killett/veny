@@ -371,13 +371,18 @@ def test_check_packages_in_venv_without_a_record_checks_every_import_name(
     monkeypatch, tmp_path
 ):
     # The bulk branch had the same inversion bug, and it is the branch the
-    # cached-venv validation path uses.
+    # cached-venv validation path uses. With a degraded probe (no venv
+    # metadata available) it must fall back to today's behaviour: the
+    # import_name from the record, never the pip_name.
     options = veny.Options()
     options.uninstalled_imports = {
         veny.ResolvedImport(import_name="cv2", pip_name="opencv-python"),
         veny.ResolvedImport(import_name="yaml", pip_name="PyYAML"),
     }
     monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
+    monkeypatch.setattr(
+        alias_index, "probe_interpreter", lambda python, timeout=30.0: ("3.12", {})
+    )
     captured = _captured_venv_check_code(monkeypatch)
 
     veny.check_packages_in_venv(options, venv_dir=tmp_path)
@@ -386,6 +391,189 @@ def test_check_packages_in_venv_without_a_record_checks_every_import_name(
     assert "'yaml'" in captured[0]
     assert "opencv-python" not in captured[0]
     assert "PyYAML" not in captured[0]
+
+
+def test_check_packages_in_venv_bulk_branch_resolves_requirement_via_venv_metadata(
+    monkeypatch, tmp_path
+):
+    # requirement_records() sets import_name == pip_name for --reqs entries
+    # (e.g. "opencv-python" for both), because a requirements line is a pip
+    # name and nothing maps it backwards. Feeding "opencv-python" straight to
+    # import_module() always fails even when cv2 really is installed. The
+    # venv's own metadata should be consulted to recover "cv2".
+    options = veny.Options()
+    options.uninstalled_imports = {
+        veny.ResolvedImport(import_name="opencv-python", pip_name="opencv-python"),
+    }
+    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
+    monkeypatch.setattr(
+        alias_index,
+        "probe_interpreter",
+        lambda python, timeout=30.0: ("3.12", {"cv2": ["opencv-python"]}),
+    )
+    captured = _captured_venv_check_code(monkeypatch)
+
+    veny.check_packages_in_venv(options, venv_dir=tmp_path)
+
+    assert "'cv2'" in captured[0]
+    assert "'opencv-python'" not in captured[0]
+
+
+def test_check_packages_in_venv_bulk_branch_matches_pep503_spelling(
+    monkeypatch, tmp_path
+):
+    # The venv metadata may report a distribution name spelled differently
+    # (underscores vs hyphens) than the record's pip_name. The lookup must
+    # normalize both sides, per PEP 503, or a genuinely installed package
+    # gets checked under the wrong name and rejected.
+    options = veny.Options()
+    options.uninstalled_imports = {
+        veny.ResolvedImport(import_name="opencv_python", pip_name="opencv_python"),
+    }
+    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
+    monkeypatch.setattr(
+        alias_index,
+        "probe_interpreter",
+        # Metadata reports the hyphenated spelling; the record uses underscores.
+        lambda python, timeout=30.0: ("3.12", {"cv2": ["opencv-python"]}),
+    )
+    captured = _captured_venv_check_code(monkeypatch)
+
+    veny.check_packages_in_venv(options, venv_dir=tmp_path)
+
+    assert "'cv2'" in captured[0]
+
+
+def test_check_packages_in_venv_bulk_branch_falls_back_when_distribution_unknown(
+    monkeypatch, tmp_path
+):
+    # A record whose pip_name is not in the venv's metadata (e.g. it was
+    # never actually installed, or metadata is incomplete) must still be
+    # checked -- under its import_name, exactly as before -- never skipped.
+    options = veny.Options()
+    options.uninstalled_imports = {
+        veny.ResolvedImport(import_name="numpy", pip_name="numpy"),
+    }
+    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
+    monkeypatch.setattr(
+        alias_index,
+        "probe_interpreter",
+        lambda python, timeout=30.0: ("3.12", {"some_other_thing": ["unrelated-pkg"]}),
+    )
+    captured = _captured_venv_check_code(monkeypatch)
+
+    veny.check_packages_in_venv(options, venv_dir=tmp_path)
+
+    assert "'numpy'" in captured[0]
+
+
+def test_check_packages_in_venv_probes_the_venv_once_per_call(monkeypatch, tmp_path):
+    # Each probe is a subprocess; probing per record instead of per call would
+    # multiply that cost by the number of uninstalled imports.
+    options = veny.Options()
+    options.uninstalled_imports = {
+        veny.ResolvedImport(import_name="cv2", pip_name="opencv-python"),
+        veny.ResolvedImport(import_name="yaml", pip_name="PyYAML"),
+        veny.ResolvedImport(import_name="numpy", pip_name="numpy"),
+    }
+    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
+    probe_calls = []
+
+    def fake_probe(python, timeout=30.0):
+        probe_calls.append(python)
+        return "3.12", {}
+
+    monkeypatch.setattr(alias_index, "probe_interpreter", fake_probe)
+    _captured_venv_check_code(monkeypatch)
+
+    veny.check_packages_in_venv(options, venv_dir=tmp_path)
+
+    assert len(probe_calls) == 1
+
+
+def _run_check_against_fake_venv(monkeypatch, importable: set[str]):
+    """Simulate a real venv by executing the generated script for real.
+
+    The generated script's own pass/fail logic (including the "any
+    alternative may import" branching) runs unmodified; only
+    ``importlib.import_module`` is stubbed, succeeding exactly for names in
+    ``importable``. This exercises the actual boolean outcome, not just the
+    names embedded in the source.
+
+    Args:
+        monkeypatch: pytest's monkeypatch fixture.
+        importable: Names that "import" successfully in the fake venv.
+    """
+    import contextlib
+    import importlib
+    import io
+
+    def fake_import_module(name: str) -> None:
+        if name not in importable:
+            raise ImportError(name)
+
+    monkeypatch.setattr(importlib, "import_module", fake_import_module)
+
+    def fake_run(command, *args, **kwargs):
+        source = command[-1]
+        buf = io.StringIO()
+        exit_code = 0
+        try:
+            with contextlib.redirect_stdout(buf):
+                exec(compile(source, "<fake-venv-check>", "exec"), {})
+        except SystemExit as exc:
+            exit_code = exc.code if isinstance(exc.code, int) else 1
+        return subprocess.CompletedProcess(
+            command, exit_code, stdout=buf.getvalue(), stderr=""
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+
+def test_check_packages_in_venv_passes_when_any_top_level_name_imports(
+    monkeypatch, tmp_path
+):
+    # A distribution declaring several top-level names (per venv metadata)
+    # must pass the check if any one of them imports -- requiring all of
+    # them would fail correct installs that only use part of a distribution.
+    options = veny.Options()
+    options.uninstalled_imports = {
+        veny.ResolvedImport(import_name="opencv-python", pip_name="opencv-python"),
+    }
+    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
+    monkeypatch.setattr(
+        alias_index,
+        "probe_interpreter",
+        lambda python, timeout=30.0: (
+            "3.12",
+            {"cv2": ["opencv-python"], "cv2_other": ["opencv-python"]},
+        ),
+    )
+    # Only one of the two top-level names actually imports.
+    _run_check_against_fake_venv(monkeypatch, importable={"cv2_other"})
+
+    assert veny.check_packages_in_venv(options, venv_dir=tmp_path) is True
+
+
+def test_check_packages_in_venv_still_fails_a_genuinely_missing_package(
+    monkeypatch, tmp_path
+):
+    # This must not become a way for everything to pass: when the package
+    # really is missing -- whether or not metadata knows about it -- the
+    # check must still fail.
+    options = veny.Options()
+    options.uninstalled_imports = {
+        veny.ResolvedImport(import_name="cv2", pip_name="opencv-python"),
+    }
+    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
+    monkeypatch.setattr(
+        alias_index,
+        "probe_interpreter",
+        lambda python, timeout=30.0: ("3.12", {"cv2": ["opencv-python"]}),
+    )
+    _run_check_against_fake_venv(monkeypatch, importable=set())
+
+    assert veny.check_packages_in_venv(options, venv_dir=tmp_path) is False
 
 
 def test_alias_index_is_serialized_as_structured_data():
