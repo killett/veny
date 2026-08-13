@@ -1612,6 +1612,40 @@ git commit -m "feat: assemble the layered alias resolution chain"
 
 Append to `tests/test_split_imports.py`:
 
+> **The test doubles below are WRONG and must not be copied** (found in review,
+> 2026-08-12). Writing `importer=lambda name: name == "right"` only works if the
+> importer receives the *pip* name, so these tests silently demand
+> `importer(candidate.pip_name)` — the opposite of the contract. The real
+> question is "install `opencv-python`, then does `import cv2` work?"; asking
+> whether `opencv-python` imports would reject every candidate, exhaust every
+> attempt budget, and fill the cache with false `import_failed` rejections.
+>
+> Use a stateful double instead — the installer records what it installed and
+> the importer answers from that state:
+>
+> ```python
+> class _FakeVenv:
+>     def __init__(self, provides, install_failures=()):
+>         self.provides = provides          # pip_name -> the import name it supplies
+>         self.install_failures = set(install_failures)
+>         self.installed, self.uninstalled = [], []
+>
+>     def install(self, pip_name):
+>         if pip_name in self.install_failures:
+>             return False
+>         self.installed.append(pip_name)
+>         return True
+>
+>     def imports(self, import_name):
+>         return any(self.provides.get(p) == import_name for p in self.installed)
+>
+>     def uninstall(self, pip_name):
+>         self.installed.remove(pip_name)
+>         self.uninstalled.append(pip_name)
+> ```
+>
+> And assert directly that the importer was called with the **import name**.
+
 ```python
 import alias_index
 from alias_index import Candidate, Resolution, Source
