@@ -29,7 +29,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final, Protocol
 
@@ -727,3 +727,208 @@ def _names_from_tail(tail: bytes) -> tuple[str, ...] | None:
     if not names or cursor != marker or len(names) != total_entries:
         return None
     return tuple(names)
+
+
+def mutations(import_name: str) -> tuple[str, ...]:
+    """Generate plausible PyPI project names for an import name.
+
+    These are guesses, not answers. Every one is checked against wheel metadata
+    before it can become a candidate, so a name generated here can never reach
+    pip on its own.
+
+    Args:
+        import_name: The import name as written in the user's source.
+
+    Returns:
+        Distinct candidate project names, excluding the import name itself.
+    """
+    base = import_name.lower()
+    generated = [
+        base.replace("_", "-"),
+        f"python-{base.replace('_', '-')}",
+        f"{base.replace('_', '-')}-python",
+        f"py{base}",
+        base.removeprefix("py") if base.startswith("py") and len(base) > 2 else base,
+    ]
+    seen: dict[str, None] = {}
+    for name in generated:
+        if name and name != import_name:
+            seen.setdefault(name, None)
+    return tuple(seen)
+
+
+@dataclass
+class AliasIndex:
+    """Resolves import names to ranked, evidence-backed pip package names.
+
+    Attributes:
+        overrides: The user's authoritative import-to-pip mapping.
+        cache:     Verified results from previous runs.
+        installed: Top-level name to distributions, from the target interpreter.
+        pypi:      PyPI client, or None when resolution must stay offline.
+        seed:      Curated exceptions that need no network to resolve.
+    """
+
+    overrides: dict[str, str]
+    cache: AliasCache
+    installed: dict[str, list[str]]
+    pypi: PyPIClient | None
+    seed: dict[str, str] = field(default_factory=lambda: dict(SEED))
+
+    def resolve(self, import_name: str) -> Resolution:
+        """Return ranked candidate pip names for an import name.
+
+        Overrides and cache hits short-circuit, because both are settled facts:
+        one is the user's stated intent, the other was verified by installing
+        and importing. Every other tier contributes without stopping the walk,
+        so weaker evidence can never hide stronger evidence.
+
+        Args:
+            import_name: The import name as written in the user's source.
+
+        Returns:
+            The ranked candidates, possibly empty.
+        """
+        override = self.overrides.get(import_name)
+        if override is not None:
+            return Resolution(
+                import_name,
+                (
+                    Candidate(
+                        pip_name=override,
+                        source=Source.OVERRIDE,
+                        evidence=f"{OVERRIDES_FILENAME} maps {import_name} to {override}",
+                    ),
+                ),
+            )
+        cached = self.cache.get(import_name)
+        if cached is not None:
+            return Resolution(
+                import_name,
+                (
+                    Candidate(
+                        pip_name=cached,
+                        source=Source.CACHE,
+                        evidence=f"previously installed and imported as {cached}",
+                    ),
+                ),
+            )
+
+        found: list[Candidate] = []
+        for distribution in self.installed.get(import_name, []):
+            found.append(
+                Candidate(
+                    pip_name=distribution,
+                    source=Source.INSTALLED,
+                    evidence=f"{distribution} provides {import_name} in the target interpreter",
+                )
+            )
+        seeded = self.seed.get(import_name)
+        if seeded is not None:
+            found.append(
+                Candidate(
+                    pip_name=seeded,
+                    source=Source.SEED,
+                    evidence=f"known exception: {import_name} ships in {seeded}",
+                )
+            )
+        found.extend(self._confirmed_by_pypi(import_name))
+
+        rejected = self.cache.rejected_names(import_name)
+        return Resolution(
+            import_name,
+            tuple(c for c in rank(found) if c.pip_name not in rejected),
+        )
+
+    def _confirmed_by_pypi(self, import_name: str) -> list[Candidate]:
+        """Return candidates whose wheels declare the import name.
+
+        Args:
+            import_name: The import name being resolved.
+
+        Returns:
+            Confirmed candidates, empty when offline or when nothing confirms.
+        """
+        if self.pypi is None:
+            return []
+        confirmed: list[Candidate] = []
+        for project in (import_name, *mutations(import_name)):
+            top_levels = self.pypi.top_levels(project)
+            if top_levels is None or import_name not in top_levels:
+                continue
+            confirmed.append(
+                Candidate(
+                    pip_name=project,
+                    source=Source.PYPI_CONFIRMED,
+                    evidence=f"the {project} wheel declares the top-level name {import_name}",
+                    top_levels=top_levels,
+                )
+            )
+        return confirmed
+
+    def confirm(self, import_name: str, pip_name: str) -> None:
+        """Record that pip_name installed and satisfied import_name.
+
+        Args:
+            import_name: The import name that was satisfied.
+            pip_name:    The pip package that satisfied it.
+        """
+        self.cache.confirm(import_name, pip_name)
+
+    def reject(self, import_name: str, pip_name: str, kind: str) -> None:
+        """Record that a candidate failed.
+
+        Args:
+            import_name: The import name being resolved.
+            pip_name:    The candidate that failed.
+            kind:        Either "import_failed" or "install_failed".
+        """
+        self.cache.reject(import_name, pip_name, kind)
+
+
+def build(
+    python: str | os.PathLike[str], my_dir: Path, *, offline: bool = False
+) -> AliasIndex:
+    """Assemble an AliasIndex for one target interpreter.
+
+    Args:
+        python:  The interpreter that will run the user's script.
+        my_dir:  veny's own directory, where the stores live.
+        offline: Skip the PyPI tier entirely.
+
+    Returns:
+        A ready-to-use AliasIndex.
+
+    Raises:
+        AliasOverrideError: If the override file exists but cannot be read.
+    """
+    tag, installed = probe_interpreter(python)
+    return AliasIndex(
+        overrides=load_overrides(my_dir / OVERRIDES_FILENAME),
+        cache=AliasCache.load(my_dir / CACHE_FILENAME, interpreter_tag=tag),
+        installed=installed,
+        pypi=None if offline else PyPIClient(),
+    )
+
+
+def empty(my_dir: Path) -> AliasIndex:
+    """Build an index with no interpreter evidence and no network access.
+
+    Options() is constructed before the target interpreter is known, and in
+    tests, so it must not pay for a probe. main() replaces this with build().
+
+    Args:
+        my_dir: veny's own directory, where the stores live.
+
+    Returns:
+        An AliasIndex backed only by the override file, cache, and seed.
+
+    Raises:
+        AliasOverrideError: If the override file exists but cannot be read.
+    """
+    return AliasIndex(
+        overrides=load_overrides(my_dir / OVERRIDES_FILENAME),
+        cache=AliasCache.load(my_dir / CACHE_FILENAME, interpreter_tag=_running_tag()),
+        installed={},
+        pypi=None,
+    )

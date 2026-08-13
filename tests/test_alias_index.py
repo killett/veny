@@ -10,6 +10,7 @@ import alias_index
 from alias_index import (
     MAX_WHEEL_BYTES,
     AliasCache,
+    AliasIndex,
     AliasOverrideError,
     Candidate,
     PyPIClient,
@@ -581,3 +582,106 @@ def test_metadata_larger_than_max_wheel_bytes_is_not_truncated():
     payload["padding"] = "x" * (MAX_WHEEL_BYTES + 1024)
     fetcher = _FakeFetcher(payload, wheel)
     assert PyPIClient(fetcher).top_levels("pkg") == frozenset({"pkg"})
+
+
+class _StubPyPI:
+    """Stands in for PyPIClient with a fixed project-to-top-levels table."""
+
+    def __init__(self, table):
+        self.table = table
+        self.asked = []
+
+    def top_levels(self, name):
+        self.asked.append(name)
+        return self.table.get(name)
+
+
+def _index(tmp_path, *, overrides=None, installed=None, pypi=None, tag="3.12"):
+    return AliasIndex(
+        overrides=overrides or {},
+        cache=AliasCache.load(tmp_path / "cache.json", interpreter_tag=tag),
+        installed=installed or {},
+        pypi=pypi,
+    )
+
+
+def test_override_wins_and_costs_no_network(tmp_path):
+    pypi = _StubPyPI({})
+    index = _index(tmp_path, overrides={"cv2": "my-opencv"}, pypi=pypi)
+    resolution = index.resolve("cv2")
+    assert [c.pip_name for c in resolution.candidates] == ["my-opencv"]
+    assert resolution.candidates[0].source is Source.OVERRIDE
+    assert pypi.asked == []
+
+
+def test_cache_hit_costs_no_network(tmp_path):
+    pypi = _StubPyPI({})
+    index = _index(tmp_path, pypi=pypi)
+    index.confirm("cv2", "opencv-python")
+    resolution = index.resolve("cv2")
+    assert [c.pip_name for c in resolution.candidates] == ["opencv-python"]
+    assert pypi.asked == []
+
+
+def test_installed_metadata_and_seed_both_contribute(tmp_path):
+    # The seed must not stop the walk, or a stale seed entry could hide better
+    # evidence permanently.
+    index = _index(
+        tmp_path, installed={"cv2": ["opencv-python-headless"]}, pypi=_StubPyPI({})
+    )
+    names = [c.pip_name for c in index.resolve("cv2").candidates]
+    assert names == ["opencv-python-headless", "opencv-python"]
+
+
+def test_unconfirmed_mutation_never_becomes_a_candidate(tmp_path):
+    # The highest-consequence bug in the design: installing a plausible-looking
+    # name that does not actually provide the import.
+    pypi = _StubPyPI({"typosquat": frozenset({"something_else"})})
+    index = _index(tmp_path, pypi=pypi)
+    assert index.resolve("typosquat").candidates == ()
+
+
+def test_confirmed_mutation_becomes_a_pypi_candidate(tmp_path):
+    pypi = _StubPyPI({"python-dateutil": frozenset({"dateutil"})})
+    index = _index(tmp_path, pypi=pypi)
+    candidates = index.resolve("dateutil").candidates
+    assert [c.pip_name for c in candidates] == ["python-dateutil"]
+    assert candidates[0].source is Source.PYPI_CONFIRMED
+    assert candidates[0].top_levels == frozenset({"dateutil"})
+
+
+def test_identity_candidate_is_confirmed_when_the_project_provides_itself(tmp_path):
+    pypi = _StubPyPI({"numpy": frozenset({"numpy"})})
+    index = _index(tmp_path, pypi=pypi)
+    assert [c.pip_name for c in index.resolve("numpy").candidates] == ["numpy"]
+
+
+def test_rejected_candidate_is_filtered_out(tmp_path):
+    # Re-offering a package already proven not to provide the import wastes an
+    # install attempt on every subsequent run.
+    pypi = _StubPyPI({"numpy": frozenset({"numpy"})})
+    index = _index(tmp_path, pypi=pypi)
+    index.reject("numpy", "numpy", "import_failed")
+    assert index.resolve("numpy").candidates == ()
+
+
+def test_offline_index_still_resolves_from_local_evidence(tmp_path):
+    index = _index(tmp_path, installed={"cv2": ["opencv-python"]}, pypi=None)
+    assert [c.pip_name for c in index.resolve("cv2").candidates] == ["opencv-python"]
+
+
+def test_unknown_name_offline_resolves_to_nothing(tmp_path):
+    assert _index(tmp_path, pypi=None).resolve("mystery").candidates == ()
+
+
+def test_build_wires_the_pieces_together(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        alias_index,
+        "probe_interpreter",
+        lambda python: ("3.12", {"cv2": ["opencv-python"]}),
+    )
+    (tmp_path / "module_aliases.toml").write_text('[aliases]\nfoo = "bar"\n')
+    index = alias_index.build(python=sys.executable, my_dir=tmp_path, offline=True)
+    assert index.overrides == {"foo": "bar"}
+    assert index.pypi is None
+    assert [c.pip_name for c in index.resolve("cv2").candidates] == ["opencv-python"]
