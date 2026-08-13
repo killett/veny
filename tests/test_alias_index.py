@@ -205,7 +205,7 @@ def test_probe_reads_version_and_distributions(monkeypatch):
         calls.append(command)
         return subprocess.CompletedProcess(command, 0, stdout=payload, stderr="")
 
-    monkeypatch.setattr(alias_index.subprocess, "run", fake_run)
+    monkeypatch.setattr("alias_index.subprocess.run", fake_run)
     tag, packages = alias_index.probe_interpreter("/usr/bin/python3")
     assert tag == "3.12"
     assert packages == {"cv2": ["opencv-python"]}
@@ -217,7 +217,7 @@ def test_probe_degrades_when_the_interpreter_cannot_run(monkeypatch, caplog):
     def fake_run(command, **kwargs):
         raise OSError("no such executable")
 
-    monkeypatch.setattr(alias_index.subprocess, "run", fake_run)
+    monkeypatch.setattr("alias_index.subprocess.run", fake_run)
     with caplog.at_level("WARNING"):
         tag, packages = alias_index.probe_interpreter("/nope/python3")
     assert packages == {}
@@ -229,7 +229,7 @@ def test_probe_degrades_on_unparseable_output(monkeypatch):
     def fake_run(command, **kwargs):
         return subprocess.CompletedProcess(command, 0, stdout="not json", stderr="")
 
-    monkeypatch.setattr(alias_index.subprocess, "run", fake_run)
+    monkeypatch.setattr("alias_index.subprocess.run", fake_run)
     _, packages = alias_index.probe_interpreter("/usr/bin/python3")
     assert packages == {}
 
@@ -238,7 +238,7 @@ def test_probe_degrades_on_nonzero_exit(monkeypatch):
     def fake_run(command, **kwargs):
         return subprocess.CompletedProcess(command, 1, stdout="", stderr="boom")
 
-    monkeypatch.setattr(alias_index.subprocess, "run", fake_run)
+    monkeypatch.setattr("alias_index.subprocess.run", fake_run)
     _, packages = alias_index.probe_interpreter("/usr/bin/python3")
     assert packages == {}
 
@@ -253,7 +253,7 @@ def test_probe_degrades_on_timeout(monkeypatch, caplog):
     def fake_run(command, **kwargs):
         raise subprocess.TimeoutExpired(command, timeout=kwargs.get("timeout", 10))
 
-    monkeypatch.setattr(alias_index.subprocess, "run", fake_run)
+    monkeypatch.setattr("alias_index.subprocess.run", fake_run)
     with caplog.at_level("WARNING"):
         _, packages = alias_index.probe_interpreter("/usr/bin/python3")
     assert packages == {}
@@ -267,7 +267,7 @@ def test_probe_degrades_on_malformed_payload(monkeypatch):
     def fake_run(command, **kwargs):
         return subprocess.CompletedProcess(command, 0, stdout=payload, stderr="")
 
-    monkeypatch.setattr(alias_index.subprocess, "run", fake_run)
+    monkeypatch.setattr("alias_index.subprocess.run", fake_run)
     _, packages = alias_index.probe_interpreter("/usr/bin/python3")
     assert packages == {}
 
@@ -438,3 +438,103 @@ def test_results_are_cached_per_project():
     before = len(fetcher.requests)
     client.top_levels("pkg")
     assert len(fetcher.requests) == before
+
+
+def test_missing_project_result_is_cached_too():
+    # A cached None ("could not determine") must not be re-fetched either --
+    # a falsy check like `if not self._cache.get(name)` would pass this test
+    # suite while still re-fetching on every call for an unresolvable name.
+    fetcher = _FakeFetcher(None, b"")
+    client = PyPIClient(fetcher)
+    client.top_levels("does-not-exist")
+    before = len(fetcher.requests)
+    client.top_levels("does-not-exist")
+    assert len(fetcher.requests) == before
+
+
+def test_dist_info_only_wheel_yields_empty_frozenset_not_none():
+    # A wheel that genuinely provides nothing importable is a real (if odd)
+    # answer, distinct from "could not determine" -- Task 5 treats None and
+    # frozenset() differently and must not see one where the other belongs.
+    wheel = _wheel_bytes(["pkg-1.0.dist-info/METADATA", "pkg-1.0.dist-info/RECORD"])
+    fetcher = _FakeFetcher(_json_for(wheel), wheel)
+    assert PyPIClient(fetcher).top_levels("pkg") == frozenset()
+
+
+def test_malformed_pypi_payload_not_a_dict_returns_none():
+    fetcher = _FakeFetcher(["not", "a", "dict"], b"")
+    assert PyPIClient(fetcher).top_levels("pkg") is None
+
+
+def test_malformed_pypi_file_entry_missing_size_returns_none():
+    # Right top-level shape, malformed entry: must not raise KeyError/TypeError
+    # reaching into a missing field -- the same defect class review already
+    # caught once each in Task 2's cache loader and Task 3's probe loader.
+    fetcher = _FakeFetcher(
+        {
+            "urls": [
+                {
+                    "filename": "pkg-1.0-py3-none-any.whl",
+                    "url": "https://files/pkg.whl",
+                }
+            ]
+        },
+        b"",
+    )
+    assert PyPIClient(fetcher).top_levels("pkg") is None
+
+
+def test_non_https_file_url_is_rejected():
+    # A malicious or misconfigured index entry pointing at file:// or plain
+    # http:// must never reach urlopen.
+    wheel = _wheel_bytes(["pkg/__init__.py"])
+    payload = _json_for(wheel)
+    payload["urls"][0]["url"] = "http://files/pkg.whl"
+    fetcher = _FakeFetcher(payload, wheel)
+    assert PyPIClient(fetcher).top_levels("pkg") is None
+
+
+def test_invalid_utf8_member_name_returns_none_instead_of_raising():
+    # zipfile.ZipFile decodes a UTF-8-flagged central-directory name
+    # strictly; a corrupt or adversarial wheel must degrade to "could not
+    # determine" rather than propagate UnicodeDecodeError out of a function
+    # contracted never to raise. Only the non-206 full-zip fallback path is
+    # exposed to this -- _names_from_tail decodes with errors="replace".
+    wheel = bytearray(_wheel_bytes(["\U0001f600/__init__.py"]))
+    marker = "\U0001f600".encode()
+    index = wheel.rfind(marker)
+    assert index != -1
+    wheel[index : index + len(marker)] = b"\xff" * len(marker)
+    frozen_wheel = bytes(wheel)
+    fetcher = _FakeFetcher(_json_for(frozen_wheel), frozen_wheel, honour_range=False)
+    assert PyPIClient(fetcher).top_levels("pkg") is None
+
+
+def test_oversized_body_is_rejected_even_when_declared_size_is_small(monkeypatch):
+    # The cap bounds bytes actually received, not just PyPI's claim; a false
+    # or stale declared size must not let an oversized body through when the
+    # server ignores Range.
+    monkeypatch.setattr(alias_index, "MAX_WHEEL_BYTES", 64)
+    wheel = _wheel_bytes([f"pkg/mod{i}.py" for i in range(20)])
+    payload = _json_for(wheel)
+    payload["urls"][0]["size"] = 1
+    fetcher = _FakeFetcher(payload, wheel, honour_range=False)
+    assert PyPIClient(fetcher).top_levels("pkg") is None
+
+
+def test_corrupt_central_directory_returns_none_not_empty_frozenset():
+    # A buffer of nothing but repeated central-file signatures is what a
+    # single "the list is non-empty" check accepts as a real directory,
+    # yielding a false "this wheel declares no top-level names" instead of
+    # "could not determine". The entry-count and cursor-alignment invariants
+    # must catch it.
+    garbage = alias_index._CENTRAL_SIGNATURE * 1000
+    eocd = (
+        alias_index._EOCD_SIGNATURE
+        + b"\x00" * 6
+        + (5).to_bytes(2, "little")  # total_entries claims 5; nowhere near true
+        + len(garbage).to_bytes(4, "little")
+        + b"\x00" * 4
+        + b"\x00" * 2
+    )
+    assert alias_index._names_from_tail(garbage + eocd) is None

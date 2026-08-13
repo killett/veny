@@ -25,6 +25,7 @@ import sys
 import time
 import tomllib
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from collections.abc import Iterable
@@ -484,10 +485,16 @@ class UrllibFetcher:
         Raises:
             FetchError: On any network or protocol failure.
         """
+        if not url.startswith("https://"):
+            raise FetchError(f"Refusing to fetch a non-https URL: {url}")
         request = urllib.request.Request(url, headers=headers or {})  # noqa: S310
         try:
             with urllib.request.urlopen(request, timeout=_READ_TIMEOUT) as response:  # noqa: S310
-                return int(response.status), dict(response.headers), response.read()
+                # Bounded even when a server ignores Range and sends a full
+                # body: the point of MAX_WHEEL_BYTES is to cap what veny
+                # transfers, not just what it is willing to accept afterward.
+                body = response.read(MAX_WHEEL_BYTES + 1)
+                return int(response.status), dict(response.headers), body
         except (urllib.error.URLError, OSError, ValueError) as exc:
             raise FetchError(str(exc)) from exc
 
@@ -558,8 +565,9 @@ class PyPIClient:
         Returns:
             The declared top-level names, or None if anything prevents inspection.
         """
+        url = PYPI_JSON_URL.format(name=urllib.parse.quote(name, safe=""))
         try:
-            _, _, body = self._fetcher.get(PYPI_JSON_URL.format(name=name))
+            _, _, body = self._fetcher.get(url)
             payload = json.loads(body)
         except (FetchError, ValueError) as exc:
             logging.debug("No PyPI metadata for %s (%s).", name, exc)
@@ -573,6 +581,7 @@ class PyPIClient:
                 not isinstance(entry, dict)
                 or not isinstance(entry.get("filename"), str)
                 or not isinstance(entry.get("url"), str)
+                or not entry["url"].startswith("https://")
                 or not isinstance(entry.get("size"), int)
             ):
                 logging.debug("Malformed PyPI file entry for %s.", name)
@@ -588,7 +597,7 @@ class PyPIClient:
         smallest = min(wheels, key=lambda entry: entry["size"])
         try:
             return self._read_member_names(smallest["url"], smallest["size"])
-        except (FetchError, zipfile.BadZipFile) as exc:
+        except (FetchError, ValueError, zipfile.BadZipFile) as exc:
             logging.debug("Could not read the wheel listing for %s (%s).", name, exc)
             return None
 
@@ -611,11 +620,15 @@ class PyPIClient:
                 url, headers={"Range": f"bytes=-{window}"}
             )
             if status != 206:
-                if size > MAX_WHEEL_BYTES:
+                # size is PyPI's claim; len(chunk) is what was actually
+                # received. Both are checked -- a false or missing declared
+                # size must not let an oversized body slip past the cap that
+                # exists to bound it.
+                if size > MAX_WHEEL_BYTES or len(chunk) > MAX_WHEEL_BYTES:
                     logging.debug(
                         "Server ignored Range for %s and the wheel is %d bytes; abandoning it.",
                         url,
-                        size,
+                        max(size, len(chunk)),
                     )
                     return None
                 return _top_levels_from_names(_names_from_zip_bytes(chunk))
@@ -655,12 +668,15 @@ def _names_from_tail(tail: bytes) -> tuple[str, ...] | None:
 
     Returns:
         Member names, or None if the end-of-central-directory record is not in
-        tail, or the directory it points at is not fully inside tail. Either way
-        the caller should retry with a wider window.
+        tail, the directory it points at is not fully inside tail, or the
+        parsed walk does not satisfy the invariants a genuine central
+        directory has (see below). Either way the caller should retry with a
+        wider window.
     """
     marker = tail.rfind(_EOCD_SIGNATURE)
     if marker < 0:
         return None
+    total_entries = int.from_bytes(tail[marker + 10 : marker + 12], "little")
     directory_size = int.from_bytes(tail[marker + 12 : marker + 16], "little")
     start = marker - directory_size
     if start < 0:
@@ -676,6 +692,12 @@ def _names_from_tail(tail: bytes) -> tuple[str, ...] | None:
             tail[name_start : name_start + name_length].decode("utf-8", "replace")
         )
         cursor = name_start + name_length + extra_length + comment_length
-    if not names:
+    # A genuine central directory satisfies two invariants that garbage bytes
+    # (e.g. a buffer that merely repeats the central-file signature) do not:
+    # the walk ends exactly where the EOCD begins, and the number of entries
+    # walked matches the EOCD's own total-entries field. Either mismatch
+    # means this was not a real directory, so report "could not determine"
+    # rather than a confidently wrong (and possibly empty) name list.
+    if not names or cursor != marker or len(names) != total_entries:
         return None
     return tuple(names)
