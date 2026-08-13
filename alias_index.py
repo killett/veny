@@ -66,6 +66,26 @@ class Candidate:
 
 
 @dataclass(frozen=True)
+class ResolvedImport:
+    """An import name paired with the pip package that provides it.
+
+    Carrying both names together is what retires the old split where pip names
+    went into one set and import names into another, leaving every consumer to
+    guess which kind of string it was holding.
+
+    This lives here rather than in veny.py so that univ_defs can serialize it
+    without importing veny, which would close an import cycle.
+
+    Attributes:
+        import_name: The name as written in the user's source.
+        pip_name:    The package name to hand to pip.
+    """
+
+    import_name: str
+    pip_name: str
+
+
+@dataclass(frozen=True)
 class Resolution:
     """The ranked candidates for one import name.
 

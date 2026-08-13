@@ -15,6 +15,8 @@ from concurrent.futures import ThreadPoolExecutor
 import errno
 import re  # Used to precompile regexes for performance
 
+import alias_index  # One-way: univ_defs imports alias_index, never the reverse.
+
 # Version of univ_defs.py:
 __version__: Final[str] = "0.2.2"
 
@@ -5666,6 +5668,24 @@ def _to_jsonable(obj: Any, *, roundtrip: bool, _seen: set[int]) -> Any:
                 "Failed to unwrap bytes/bytearray/memoryview: %s", e
             )
             return str(obj)
+    # alias_index records and indexes.
+    # These must be handled before the str() fallback below, or an AliasIndex is
+    # flattened to its repr and every later lookup degrades to substring matching,
+    # which returns wrong answers silently instead of raising. ResolvedImport is
+    # tagged so it round-trips: options.uninstalled_imports is written to the
+    # last-used options file and read back by veny's check_venv_dir(), whose
+    # issubset() check could never match a set of stringified records.
+    # (The equivalent StdlibIndex gap is still open; it falls through to str().)
+    if isinstance(obj, alias_index.ResolvedImport):
+        payload = {"import_name": obj.import_name, "pip_name": obj.pip_name}
+        return {"__type__": "resolved_import", **payload} if roundtrip else payload
+    if isinstance(obj, alias_index.AliasIndex):
+        return {
+            "overrides"       : dict(obj.overrides),
+            "interpreter_tag" : obj.cache.interpreter_tag,
+            "cache_path"      : os.fspath(obj.cache.path),
+            "offline"         : obj.pypi is None,
+        }
     # re.Pattern (compiled regex)
     try:
         import re
@@ -5769,6 +5789,9 @@ def from_jsonable(obj: Any) -> Any:
                 "Failed to unwrap memoryview: %s", e
             )
             return obj.get("value")
+    if t == "resolved_import":
+        return alias_index.ResolvedImport(import_name=obj.get("import_name", ""),
+                                          pip_name=obj.get("pip_name", ""))
     if t == "recursion":
         return "<recursion>"
     if t == "object":

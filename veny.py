@@ -20,13 +20,19 @@ import tempfile
 import shlex  # For safely quoting shell commands
 from functools   import lru_cache  # For caching results of expensive function calls
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 import alias_index
 import stdlib_index
 import univ_defs as ud
 
 __version__: str = "0.2.2"
+
+# An import name paired with the pip package that provides it. Defined in
+# alias_index so that univ_defs can serialize it without importing veny (which
+# would close an import cycle), and re-exported here because veny is where it
+# is used.
+ResolvedImport = alias_index.ResolvedImport
 
 
 class Options(ud.Options):
@@ -48,8 +54,10 @@ class Options(ud.Options):
         self.venv_name:                     str = "myenv"  # Can NOT include dashes ("-")
         self.packages_dir:                 Path = self.my_dir / "packages"
         self.test_dir:                     Path = self.my_dir / "test"
-        self.uninstalled_imports:      set[str] = set()
-        self.installed_imports:        set[str] = set()
+        # Both sets hold ResolvedImport records, so every consumer can pick the
+        # right name instead of guessing which kind of string it was handed.
+        self.uninstalled_imports: set[alias_index.ResolvedImport] = set()
+        self.installed_imports:   set[alias_index.ResolvedImport] = set()
         self.bad_imports:              set[str] = set()
         self.all_imports:              set[str] = set()
         self.total_imports:                 int = 0
@@ -119,8 +127,11 @@ If you're using the bash shell, follow these steps to add the alias manually:
 4. Reload your bash configuration by running the following command:
    source ~/.bashrc
 """
-        self.also_needs: dict[str, list[str]] = {  # Some packages also need other packages to be installed.
-            "xarray"  : ["dask", "netcdf4", "h5netcdf"],
+        # Some imports also need other packages to be installed. Both the keys and
+        # the values are *import* names: they are matched against and resolved
+        # through options.aliases, which turns e.g. "netCDF4" into pip's "netcdf4".
+        self.also_needs: dict[str, list[str]] = {
+            "xarray"  : ["dask", "netCDF4", "h5netcdf"],
             "litellm" : ["tenacity"],
             # NOT PIP PACKAGES: "pyautogui": ["scrot", "python3-tk"]
             # Add more packages and their dependencies here
@@ -131,1227 +142,14 @@ If you're using the bash shell, follow these steps to add the alias manually:
         # docs/superpowers/specs/2026-08-12-stdlib-index-design.md
         self.stdlib: stdlib_index.StdlibIndex = stdlib_index.for_running_interpreter()
         self.seen_stdlib_imports:    set[str] = set()  # Standard-library imports that were skipped
-        # Sometimes, a module is imported in python using a different name than is required in the "pip install" command. Keep track of these exceptions here.
-        self.module_aliases: dict[str, str] = {
-            # I added these manually by asking ChatGPT what pip aliases are different than their import commands:
-            # "import name" : "pip install name"
-            "osgeo": "gdal",  # osgeo is the import name for gdal
-            "ffmpeg": "ffmpeg-python",
-            "cv2": "opencv-python",
-            "jnp": "jax.numpy",
-            # "sm": "statsmodels",
-            "netCDF4": "netcdf4",
-            "skill_metrics": "SkillMetrics",
-            "bugbear": "flake8-bugbear",
-            "whisper": "openai-whisper",
-            "mypy.api": "mypy",
-            "speedtest": "speedtest-cli",
-            # This list is from the pipreqs repo in file "mapping", retrieved on 2024-08-15 from here: https://github.com/bndr/pipreqs
-            # There are a LOT of duplicate keys in this list! I don't know why. Python dicts will just use the last one.
-            # "mapping" file is here: https://github.com/bndr/pipreqs/blob/master/pipreqs/mapping
-            # It's used like this:
-            # def get_pkg_names(pkgs):
-            #     """Get PyPI package names from a list of imports.
-
-            #     Args:
-            #         pkgs (List[str]): List of import names.
-
-            #     Returns:
-            #         List[str]: The corresponding PyPI package names.
-
-            #     """
-            #     result = set()
-            #     with open(join("mapping"), "r") as f:
-            #         data = dict(x.strip().split(":") for x in f)
-            #     for pkg in pkgs:
-            #         # Look up the mapped requirement. If a mapping isn't found,
-            #         # simply use the package name.
-            #         result.add(data.get(pkg, pkg))
-            #     # Return a sorted list for backward compatibility.
-            #     return sorted(result, key=lambda s: s.lower())
-            # Here's an alternative: https://pypi.org/project/pip-run/
-            # Here's another alternative: https://pypi.org/project/coherent.deps/
-            # Here's some relevant info from the coherent.deps project description:
-            # Maintaining the mapping
-            # There is a subpackage, distributions, which contains two scripts, load and process (invoked by python -m coherent.deps.distributions.{load,process}) to load the distributions from a "top downloads" summary and then process those by loading their data from PyPI.
-
-            # To get the full set of "top downloaded" packages that contain at least one download, run this query:
-
-            #   pipx run --python 3.13 pypinfo --json --indent 0 --limit 800000 --days 30 "" project > ~/Downloads/top-pypi-packages-30-days.json
-
-            # Note that this pypinfo script requires a Google API key and with a very high limit like 800000, will cost several dollars to run, so the maintainer only runs it about twice a year.
-
-            # Then, to refresh the database with the downloaded dataset:
-
-            #   py -3.13 -m pip-run coherent.deps -- -m coherent.deps.distributions.load ~/Downloads/top-pypi-packages-30-days.json
-
-            # This process will ensure that all packages are up-to-date with their latest download stats.
-
-            # From there, ensure that any newly-added packages are processed:
-
-            #   py -3.13 -m pip-run coherent.deps -- -m coherent.deps.distributions.process
-
-            # Note that only those entries without an updated field will be processed. To re-process packgaes that may have grown stale, clear the updated field on those entries. For example, to mark stale any entries older than 6 months:
-
-            # max_age = datetime.timedelta(days=6*30)
-            # filter = {'updated': {'$lt': datetime.today() - max_age}}
-            # op = {'$unset': 'updated'}
-            # collection.update_many(filter, op)
-
-            # Thereafter, re-run the process routine, which will re-process the packages without the updated field.
-            "AFQ": "pyAFQ",
-            "AG_fft_tools": "agpy",
-            "ANSI": "pexpect",
-            "Adafruit": "Adafruit_Libraries",
-            "App": "Zope2",
-            "Asterisk": "py_Asterisk",
-            "BB_jekyll_hook": "bitbucket_jekyll_hook",
-            "Banzai": "Banzai_NGS",
-            "BeautifulSoupTests": "BeautifulSoup",
-            "BioSQL": "biopython",
-            "BuildbotStatusShields": "BuildbotEightStatusShields",
-            "ComputedAttribute": "ExtensionClass",
-            "constraint": "python-constraint",
-            "Crypto": "pycryptodome",
-            "Cryptodome": "pycryptodomex",
-            "FSM": "pexpect",
-            "FiftyOneDegrees": "51degrees_mobile_detector_v3_wrapper",
-            "functional": "pyfunctional",
-            "GeoBaseMain": "GeoBasesDev",
-            "GeoBases": "GeoBasesDev",
-            "Globals": "Zope2",
-            "HelpSys": "Zope2",
-            "IPython": "ipython",
-            "Kittens": "astro_kittens",
-            "Levenshtein": "python_Levenshtein",
-            "Lifetime": "Zope2",
-            "MethodObject": "ExtensionClass",
-            "MySQLdb": "MySQL-python",
-            "OFS": "Zope2",
-            "OpenGL": "PyOpenGL",
-            "OpenSSL": "pyOpenSSL",
-            "PIL": "Pillow",
-            "Products": "Zope2",
-            "PyWCSTools": "astLib",
-            "Pyxides": "astro_pyxis",
-            "QtCore": "PySide",
-            "S3": "s3cmd",
-            "SCons": "pystick",
-            "Shared": "Zope2",
-            "Signals": "Zope2",
-            "Stemmer": "PyStemmer",
-            "Testing": "Zope2",
-            "TopZooTools": "topzootools",
-            "TreeDisplay": "DocumentTemplate",
-            "WorkingWithDocumentConversion": "aspose_pdf_java_for_python",
-            "ZPublisher": "Zope2",
-            "ZServer": "Zope2",
-            "ZTUtils": "Zope2",
-            "aadb": "auto_adjust_display_brightness",
-            "abakaffe": "abakaffe_cli",
-            "abiosgaming": "abiosgaming.py",
-            "abiquo": "abiquo_api",
-            "abl": "abl.cssprocessor",
-            "abl": "abl.robot",
-            "abl": "abl.util",
-            "abl": "abl.vpath",
-            "abo": "abo_generator",
-            "abris_transform": "abris",
-            "abstract": "abstract.jwrotator",
-            "abu": "abu.admin",
-            "ac_flask": "AC_Flask_HipChat",
-            "acg": "anikom15",
-            "acme": "acme.dchat",
-            "acme": "acme.hello",
-            "acted": "acted.projects",
-            "action": "ActionServer",
-            "actionbar": "actionbar.panel",
-            "activehomed": "afn",
-            "activepapers": "ActivePapers.Py",
-            "address_book": "address_book_lansry",
-            "adi": "adi.commons",
-            "adi": "adi.devgen",
-            "adi": "adi.fullscreen",
-            "adi": "adi.init",
-            "adi": "adi.playlist",
-            "adi": "adi.samplecontent",
-            "adi": "adi.slickstyle",
-            "adi": "adi.suite",
-            "adi": "adi.trash",
-            "adict": "aDict2",
-            "aditam": "aditam.agent",
-            "aditam": "aditam.core",
-            "adiumsh": "adium_sh",
-            "adjector": "AdjectorClient",
-            "adjector": "AdjectorTracPlugin",
-            "adkit": "Banner_Ad_Toolkit",
-            "admin_tools": "django_admin_tools",
-            "adminishcategories": "adminish_categories",
-            "adminsortable": "django_admin_sortable",
-            "adspygoogle": "adspygoogle.adwords",
-            "advancedcaching": "agtl",
-            "adytum": "Adytum_PyMonitor",
-            "affinitic": "affinitic.docpyflakes",
-            "affinitic": "affinitic.recipe.fakezope2eggs",
-            "affinitic": "affinitic.simplecookiecuttr",
-            "affinitic": "affinitic.verifyinterface",
-            "affinitic": "affinitic.zamqp",
-            "afpy": "afpy.xap",
-            "agatesql": "agate_sql",
-            "ageliaco": "ageliaco.recipe.csvconfig",
-            "agent_http": "agent.http",
-            "agora": "Agora_Client",
-            "agora": "Agora_Fountain",
-            "agora": "Agora_Fragment",
-            "agora": "Agora_Planner",
-            "agora": "Agora_Service_Provider",
-            "agoraplex": "agoraplex.themes.sphinx",
-            "agsci": "agsci.blognewsletter",
-            "agx": "agx.core",
-            "agx": "agx.dev",
-            "agx": "agx.generator.buildout",
-            "agx": "agx.generator.dexterity",
-            "agx": "agx.generator.generator",
-            "agx": "agx.generator.plone",
-            "agx": "agx.generator.pyegg",
-            "agx": "agx.generator.sql",
-            "agx": "agx.generator.uml",
-            "agx": "agx.generator.zca",
-            "agx": "agx.transform.uml2fs",
-            "agx": "agx.transform.xmi2uml",
-            "aimes": "aimes.bundle",
-            "aimes": "aimes.skeleton",
-            "aio": "aio.app",
-            "aio": "aio.config",
-            "aio": "aio.core",
-            "aio": "aio.signals",
-            "aiohs2": "aio_hs2",
-            "aioroutes": "aio_routes",
-            "aios3": "aio_s3",
-            "airbrake": "airbrake_flask",
-            "airship": "airship_icloud",
-            "airship": "airship_steamcloud",
-            "airflow": "apache-airflow",
-            "akamai": "edgegrid_python",
-            "alation": "alation_api",
-            "alba_client": "alba_client_python",
-            "alburnum": "alburnum_maas_client",
-            "alchemist": "alchemist.audit",
-            "alchemist": "alchemist.security",
-            "alchemist": "alchemist.traversal",
-            "alchemist": "alchemist.ui",
-            "alchemyapi": "alchemyapi_python",
-            "alerta": "alerta_server",
-            "alexandria_upload": "Alexandria_Upload_Utils",
-            "alibaba": "alibaba_python_sdk",
-            "aliyun": "aliyun_python_sdk",
-            "aliyuncli": "alicloudcli",
-            "aliyunsdkacs": "aliyun_python_sdk_acs",
-            "aliyunsdkbatchcompute": "aliyun_python_sdk_batchcompute",
-            "aliyunsdkbsn": "aliyun_python_sdk_bsn",
-            "aliyunsdkbss": "aliyun_python_sdk_bss",
-            "aliyunsdkcdn": "aliyun_python_sdk_cdn",
-            "aliyunsdkcms": "aliyun_python_sdk_cms",
-            "aliyunsdkcore": "aliyun_python_sdk_core",
-            "aliyunsdkcrm": "aliyun_python_sdk_crm",
-            "aliyunsdkcs": "aliyun_python_sdk_cs",
-            "aliyunsdkdrds": "aliyun_python_sdk_drds",
-            "aliyunsdkecs": "aliyun_python_sdk_ecs",
-            "aliyunsdkess": "aliyun_python_sdk_ess",
-            "aliyunsdkft": "aliyun_python_sdk_ft",
-            "aliyunsdkmts": "aliyun_python_sdk_mts",
-            "aliyunsdkocs": "aliyun_python_sdk_ocs",
-            "aliyunsdkoms": "aliyun_python_sdk_oms",
-            "aliyunsdkossadmin": "aliyun_python_sdk_ossadmin",
-            "aliyunsdkr-kvstore": "aliyun_python_sdk_r_kvstore",
-            "aliyunsdkram": "aliyun_python_sdk_ram",
-            "aliyunsdkrds": "aliyun_python_sdk_rds",
-            "aliyunsdkrisk": "aliyun_python_sdk_risk",
-            "aliyunsdkros": "aliyun_python_sdk_ros",
-            "aliyunsdkslb": "aliyun_python_sdk_slb",
-            "aliyunsdksts": "aliyun_python_sdk_sts",
-            "aliyunsdkubsms": "aliyun_python_sdk_ubsms",
-            "aliyunsdkyundun": "aliyun_python_sdk_yundun",
-            "allattachments": "AllAttachmentsMacro",
-            "allocine": "allocine_wrapper",
-            "allowedsites": "django_allowedsites",
-            "alm": "alm.solrindex",
-            "aloft": "aloft.py",
-            "alpacalib": "alpaca",
-            "alphabetic": "alphabetic_simple",
-            "alphasms": "alphasms_client",
-            "altered": "altered.states",
-            "alterootheme": "alterootheme.busycity",
-            "alterootheme": "alterootheme.intensesimplicity",
-            "alterootheme": "alterootheme.lazydays",
-            "alurinium": "alurinium_image_processing",
-            "alxlib": "alx",
-            "amara3": "amara3_iri",
-            "amara3": "amara3_xml",
-            "amazon": "AmazonAPIWrapper",
-            "amazon": "python_amazon_simple_product_api",
-            "ambikesh1349-1": "ambikesh1349_1",
-            "ambilight": "AmbilightParty",
-            "amifs": "amifs_core",
-            "amiorganizer": "ami_organizer",
-            "amitu": "amitu.lipy",
-            "amitu": "amitu_putils",
-            "amitu": "amitu_websocket_client",
-            "amitu": "amitu_zutils",
-            "amltlearn": "AMLT_learn",
-            "amocrm": "amocrm_api",
-            "amqpdispatcher": "amqp_dispatcher",
-            "amqpstorm": "AMQP_Storm",
-            "analytics": "analytics_python",
-            "analyzedir": "AnalyzeDirectory",
-            "ancientsolutions": "ancientsolutions_crypttools",
-            "anderson_paginator": "anderson.paginator",
-            "android_clean_app": "android_resource_remover",
-            "anel_power_control": "AnelPowerControl",
-            "angus": "angus_sdk_python",
-            "annalist_root": "Annalist",
-            "annogesiclib": "ANNOgesic",
-            "ansible-role-apply": "ansible_role_apply",
-            "ansibledebugger": "ansible_playbook_debugger",
-            "ansibledocgen": "ansible_docgen",
-            "ansibleflow": "ansible_flow",
-            "ansibleinventorygrapher": "ansible_inventory_grapher",
-            "ansiblelint": "ansible_lint",
-            "ansiblerolesgraph": "ansible_roles_graph",
-            "ansibletools": "ansible_tools",
-            "anthill": "anthill.exampletheme",
-            "anthill": "anthill.skinner",
-            "anthill": "anthill.tal.macrorenderer",
-            "anthrax": "AnthraxDojoFrontend",
-            "anthrax": "AnthraxHTMLInput",
-            "anthrax": "AnthraxImage",
-            "antisphinx": "antiweb",
-            "antispoofing": "antispoofing.evaluation",
-            "antlr4": "antlr4_python2_runtime",
-            "antlr4": "antlr4_python3_runtime",
-            "antlr4": "antlr4_python_alt",
-            "anybox": "anybox.buildbot.openerp",
-            "anybox": "anybox.nose.odoo",
-            "anybox": "anybox.paster.odoo",
-            "anybox": "anybox.paster.openerp",
-            "anybox": "anybox.recipe.sysdeps",
-            "anybox": "anybox.scripts.odoo",
-            "apiclient": "google_api_python_client",
-            "apitools": "google_apitools",
-            "apm": "arpm",
-            "app_data": "django_appdata",
-            "appconf": "django_appconf",
-            "appd": "AppDynamicsDownloader",
-            "appd": "AppDynamicsREST",
-            "appdynamics_bindeps": "appdynamics_bindeps_linux_x64",
-            "appdynamics_bindeps": "appdynamics_bindeps_linux_x86",
-            "appdynamics_bindeps": "appdynamics_bindeps_osx_x64",
-            "appdynamics_proxysupport": "appdynamics_proxysupport_linux_x64",
-            "appdynamics_proxysupport": "appdynamics_proxysupport_linux_x86",
-            "appdynamics_proxysupport": "appdynamics_proxysupport_osx_x64",
-            "appium": "Appium_Python_Client",
-            "appliapps": "applibase",
-            "appserver": "broadwick",
-            "archetypes": "archetypes.kss",
-            "archetypes": "archetypes.multilingual",
-            "archetypes": "archetypes.schemaextender",
-            "arm": "ansible_role_manager",
-            "armor": "armor_api",
-            "armstrong": "armstrong.apps.related_content",
-            "armstrong": "armstrong.apps.series",
-            "armstrong": "armstrong.cli",
-            "armstrong": "armstrong.core.arm_access",
-            "armstrong": "armstrong.core.arm_layout",
-            "armstrong": "armstrong.core.arm_sections",
-            "armstrong": "armstrong.core.arm_wells",
-            "armstrong": "armstrong.dev",
-            "armstrong": "armstrong.esi",
-            "armstrong": "armstrong.hatband",
-            "armstrong": "armstrong.templates.standard",
-            "armstrong": "armstrong.utils.backends",
-            "armstrong": "armstrong.utils.celery",
-            "arstecnica": "arstecnica.raccoon.autobahn",
-            "arstecnica": "arstecnica.sqlalchemy.async",
-            "article-downloader": "article_downloader",
-            "artifactcli": "artifact_cli",
-            "arvados": "arvados_python_client",
-            "arvados_cwl": "arvados_cwl_runner",
-            "arvnodeman": "arvados_node_manager",
-            "asana_to_github": "AsanaToGithub",
-            "asciibinary": "AsciiBinaryConverter",
-            "asd": "AdvancedSearchDiscovery",
-            "askbot": "askbot_tuan",
-            "askbot": "askbot_tuanpa",
-            "asnhistory": "asnhistory_redis",
-            "aspen_jinja2_renderer": "aspen_jinja2",
-            "aspen_tornado_engine": "aspen_tornado",
-            "asprise_ocr_api": "asprise_ocr_sdk_python_api",
-            "aspy": "aspy.refactor_imports",
-            "aspy": "aspy.yaml",
-            "asterisk": "asterisk_ami",
-            "asts": "add_asts",
-            "asymmetricbase": "asymmetricbase.enum",
-            "asymmetricbase": "asymmetricbase.fields",
-            "asymmetricbase": "asymmetricbase.logging",
-            "asymmetricbase": "asymmetricbase.utils",
-            "asyncirc": "asyncio_irc",
-            "asyncmongoorm": "asyncmongoorm_je",
-            "asyncssh": "asyncssh_unofficial",
-            "athletelist": "athletelistyy",
-            "atm": "automium",
-            "atmosphere": "atmosphere_python_client",
-            "atom": "gdata",
-            "atomic": "AtomicWrite",
-            "atomisator": "atomisator.db",
-            "atomisator": "atomisator.enhancers",
-            "atomisator": "atomisator.feed",
-            "atomisator": "atomisator.indexer",
-            "atomisator": "atomisator.outputs",
-            "atomisator": "atomisator.parser",
-            "atomisator": "atomisator.readers",
-            "atreal": "atreal.cmfeditions.unlocker",
-            "atreal": "atreal.filestorage.common",
-            "atreal": "atreal.layouts",
-            "atreal": "atreal.mailservices",
-            "atreal": "atreal.massloader",
-            "atreal": "atreal.monkeyplone",
-            "atreal": "atreal.override.albumview",
-            "atreal": "atreal.richfile.preview",
-            "atreal": "atreal.richfile.qualifier",
-            "atreal": "atreal.usersinout",
-            "atsim": "atsim.potentials",
-            "attractsdk": "attract_sdk",
-            "audio": "audio.bitstream",
-            "audio": "audio.coders",
-            "audio": "audio.filters",
-            "audio": "audio.fourier",
-            "audio": "audio.frames",
-            "audio": "audio.lp",
-            "audio": "audio.psychoacoustics",
-            "audio": "audio.quantizers",
-            "audio": "audio.shrink",
-            "audio": "audio.wave",
-            "aufrefer": "auf_refer",
-            "auslfe": "auslfe.formonline.content",
-            "auspost": "auspost_apis",
-            "auth0": "auth0_python",
-            "auth_server_client": "AuthServerClient",
-            "authorize": "AuthorizeSauce",
-            "authzpolicy": "AuthzPolicyPlugin",
-            "autobahn": "autobahn_rce",
-            "avatar": "geonode_avatar",
-            "awebview": "android_webview",
-            "azure": "azure_common",
-            "azure": "azure_mgmt_common",
-            "azure": "azure_mgmt_compute",
-            "azure": "azure_mgmt_network",
-            "azure": "azure_mgmt_nspkg",
-            "azure": "azure_mgmt_resource",
-            "azure": "azure_mgmt_storage",
-            "azure": "azure_nspkg",
-            "azure": "azure_servicebus",
-            "azure": "azure_servicemanagement_legacy",
-            "azure": "azure_storage",
-            "b2gcommands": "b2g_commands",
-            "b2gperf": "b2gperf_v1.3",
-            "b2gperf": "b2gperf_v1.4",
-            "b2gperf": "b2gperf_v2.0",
-            "b2gperf": "b2gperf_v2.1",
-            "b2gperf": "b2gperf_v2.2",
-            "b2gpopulate": "b2gpopulate_v1.3",
-            "b2gpopulate": "b2gpopulate_v1.4",
-            "b2gpopulate": "b2gpopulate_v2.0",
-            "b2gpopulate": "b2gpopulate_v2.1",
-            "b2gpopulate": "b2gpopulate_v2.2",
-            "b3j0f": "b3j0f.annotation",
-            "b3j0f": "b3j0f.aop",
-            "b3j0f": "b3j0f.conf",
-            "b3j0f": "b3j0f.sync",
-            "b3j0f": "b3j0f.utils",
-            "babel": "Babel",
-            "babelglade": "BabelGladeExtractor",
-            "backplane": "backplane2_pyclient",
-            "backport_abcoll": "backport_collections",
-            "backports": "backports.functools_lru_cache",
-            "backports": "backports.inspect",
-            "backports": "backports.pbkdf2",
-            "backports": "backports.shutil_get_terminal_size",
-            "backports": "backports.socketpair",
-            "backports": "backports.ssl",
-            "backports": "backports.ssl_match_hostname",
-            "backports": "backports.statistics",
-            "badgekit": "badgekit_api_client",
-            "badlinks": "BadLinksPlugin",
-            "bael": "bael.project",
-            "baidu": "baidupy",
-            "balrog": "buildtools",
-            "baluhn": "baluhn_redux",
-            "bamboo": "bamboo.pantrybell",
-            "bamboo": "bamboo.scaffold",
-            "bamboo": "bamboo.setuptools_version",
-            "bamboo": "bamboo_data",
-            "bamboo": "bamboo_server",
-            "bambu": "bambu_codemirror",
-            "bambu": "bambu_dataportability",
-            "bambu": "bambu_enqueue",
-            "bambu": "bambu_faq",
-            "bambu": "bambu_ffmpeg",
-            "bambu": "bambu_grids",
-            "bambu": "bambu_international",
-            "bambu": "bambu_jwplayer",
-            "bambu": "bambu_minidetect",
-            "bambu": "bambu_navigation",
-            "bambu": "bambu_notifications",
-            "bambu": "bambu_payments",
-            "bambu": "bambu_pusher",
-            "bambu": "bambu_saas",
-            "bambu": "bambu_sites",
-            "banana": "Bananas",
-            "banana": "banana.maya",
-            "bang": "bangtext",
-            "barcode": "barcode_generator",
-            "bark": "bark_ssg",
-            "barking_owl": "BarkingOwl",
-            "bart": "bart_py",
-            "basalt": "basalt_tasks",
-            "base62": "base_62",
-            "basemap": "basemap_Jim",
-            "bash": "bash_toolbelt",
-            "bashutils": "Python_Bash_Utils",
-            "basic_http": "BasicHttp",
-            "basil": "basil_daq",
-            "batchapps": "azure_batch_apps",
-            "bcrypt": "python_bcrypt",
-            "beaker": "Beaker",
-            "beetsplug": "beets",
-            "begin": "begins",
-            "benchit": "bench_it",
-            "beproud": "beproud.utils",
-            "bfillings": "burrito_fillings",
-            "bigjob": "BigJob",
-            "billboard": "billboard.py",
-            "binstar_build_client": "anaconda_build",
-            "binstar_client": "anaconda_client",
-            "biocommons": "biocommons.dev",
-            "birdhousebuilder": "birdhousebuilder.recipe.conda",
-            "birdhousebuilder": "birdhousebuilder.recipe.docker",
-            "birdhousebuilder": "birdhousebuilder.recipe.redis",
-            "birdhousebuilder": "birdhousebuilder.recipe.supervisor",
-            "blender26-meshio": "pymeshio",
-            "bootstrap": "BigJob",
-            "borg": "borg.localrole",
-            "bow": "bagofwords",
-            "bpdb": "bpython",
-            "bqapi": "bisque_api",
-            "braces": "django_braces",
-            "briefscaster": "briefs_caster",
-            "brisa_media_server/plugins": "brisa_media_server_plugins",
-            "brkt_requests": "brkt_sdk",
-            "broadcastlogging": "broadcast_logging",
-            "brocadetool": "brocade_tool",
-            "bronto": "bronto_python",
-            "brownie": "Brownie",
-            "browsermobproxy": "browsermob_proxy",
-            "brubeckmysql": "brubeck_mysql",
-            "brubeckoauth": "brubeck_oauth",
-            "brubeckservice": "brubeck_service",
-            "brubeckuploader": "brubeck_uploader",
-            "bs4": "beautifulsoup4",
-            "bson": "pymongo",
-            "bst": "bst.pygasus.core",
-            "bst": "bst.pygasus.datamanager",
-            "bst": "bst.pygasus.demo",
-            "bst": "bst.pygasus.i18n",
-            "bst": "bst.pygasus.resources",
-            "bst": "bst.pygasus.scaffolding",
-            "bst": "bst.pygasus.security",
-            "bst": "bst.pygasus.session",
-            "bst": "bst.pygasus.wsgi",
-            "btable": "btable_py",
-            "btapi": "bananatag_api",
-            "btceapi": "btce_api",
-            "btcebot": "btce_bot",
-            "btsync": "btsync.py",
-            "buck": "buck.pprint",
-            "bud": "bud.nospam",
-            "budy": "budy_api",
-            "buffer": "buffer_alpaca",
-            "buggd": "bug.gd",
-            "bugle": "bugle_sites",
-            "bugspots": "bug_spots",
-            "bugzilla": "python_bugzilla",
-            "bugzscout": "bugzscout_py",
-            "buildTools": "ajk_ios_buildTools",
-            "buildnotifylib": "BuildNotify",
-            "buildout": "buildout.bootstrap",
-            "buildout": "buildout.disablessl",
-            "buildout": "buildout.dumppickedversions",
-            "buildout": "buildout.dumppickedversions2",
-            "buildout": "buildout.dumprequirements",
-            "buildout": "buildout.eggnest",
-            "buildout": "buildout.eggscleaner",
-            "buildout": "buildout.eggsdirectories",
-            "buildout": "buildout.eggtractor",
-            "buildout": "buildout.extensionscripts",
-            "buildout": "buildout.locallib",
-            "buildout": "buildout.packagename",
-            "buildout": "buildout.recipe.isolation",
-            "buildout": "buildout.removeaddledeggs",
-            "buildout": "buildout.requirements",
-            "buildout": "buildout.sanitycheck",
-            "buildout": "buildout.sendpickedversions",
-            "buildout": "buildout.threatlevel",
-            "buildout": "buildout.umask",
-            "buildout": "buildout.variables",
-            "buildslave": "buildbot_slave",
-            "builtins": "pies2overrides",
-            "bumper": "bumper_lib",
-            "bumple": "bumple_downloader",
-            "bundesliga": "bundesliga_cli",
-            "bundlemaker": "bundlemanager",
-            "burpui": "burp_ui",
-            "busyflow": "busyflow.pivotal",
-            "buttercms-django": "buttercms_django",
-            "buzz": "buzz_python_client",
-            "bvc": "buildout_versions_checker",
-            "bvggrabber": "bvg_grabber",
-            "byond": "BYONDTools",
-            "bzETL": "Bugzilla_ETL",
-            "bzlib": "bugzillatools",
-            "bzrlib": "bzr",
-            "bzrlib": "bzr_automirror",
-            "bzrlib": "bzr_bash_completion",
-            "bzrlib": "bzr_colo",
-            "bzrlib": "bzr_killtrailing",
-            "bzrlib": "bzr_pqm",
-            "c2c": "c2c.cssmin",
-            "c2c": "c2c.recipe.closurecompile",
-            "c2c": "c2c.recipe.cssmin",
-            "c2c": "c2c.recipe.jarfile",
-            "c2c": "c2c.recipe.msgfmt",
-            "c2c": "c2c.recipe.pkgversions",
-            "c2c": "c2c.sqlalchemy.rest",
-            "c2c": "c2c.versions",
-            "c2c_recipe_facts": "c2c.recipe.facts",
-            "cabalgata": "cabalgata_silla_de_montar",
-            "cabalgata": "cabalgata_zookeeper",
-            "cache_utils": "django_cache_utils",
-            "captcha": "django_recaptcha",
-            "cartridge": "Cartridge",
-            "cassandra": "cassandra_driver",
-            "cassandralauncher": "CassandraLauncher",
-            "cc42": "42qucc",
-            "cerberus": "Cerberus",
-            "cfnlint": "cfn-lint",
-            "chameleon": "Chameleon",
-            "charmtools": "charm_tools",
-            "chef": "PyChef",
-            "chip8": "c8d",
-            "cjson": "python_cjson",
-            "classytags": "django_classy_tags",
-            "cloghandler": "ConcurrentLogHandler",
-            "clonevirtualenv": "virtualenv_clone",
-            "cloud-insight": "al_cloudinsight",
-            "cloud_admin": "adminapi",
-            "cloudservers": "python_cloudservers",
-            "clusterconsole": "cerebrod",
-            "clustersitter": "cerebrod",
-            "cms": "django_cms",
-            "colander": "ba_colander",
-            "colors": "ansicolors",
-            "compile": "bf_lc3",
-            "compose": "docker_compose",
-            "compressor": "django_compressor",
-            "concurrent": "futures",
-            "configargparse": "ConfigArgParse",
-            "configparser": "pies2overrides",
-            "contracts": "PyContracts",
-            "coordination": "BigJob",
-            "copyreg": "pies2overrides",
-            "corebio": "weblogo",
-            "couchapp": "Couchapp",
-            "couchdb": "CouchDB",
-            "couchdbcurl": "couchdb_python_curl",
-            "courseradownloader": "coursera_dl",
-            "cow": "cow_framework",
-            "creole": "python_creole",
-            "creoleparser": "Creoleparser",
-            "crispy_forms": "django_crispy_forms",
-            "cronlog": "python_crontab",
-            "crontab": "python_crontab",
-            "ctff": "tff",
-            "cups": "pycups",
-            "curator": "elasticsearch_curator",
-            "curl": "pycurl",
-            "daemon": "python_daemon",
-            "dare": "DARE",
-            "dateutil": "python_dateutil",
-            "dawg": "DAWG",
-            "deb822": "python_debian",
-            "debian": "python_debian",
-            "decouple": "python-decouple",
-            "demo": "webunit",
-            "demosongs": "PySynth",
-            "deployer": "juju_deployer",
-            "depot": "filedepot",
-            "devtools": "tg.devtools",
-            "dgis": "2gis",
-            "dhtmlparser": "pyDHTMLParser",
-            "digitalocean": "python_digitalocean",
-            "discord": "discord.py",
-            "distribute_setup": "ez_setup",
-            "distutils2": "Distutils2",
-            "django": "Django",
-            "django_hstore": "amitu_hstore",
-            "djangobower": "django_bower",
-            "djcelery": "django_celery",
-            "djkombu": "django_kombu",
-            "djorm_pgarray": "djorm_ext_pgarray",
-            "dns": "dnspython",
-            "docgen": "ansible_docgenerator",
-            "docker": "docker_py",
-            "dogpile": "dogpile.cache",
-            "dogpile": "dogpile.core",
-            "dogshell": "dogapi",
-            "dot_parser": "pydot",
-            "dot_parser": "pydot2",
-            "dot_parser": "pydot3k",
-            "dotenv": "python-dotenv",
-            "dpkt": "dpkt_fix",
-            "dsml": "python_ldap",
-            "durationfield": "django_durationfield",
-            "dzclient": "datazilla",
-            "easybuild": "easybuild_framework",
-            "editor": "python_editor",
-            "elasticluster": "azure_elasticluster",
-            "elasticluster": "azure_elasticluster_current",
-            "elftools": "pyelftools",
-            "elixir": "Elixir",
-            "em": "empy",
-            "emlib": "empy",
-            "enchant": "pyenchant",
-            "encutils": "cssutils",
-            "engineio": "python_engineio",
-            "enum": "enum34",
-            "ephem": "pyephem",
-            "errorreporter": "abl.errorreporter",
-            "esplot": "beaker_es_plot",
-            "example": "adrest",
-            "examples": "tweepy",
-            "ez_setup": "pycassa",
-            "fabfile": "Fabric",
-            "fabric": "Fabric",
-            "faker": "Faker",
-            "fdpexpect": "pexpect",
-            "fedora": "python_fedora",
-            "fias": "ailove_django_fias",
-            "fiftyone_degrees": "51degrees_mobile_detector",
-            "five": "five.customerize",
-            "five": "five.globalrequest",
-            "five": "five.intid",
-            "five": "five.localsitemanager",
-            "five": "five.pt",
-            "flasher": "android_flasher",
-            "flask": "Flask",
-            "flask_frozen": "Frozen_Flask",
-            "flask_redis": "Flask_And_Redis",
-            "flaskext": "Flask_Bcrypt",
-            "flvscreen": "vnc2flv",
-            "followit": "django_followit",
-            "forge": "pyforge",
-            "formencode": "FormEncode",
-            "formtools": "django_formtools",
-            "fourch": "4ch",
-            "franz": "allegrordf",
-            "freetype": "freetype_py",
-            "frontmatter": "python_frontmatter",
-            "ftpcloudfs": "ftp_cloudfs",
-            "funtests": "librabbitmq",
-            "fuse": "fusepy",
-            "fuzzy": "Fuzzy",
-            "gabbi": "tiddlyweb",
-            "gen_3dwallet": "3d_wallet_generator",
-            "gendimen": "android_gendimen",
-            "genshi": "Genshi",
-            "geohash": "python_geohash",
-            "geonode": "GeoNode",
-            "geoserver": "gsconfig",
-            "geraldo": "Geraldo",
-            "getenv": "django_getenv",
-            "geventwebsocket": "gevent_websocket",
-            "gflags": "python_gflags",
-            "git": "GitPython",
-            "github": "PyGithub",
-            "github3": "github3.py",
-            "gitpy": "git_py",
-            "globusonline": "globusonline_transfer_api_client",
-            "google": "protobuf",
-            "googleapiclient": "google_api_python_client",
-            "grace-dizmo": "grace_dizmo",
-            "grammar": "anovelmous_grammar",
-            "grapheneapi": "graphenelib",
-            "greplin": "scales",
-            "gridfs": "pymongo",
-            "grokcore": "grokcore.component",
-            "gslib": "gsutil",
-            "hamcrest": "PyHamcrest",
-            "harpy": "HARPy",
-            "hawk": "PyHawk_with_a_single_extra_commit",
-            "haystack": "django_haystack",
-            "hgext": "mercurial",
-            "hggit": "hg_git",
-            "hglib": "python_hglib",
-            "ho": "pisa",
-            "hola": "amarokHola",
-            "hoover": "Hoover",
-            "hostlist": "python_hostlist",
-            "html": "pies2overrides",
-            "htmloutput": "nosehtmloutput",
-            "http": "pies2overrides",
-            "hvad": "django_hvad",
-            "hydra": "hydra-core",
-            "i99fix": "199Fix",
-            "igraph": "python_igraph",
-            "imdb": "IMDbPY",
-            "impala": "impyla",
-            "inmemorystorage": "ambition_inmemorystorage",
-            "ipaddress": "backport_ipaddress",
-            "jaraco": "jaraco.timing",
-            "jaraco": "jaraco.util",
-            "jinja2": "Jinja2",
-            "jiracli": "jira_cli",
-            "johnny": "johnny_cache",
-            "jpgrid": "python_geohash",
-            "jpiarea": "python_geohash",
-            "jpype": "JPype1",
-            "jpypex": "JPype1",
-            "jsonfield": "django_jsonfield",
-            "jstools": "aino_jstools",
-            "jupyterpip": "jupyter_pip",
-            "jwt": "PyJWT",
-            "kazoo": "asana_kazoo",
-            "kernprof": "line_profiler",
-            "keyczar": "python_keyczar",
-            "keyedcache": "django_keyedcache",
-            "keystoneclient": "python_keystoneclient",
-            "kickstarter": "kickstart",
-            "krbv": "krbV",
-            "kss": "kss.core",
-            "kuyruk": "Kuyruk",
-            "langconv": "AdvancedLangConv",
-            "lava": "lava_utils_interface",
-            "lazr": "lazr.authentication",
-            "lazr": "lazr.restfulclient",
-            "lazr": "lazr.uri",
-            "ldap": "python_ldap",
-            "ldaplib": "adpasswd",
-            "ldapurl": "python_ldap",
-            "ldif": "python_ldap",
-            "lib2or3": "2or3",
-            "lib3to2": "3to2",
-            "libaito": "Aito",
-            "libbe": "bugs_everywhere",
-            "libbucket": "bucket",
-            "libcloud": "apache_libcloud",
-            "libfuturize": "future",
-            "libgenerateDS": "generateDS",
-            "libmproxy": "mitmproxy",
-            "libpasteurize": "future",
-            "libsvm": "7lk_ocr_deploy",
-            "lisa": "lisa_server",
-            "loadingandsaving": "aspose_words_java_for_python",
-            "locust": "locustio",
-            "logbook": "Logbook",
-            "logentries": "buildbot_status_logentries",
-            "logilab": "logilab_mtconverter",
-            "machineconsole": "cerebrod",
-            "machinesitter": "cerebrod",
-            "magic": "python_magic",
-            "mako": "Mako",
-            "manifestparser": "ManifestDestiny",
-            "marionette": "marionette_client",
-            "markdown": "Markdown",
-            "marks": "pytest_marks",
-            "markupsafe": "MarkupSafe",
-            "mavnative": "pymavlink",
-            "memcache": "python_memcached",
-            "metacomm": "AllPairs",
-            "metaphone": "Metafone",
-            "metlog": "metlog_py",
-            "mezzanine": "Mezzanine",
-            "migrate": "sqlalchemy_migrate",
-            "mimeparse": "python_mimeparse",
-            "minitage": "minitage.paste",
-            "minitage": "minitage.recipe.common",
-            "missingdrawables": "android_missingdrawables",
-            "mixfiles": "PySynth",
-            "mkfreq": "PySynth",
-            "mkrst_themes": "2lazy2rest",
-            "mockredis": "mockredispy",
-            "modargs": "python_modargs",
-            "model_utils": "django_model_utils",
-            "models": "asposebarcode",
-            "models": "asposestorage",
-            "moksha": "moksha.common",
-            "moksha": "moksha.hub",
-            "moksha": "moksha.wsgi",
-            "moneyed": "py_moneyed",
-            "mongoalchemy": "MongoAlchemy",
-            "monthdelta": "MonthDelta",
-            "mopidy": "Mopidy",
-            "mopytools": "MoPyTools",
-            "mptt": "django_mptt",
-            "mpv": "python-mpv",
-            "mrbob": "mr.bob",
-            "msgpack": "msgpack_python",
-            "mutations": "aino_mutations",
-            "mws": "amazon_mws",
-            "mysql": "mysql_connector_repackaged",
-            "native_tags": "django_native_tags",
-            "ndg": "ndg_httpsclient",
-            "nereid": "trytond_nereid",
-            "nested": "baojinhuan",
-            "nester": "Amauri",
-            "nester": "abofly",
-            "nester": "bssm_pythonSig",
-            "novaclient": "python_novaclient",
-            "oauth2_provider": "alauda_django_oauth",
-            "oauth2client": "oauth2client",
-            "odf": "odfpy",
-            "ometa": "Parsley",
-            "openid": "python_openid",
-            "opensearchsdk": "ali_opensearch",
-            "oslo_i18n": "oslo.i18n",
-            "oslo_serialization": "oslo.serialization",
-            "oslo_utils": "oslo.utils",
-            "oss": "alioss",
-            "oss": "aliyun_python_sdk_oss",
-            "oss": "aliyunoss",
-            "output": "cashew",
-            "owslib": "OWSLib",
-            "packetdiag": "nwdiag",
-            "paho": "paho_mqtt",
-            "paintstore": "django_paintstore",
-            "parler": "django_parler",
-            "past": "future",
-            "paste": "PasteScript",
-            "path": "forked_path",
-            "path": "path.py",
-            "patricia": "patricia-trie",
-            "paver": "Paver",
-            "peak": "ProxyTypes",
-            "picasso": "anderson.picasso",
-            "picklefield": "django-picklefield",
-            "pilot": "BigJob",
-            "pivotal": "pivotal_py",
-            "play_wav": "PySynth",
-            "playhouse": "peewee",
-            "plivoxml": "plivo",
-            "plone": "plone.alterego",
-            "plone": "plone.api",
-            "plone": "plone.app.blob",
-            "plone": "plone.app.collection",
-            "plone": "plone.app.content",
-            "plone": "plone.app.contentlisting",
-            "plone": "plone.app.contentmenu",
-            "plone": "plone.app.contentrules",
-            "plone": "plone.app.contenttypes",
-            "plone": "plone.app.controlpanel",
-            "plone": "plone.app.customerize",
-            "plone": "plone.app.dexterity",
-            "plone": "plone.app.discussion",
-            "plone": "plone.app.event",
-            "plone": "plone.app.folder",
-            "plone": "plone.app.i18n",
-            "plone": "plone.app.imaging",
-            "plone": "plone.app.intid",
-            "plone": "plone.app.layout",
-            "plone": "plone.app.linkintegrity",
-            "plone": "plone.app.locales",
-            "plone": "plone.app.lockingbehavior",
-            "plone": "plone.app.multilingual",
-            "plone": "plone.app.portlets",
-            "plone": "plone.app.querystring",
-            "plone": "plone.app.redirector",
-            "plone": "plone.app.registry",
-            "plone": "plone.app.relationfield",
-            "plone": "plone.app.textfield",
-            "plone": "plone.app.theming",
-            "plone": "plone.app.users",
-            "plone": "plone.app.uuid",
-            "plone": "plone.app.versioningbehavior",
-            "plone": "plone.app.viewletmanager",
-            "plone": "plone.app.vocabularies",
-            "plone": "plone.app.widgets",
-            "plone": "plone.app.workflow",
-            "plone": "plone.app.z3cform",
-            "plone": "plone.autoform",
-            "plone": "plone.batching",
-            "plone": "plone.behavior",
-            "plone": "plone.browserlayer",
-            "plone": "plone.caching",
-            "plone": "plone.contentrules",
-            "plone": "plone.dexterity",
-            "plone": "plone.event",
-            "plone": "plone.folder",
-            "plone": "plone.formwidget.namedfile",
-            "plone": "plone.formwidget.recurrence",
-            "plone": "plone.i18n",
-            "plone": "plone.indexer",
-            "plone": "plone.intelligenttext",
-            "plone": "plone.keyring",
-            "plone": "plone.locking",
-            "plone": "plone.memoize",
-            "plone": "plone.namedfile",
-            "plone": "plone.outputfilters",
-            "plone": "plone.portlet.collection",
-            "plone": "plone.portlet.static",
-            "plone": "plone.portlets",
-            "plone": "plone.protect",
-            "plone": "plone.recipe.zope2install",
-            "plone": "plone.registry",
-            "plone": "plone.resource",
-            "plone": "plone.resourceeditor",
-            "plone": "plone.rfc822",
-            "plone": "plone.scale",
-            "plone": "plone.schema",
-            "plone": "plone.schemaeditor",
-            "plone": "plone.session",
-            "plone": "plone.stringinterp",
-            "plone": "plone.subrequest",
-            "plone": "plone.supermodel",
-            "plone": "plone.synchronize",
-            "plone": "plone.theme",
-            "plone": "plone.transformchain",
-            "plone": "plone.uuid",
-            "plone": "plone.z3cform",
-            "plonetheme": "plonetheme.barceloneta",
-            "png": "pypng",
-            "polymorphic": "django_polymorphic",
-            "postmark": "python_postmark",
-            "powerprompt": "bash_powerprompt",
-            "prefetch": "django-prefetch",
-            "printList": "AndrewList",
-            "progressbar": "progressbar2",
-            "progressbar": "progressbar33",
-            "provider": "django_oauth2_provider",
-            "puresasl": "pure_sasl",
-            "pwiz": "peewee",
-            "pxssh": "pexpect",
-            "py7zlib": "pylzma",
-            "pyAMI": "pyAMI_core",
-            "pyarsespyder": "arsespyder",
-            "pyasdf": "asdf",
-            "pyaspell": "aspell_python_ctypes",
-            "pybb": "pybbm",
-            "pybloomfilter": "pybloomfiltermmap",
-            "pyccuracy": "Pyccuracy",
-            "pyck": "PyCK",
-            "pycrfsuite": "python_crfsuite",
-            "pydispatch": "PyDispatcher",
-            "pygeolib": "pygeocoder",
-            "pygments": "Pygments",
-            "pygraph": "python_graph_core",
-            "pyjon": "pyjon.utils",
-            "pyjsonrpc": "python_jsonrpc",
-            "pykka": "Pykka",
-            "pylogo": "PyLogo",
-            "pylons": "adhocracy_Pylons",
-            "pymagic": "libmagic",
-            "pymycraawler": "Amalwebcrawler",
-            "pynma": "AbakaffeNotifier",
-            "pyphen": "Pyphen",
-            "pyrimaa": "AEI",
-            "pysideuic": "PySide",
-            "pysqlite2": "adhocracy_pysqlite",
-            "pysqlite2": "pysqlite",
-            "pysynth_b": "PySynth",
-            "pysynth_beeper": "PySynth",
-            "pysynth_c": "PySynth",
-            "pysynth_d": "PySynth",
-            "pysynth_e": "PySynth",
-            "pysynth_p": "PySynth",
-            "pysynth_s": "PySynth",
-            "pysynth_samp": "PySynth",
-            "pythongettext": "python_gettext",
-            "pythonjsonlogger": "python_json_logger",
-            "pyutilib": "PyUtilib",
-            "pyximport": "Cython",
-            "qs": "qserve",
-            "quadtree": "python_geohash",
-            "queue": "future",
-            "quickapi": "django_quickapi",
-            "quickunit": "nose_quickunit",
-            "rackdiag": "nwdiag",
-            "radical": "radical.pilot",
-            "radical": "radical.utils",
-            "reStructuredText": "Zope2",
-            "readability": "readability_lxml",
-            "readline": "gnureadline",
-            "recaptcha_works": "django_recaptcha_works",
-            "relstorage": "RelStorage",
-            "reportapi": "django_reportapi",
-            "reprlib": "pies2overrides",
-            # "requests": "Requests", # This doesn't work on my Ubuntu machine.
-            "requirements": "requirements_parser",
-            "rest_framework": "djangorestframework",
-            "restclient": "py_restclient",
-            "retrial": "async_retrial",
-            "reversion": "django_reversion",
-            "rhaptos2": "rhaptos2.common",
-            "robot": "robotframework",
-            "robots": "django_robots",
-            "rosdep2": "rosdep",
-            "rsbackends": "RSFile",
-            "ruamel": "ruamel.base",
-            "s2repoze": "pysaml2",
-            "saga": "saga_python",
-            "saml2": "pysaml2",
-            "samtranslator": "aws-sam-translator",
-            "sass": "libsass",
-            "sassc": "libsass",
-            "sasstests": "libsass",
-            "sassutils": "libsass",
-            "sayhi": "alex_sayhi",
-            "scalrtools": "scalr",
-            "scikits": "scikits.talkbox",
-            "scratch": "scratchpy",
-            "screen": "pexpect",
-            "scss": "pyScss",
-            "sdict": "dict.sorted",
-            "sdk_updater": "android_sdk_updater",
-            "sekizai": "django_sekizai",
-            "sendfile": "pysendfile",
-            "serial": "pyserial",
-            "setuputils": "astor",
-            "shapefile": "pyshp",
-            "shapely": "Shapely",
-            "sika": "ahonya_sika",
-            "singleton": "pysingleton",
-            "sittercommon": "cerebrod",
-            "skbio": "scikit_bio",
-            "sklearn": "scikit_learn",
-            "slack": "slackclient",
-            "slugify": "unicode_slugify",
-            "slugify": "python-slugify",
-            "smarkets": "smk_python_sdk",
-            "snappy": "ctypes_snappy",
-            "socketio": "python-socketio",
-            "socketserver": "pies2overrides",
-            "sockjs": "sockjs_tornado",
-            "socks": "SocksiPy_branch",
-            "solr": "solrpy",
-            "solution": "Solution",
-            "sorl": "sorl_thumbnail",
-            "south": "South",
-            "sphinx": "Sphinx",
-            "sphinx_pypi_upload": "ATD_document",
-            "sphinxcontrib": "sphinxcontrib_programoutput",
-            "sqlalchemy": "SQLAlchemy",
-            "src": "atlas",
-            "src": "auto_mix_prep",
-            "stats_toolkit": "bw_stats_toolkit",
-            "statsd": "dogstatsd_python",
-            "stdnum": "python_stdnum",
-            "stoneagehtml": "StoneageHTML",
-            "storages": "django_storages",
-            "stubout": "mox",
-            "suds": "suds_jurko",
-            "swiftclient": "python_swiftclient",
-            "sx": "pisa",
-            "tabix": "pytabix",
-            "taggit": "django_taggit",
-            "tasksitter": "cerebrod",
-            "tastypie": "django_tastypie",
-            "teamcity": "teamcity_messages",
-            "telebot": "pyTelegramBotAPI",
-            "telegram": "python-telegram-bot",
-            "tempita": "Tempita",
-            "tenjin": "Tenjin",
-            "termstyle": "python_termstyle",
-            "test": "pytabix",
-            "thclient": "treeherder_client",
-            "threaded_multihost": "django_threaded_multihost",
-            "threecolor": "3color_Press",
-            "tidylib": "pytidylib",
-            "tkinter": "future",
-            "tlw": "3lwg",
-            "toredis": "toredis_fork",
-            "tornadoredis": "tornado_redis",
-            "tower_cli": "ansible_tower_cli",
-            "trac": "Trac",
-            "tracopt": "Trac",
-            "translation_helper": "android_localization_helper",
-            "treebeard": "django_treebeard",
-            "trytond": "trytond_stock",
-            "tsuru": "tsuru_circus",
-            "tvrage": "python_tvrage",
-            "tw2": "tw2.core",
-            "tw2": "tw2.d3",
-            "tw2": "tw2.dynforms",
-            "tw2": "tw2.excanvas",
-            "tw2": "tw2.forms",
-            "tw2": "tw2.jit",
-            "tw2": "tw2.jqplugins.flot",
-            "tw2": "tw2.jqplugins.gritter",
-            "tw2": "tw2.jqplugins.ui",
-            "tw2": "tw2.jquery",
-            "tw2": "tw2.sqla",
-            "twisted": "Twisted",
-            "twitter": "python_twitter",
-            "txclib": "transifex_client",
-            "u115": "115wangpan",
-            # "unidecode": "Unidecode", # This doesn't work on my Ubuntu machine.
-            "universe": "ansible_universe",
-            "usb": "pyusb",
-            "useless": "useless.pipes",
-            "userpass": "auth_userpass",
-            "utilities": "automakesetup.py",
-            "utkik": "aino_utkik",
-            "uwsgidecorators": "uWSGI",
-            "valentine": "ab",
-            "validate": "configobj",
-            "version": "chartio",
-            "virtualenvapi": "ar_virtualenv_api",
-            "vyatta": "brocade_plugins",
-            "webdav": "Zope2",
-            "weblogolib": "weblogo",
-            "webob": "WebOb",
-            "websocket": "websocket_client",
-            "webtest": "WebTest",
-            "werkzeug": "Werkzeug",
-            "wheezy": "wheezy.caching",
-            "wheezy": "wheezy.core",
-            "wheezy": "wheezy.http",
-            "wikklytext": "tiddlywebwiki",
-            "winreg": "future",
-            "winrm": "pywinrm",
-            "workflow": "Alfred_Workflow",
-            "wsmeext": "WSME",
-            "wtforms": "WTForms",
-            "wtfpeewee": "wtf_peewee",
-            "xdg": "pyxdg",
-            "xdist": "pytest_xdist",
-            "xmldsig": "pysaml2",
-            "xmlenc": "pysaml2",
-            "xmlrpc": "pies2overrides",
-            "xmpp": "xmpppy",
-            "xstatic": "XStatic_Font_Awesome",
-            "xstatic": "XStatic_jQuery",
-            "xstatic": "XStatic_jquery_ui",
-            "yaml": "PyYAML",
-            "z3c": "z3c.autoinclude",
-            "z3c": "z3c.caching",
-            "z3c": "z3c.form",
-            "z3c": "z3c.formwidget.query",
-            "z3c": "z3c.objpath",
-            "z3c": "z3c.pt",
-            "z3c": "z3c.relationfield",
-            "z3c": "z3c.traverser",
-            "z3c": "z3c.zcmlhook",
-            "zmq": "pyzmq",
-            "zopyx": "zopyx.textindexng3"}
-        self.reversed_module_aliases = {v: k for k, v in self.module_aliases.items()}
+        # Import-name-to-pip-name resolution. Replaced in main() once
+        # options.python_command is known, so the resolver probes the
+        # interpreter that will actually run the user's script. empty()
+        # rather than build() here: Options() is constructed before
+        # python_command is known and in every test, and build() spawns a
+        # probe subprocess. See
+        # docs/superpowers/specs/2026-08-12-module-alias-resolver-design.md
+        self.aliases: alias_index.AliasIndex = alias_index.empty(self.my_dir)
         # Project-specific module names that are not on PyPI and never will be. Python 2
         # names and system-package cases now live in stdlib_index.py instead.
         self.known_bad_imports: set[str] = {"snakeClass", "GPUampcor", "pathfinding_salvo_rework",
@@ -1487,6 +285,17 @@ def main() -> None:
         "Standard library index: %d names from Python %d.%d (source: %s)",
         len(options.stdlib.names), options.stdlib.python_version[0],
         options.stdlib.python_version[1], options.stdlib.source)
+    # Rebuild the alias index against the interpreter that will actually run the
+    # user's script. Options() seeded it with alias_index.empty(), whose cache is
+    # tagged with *veny's own* interpreter version; leaving that in place would
+    # let a cache entry recorded under one Python version short-circuit
+    # resolution for a target on another. This must happen before anything
+    # resolves, i.e. before list_packages() below.
+    options.aliases = alias_index.build(options.python_command, options.my_dir)
+    if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
+        "Alias index: %d overrides, %d cached names, tagged %s",
+        len(options.aliases.overrides), len(options.aliases.cache.entries),
+        options.aliases.cache.interpreter_tag)
 
     if not ud.safe_is_dir(options.my_dir):
         if not options.rawlog: logging.info("Directory %s does not exist yet, so it is being created.", options.my_dir)
@@ -1577,7 +386,9 @@ def main() -> None:
     list_packages(options)
 
     if not options.rawlog:
-        logging.info("Uninstalled imports: %s", options.uninstalled_imports)
+        # Report the import names, which are what the user wrote in their source.
+        logging.info("Uninstalled imports: %s",
+                     sorted(record.import_name for record in options.uninstalled_imports))
         if options.bad_imports:
             logging.warning("Bad imports: %s", options.bad_imports)
         warn_about_system_packages(options)
@@ -4343,30 +3154,66 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
                          options.python_script, ", ".join(options.loaded_custom_modules))
 
 
+def resolve_records(options: Options, import_names: Iterable[str]) -> set[ResolvedImport]:
+    """Resolve import names into records carrying their pip names.
+
+    Args:
+        options:      Options object; reads options.aliases.
+        import_names: Import names as they would be written in source.
+
+    Returns:
+        One record per name. A name the index cannot resolve keeps its own
+        spelling as the pip name, because no evidence is not the same as
+        contrary evidence.
+    """
+    records: set[ResolvedImport] = set()
+    for name in import_names:
+        resolution = options.aliases.resolve(name)
+        primary = resolution.candidates[0].pip_name if resolution.candidates else name
+        records.add(ResolvedImport(import_name=name, pip_name=primary))
+    return records
+
+
+def requirement_records(pip_names: Iterable[str]) -> set[ResolvedImport]:
+    """Wrap pip names from a requirements file as records.
+
+    These arrive already as pip names, and nothing maps a pip name back to an
+    import name, so the same string is the best available answer for both.
+
+    Args:
+        pip_names: Package names as written in the extra requirements file.
+
+    Returns:
+        One record per name, with import_name == pip_name.
+    """
+    return {ResolvedImport(import_name=name, pip_name=name) for name in pip_names}
+
+
 def add_dependencies(options: Options) -> None:
     """Add dependencies for uninstalled imports."""
     # Create a copy to iterate over since we'll be modifying the set
     initial_packages = options.uninstalled_imports.copy()
 
-    for package in initial_packages:
-        if package in options.also_needs:
-            dependencies = options.also_needs[package]
+    for record in initial_packages:
+        if record.import_name in options.also_needs:
+            dependencies = options.also_needs[record.import_name]
             if not options.rawlog:
-                logging.info("Adding dependencies for %s: %s", package, dependencies)
-            options.uninstalled_imports.update(dependencies)
+                logging.info("Adding dependencies for %s: %s", record.import_name, dependencies)
+            options.uninstalled_imports.update(resolve_records(options, dependencies))
 
     # Handle nested dependencies by repeating this process until no new dependencies are added.
     added = True
     while added:
         added = False
         current_packages = options.uninstalled_imports.copy()
-        for package in current_packages:
-            if package in options.also_needs:
-                dependencies = options.also_needs[package]
-                new_dependencies = set(dependencies) - options.uninstalled_imports
+        for record in current_packages:
+            if record.import_name in options.also_needs:
+                dependencies = options.also_needs[record.import_name]
+                new_dependencies = resolve_records(options, dependencies) - options.uninstalled_imports
                 if new_dependencies:
                     if not options.rawlog:
-                        logging.info("Adding nested dependencies for %s: %s", package, new_dependencies)
+                        logging.info("Adding nested dependencies for %s: %s", record.import_name,
+                                     sorted(r.import_name for r in new_dependencies))
                     options.uninstalled_imports.update(new_dependencies)
                     added = True
 
@@ -4417,14 +3264,19 @@ def resolve_and_verify(
     return None
 
 
-def check_packages_in_venv(options: Options, package: str | None = None,
+def check_packages_in_venv(options: Options, record: ResolvedImport | None = None,
                            venv_dir: str | os.PathLike[str] | None = None) -> bool:
     """
     Check if packages can be imported in the specified virtual environment.
 
+    This runs import_module() inside the venv, so it always wants the *import*
+    name, never the pip name. Reading it off the record is what retires the old
+    reverse-alias inversion, which lost every import name that shared a pip name
+    with another and silently returned the pip name for anything it did not know.
+
     Args:
         options:    Options object containing settings and paths.
-        package:    Optional package name to check. If None, checks all uninstalled imports.
+        record:     Optional resolved import to check. If None, checks all uninstalled imports.
         venv_dir:   Optional path to the virtual environment directory. If None, uses options.venv_dir.
 
     Returns:
@@ -4442,11 +3294,11 @@ def check_packages_in_venv(options: Options, package: str | None = None,
         venv_python = (venv_dir / "Scripts" / "python.exe").absolute()
     else:  # Do NOT use resolve() here because this is a symlink and resolve() would break it
         venv_python = (venv_dir / "bin" / "python").absolute()
-    if package:
-        packages = [options.reversed_module_aliases.get(package, package)]
+    if record is not None:
+        packages = [record.import_name]
     else:
         use_pip_list(options)
-        packages = [options.reversed_module_aliases.get(pkg, pkg) for pkg in options.uninstalled_imports]
+        packages = sorted(entry.import_name for entry in options.uninstalled_imports)
     if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Packages to check in venv: %s", packages)
     python_code = f"""
 import sys
@@ -4529,20 +3381,27 @@ def split_imports(options: Options) -> None:
     with tempfile.TemporaryDirectory() as venv_dir:
         venv.create(venv_dir, with_pip=True)
         for i, imp in enumerate(options.all_imports, 1):
-            package_name = options.module_aliases.get(imp, imp)
+            resolution = options.aliases.resolve(imp)
+            # No candidate at all means no evidence either way, not a bad name,
+            # so fall back to the import name and let pip have its say.
+            primary = resolution.candidates[0].pip_name if resolution.candidates else imp
+            if logging.getLogger().isEnabledFor(logging.DEBUG):
+                logging.debug("Resolved import %s to candidates %s", imp,
+                              [c.pip_name for c in resolution.candidates])
+            record = ResolvedImport(import_name=imp, pip_name=primary)
             if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Checking if import %s is installed or uninstalled", imp)
             if imp in options.custom_modules.keys():
                 if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Custom module %s has path %s", imp, os.fspath(options.custom_modules[imp]))
                 status_str = f"{ud.ANSI_CYAN}YES - custom module{ud.ANSI_RESET}"
-            elif check_packages_in_venv(options, package=package_name,
+            elif check_packages_in_venv(options, record=record,
                                         venv_dir=venv_dir):
                 if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Module %s can be imported in venv", imp)
                 status_str = f"{ud.ANSI_GREEN}YES -     installed{ud.ANSI_RESET}"
-                options.installed_imports.add(imp)
+                options.installed_imports.add(record)
             else:
                 if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Import %s is not installed and not a custom module", imp)
                 status_str = " NO - NOT installed"
-                options.uninstalled_imports.add(package_name)
+                options.uninstalled_imports.add(record)
             if not options.rawlog:
                 logging.info("Checking import %-*s : %*d/%d - %s",
                              max_length,  # width for imp (left-aligned)
@@ -4550,7 +3409,7 @@ def split_imports(options: Options) -> None:
                              max_digits,  # width for i (right-aligned)
                              i, options.total_imports, status_str)
     if getattr(options.args, "reqs", False):
-        options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
+        options.uninstalled_imports = options.uninstalled_imports.union(requirement_records(options.extra_requirements.keys()))
     add_dependencies(options)
     return
 
@@ -4567,15 +3426,14 @@ def list_packages(options: Options) -> None:
                                        generating requirements.
             - script_dir:              Directory containing the script, used for logging.
             - all_imports:             Set to be populated with all imports found.
-            - installed_imports:       Set to be populated with installed imports.
-            - uninstalled_imports:     Set to be populated with uninstalled imports.
+            - installed_imports:       Set to be populated with ResolvedImport records.
+            - uninstalled_imports:     Set to be populated with ResolvedImport records.
             - known_bad_imports:       Set of known bad imports to filter out.
             - stdlib:                  StdlibIndex used to skip standard library imports.
             - custom_modules:          Dictionary mapping custom module names to their file paths.
-            - module_aliases:          Dictionary mapping import names to package names
-                                       (e.g., 'PIL' -> 'Pillow').
-            - reversed_module_aliases: Reverse mapping of module_aliases for checking installations.
-            - also_needs:              Dictionary mapping packages to their dependencies.
+            - aliases:                 AliasIndex resolving import names to pip names
+                                       (e.g., 'cv2' -> 'opencv-python').
+            - also_needs:              Dictionary mapping import names to their dependencies.
 
     Returns:
         None - modifies options to include all imports found in the specified Python script or directory.
@@ -4724,12 +3582,13 @@ def install_packages_simultaneously(options: Options) -> bool:
 def install_packages_individually(options: Options) -> bool:
     """Install packages individually in the virtual environment."""
     failed_packages = []
-    for package in options.uninstalled_imports:
-        if not install_package(package, options):
-            failed_packages.append(package)
+    # pip is being invoked, so this is the one place that wants the pip name.
+    for record in options.uninstalled_imports:
+        if not install_package(record.pip_name, options):
+            failed_packages.append(record.pip_name)
 
     if failed_packages:
-        logging.error("Failed to install the following packages: %s", ", ".join(failed_packages))
+        logging.error("Failed to install the following packages: %s", ", ".join(sorted(failed_packages)))
         return False
     else:
         if not options.rawlog: logging.info("All packages installed successfully.")
@@ -4792,7 +3651,9 @@ def recover_pip_versions(output: str, options: Options) -> None:
 def pretty_packages_list(options: Options) -> str:
     """Create a pretty string of the first five package names and the number of remaining packages."""
     maxnum = 5
-    packages_list = sorted(list(options.uninstalled_imports))
+    # Pip names, so this string matches the requirements.txt contents that
+    # find_match_dir_in_cache() compares a cached venv folder against.
+    packages_list = sorted(record.pip_name for record in options.uninstalled_imports)
     if len(packages_list) > maxnum:
         first_five = "-".join(packages_list[:maxnum])
         suffix = f"-and-{len(packages_list) - maxnum}-more"
@@ -4807,7 +3668,7 @@ def use_pip_list(options: Options) -> None:
     """Use the pip list command to find all installed packages and use that pip list to modify the uninstalled and installed imports. Add packages from the options.extra_requirements dictionary if "--reqs" is specified as a runtime argument."""
     # Add packages from the options.extra_requirements dictionary if "--reqs" is specified as a runtime argument.
     if getattr(options.args, "reqs", False):
-        options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
+        options.uninstalled_imports = options.uninstalled_imports.union(requirement_records(options.extra_requirements.keys()))
     if len(options.pip_list) == 0:
         # Create virtual environment
         venv.create(options.test_dir, with_pip=True)
@@ -4854,14 +3715,22 @@ print("\\n".join(installed_packages + available_modules + list(builtin_modules))
         pip_list_filename = options.my_dir / f"pip_list_{options.timestamp}.txt"
         pip_list_filename.write_text("\n".join(options.pip_list), encoding=ud.DEFAULT_ENCODING)
 
-    new_uninstalled_imports = options.installed_imports - set(options.pip_list)
+    # options.pip_list holds distribution names, module names and builtin module
+    # names all mixed together, so it is matched against the import name -- which
+    # is exactly what the pre-record code compared, since installed_imports used
+    # to hold import names.
+    known_names = set(options.pip_list)
+    new_uninstalled_imports = {record for record in options.installed_imports
+                               if record.import_name not in known_names}
     options.uninstalled_imports = options.uninstalled_imports.union(new_uninstalled_imports)
     if options.uninstalled_imports:
-        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("new_uninstalled_imports = %s", new_uninstalled_imports)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
+            "new_uninstalled_imports = %s",
+            sorted(record.import_name for record in new_uninstalled_imports))
     options.installed_imports = options.installed_imports - new_uninstalled_imports
     # Once again, add packages from the options.extra_requirements dictionary if "--reqs" is specified as a runtime argument. (Do this again, just in case they got removed from the uninstalled_imports set above.)
     if getattr(options.args, "reqs", False):
-        options.uninstalled_imports = options.uninstalled_imports.union(options.extra_requirements.keys())
+        options.uninstalled_imports = options.uninstalled_imports.union(requirement_records(options.extra_requirements.keys()))
 
 
 def parse_extra_requirements(options: Options) -> None:
@@ -4909,8 +3778,9 @@ def write_requirements_file_with_extras(options: Options) -> None:
     assert options.uninstalled_imports is not None, "options.uninstalled_imports must be set"
     assert options.extra_requirements  is not None, "options.extra_requirements must be set"
     with open(options.requirements_file, "w") as f:
-        # Write the packages in alphabetical order so the requirements file is deterministic.
-        for idx, package in enumerate(sorted(options.uninstalled_imports)):
+        # Write the packages in alphabetical order so the requirements file is
+        # deterministic. pip reads this file, so it gets the pip names.
+        for idx, package in enumerate(sorted(record.pip_name for record in options.uninstalled_imports)):
             if package in options.extra_requirements:
                 version_spec = options.extra_requirements[package]
                 if version_spec:
@@ -5193,7 +4063,8 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
                 number_unknown_packages = int(pretty_list[-2].split("-")[0])
                 break
             known_packages.add(item)
-        missing_packages = options.uninstalled_imports - known_packages
+        # Folder names are built from pretty_packages_list(), which uses pip names.
+        missing_packages = {record.pip_name for record in options.uninstalled_imports} - known_packages
         if len(missing_packages) <= number_unknown_packages:
             venv_folders.append(folder)
     # Loop through possibly valid venv folders and compare requirements in detail.
@@ -5202,7 +4073,8 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
         this_requirements_file: Path = options.my_dir / folder / "requirements.txt"
         with open(this_requirements_file, "r") as file:
             requirements = set(file.read().splitlines())
-        if options.uninstalled_imports.issubset(requirements):
+        # requirements.txt holds pip names, so compare pip names against it.
+        if {record.pip_name for record in options.uninstalled_imports}.issubset(requirements):
             match = re.search(r'(\d{8})-(\d{6})', folder.name)
             if not match:
                 if logging.getLogger().isEnabledFor(logging.DEBUG):

@@ -1,6 +1,11 @@
 import logging
+import subprocess
+import venv
+from pathlib import Path
 
+import alias_index
 import stdlib_index
+import univ_defs as ud
 import veny
 from alias_index import Candidate, Resolution, Source
 
@@ -231,3 +236,185 @@ def test_empty_resolution_never_touches_the_installer():
     )
     assert result is None
     assert tried == []
+
+
+def _index_with(overrides):
+    """Build an AliasIndex that resolves only from the given overrides.
+
+    Args:
+        overrides: import name -> pip name mapping to seed the index with.
+
+    Returns:
+        An offline AliasIndex with an in-memory cache and no seed entries, so
+        resolution is fully determined by the test rather than by whatever
+        happens to sit in the developer's ~/veny directory.
+    """
+    return alias_index.AliasIndex(
+        overrides=dict(overrides),
+        cache=alias_index.AliasCache(
+            path=Path("/nonexistent/alias_cache.json"),
+            interpreter_tag="3.12",
+            entries={},
+            rejections={},
+        ),
+        installed={},
+        pypi=None,
+        seed={},
+    )
+
+
+def test_options_no_longer_carries_an_alias_table():
+    # The whole point of the change: the 1,219-line literal is gone, and with
+    # it the reverse map whose {v: k} inversion silently dropped every import
+    # name that shared a pip name with another.
+    options = veny.Options()
+    assert not hasattr(options, "module_aliases")
+    assert not hasattr(options, "reversed_module_aliases")
+
+
+def test_options_alias_index_is_offline_and_unprobed():
+    # Options() is built in every test and on every --help run, before the
+    # target interpreter is even known. If this were alias_index.build(), each
+    # construction would fork a probe subprocess and open PyPI sockets.
+    options = veny.Options()
+    assert isinstance(options.aliases, alias_index.AliasIndex)
+    assert options.aliases.pypi is None
+    assert options.aliases.installed == {}
+
+
+def test_resolved_import_record_carries_both_names():
+    # The old code put pip names in one set and import names in another, so
+    # every consumer had to guess which kind of string it held.
+    record = veny.ResolvedImport(import_name="cv2", pip_name="opencv-python")
+    assert record.import_name == "cv2"
+    assert record.pip_name == "opencv-python"
+
+
+def test_split_imports_stores_both_names_on_the_record(monkeypatch):
+    # The bug this retires: split_imports used to add the *pip* name to
+    # uninstalled_imports, so downstream import checks were handed
+    # "widget-lib-pypi" when they needed "widgetlib".
+    options = veny.Options()
+    options.aliases = _index_with({"widgetlib": "widget-lib-pypi"})
+    options.all_imports = {"widgetlib"}
+    monkeypatch.setattr(venv, "create", lambda *a, **k: None)
+    monkeypatch.setattr(veny, "check_packages_in_venv", lambda *a, **k: False)
+
+    veny.split_imports(options)
+
+    assert options.uninstalled_imports == {
+        veny.ResolvedImport(import_name="widgetlib", pip_name="widget-lib-pypi")
+    }
+    assert options.installed_imports == set()
+
+
+def test_split_imports_falls_back_to_the_import_name_when_nothing_resolves(monkeypatch):
+    # An unresolvable import must still be recorded, not crash on
+    # candidates[0] and not vanish from the install list.
+    options = veny.Options()
+    options.aliases = _index_with({})
+    options.all_imports = {"mysterylib"}
+    monkeypatch.setattr(venv, "create", lambda *a, **k: None)
+    monkeypatch.setattr(veny, "check_packages_in_venv", lambda *a, **k: False)
+
+    veny.split_imports(options)
+
+    assert options.uninstalled_imports == {
+        veny.ResolvedImport(import_name="mysterylib", pip_name="mysterylib")
+    }
+
+
+def _captured_venv_check_code(monkeypatch):
+    """Capture the source that check_packages_in_venv runs inside the venv.
+
+    Args:
+        monkeypatch: pytest's monkeypatch fixture.
+
+    Returns:
+        A one-element list that will hold the generated source after
+        check_packages_in_venv is called.
+    """
+    captured: list[str] = []
+
+    def fake_run(command, *args, **kwargs):
+        captured.append(command[-1])
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="All 1 (out of 1) packages imported successfully.\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    return captured
+
+
+def test_check_packages_in_venv_import_checks_the_import_name(monkeypatch, tmp_path):
+    # It runs `import_module(...)` inside a venv, so it needs "cv2". Handing
+    # it "opencv-python" -- which is what the old reversed_module_aliases
+    # inversion returned for anything it did not know -- makes the import
+    # always fail and reports every package as uninstalled.
+    options = veny.Options()
+    captured = _captured_venv_check_code(monkeypatch)
+
+    veny.check_packages_in_venv(
+        options,
+        record=veny.ResolvedImport(import_name="cv2", pip_name="opencv-python"),
+        venv_dir=tmp_path,
+    )
+
+    assert "'cv2'" in captured[0]
+    assert "opencv-python" not in captured[0]
+
+
+def test_check_packages_in_venv_without_a_record_checks_every_import_name(
+    monkeypatch, tmp_path
+):
+    # The bulk branch had the same inversion bug, and it is the branch the
+    # cached-venv validation path uses.
+    options = veny.Options()
+    options.uninstalled_imports = {
+        veny.ResolvedImport(import_name="cv2", pip_name="opencv-python"),
+        veny.ResolvedImport(import_name="yaml", pip_name="PyYAML"),
+    }
+    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
+    captured = _captured_venv_check_code(monkeypatch)
+
+    veny.check_packages_in_venv(options, venv_dir=tmp_path)
+
+    assert "'cv2'" in captured[0]
+    assert "'yaml'" in captured[0]
+    assert "opencv-python" not in captured[0]
+    assert "PyYAML" not in captured[0]
+
+
+def test_alias_index_is_serialized_as_structured_data():
+    # Serializing via str()/repr() turns lookups into substring matching, which
+    # silently returns wrong answers instead of raising.
+    index = alias_index.AliasIndex(
+        overrides={"cv2": "my-opencv"},
+        cache=alias_index.AliasCache(
+            path=Path("/tmp/none.json"),
+            interpreter_tag="3.12",
+            entries={},
+            rejections={},
+        ),
+        installed={},
+        pypi=None,
+    )
+    payload = ud.to_jsonable(index)
+    assert isinstance(payload, dict)
+    assert payload["overrides"] == {"cv2": "my-opencv"}
+    assert payload["interpreter_tag"] == "3.12"
+    assert payload["cache_path"] == "/tmp/none.json"
+    assert payload["offline"] is True
+
+
+def test_resolved_import_round_trips_through_json():
+    # uninstalled_imports is written to the last-used options file and read
+    # back by check_venv_dir. Without a handler each record stringifies to
+    # "ResolvedImport(import_name='cv2', ...)", so the issubset() check against
+    # the cached set can never match and veny rebuilds a venv every run.
+    record = veny.ResolvedImport(import_name="cv2", pip_name="opencv-python")
+    restored = ud.from_jsonable(ud.to_jsonable({record}))
+    assert restored == {record}
