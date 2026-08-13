@@ -61,6 +61,11 @@ def test_pep503_equivalent_spellings_collapse_to_one_candidate():
     # PyPI normalizes runs of "-", "_", "." and case, so "skill-metrics" and
     # "skill_metrics" name the same project. Task 6 attempts at most 3
     # candidates; two spellings of one project must not consume two of them.
+    # Same-source ties survive as the first-encountered spelling (see rank()'s
+    # docstring), so the exact surviving string is asserted, not just
+    # membership -- a regression that stored the normalized form instead of
+    # an original spelling would still satisfy a membership check but hand
+    # pip a name the evidence never confirmed.
     ranked = alias_index.rank(
         [
             _candidate("skill-metrics", Source.PYPI_CONFIRMED),
@@ -68,7 +73,25 @@ def test_pep503_equivalent_spellings_collapse_to_one_candidate():
         ]
     )
     assert len(ranked) == 1
-    assert ranked[0].pip_name in ("skill-metrics", "skill_metrics")
+    assert ranked[0].pip_name == "skill-metrics"
+
+
+def test_pep503_equivalent_spellings_collapse_across_tiers():
+    # The single-tier case above ties on source, so first-encountered order
+    # decides the survivor -- that alone wouldn't catch a regression that
+    # broke the strongest-evidence rule for equivalent spellings specifically.
+    # This crosses tiers: INSTALLED must still win over PYPI_CONFIRMED even
+    # though the two candidates are spelled differently, and the survivor
+    # must carry INSTALLED's own original spelling, not PYPI_CONFIRMED's.
+    ranked = alias_index.rank(
+        [
+            _candidate("skill-metrics", Source.PYPI_CONFIRMED),
+            _candidate("skill_metrics", Source.INSTALLED),
+        ]
+    )
+    assert len(ranked) == 1
+    assert ranked[0].pip_name == "skill_metrics"
+    assert ranked[0].source is Source.INSTALLED
 
 
 def test_rank_returns_a_tuple_not_a_generator():
@@ -677,6 +700,33 @@ def test_rejected_candidate_is_filtered_out(tmp_path):
     index = _index(tmp_path, pypi=pypi)
     index.reject("numpy", "numpy", "import_failed")
     assert index.resolve("numpy").candidates == ()
+
+
+def test_rejection_normalizes_across_pep503_equivalent_spellings(tmp_path):
+    # rank() dedupes PYPI_CONFIRMED candidates on the PEP 503 normalized
+    # name, so the rejection filter must compare on the same normalized
+    # form -- otherwise a project rejected as one spelling (e.g.
+    # "foo_bar") could be re-offered under an equivalent one (e.g.
+    # "foo-bar"), burning an install attempt on the exact project that was
+    # just proven not to work. "foo_bar" is not in SEED, so the only
+    # possible candidate here comes from the PyPI tier.
+    pypi = _StubPyPI({"foo-bar": frozenset({"foo_bar"})})
+    index = _index(tmp_path, pypi=pypi)
+    index.reject("foo_bar", "foo_bar", "import_failed")
+    assert index.resolve("foo_bar").candidates == ()
+
+
+def test_cache_hit_rejected_under_an_equivalent_spelling_falls_through(tmp_path):
+    # Same requirement as the PYPI_CONFIRMED case above, but for the CACHE
+    # short-circuit itself: the cache branch's own rejection check must also
+    # compare on the normalized name, not the raw string.
+    pypi = _StubPyPI({})
+    index = _index(tmp_path, installed={"cv2": ["opencv-python-headless"]}, pypi=pypi)
+    index.confirm("cv2", "opencv_python")
+    index.reject("cv2", "opencv-python", "import_failed")
+    names = [c.pip_name for c in index.resolve("cv2").candidates]
+    assert "opencv_python" not in names
+    assert names == ["opencv-python-headless"]
 
 
 def test_rejected_cache_hit_falls_through_to_the_rest_of_the_walk(tmp_path):

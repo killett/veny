@@ -106,9 +106,13 @@ def rank(candidates: Iterable[Candidate]) -> tuple[Candidate, ...]:
     attempts at most 3 candidates, and two spellings of one project would
     burn two of those three attempts re-installing the same thing. Dedup
     keys on the PEP 503 normalized name; the surviving candidate keeps its
-    original ``pip_name`` string, since that is what is passed to pip.
-    Ordering is (source, pip_name) so that identical inputs always produce an
-    identical order, which keeps runs reproducible and logs comparable.
+    original ``pip_name`` string, since that is what is passed to pip. When
+    two equivalent spellings tie on source, the first one encountered in
+    ``candidates`` survives (deterministic given a deterministic input order,
+    but not lexicographic -- see ``strongest.get`` below). The final ordering
+    across distinct projects is (source, pip_name) of each surviving
+    candidate, so that identical inputs always produce an identical order,
+    which keeps runs reproducible and logs comparable.
 
     Args:
         candidates: Candidates in any order, possibly naming the same project
@@ -811,7 +815,10 @@ class AliasIndex:
         release), it must not keep being re-offered, so the cache branch is
         checked against the recorded rejections before it short-circuits.
         Every other tier contributes without stopping the walk, so weaker
-        evidence can never hide stronger evidence.
+        evidence can never hide stronger evidence. Rejections are compared on
+        the PEP 503 normalized name, matching rank()'s dedup key, so a name
+        rejected under one spelling (e.g. "skill-metrics") cannot be
+        re-offered under an equivalent one (e.g. "skill_metrics").
 
         Args:
             import_name: The import name as written in the user's source.
@@ -832,7 +839,13 @@ class AliasIndex:
                 ),
             )
         cached = self.cache.get(import_name)
-        if cached is not None and cached not in self.cache.rejected_names(import_name):
+        rejected_normalized = {
+            _normalize_pip_name(name) for name in self.cache.rejected_names(import_name)
+        }
+        if (
+            cached is not None
+            and _normalize_pip_name(cached) not in rejected_normalized
+        ):
             return Resolution(
                 import_name,
                 (
@@ -864,10 +877,13 @@ class AliasIndex:
             )
         found.extend(self._confirmed_by_pypi(import_name))
 
-        rejected = self.cache.rejected_names(import_name)
         return Resolution(
             import_name,
-            tuple(c for c in rank(found) if c.pip_name not in rejected),
+            tuple(
+                c
+                for c in rank(found)
+                if _normalize_pip_name(c.pip_name) not in rejected_normalized
+            ),
         )
 
     def _confirmed_by_pypi(self, import_name: str) -> list[Candidate]:
