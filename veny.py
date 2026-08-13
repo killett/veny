@@ -3275,11 +3275,15 @@ def check_packages_in_venv(options: Options, record: ResolvedImport | None = Non
     with another and silently returned the pip name for anything it did not know.
 
     With no record (the bulk branch), it probes the venv's own interpreter once
-    for its installed distributions, and for each uninstalled import prefers the
-    top-level names that distribution actually declares over the record's own
-    import_name. When the venv's metadata does not know the distribution, or the
-    probe degrades, it falls back to record.import_name -- the check is never
-    skipped.
+    for its installed distributions. A record whose own import_name is among the
+    names that distribution declares is checked under that name alone: it came
+    from the user's source, so it is exactly what must import. Only a record
+    carrying a pip spelling rather than an import name (a --reqs line, a
+    dependency name) is checked against the distribution's declared top-level
+    names, any one of which passing is a pass -- that metadata is all there is
+    to go on for such a record. When the venv's metadata does not know the
+    distribution, or the probe degrades, it falls back to record.import_name --
+    the check is never skipped.
 
     Args:
         options:    Options object containing settings and paths.
@@ -3319,11 +3323,21 @@ def check_packages_in_venv(options: Options, record: ResolvedImport | None = Non
         alternatives = []
         for entry in sorted(options.uninstalled_imports, key=lambda r: r.import_name):
             top_levels = import_names_by_dist.get(alias_index.normalize_pip_name(entry.pip_name))
-            # Found: check what the venv says this distribution provides (any
-            # one importing is a pass). Not found, or the probe degraded to an
-            # empty mapping: fall back to the import_name -- today's behaviour.
-            # Never skip the check.
-            alternatives.append(sorted(top_levels) if top_levels else [entry.import_name])
+            # The record's own import_name being one the distribution declares
+            # means it came from the user's source: that exact name is what has
+            # to import, and widening to the distribution's whole top-level
+            # list would be fail-open (setuptools declares _distutils_hack,
+            # which imports whether or not setuptools does). Only when the
+            # record carries a pip spelling instead of an import name (a --reqs
+            # line, a dependency name) is the metadata all there is to go on.
+            # Not found, or the probe degraded to an empty mapping: fall back
+            # to the import_name -- today's behaviour. Never skip the check.
+            if top_levels and entry.import_name in top_levels:
+                alternatives.append([entry.import_name])
+            elif top_levels:
+                alternatives.append(sorted(top_levels))
+            else:
+                alternatives.append([entry.import_name])
     if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Packages to check in venv: %s", alternatives)
     python_code = f"""
 import sys

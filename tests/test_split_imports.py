@@ -555,6 +555,44 @@ def test_check_packages_in_venv_passes_when_any_top_level_name_imports(
     assert veny.check_packages_in_venv(options, venv_dir=tmp_path) is True
 
 
+def test_check_packages_in_venv_bulk_branch_checks_the_records_own_import_name(
+    monkeypatch, tmp_path
+):
+    # When the record's import_name is one the distribution declares, it came
+    # from the user's source and is the name that must actually import.
+    # Widening the check to the distribution's whole top-level list makes it
+    # fail-open: setuptools declares ['_distutils_hack', 'pkg_resources',
+    # 'setuptools'] and, sorted, '_distutils_hack' is tried first and
+    # short-circuits, so the name the user wrote is never tested. This is the
+    # final gate -- it drops the venv's 'failed-' prefix and decides whether a
+    # cached venv is reusable -- so a false pass hands over a venv that cannot
+    # run the script.
+    options = veny.Options()
+    options.uninstalled_imports = {
+        veny.ResolvedImport(import_name="setuptools", pip_name="setuptools"),
+    }
+    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
+    monkeypatch.setattr(
+        alias_index,
+        "probe_interpreter",
+        lambda python, timeout=30.0: (
+            "3.12",
+            {
+                "_distutils_hack": ["setuptools"],
+                "pkg_resources": ["setuptools"],
+                "setuptools": ["setuptools"],
+            },
+        ),
+    )
+    # The broken half-install the user would be handed: the sibling top-level
+    # names import, the one that was asked for does not.
+    _run_check_against_fake_venv(
+        monkeypatch, importable={"_distutils_hack", "pkg_resources"}
+    )
+
+    assert veny.check_packages_in_venv(options, venv_dir=tmp_path) is False
+
+
 def test_check_packages_in_venv_still_fails_a_genuinely_missing_package(
     monkeypatch, tmp_path
 ):
