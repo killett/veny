@@ -15,7 +15,13 @@ from concurrent.futures import ThreadPoolExecutor
 import errno
 import re  # Used to precompile regexes for performance
 
-import alias_index  # One-way: univ_defs imports alias_index, never the reverse.
+# alias_index is imported lazily, inside the two serialization helpers that use
+# it. One-way: univ_defs imports alias_index, never the reverse -- and only when
+# something actually asks it to serialize one of alias_index's types. This file
+# is deployed standalone beside mydiff, myaudit, multireplace, treeview and
+# printall, each of which does "import univ_defs as ud"; importing alias_index
+# (and through it pypi_client) at module scope makes every one of those fail
+# with ModuleNotFoundError unless both modules are copied there too.
 
 # Version of univ_defs.py:
 __version__: Final[str] = "0.2.2"
@@ -5676,16 +5682,24 @@ def _to_jsonable(obj: Any, *, roundtrip: bool, _seen: set[int]) -> Any:
     # last-used options file and read back by veny's check_venv_dir(), whose
     # issubset() check could never match a set of stringified records.
     # (The equivalent StdlibIndex gap is still open; it falls through to str().)
-    if isinstance(obj, alias_index.ResolvedImport):
-        payload = {"import_name": obj.import_name, "pip_name": obj.pip_name}
-        return {"__type__": "resolved_import", **payload} if roundtrip else payload
-    if isinstance(obj, alias_index.AliasIndex):
-        return {
-            "overrides"       : dict(obj.overrides),
-            "interpreter_tag" : obj.cache.interpreter_tag,
-            "cache_path"      : os.fspath(obj.cache.path),
-            "offline"         : obj.pypi is None,
-        }
+    # Imported here, not at module scope: see the note beside the imports.
+    # Absent alongside a standalone univ_defs, there is nothing of its to
+    # serialize either, so the handlers are simply skipped.
+    try:
+        import alias_index
+    except ImportError:
+        alias_index = None  # type: ignore[assignment]
+    if alias_index is not None:
+        if isinstance(obj, alias_index.ResolvedImport):
+            payload = {"import_name": obj.import_name, "pip_name": obj.pip_name}
+            return {"__type__": "resolved_import", **payload} if roundtrip else payload
+        if isinstance(obj, alias_index.AliasIndex):
+            return {
+                "overrides"       : dict(obj.overrides),
+                "interpreter_tag" : obj.cache.interpreter_tag,
+                "cache_path"      : os.fspath(obj.cache.path),
+                "offline"         : obj.pypi is None,
+            }
     # re.Pattern (compiled regex)
     try:
         import re
@@ -5790,6 +5804,10 @@ def from_jsonable(obj: Any) -> Any:
             )
             return obj.get("value")
     if t == "resolved_import":
+        # Imported here, not at module scope: see the note beside the imports.
+        # Unlike _to_jsonable's optional handlers, this one is only reached by a
+        # payload that alias_index wrote, so its absence really is an error.
+        import alias_index
         return alias_index.ResolvedImport(import_name=obj.get("import_name", ""),
                                           pip_name=obj.get("pip_name", ""))
     if t == "recursion":
