@@ -324,6 +324,63 @@ def test_split_imports_falls_back_to_the_import_name_when_nothing_resolves(monke
     }
 
 
+class _CountingIndex:
+    """Wraps an AliasIndex and records every import name resolution was asked for."""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.resolved = []
+
+    def resolve(self, import_name):
+        self.resolved.append(import_name)
+        return self.inner.resolve(import_name)
+
+
+def test_only_genuinely_uninstalled_imports_are_resolved(monkeypatch):
+    # resolve() ran before both the custom-module check and the installed
+    # check, so every import paid for resolution before veny knew whether it
+    # needed a pip name at all. An unresolved name costs up to six PyPI project
+    # lookups (the name plus five mutations), each a metadata request plus up
+    # to two ranged wheel reads, at a 10 s read timeout. A local custom module
+    # never needs a pip name, and neither does an import that is installed.
+    options = veny.Options()
+    index = _CountingIndex(_index_with({"missingthing": "missing-thing-pypi"}))
+    options.aliases = index
+    options.all_imports = {"mycustom", "alreadyhere", "missingthing"}
+    options.custom_modules = {"mycustom": Path("/nowhere/mycustom.py")}
+    monkeypatch.setattr(venv, "create", lambda *a, **k: None)
+    monkeypatch.setattr(
+        veny,
+        "check_packages_in_venv",
+        lambda opts, record=None, venv_dir=None: record.import_name == "alreadyhere",
+    )
+
+    veny.split_imports(options)
+
+    assert index.resolved == ["missingthing"]
+    assert options.uninstalled_imports == {
+        veny.ResolvedImport(import_name="missingthing", pip_name="missing-thing-pypi")
+    }
+
+
+def test_an_import_reclassified_by_pip_list_gets_its_pip_name_resolved(monkeypatch):
+    # use_pip_list() moves an import back to uninstalled when pip's list does
+    # not know it, and those records go straight to pip. Now that split_imports
+    # no longer resolves installed imports, resolution has to happen here or
+    # pip is asked to install "cv2".
+    options = veny.Options()
+    options.aliases = _index_with({"cv2": "opencv-python"})
+    options.installed_imports = {veny.ResolvedImport(import_name="cv2", pip_name="cv2")}
+    options.pip_list = ["numpy"]  # Non-empty, so no probe venv is built.
+
+    veny.use_pip_list(options)
+
+    assert options.uninstalled_imports == {
+        veny.ResolvedImport(import_name="cv2", pip_name="opencv-python")
+    }
+    assert options.installed_imports == set()
+
+
 def _captured_venv_check_code(monkeypatch):
     """Capture the source that check_packages_in_venv runs inside the venv.
 

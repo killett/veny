@@ -3463,14 +3463,9 @@ def split_imports(options: Options) -> None:
     with tempfile.TemporaryDirectory() as venv_dir:
         venv.create(venv_dir, with_pip=True)
         for i, imp in enumerate(options.all_imports, 1):
-            resolution = options.aliases.resolve(imp)
-            # No candidate at all means no evidence either way, not a bad name,
-            # so fall back to the import name and let pip have its say.
-            primary = resolution.candidates[0].pip_name if resolution.candidates else imp
-            if logging.getLogger().isEnabledFor(logging.DEBUG):
-                logging.debug("Resolved import %s to candidates %s", imp,
-                              [c.pip_name for c in resolution.candidates])
-            record = ResolvedImport(import_name=imp, pip_name=primary)
+            # The import name is all either check below needs, and resolution is
+            # deliberately not done yet: see the else branch.
+            record = ResolvedImport(import_name=imp, pip_name=imp)
             if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Checking if import %s is installed or uninstalled", imp)
             if imp in options.custom_modules.keys():
                 if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Custom module %s has path %s", imp, os.fspath(options.custom_modules[imp]))
@@ -3479,11 +3474,27 @@ def split_imports(options: Options) -> None:
                                         venv_dir=venv_dir):
                 if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Module %s can be imported in venv", imp)
                 status_str = f"{ud.ANSI_GREEN}YES -     installed{ud.ANSI_RESET}"
+                # The pip name is left as the import name here because nothing
+                # needs it: an installed import is never handed to pip. If
+                # use_pip_list() later reclassifies this record, it resolves it.
                 options.installed_imports.add(record)
             else:
+                # Only a genuinely uninstalled import needs a pip name, so this
+                # is where resolution belongs. Resolving before the two checks
+                # above charged every import up to six PyPI project lookups (the
+                # name plus five mutations), each a metadata request plus up to
+                # two ranged wheel reads -- for local modules and already
+                # installed packages that never needed one.
+                resolution = options.aliases.resolve(imp)
+                # No candidate at all means no evidence either way, not a bad
+                # name, so fall back to the import name and let pip have its say.
+                primary = resolution.candidates[0].pip_name if resolution.candidates else imp
+                if logging.getLogger().isEnabledFor(logging.DEBUG):
+                    logging.debug("Resolved import %s to candidates %s", imp,
+                                  [c.pip_name for c in resolution.candidates])
                 if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Import %s is not installed and not a custom module", imp)
                 status_str = " NO - NOT installed"
-                options.uninstalled_imports.add(record)
+                options.uninstalled_imports.add(ResolvedImport(import_name=imp, pip_name=primary))
             if not options.rawlog:
                 logging.info("Checking import %-*s : %*d/%d - %s",
                              max_length,  # width for imp (left-aligned)
@@ -3802,14 +3813,22 @@ print("\\n".join(installed_packages + available_modules + list(builtin_modules))
     # is exactly what the pre-record code compared, since installed_imports used
     # to hold import names.
     known_names = set(options.pip_list)
-    new_uninstalled_imports = {record for record in options.installed_imports
-                               if record.import_name not in known_names}
+    stale_records = {record for record in options.installed_imports
+                     if record.import_name not in known_names}
+    # These records are about to be handed to pip, and split_imports() leaves an
+    # installed record's pip_name as its import name because nothing needed it
+    # until now. This is the moment it does, so resolve it here -- otherwise pip
+    # is asked to install "cv2".
+    new_uninstalled_imports = resolve_records(options, {record.import_name for record in stale_records})
     options.uninstalled_imports = options.uninstalled_imports.union(new_uninstalled_imports)
     if options.uninstalled_imports:
         if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
             "new_uninstalled_imports = %s",
             sorted(record.import_name for record in new_uninstalled_imports))
-    options.installed_imports = options.installed_imports - new_uninstalled_imports
+    # Remove the records as they were, not as they were re-resolved: resolution
+    # may have changed the pip_name, and a set difference on the new records
+    # would then leave the old ones behind in installed_imports.
+    options.installed_imports = options.installed_imports - stale_records
     # Once again, add packages from the options.extra_requirements dictionary if "--reqs" is specified as a runtime argument. (Do this again, just in case they got removed from the uninstalled_imports set above.)
     if getattr(options.args, "reqs", False):
         options.uninstalled_imports = options.uninstalled_imports.union(requirement_records(options.extra_requirements.keys()))
