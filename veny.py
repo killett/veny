@@ -4043,6 +4043,34 @@ def repair_unsatisfied_import(options: Options, record: ResolvedImport,
     return ResolvedImport(import_name=record.import_name, pip_name=winner.pip_name)
 
 
+def confirm_if_attributable(options: Options, record: ResolvedImport,
+                            installed_distributions: dict[str, frozenset[str]]) -> None:
+    """Cache a verified import only if the venv says the record's package provided it.
+
+    A passing import check proves the import *works*; it does not prove that
+    record.pip_name is what provided it. The import may come from a transitive
+    dependency, or from another requested distribution, while the record's own
+    pip name resolved wrongly-but-installably. A cache entry outranks every tier
+    except OVERRIDE on every later run, so confirming an attribution that was
+    never established writes durable misinformation -- the same defect class the
+    bulk check's source-name rule closes, on the one path it does not cover.
+
+    Args:
+        options:                 Options object; reads options.aliases.
+        record:                  The record whose import was just verified.
+        installed_distributions: Normalized distribution name -> the import names
+                                 it provides, from the venv's own metadata.
+    """
+    top_levels = installed_distributions.get(alias_index.normalize_pip_name(record.pip_name))
+    if top_levels is not None and record.import_name in top_levels:
+        options.aliases.confirm(record.import_name, record.pip_name)
+    elif logging.getLogger().isEnabledFor(logging.DEBUG):
+        logging.debug("Not caching %s -> %s: the venv imports %s but does not attribute "
+                      "it to that distribution (it declares %s).",
+                      record.import_name, record.pip_name, record.import_name,
+                      sorted(top_levels) if top_levels else "nothing")
+
+
 def verify_and_repair_imports(options: Options) -> None:
     """Record what the install actually provided, and repair what it did not.
 
@@ -4067,18 +4095,22 @@ def verify_and_repair_imports(options: Options) -> None:
                if record.import_name in from_source]
     if not records:
         return
+    # One probe, used by both branches: the bulk branch needs it to attribute a
+    # passing import to the distribution that actually provided it, and the
+    # repair branch needs it to tell "installed but does not provide this" from
+    # "never installed at all".
+    _, venv_distributions   = alias_index.probe_interpreter(options.venv_python)
+    installed_distributions = alias_index.import_names_by_distribution(venv_distributions)
     if check_packages_in_venv(options):
         # Every source-derived record is checked under its own import name, so
         # a bulk pass means each one of them really did import.
         for record in records:
-            options.aliases.confirm(record.import_name, record.pip_name)
+            confirm_if_attributable(options, record, installed_distributions)
         return
-    _, venv_distributions   = alias_index.probe_interpreter(options.venv_python)
-    installed_distributions = alias_index.import_names_by_distribution(venv_distributions)
     repaired: dict[ResolvedImport, ResolvedImport] = {}
     for record in records:
         if check_packages_in_venv(options, record=record):
-            options.aliases.confirm(record.import_name, record.pip_name)
+            confirm_if_attributable(options, record, installed_distributions)
             continue
         replacement = repair_unsatisfied_import(options, record, installed_distributions)
         if replacement != record:

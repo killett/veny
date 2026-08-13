@@ -897,6 +897,51 @@ def test_a_verified_import_is_written_to_the_alias_cache(monkeypatch, tmp_path):
     assert reloaded.get("yaml") == "PyYAML"
 
 
+def test_an_import_provided_by_another_distribution_is_not_confirmed(
+    monkeypatch, tmp_path
+):
+    # A passing import check proves the import *works*, not that the record's
+    # pip_name is what provided it. Here "thing" is really supplied by
+    # other-pkg -- a dependency, or another requested distribution -- while the
+    # record's own wrong-pkg resolved wrongly but installably. Confirming that
+    # writes a false CACHE entry, which outranks SEED, INSTALLED and
+    # PYPI_CONFIRMED on every later run and is durable.
+    index = _live_index(tmp_path)
+    record = veny.ResolvedImport(import_name="thing", pip_name="wrong-pkg")
+    options = _options_with_venv(tmp_path, index, [record])
+    fake = _FakeInstalledVenv(
+        provides={"wrong-pkg": "something-else", "other-pkg": "thing"},
+        installed=["wrong-pkg", "other-pkg"],
+    )
+    monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
+    monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
+    monkeypatch.setattr(veny, "install_into_venv", fake.install)
+    monkeypatch.setattr(veny, "uninstall_from_venv", fake.uninstall)
+
+    veny.verify_and_repair_imports(options)
+
+    assert index.cache.entries == {}
+
+
+def test_an_import_attributable_to_its_own_distribution_is_confirmed(
+    monkeypatch, tmp_path
+):
+    # The other side of the same rule: requiring attribution must not stop the
+    # ordinary case from being cached, or the CACHE tier is dead again.
+    index = _live_index(tmp_path)
+    record = veny.ResolvedImport(import_name="thing", pip_name="thing-pkg")
+    options = _options_with_venv(tmp_path, index, [record])
+    fake = _FakeInstalledVenv(
+        provides={"thing-pkg": "thing"}, installed=["thing-pkg"]
+    )
+    monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
+    monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
+
+    veny.verify_and_repair_imports(options)
+
+    assert index.cache.get("thing") == "thing-pkg"
+
+
 def test_an_import_the_batch_install_did_not_provide_is_repaired(
     monkeypatch, tmp_path
 ):
