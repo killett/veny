@@ -3274,6 +3274,13 @@ def check_packages_in_venv(options: Options, record: ResolvedImport | None = Non
     reverse-alias inversion, which lost every import name that shared a pip name
     with another and silently returned the pip name for anything it did not know.
 
+    With no record (the bulk branch), it probes the venv's own interpreter once
+    for its installed distributions, and for each uninstalled import prefers the
+    top-level names that distribution actually declares over the record's own
+    import_name. When the venv's metadata does not know the distribution, or the
+    probe degrades, it falls back to record.import_name -- the check is never
+    skipped.
+
     Args:
         options:    Options object containing settings and paths.
         record:     Optional resolved import to check. If None, checks all uninstalled imports.
@@ -3311,7 +3318,7 @@ def check_packages_in_venv(options: Options, record: ResolvedImport | None = Non
         import_names_by_dist = alias_index.import_names_by_distribution(venv_distributions)
         alternatives = []
         for entry in sorted(options.uninstalled_imports, key=lambda r: r.import_name):
-            top_levels = import_names_by_dist.get(alias_index._normalize_pip_name(entry.pip_name))
+            top_levels = import_names_by_dist.get(alias_index.normalize_pip_name(entry.pip_name))
             # Found: check what the venv says this distribution provides (any
             # one importing is a pass). Not found, or the probe degraded to an
             # empty mapping: fall back to the import_name -- today's behaviour.

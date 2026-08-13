@@ -98,13 +98,16 @@ class Resolution:
     candidates: tuple[Candidate, ...]
 
 
-def _normalize_pip_name(name: str) -> str:
+def normalize_pip_name(name: str) -> str:
     """Reduce a pip project name to its PEP 503 normalized form.
 
     PyPI treats runs of ``-``, ``_``, and ``.`` as equivalent and matches
     case-insensitively, so "skill-metrics" and "skill_metrics" name the same
-    project. This form is for comparison only -- pip always receives a
-    candidate's original ``pip_name``, never this normalized string.
+    project. This is the public contract callers rely on to compare two
+    spellings of a project name for equality: normalize both sides with this
+    function and compare the results. This form is for comparison only --
+    pip always receives a candidate's original ``pip_name``, never this
+    normalized string.
 
     Args:
         name: A pip project name.
@@ -140,7 +143,7 @@ def rank(candidates: Iterable[Candidate]) -> tuple[Candidate, ...]:
     """
     strongest: dict[str, Candidate] = {}
     for candidate in candidates:
-        key = _normalize_pip_name(candidate.pip_name)
+        key = normalize_pip_name(candidate.pip_name)
         existing = strongest.get(key)
         if existing is None or candidate.source < existing.source:
             strongest[key] = candidate
@@ -496,13 +499,13 @@ def import_names_by_distribution(
 
     Returns:
         Normalized distribution name -> the top-level import names it provides.
-        Keys are normalized with _normalize_pip_name so that a lookup by any
+        Keys are normalized with normalize_pip_name so that a lookup by any
         PEP 503 equivalent spelling succeeds.
     """
     inverted: dict[str, set[str]] = {}
     for import_name, distributions in packages.items():
         for distribution in distributions:
-            key = _normalize_pip_name(distribution)
+            key = normalize_pip_name(distribution)
             inverted.setdefault(key, set()).add(import_name)
     return {key: frozenset(names) for key, names in inverted.items()}
 
@@ -589,11 +592,11 @@ class AliasIndex:
             )
         cached = self.cache.get(import_name)
         rejected_normalized = {
-            _normalize_pip_name(name) for name in self.cache.rejected_names(import_name)
+            normalize_pip_name(name) for name in self.cache.rejected_names(import_name)
         }
         if (
             cached is not None
-            and _normalize_pip_name(cached) not in rejected_normalized
+            and normalize_pip_name(cached) not in rejected_normalized
         ):
             return Resolution(
                 import_name,
@@ -631,7 +634,7 @@ class AliasIndex:
             tuple(
                 c
                 for c in rank(found)
-                if _normalize_pip_name(c.pip_name) not in rejected_normalized
+                if normalize_pip_name(c.pip_name) not in rejected_normalized
             ),
         )
 
