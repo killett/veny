@@ -77,8 +77,8 @@ resolution would forfeit them.
 class Source(enum.Enum):        # ordered; lower value = stronger evidence
     OVERRIDE = 0                # ~/veny/module_aliases.toml, human intent
     CACHE = 1                   # ~/veny/module_aliases_cache.json, previously verified
-    INSTALLED = 2               # packages_distributions() on the target interpreter
-    SEED = 3                    # curated in-repo exceptions
+    SEED = 2                    # curated in-repo exceptions
+    INSTALLED = 3               # packages_distributions() on the target interpreter
     PYPI_CONFIRMED = 4          # project exists AND its wheel declares this top-level name
 
 @dataclass(frozen=True)

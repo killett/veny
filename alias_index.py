@@ -39,12 +39,20 @@ class Source(enum.IntEnum):
     name becomes a candidate only once wheel inspection confirms it provides the
     import name, at which point its source is PYPI_CONFIRMED. That keeps "never
     install an unverified guess" a structural property rather than a runtime check.
+
+    SEED outranks INSTALLED because INSTALLED names come from
+    packages_distributions(), i.e. whatever local packaging says, which is never
+    PyPI-confirmed and includes conda-forge spellings: on a conda or pixi system
+    Python, "import cv2" reports the distribution as "opencv", and
+    "pip install opencv" is a different, long-abandoned project. The seed is a
+    handful of curated, correct entries, so it cannot broadly mask local
+    metadata, and a wrong guess is corrected by installing and importing.
     """
 
     OVERRIDE = 0
     CACHE = 1
-    INSTALLED = 2
-    SEED = 3
+    SEED = 2
+    INSTALLED = 3
     PYPI_CONFIRMED = 4
 
 

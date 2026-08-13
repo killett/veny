@@ -474,7 +474,20 @@ def test_installed_metadata_and_seed_both_contribute(tmp_path):
         tmp_path, installed={"cv2": ["opencv-python-headless"]}, pypi=_StubPyPI({})
     )
     names = [c.pip_name for c in index.resolve("cv2").candidates]
-    assert names == ["opencv-python-headless", "opencv-python"]
+    assert sorted(names) == ["opencv-python", "opencv-python-headless"]
+
+
+def test_the_curated_seed_outranks_local_packaging_metadata(tmp_path):
+    # INSTALLED names come from packages_distributions(), which reports whatever
+    # local packaging says -- conda-forge names included -- and is never
+    # PyPI-confirmed. On a conda or pixi system Python, "import cv2" reports the
+    # distribution as "opencv", and "pip install opencv" is a different,
+    # long-abandoned project. The seed is ten curated, correct entries, so it
+    # cannot broadly mask local metadata, and since resolve_and_verify() was
+    # wired in, a wrong guess is corrected by installing and importing anyway.
+    index = _index(tmp_path, installed={"cv2": ["opencv"]}, pypi=None)
+    names = [c.pip_name for c in index.resolve("cv2").candidates]
+    assert names == ["opencv-python", "opencv"]
 
 
 def test_unconfirmed_mutation_never_becomes_a_candidate(tmp_path):
