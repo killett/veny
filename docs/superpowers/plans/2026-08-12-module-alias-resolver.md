@@ -814,7 +814,8 @@ git commit -m "feat: probe the target interpreter for installed distributions"
 **Acceptance Criteria:**
 - [ ] `PyPIClient.top_levels(name)` returns the declared top-level names, or `None` when the project does not exist or cannot be inspected
 - [ ] The smallest available wheel is selected
-- [ ] A suffix Range request is used; when the server honours it, the whole wheel is never transferred
+- [ ] An **absolute** tail Range request is used — `bytes={size - W}-{size - 1}`, computed from the declared size — and when the server honours it the whole wheel is never transferred. **Not a suffix range** (`bytes=-W`): `files.pythonhosted.org` answers `501 Unsupported client range` to those, which makes the whole PyPI tier inert. Found in review against the live CDN; a declared size that is absent, zero, or negative means "cannot inspect" and returns `None`
+- [ ] The metadata fetch and the wheel fetch carry **separate** byte caps. Reusing `MAX_WHEEL_BYTES` for both truncates large PyPI JSON payloads (`grpcio` is 8.8 MB) and silently blinds those projects
 - [ ] A server that ignores Range is accepted only below `MAX_WHEEL_BYTES` (5 MB); otherwise the candidate is abandoned (returns `None`)
 - [ ] `.dist-info`, `.data`, and `__pycache__` members are excluded; top-level single-file modules contribute their name without the `.py` suffix
 - [ ] Network errors return `None` and log at debug level, never raise

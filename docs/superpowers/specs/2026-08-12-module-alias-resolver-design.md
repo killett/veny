@@ -190,9 +190,19 @@ Select the smallest `.whl`. A wheel is a zip archive, and a zip's **central
 directory** — which lists every member path — sits at the end of the file.
 Therefore:
 
-1. One HTTP Range request for the trailing ~64 KB.
+1. One HTTP Range request for the trailing ~64 KB, addressed as an **absolute**
+   byte range computed from the declared size: `bytes={size - W}-{size - 1}`.
 2. Locate the end-of-central-directory record.
 3. Parse member paths and take their first path components.
+
+**Not a suffix range** (corrected 2026-08-12, found in review). The obvious
+spelling, `Range: bytes=-65536`, does not work against PyPI:
+`files.pythonhosted.org` answers `501 Unsupported client range` to any suffix
+range, while absolute ranges return `206` normally. Verified against the live
+CDN. Using a suffix range makes every real project fail to `None` and the entire
+PyPI tier inert. The declared `size` from the JSON payload supplies what the
+absolute form needs, so this costs nothing extra; a payload whose `size` is
+absent, zero, or negative simply cannot be inspected and returns `None`.
 
 Top-level names fall out of the listing alone. No member is decompressed and no
 multi-megabyte wheel is transferred; typical cost is one JSON request plus one
