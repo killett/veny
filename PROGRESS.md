@@ -13,12 +13,24 @@ actually imports).
 - Design doc: `docs/superpowers/specs/2026-08-12-module-alias-resolver-design.md`
   (approved 2026-08-12)
 - Implementation plan: `docs/superpowers/plans/2026-08-12-module-alias-resolver.md`
-  (8 tasks, all executed on branch `alias-index`, 23 commits)
+  (8 tasks plus a Task 9 whole-branch review pass, all executed on branch
+  `alias-index`, 30 commits)
+- Task 9 brief / report:
+  `.superpowers/sdd/2026-08-12-module-alias-resolver/task-9-brief.md`,
+  `.superpowers/sdd/2026-08-12-module-alias-resolver/task-9-report.md`
 - Task tracker: `docs/superpowers/plans/2026-08-12-module-alias-resolver.md.tasks.json`
 
-Outcome, verified: `veny.py` 5,475 → 4,379 lines; its `ruff check
-veny.py --statistics` count 624 → 302; 113 tests where the repo had 23
+Outcome, verified: `veny.py` 5,475 → 4,646 lines; its `ruff check
+veny.py --statistics` count 624 → 302; 137 tests where the repo had 23
 before this plan.
+
+Task 9 closed the final review's three Critical and five Important
+findings. The consequential one: `resolve_and_verify` had been built,
+tested and never called from production, so the cache was never written
+and two of the five evidence tiers were unreachable. It is now wired into
+`setup_virtualenv` via `verify_and_repair_imports`, which confirms what
+really imported and repairs what did not. See the Task 9 report for the
+wiring rationale and for two Minors deliberately left unfixed.
 
 **Next action:** fix `find_match_dir_in_cache` — it splits venv folder names
 on `-`, which cannot survive a hyphenated pip name (see Deferred items).
@@ -55,6 +67,22 @@ deferred list.
 
 ## Gotchas
 
+- A defect that lives in the **seam between two tasks** is invisible to
+  per-task review, because each task is individually correct. Task 6 built
+  `resolve_and_verify` and tested it; Task 8 wired resolution into
+  `split_imports`; nobody joined them, so the attempt loop had no production
+  caller through 113 green tests and a review of every task. Where two pieces
+  are meant to meet, write a test of the join itself (see
+  `test_setup_virtualenv_verifies_every_import_before_reporting_success`),
+  and be suspicious of any parameter or function that no production code
+  passes or calls (`build(offline=True)` was the same class of gap).
+- A check that widens what counts as a pass fails **open**. The bulk venv check
+  went from "this exact import name must import" to "any top-level name of the
+  distribution may import", which passes `setuptools` on `_distutils_hack` and
+  passes a wrongly resolved pip name on whatever it does provide. When
+  loosening a check to serve a new case (`--reqs` records carry pip spellings),
+  restrict the loosening to that case rather than applying it to everything —
+  `veny.source_import_names()` is what makes that distinction.
 - `sys.stdlib_module_names` lists **top-level names only** and is
   platform-independent — it includes `msvcrt` and `winreg` on Linux. Dotted
   imports must be normalized to their first component before lookup.
@@ -179,7 +207,7 @@ deferred list.
   now done — see the completed alias-resolver plan under Current work.
   `also_needs` itself was never part of that plan and stays open.)
 - The repository had no `tests/` directory before the stdlib work. Coverage
-  now stands at 113 tests (`tests/test_alias_index.py`,
+  now stands at 137 tests (`tests/test_alias_index.py`,
   `tests/test_pypi_client.py`, `tests/test_split_imports.py`,
   `tests/test_stdlib_index.py`); broader coverage of `veny.py` /
   `univ_defs.py` beyond what these plans touched remains open.
