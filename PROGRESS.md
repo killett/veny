@@ -268,6 +268,28 @@ deferred list.
   override file, so a malformed override is discovered later than it could
   be; `--reqs` may produce duplicate records when the resolve loop and
   `requirement_records` disagree on `pip_name`.
+- **`test_a_record_carrying_a_pip_spelling_is_never_repaired` does not
+  actually guard what it names.** It is supposed to pin the
+  `source_import_names` filter that stops `repair_unsatisfied_import`
+  uninstalling a good `--reqs` package whose "import name" is really a pip
+  name. But it sets `options.all_imports = set()`, so the function returns
+  before reaching the branch, and its fake's bulk check passes, so the
+  record never reaches the per-record path where the uninstall happens.
+  Delete the filter and all 153 tests still pass. **Production behaviour is
+  correct; the test is decorative.** Fix: give it a second record that
+  fails the bulk check, with `all_imports` naming only that second record —
+  then removing the filter uninstalls the package and the existing
+  `assert fake.uninstalled == []` fails. Found by mutation testing in the
+  final review, 2026-08-13.
+- `veny.py:3306`/`3521` — the `Provided by:` line reports the *succeeding*
+  alternative while `successes.append(alternatives[0])` records the first,
+  and `import_providers` unions across every such line. Provably equivalent
+  today, because `report_providers=True` is only ever set with a single
+  one-name group. If the bulk path ever enables that flag, both need a
+  group index. Same latent shape as the `details`-accumulation note above.
+- Attribution keys on top-level module names, since `packages_distributions()`
+  maps `foo` and not `foo.bar`. A dotted import name attributes to nothing
+  and skips the cache write — fails closed, correct direction, untested.
 
 ## Open questions
 
