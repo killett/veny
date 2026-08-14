@@ -276,18 +276,38 @@ def test_a_probe_failure_reports_an_unknown_interpreter_tag(monkeypatch):
     assert packages == {}
 
 
-def test_a_machine_scoped_import_failure_is_not_persisted(tmp_path):
+def test_a_machine_scoped_import_failure_is_remembered_only_in_session(tmp_path):
     # "opencv-python installed, but libGL.so.1 is missing" is a fact about the
     # machine, not about the package. Persisting it as a rejection makes
     # resolve() filter the correct package on this machine forever -- including
     # after the user installs libgl1 -- and the cache outranks every tier except
     # OVERRIDE. stdlib_index.NEEDS_SYSTEM_PACKAGE models the same class of
     # problem and answers it with a report, not a suppression.
+    #
+    # But forgetting it *immediately* is also wrong: resolve() then re-ranks the
+    # name that was just uninstalled back to position 0, so veny re-downloads and
+    # re-installs a package it has already proven unusable, and burns one of its
+    # three attempts on it. So: remembered in memory, never written.
     path = tmp_path / "cache.json"
     cache = AliasCache.load(path, interpreter_tag="3.12")
     cache.reject("cv2", "opencv-python", "import_unavailable")
-    assert cache.rejected_names("cv2") == frozenset()
+    assert cache.rejected_names("cv2") == frozenset({"opencv-python"})
     assert not path.exists()
+    assert AliasCache.load(path, interpreter_tag="3.12").rejected_names("cv2") == frozenset()
+
+
+def test_a_session_rejection_is_not_leaked_to_disk_by_a_later_confirm(tmp_path):
+    # confirm() saves the whole cache. If the in-session rejection lived in the
+    # same store as the durable ones, the very next confirm -- which is exactly
+    # what follows a successful repair -- would write it out, and the machine's
+    # missing library would become a permanent fact about the package after all.
+    path = tmp_path / "cache.json"
+    cache = AliasCache.load(path, interpreter_tag="3.12")
+    cache.reject("cv2", "opencv-python", "import_unavailable")
+    cache.confirm("cv2", "opencv-python-headless")
+    reloaded = AliasCache.load(path, interpreter_tag="3.12")
+    assert reloaded.get("cv2") == "opencv-python-headless"
+    assert reloaded.rejected_names("cv2") == frozenset()
 
 
 def test_a_package_that_simply_lacks_the_import_is_still_persisted(tmp_path):

@@ -1165,7 +1165,17 @@ def test_a_machine_scoped_failure_leaves_no_persisted_rejection(
     # genuinely be the answer -- but persisting a rejection suppresses the
     # correct package on this machine on every later run, including after the
     # user installs libgl1. The cache outranks every tier except OVERRIDE.
-    index = _live_index(tmp_path, seed={"cv2": "opencv-python-headless"})
+    #
+    # The seeding matters: opencv-python is deliberately still resolvable (from
+    # the seed, and headless from the target interpreter's metadata), so if the
+    # failure were forgotten immediately rather than for the run, resolve() would
+    # re-rank the name just uninstalled back to position 0 and veny would
+    # re-download and re-install a ~90 MB wheel it has already proven unusable.
+    index = _live_index(
+        tmp_path,
+        seed={"cv2": "opencv-python"},
+        installed={"cv2": ["opencv-python-headless"]},
+    )
     record = veny.ResolvedImport(import_name="cv2", pip_name="opencv-python")
     options = _options_with_venv(tmp_path, index, [record])
     fake = _FakeInstalledVenv(
@@ -1181,16 +1191,17 @@ def test_a_machine_scoped_failure_leaves_no_persisted_rejection(
 
     veny.verify_and_repair_imports(options)
 
-    # Still removed, and the next candidate still tried.
+    # Removed once, and the next candidate tried -- not the same unusable wheel
+    # re-installed because the failure was forgotten the instant it happened.
     assert fake.uninstalled == ["opencv-python"]
     assert fake.attempted == ["opencv-python-headless"]
-    # But nothing about opencv-python is remembered.
-    assert index.cache.rejected_names("cv2") == frozenset()
-    assert not any(
-        "opencv-python" == name
-        for names in index.cache.rejections.values()
-        for name in names
-    )
+    # Remembered for the rest of this run...
+    assert index.cache.rejected_names("cv2") == frozenset({"opencv-python"})
+    # ...and nowhere else: the durable store is untouched, on disk and in memory.
+    assert index.cache.rejections == {}
+    assert alias_index.AliasCache.load(
+        tmp_path / "alias_cache.json", interpreter_tag="3.12"
+    ).rejected_names("cv2") == frozenset()
 
 
 def test_a_package_that_lacks_the_import_is_still_rejected_durably(

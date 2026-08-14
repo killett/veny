@@ -184,12 +184,19 @@ _REJECTION_KINDS: Final[frozenset[str]] = frozenset(
     {"import_failed", "install_failed", "import_unavailable"}
 )
 
-# Only a durable fact about the package itself is worth remembering. A failed
-# install may be a network blip, and an import that failed because *this
-# machine* lacks a shared library says nothing about the package: the same
-# release imports fine once the operating-system package is installed, and on
-# any other machine that already has it.
+# Only a durable fact about the package itself is worth writing down. An import
+# that failed because *this machine* lacks a shared library says nothing about
+# the package: the same release imports fine once the operating-system package
+# is installed, and on any other machine that already has it.
 _PERSISTED_REJECTION_KINDS: Final[frozenset[str]] = frozenset({"import_failed"})
+
+# ...but it is still worth not repeating within one run. A failed *install* is
+# excluded even from that: a batch install fails wholesale when any one
+# requirement is bad, so retrying the same name on its own is often exactly what
+# succeeds.
+_REMEMBERED_REJECTION_KINDS: Final[frozenset[str]] = frozenset(
+    {"import_failed", "import_unavailable"}
+)
 
 
 class AliasOverrideError(Exception):
@@ -248,17 +255,24 @@ class AliasCache:
     unknown version -- is how cross-version poisoning starts.
 
     Attributes:
-        path:            Where the cache is stored.
-        interpreter_tag: Version tag entries must match to be used, e.g. "3.12",
-                         or None when the target interpreter is unknown.
-        entries:         import name -> {"pip_name": str, "python": str}.
-        rejections:      import name -> {pip names that installed but did not import}.
+        path:               Where the cache is stored.
+        interpreter_tag:    Version tag entries must match to be used, e.g. "3.12",
+                            or None when the target interpreter is unknown.
+        entries:            import name -> {"pip_name": str, "python": str}.
+        rejections:         import name -> {pip names that installed but did not
+                            contain it}. Durable, and written to disk.
+        session_rejections: import name -> {pip names that failed for a reason
+                            this machine owns, not the package}. Deliberately a
+                            separate store: _save() writes only ``rejections``,
+                            so a later confirm() -- which is exactly what follows
+                            a successful repair -- cannot leak these to disk.
     """
 
     path: Path
     interpreter_tag: str | None
     entries: dict[str, dict[str, str]]
     rejections: dict[str, list[str]]
+    session_rejections: dict[str, list[str]] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: Path, interpreter_tag: str | None) -> AliasCache:
@@ -344,7 +358,11 @@ class AliasCache:
         return entry["pip_name"]
 
     def rejected_names(self, import_name: str) -> frozenset[str]:
-        """Return pip names already known to install without providing this import.
+        """Return pip names already known not to satisfy this import.
+
+        Both stores are consulted: a name proven unusable earlier in this run is
+        just as pointless to re-install as one proven wrong in an earlier run.
+        Only the durable store survives to the next run.
 
         Args:
             import_name: The import name being resolved.
@@ -352,7 +370,9 @@ class AliasCache:
         Returns:
             The rejected pip names, empty if none were recorded.
         """
-        return frozenset(self.rejections.get(import_name, ()))
+        return frozenset(self.rejections.get(import_name, ())) | frozenset(
+            self.session_rejections.get(import_name, ())
+        )
 
     def confirm(self, import_name: str, pip_name: str) -> None:
         """Record that pip_name installed and provided import_name, and save.
@@ -375,28 +395,37 @@ class AliasCache:
             "pip_name": pip_name,
             "python": self.interpreter_tag,
         }
-        remaining = [
-            name for name in self.rejections.get(import_name, []) if name != pip_name
-        ]
-        if remaining:
-            self.rejections[import_name] = remaining
-        else:
-            self.rejections.pop(import_name, None)
+        for store in (self.rejections, self.session_rejections):
+            remaining = [
+                name for name in store.get(import_name, []) if name != pip_name
+            ]
+            if remaining:
+                store[import_name] = remaining
+            else:
+                store.pop(import_name, None)
         self._save()
 
     def reject(self, import_name: str, pip_name: str, kind: str) -> None:
         """Record a failed attempt, persisting only deterministic failures.
 
-        An "installed but does not contain this module" result is a fact about
-        the package and is persisted. A failed install may be transient -- a
-        network blip or an index outage -- so persisting it would permanently
-        blacklist a package that is actually correct. An import that failed
-        because this machine lacks a shared library ("import_unavailable") is a
-        fact about the machine, not the package: the same release imports fine
-        once the operating-system package is installed, so persisting it would
-        suppress the correct package here forever. Nothing at all is persisted
-        when the target interpreter's version is unknown, for the same reason as
-        confirm().
+        Three kinds, three lifetimes:
+
+        - "import_failed" -- installed and does not contain this module. A fact
+          about the package: remembered, and written to disk.
+        - "import_unavailable" -- installed and contains the module, but this
+          machine cannot load it (a missing shared library, an ABI mismatch). A
+          fact about the machine: remembered for the rest of this run, so the
+          same unusable wheel is not downloaded and installed again, but never
+          written, because the same release imports fine once the
+          operating-system package is installed. Persisting it would suppress
+          the correct package here forever.
+        - "install_failed" -- never installed. May be a network blip or an index
+          outage, and a batch install fails wholesale when any one requirement is
+          bad, so it is not remembered at all: retrying it alone is often exactly
+          the right move.
+
+        Nothing at all is recorded when the target interpreter's version is
+        unknown, for the same reason as confirm().
 
         Args:
             import_name: The import name being resolved.
@@ -411,7 +440,7 @@ class AliasCache:
             raise ValueError(
                 f"Unknown rejection kind {kind!r}; expected one of {sorted(_REJECTION_KINDS)}."
             )
-        if kind not in _PERSISTED_REJECTION_KINDS:
+        if kind not in _REMEMBERED_REJECTION_KINDS:
             return
         if self.interpreter_tag is None:
             logging.debug(
@@ -421,10 +450,13 @@ class AliasCache:
                 import_name,
             )
             return
-        recorded = self.rejections.setdefault(import_name, [])
+        persist = kind in _PERSISTED_REJECTION_KINDS
+        store = self.rejections if persist else self.session_rejections
+        recorded = store.setdefault(import_name, [])
         if pip_name not in recorded:
             recorded.append(pip_name)
-        self._save()
+        if persist:
+            self._save()
 
     def _save(self) -> None:
         """Write the cache to disk, warning but not raising if that fails."""
@@ -740,7 +772,10 @@ class AliasIndex:
         Args:
             import_name: The import name being resolved.
             pip_name:    The candidate that failed.
-            kind:        Either "import_failed" or "install_failed".
+            kind:        One of "import_failed" (does not contain the module),
+                         "import_unavailable" (contains it, but this machine
+                         cannot load it) or "install_failed". See
+                         AliasCache.reject for what each one costs.
         """
         self.cache.reject(import_name, pip_name, kind)
 
