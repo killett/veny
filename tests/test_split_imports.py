@@ -174,6 +174,85 @@ def test_first_working_candidate_is_confirmed():
     assert import_calls == ["thing", "thing"]
 
 
+def test_a_candidate_credited_to_another_distribution_is_not_confirmed():
+    # The last unattributed confirm() in the branch. A repair candidate can drag
+    # in a transitive dependency that satisfies the import -- sklearn repaired to
+    # scikit-learn-extra, satisfied by its own scikit-learn dependency -- and the
+    # cache would then claim scikit-learn-extra provides sklearn, outranking
+    # every tier except OVERRIDE on every later run.
+    index = _RecordingIndex()
+    venv = _FakeVenv(provides={"scikit-learn-extra": "sklearn"})
+
+    def importer(name):
+        # It imports -- but the venv credits a different distribution for it.
+        return veny.ImportOutcome(
+            imported=True,
+            rejection_kind="",
+            detail="",
+            providers=frozenset({"scikit-learn"}),
+        )
+
+    winner = veny.resolve_and_verify(
+        Resolution(
+            "sklearn",
+            (
+                Candidate(
+                    pip_name="scikit-learn-extra",
+                    source=Source.PYPI_CONFIRMED,
+                    evidence="test",
+                ),
+            ),
+        ),
+        index,
+        installer=venv.install,
+        importer=importer,
+        uninstaller=venv.uninstall,
+    )
+
+    # The import works now, so the repair did succeed and the venv is usable:
+    # the candidate must still be returned, and must not be uninstalled.
+    assert winner.pip_name == "scikit-learn-extra"
+    assert venv.uninstalled == []
+    # But the attribution was never established, so nothing may be written down.
+    assert index.confirmed == []
+
+
+def test_a_candidate_credited_with_the_import_is_confirmed():
+    # The guard against over-tightening: attribution must not stop the ordinary
+    # repair from being cached, or the CACHE tier is dead on this path.
+    # The spelling is deliberately not identical -- PyPI treats runs of -, _ and
+    # . as equivalent, and the venv's metadata may report either.
+    index = _RecordingIndex()
+    venv = _FakeVenv(provides={"skill-metrics": "skill_metrics"})
+
+    def importer(name):
+        return veny.ImportOutcome(
+            imported=True,
+            rejection_kind="",
+            detail="",
+            providers=frozenset({"skill_metrics"}),
+        )
+
+    veny.resolve_and_verify(
+        Resolution(
+            "skill_metrics",
+            (
+                Candidate(
+                    pip_name="skill-metrics",
+                    source=Source.PYPI_CONFIRMED,
+                    evidence="test",
+                ),
+            ),
+        ),
+        index,
+        installer=venv.install,
+        importer=importer,
+        uninstaller=venv.uninstall,
+    )
+
+    assert index.confirmed == [("skill_metrics", "skill-metrics")]
+
+
 def test_candidate_that_installs_but_does_not_import_is_uninstalled():
     # Leaving it behind pollutes the venv and can shadow the correct package.
     index = _RecordingIndex()
@@ -796,11 +875,24 @@ class _FakeInstalledVenv:
             for p in self.installed
         )
 
+    def providers_of(self, import_name):
+        """The distributions this venv credits with providing an import name."""
+        return frozenset(
+            alias_index.normalize_pip_name(p)
+            for p in self.installed
+            if self.provides.get(p) == import_name and p not in self.unusable
+        )
+
     def outcome(self, options, import_name, venv_dir=None):
         """Stand in for import_outcome_in_venv."""
         self.import_checks.append(import_name)
         if self.imports(import_name):
-            return veny.ImportOutcome(imported=True, rejection_kind="", detail="")
+            return veny.ImportOutcome(
+                imported=True,
+                rejection_kind="",
+                detail="",
+                providers=self.providers_of(import_name),
+            )
         if any(
             self.provides.get(p) == import_name and p in self.unusable
             for p in self.installed
@@ -1130,6 +1222,86 @@ def test_a_working_import_reports_no_rejection(monkeypatch, tmp_path):
     outcome = veny.import_outcome_in_venv(options, "cv2")
 
     assert outcome.imported is True
+
+
+def test_a_successful_import_reports_which_distribution_provided_it(
+    monkeypatch, tmp_path
+):
+    # The seam between import_outcome_in_venv and the script it generates. If it
+    # stops asking the venv who provided the import, every attribution gate
+    # downstream is fed an empty set and silently stops caching anything -- or,
+    # under a different mistake, stops gating. Checked against a distribution
+    # that really is installed (pytest is running this), so the assertion is
+    # about real importlib.metadata output rather than a stub of it.
+    options = veny.Options()
+    options.my_dir = tmp_path
+    options.set_venv_dir(tmp_path / "venv")
+    _run_check_against_fake_venv(monkeypatch, importable={"pytest"})
+
+    outcome = veny.import_outcome_in_venv(options, "pytest")
+
+    assert outcome.imported is True
+    assert "pytest" in outcome.providers
+
+
+def test_a_per_record_success_credited_elsewhere_is_not_confirmed(
+    monkeypatch, tmp_path
+):
+    # The bulk check fails because of one record, so the run drops to per-record
+    # verification -- where another record's import can still be satisfied by a
+    # distribution other than the one it names. Same rule, second path.
+    index = _live_index(tmp_path)
+    broken = veny.ResolvedImport(import_name="alpha", pip_name="alpha-pkg")
+    misattributed = veny.ResolvedImport(import_name="beta", pip_name="beta-pkg")
+    options = _options_with_venv(tmp_path, index, [broken, misattributed])
+    fake = _FakeInstalledVenv(
+        # beta-pkg installed and provides something else entirely; beta really
+        # comes from other-pkg. alpha-pkg never installed, which is what makes
+        # the bulk check fail and forces the per-record path.
+        provides={"beta-pkg": "something-else", "other-pkg": "beta"},
+        installed=["beta-pkg", "other-pkg"],
+    )
+    monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
+    monkeypatch.setattr(veny, "import_outcome_in_venv", fake.outcome)
+    monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
+    monkeypatch.setattr(veny, "install_into_venv", fake.install)
+    monkeypatch.setattr(veny, "uninstall_from_venv", fake.uninstall)
+
+    veny.verify_and_repair_imports(options)
+
+    assert index.cache.entries == {}
+
+
+def test_a_second_candidates_machine_scoped_failure_is_also_not_persisted(
+    monkeypatch, tmp_path
+):
+    # Finding 1's scenario one attempt deeper: the *replacement* candidate is the
+    # one this machine cannot load. resolve_and_verify does its own rejecting, so
+    # a hardcoded "import_failed" there would durably blacklist a package whose
+    # only sin is that libGL is missing here -- the same permanent suppression,
+    # reached by the second candidate instead of the first.
+    index = _live_index(tmp_path, seed={"cv2": "opencv-python-headless"})
+    record = veny.ResolvedImport(import_name="cv2", pip_name="opencv-python")
+    options = _options_with_venv(tmp_path, index, [record])
+    fake = _FakeInstalledVenv(
+        provides={"opencv-python": "cv2", "opencv-python-headless": "cv2"},
+        installed=["opencv-python"],
+        unusable={"opencv-python", "opencv-python-headless"},
+    )
+    monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
+    monkeypatch.setattr(veny, "import_outcome_in_venv", fake.outcome)
+    monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
+    monkeypatch.setattr(veny, "install_into_venv", fake.install)
+    monkeypatch.setattr(veny, "uninstall_from_venv", fake.uninstall)
+
+    veny.verify_and_repair_imports(options)
+
+    # The second candidate was tried and removed, like the first.
+    assert fake.attempted == ["opencv-python-headless"]
+    assert fake.uninstalled == ["opencv-python", "opencv-python-headless"]
+    # And neither is remembered anywhere durable.
+    assert index.cache.rejections == {}
+    assert not (tmp_path / "alias_cache.json").exists()
 
 
 def test_a_missing_shared_library_is_reported_to_the_user(

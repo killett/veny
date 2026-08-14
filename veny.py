@@ -3239,11 +3239,19 @@ def add_dependencies(options: Options) -> None:
 
 
 # Import errors that are facts about *this machine*, not about the package: the
-# distribution installed and contains the module, but a shared library it links
-# against is not present. The same release imports fine once the operating-system
-# package is installed, so such a failure must never be remembered as a fault of
-# the package. stdlib_index.NEEDS_SYSTEM_PACKAGE models the same class of problem
-# and answers it with a report rather than a suppression; so does this.
+# distribution installed and contains the module, but the native code it links
+# against will not load here. The same release imports fine once the
+# operating-system package is installed, so such a failure must never be
+# remembered as a fault of the package. stdlib_index.NEEDS_SYSTEM_PACKAGE models
+# the same class of problem and answers it with a report rather than a
+# suppression; so does this.
+#
+# "undefined symbol" is deliberately included even though it also catches
+# native-ABI mismatches (a wheel built against a different numpy, say), which are
+# not strictly a missing system library. That errs toward retrying the next
+# candidate rather than durably suppressing this one, which is the safe
+# direction: the cost of a wrong guess here is one wasted attempt, while the cost
+# in the other direction is permanent suppression of a correct package.
 MACHINE_SCOPED_IMPORT_MARKERS: tuple[str, ...] = (
     "cannot open shared object file",
     "undefined symbol",
@@ -3258,6 +3266,12 @@ _SHARED_LIBRARY_PATTERN = re.compile(r"[\w.+-]+\.(?:so(?:\.[\w.]+)?|dylib|dll)",
 class ImportOutcome:
     """The result of asking a venv to import one name.
 
+    It reports what provided the import, not only that it imported, because
+    those are different questions and only the venv can answer the first one.
+    Everything that writes a cache entry needs the answer: "the import works" is
+    not "this package provided it", and a cache entry outranks every tier except
+    OVERRIDE on every later run.
+
     Attributes:
         imported:       Whether the import succeeded.
         rejection_kind: The alias_index rejection kind a failure warrants --
@@ -3265,11 +3279,15 @@ class ImportOutcome:
                         module, "import_unavailable" when this machine cannot
                         load it. Empty when the import succeeded.
         detail:         The ImportError text, for reporting.
+        providers:      The distributions the venv credits with providing the
+                        import, PEP 503 normalized. Empty when the import failed,
+                        or when the venv's metadata does not know.
     """
 
     imported: bool
     rejection_kind: str
     detail: str
+    providers: frozenset[str] = frozenset()
 
 
 def import_error_detail(output: str) -> str:
@@ -3285,6 +3303,24 @@ def import_error_detail(output: str) -> str:
                      if line.startswith("Import error: "))
 
 
+def import_providers(output: str) -> frozenset[str]:
+    """Return the distributions a venv import check credited with the import.
+
+    Args:
+        output: The check's stdout.
+
+    Returns:
+        The distribution names, PEP 503 normalized so they can be compared with
+        a candidate's pip name. Empty when the check reported none.
+    """
+    names: set[str] = set()
+    for line in output.splitlines():
+        if line.startswith("Provided by: "):
+            _, _, listed = line.removeprefix("Provided by: ").partition(": ")
+            names.update(alias_index.normalize_pip_name(name) for name in listed.split(",") if name)
+    return frozenset(names)
+
+
 def import_outcome_in_venv(options: Options, import_name: str,
                            venv_dir: str | os.PathLike[str] | None = None) -> ImportOutcome:
     """Import one name inside the venv and classify any failure.
@@ -3294,6 +3330,9 @@ def import_outcome_in_venv(options: Options, import_name: str,
     only the first is a fact about the package. Persisting the second suppresses
     the correct package on this machine forever -- including after the user
     installs the missing system library.
+
+    A successful import also reports which distributions the venv credits with
+    providing it, because "the import works" is not "this package provided it".
 
     A machine-scoped failure is reported to the user, naming the library, because
     an unexplained dead end is the worst of the available outcomes.
@@ -3307,9 +3346,10 @@ def import_outcome_in_venv(options: Options, import_name: str,
         The outcome, carrying the rejection kind any failure warrants.
     """
     imported, output = run_import_check_in_venv(venv_python_for(options, venv_dir),
-                                                [[import_name]])
+                                                [[import_name]], report_providers=True)
     if imported:
-        return ImportOutcome(imported=True, rejection_kind="", detail="")
+        return ImportOutcome(imported=True, rejection_kind="", detail="",
+                             providers=import_providers(output))
     detail = import_error_detail(output)
     if not any(marker in detail for marker in MACHINE_SCOPED_IMPORT_MARKERS):
         return ImportOutcome(imported=False, rejection_kind="import_failed", detail=detail)
@@ -3320,6 +3360,26 @@ def import_outcome_in_venv(options: Options, import_name: str,
                     "against the package.",
                     import_name, detail, library.group(0) if library else "unknown")
     return ImportOutcome(imported=False, rejection_kind="import_unavailable", detail=detail)
+
+
+def _credited_with_the_import(outcome: bool | ImportOutcome, pip_name: str) -> bool:
+    """Return True if the import may be recorded as provided by pip_name.
+
+    A bool importer carries no attribution at all, so it is taken at its word --
+    that is the contract its callers were written against, and narrowing it would
+    silently stop them caching anything.
+
+    Args:
+        outcome:  What the importer reported.
+        pip_name: The candidate that was just installed.
+
+    Returns:
+        Whether the evidence supports crediting pip_name with the import.
+    """
+    if not isinstance(outcome, ImportOutcome):
+        return True
+    wanted = alias_index.normalize_pip_name(pip_name)
+    return any(alias_index.normalize_pip_name(name) == wanted for name in outcome.providers)
 
 
 def resolve_and_verify(
@@ -3364,7 +3424,19 @@ def resolve_and_verify(
             continue
         outcome = importer(resolution.import_name)
         if outcome.imported if isinstance(outcome, ImportOutcome) else outcome:
-            index.confirm(resolution.import_name, candidate.pip_name)
+            # The import works, so this candidate is the answer for this run
+            # either way. Whether it is written down depends on whether the venv
+            # credits *it* with providing the import: a candidate can drag in a
+            # transitive dependency that satisfies the import, and caching that
+            # is the same durable misinformation confirm_if_attributable()
+            # refuses to write on the other two paths.
+            if _credited_with_the_import(outcome, candidate.pip_name):
+                index.confirm(resolution.import_name, candidate.pip_name)
+            else:
+                logging.debug("Not caching %s -> %s: the venv credits %s with providing it.",
+                              resolution.import_name, candidate.pip_name,
+                              sorted(outcome.providers) if isinstance(outcome, ImportOutcome)
+                              else "something else")
             return candidate
         logging.debug(
             "%s installed but did not provide %s; removing it.",
@@ -3397,14 +3469,18 @@ def venv_python_for(options: Options, venv_dir: str | os.PathLike[str] | None = 
     return (venv_dir / "bin" / "python").absolute()
 
 
-def run_import_check_in_venv(venv_python: Path,
-                             alternatives: list[list[str]]) -> tuple[bool, str]:
+def run_import_check_in_venv(venv_python: Path, alternatives: list[list[str]],
+                             report_providers: bool = False) -> tuple[bool, str]:
     """Ask a venv's own interpreter to import each group of alternative names.
 
     Args:
-        venv_python:  The venv interpreter to run the check in.
-        alternatives: One group per thing to check. A group passes if any one of
-                      its names imports.
+        venv_python:      The venv interpreter to run the check in.
+        alternatives:     One group per thing to check. A group passes if any one
+                          of its names imports.
+        report_providers: Also report which distributions the venv credits with
+                          each successful import. Off by default because only the
+                          verification path needs it, and it costs a
+                          packages_distributions() scan inside the venv.
 
     Returns:
         Whether every group imported, and the check's stdout -- which carries the
@@ -3416,6 +3492,14 @@ def run_import_check_in_venv(venv_python: Path,
     python_code = f"""
 import sys
 from importlib import import_module
+report_providers = {report_providers!r}
+providers = {{}}
+if report_providers:
+    try:
+        from importlib.metadata import packages_distributions
+        providers = packages_distributions()
+    except Exception:
+        providers = {{}}
 successes = []
 failures = []
 details = []
@@ -3433,6 +3517,8 @@ for alternatives in {alternatives!r}:
             continue
     if ok:
         successes.append(alternatives[0])
+        if report_providers:
+            print("Provided by: " + package + ": " + ",".join(providers.get(package, [])))
     else:
         failures.append(alternatives[0])
 if failures:
@@ -4188,8 +4274,13 @@ def confirm_if_attributable(options: Options, record: ResolvedImport,
     dependency, or from another requested distribution, while the record's own
     pip name resolved wrongly-but-installably. A cache entry outranks every tier
     except OVERRIDE on every later run, so confirming an attribution that was
-    never established writes durable misinformation -- the same defect class the
-    bulk check's source-name rule closes, on the one path it does not cover.
+    never established writes durable misinformation.
+
+    This covers the two paths that verify an import veny did not itself just
+    install: the bulk pass and the per-record check. The third path --
+    resolve_and_verify(), which installs a candidate and then checks -- applies
+    the same rule through ImportOutcome.providers, because it is
+    dependency-injected and has no Options to probe the venv with.
 
     Args:
         options:                 Options object; reads options.aliases.
