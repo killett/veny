@@ -67,6 +67,16 @@ deferred list.
 
 ## Gotchas
 
+- Recording nothing and recording forever are both wrong for a failure whose
+  cause is environmental. veny keeps `import_unavailable` in a *separate
+  in-memory* store: filtered for the rest of the run so the same unusable wheel
+  is not re-downloaded, never written so the next run may try again. The
+  separation is load-bearing — a shared store would be flushed to disk by the
+  very next `confirm()` (`alias_index.AliasCache.session_rejections`).
+- When a test double stands in for the function under audit, the seam behind it
+  is unguarded. Patching `import_outcome_in_venv` in every repair test meant a
+  mutation deleting its `report_providers=True` stayed green across 150 tests.
+  If a double replaces X everywhere, one test must still exercise the real X.
 - A passing check proves the **behaviour**, not the **attribution**. "The
   import works" is not "this package provided it": it may come from a transitive
   dependency while the record's own pip name resolved wrongly-but-installably.
@@ -221,7 +231,7 @@ deferred list.
   now done — see the completed alias-resolver plan under Current work.
   `also_needs` itself was never part of that plan and stays open.)
 - The repository had no `tests/` directory before the stdlib work. Coverage
-  now stands at 147 tests (`tests/test_alias_index.py`,
+  now stands at 153 tests (`tests/test_alias_index.py`,
   `tests/test_pypi_client.py`, `tests/test_split_imports.py`,
   `tests/test_stdlib_index.py`); broader coverage of `veny.py` /
   `univ_defs.py` beyond what these plans touched remains open.
