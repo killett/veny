@@ -112,7 +112,6 @@ class Options(ek.Options):
         self.download_urls:                 list[Path] = []  # List of  URLs downloaded by the Python script.
         self.upload_urls:                   list[Path] = []  # List of  URLs uploaded   by the Python script.
         self.current_method_name:                  str = ""  # Name of the current method being executed.
-        self.args:           argparse.Namespace | None = None
         self.manual_instructions:                  str = f"""
 This program acts as a wrapper around Python to automate the creation of virtual environments and the installation of any required packages. Instead of typing "python3 script.py", you can type "{self.my_name} script.py" to run script.py in a virtual environment which has all the required packages.
 
@@ -246,7 +245,6 @@ def parse_arguments(options: Options) -> None:
 
     # Otherwise, parse the arguments and store them in options.args for later use.
     options.args = parser.parse_args()
-    assert options.args is not None  # for type-checkers
 
     # Print instructions for manually adding the alias to the shell configuration file, etc.
     if getattr(options.args, "manual", False):
@@ -4822,7 +4820,6 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
         None, but logs errors if the combination of flags is invalid, if no matching venv is found,
         or if the cached venv is invalid.
     """
-    assert options.args is not None  # For mypy
     if not getattr(options.args, "latest",    False) and \
        not getattr(options.args, "oldest",    False) and \
        not getattr(options.args, "last_used", False) and \

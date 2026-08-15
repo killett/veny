@@ -22,24 +22,32 @@ the JSON type registry emmykit gained in 0.4.0.
   (8 tasks, 0-7; Task 0 is the external emmykit release and blocks Tasks 3-7)
 - Task tracker: `docs/superpowers/plans/2026-08-14-emmykit-migration.md.tasks.json`
 
-The veny branch is built now but merged only after emmykit 0.4.0 exists, so
-that no known-degraded state reaches `main`.
+The branch was held back until emmykit 0.4.0 existed, so that no
+known-degraded state reached `main`.
 
-**Next action:** Migration complete. Tasks 0–7 are all done on branch
-`emmykit-migration`. `pyproject.toml` and `pixi.toml` pin
-`emmykit>=0.4.0,<1.0` (installed: 0.4.0); the `[pypi-exclude-newer]`
-override that exempts emmykit from the workspace's 7-day cooldown stays in
-`pixi.toml`. Full suite: 250 passed. `ruff check veny.py --statistics` and
-`mypy veny.py veny_json_types.py` are unchanged from the pre-pin baseline
-(301 / 30 errors respectively). A live run against a real script (installing
-PyYAML into a fresh/reused venv) succeeded end to end; see
-`.superpowers/sdd/2026-08-14-emmykit-migration/task-7-report.md` for full
-captured output. Both cross-repo prompts: the emmykit prompt
-(`docs/prompts/2026-08-14-emmykit-json-type-registry.md`) is done — emmykit
-0.4.0 is released and installed; the utilities prompt
+**Next action:** none on this plan. Tasks 0–7 are all complete and branch
+`emmykit-migration` is merged into `main` (14 commits, deleted after merge).
+`pyproject.toml` and `pixi.toml` pin `emmykit>=0.4.0,<1.0` (installed:
+0.4.0); the `[pypi-exclude-newer]` override that exempts emmykit from the
+workspace's 7-day cooldown stays in `pixi.toml` — without it the environment
+silently reverts to 0.3.4 on the next solve. Full suite: 252 passed. Scoped
+gates: 299 ruff findings in `veny.py`, 28 mypy errors across `veny.py` +
+`veny_json_types.py`. A live run against a real script (installing PyYAML
+into a fresh/reused venv) succeeded end to end, left the helper scripts in
+`~/veny` untouched, and wrote an options JSON carrying no `univ_defs` key and
+no `ResolvedImport(` repr strings.
+
+A follow-up on 2026-08-15 dropped veny's `Options.args` re-declaration and
+the two `assert options.args is not None` lines it forced, aligning veny with
+the empty-`Namespace` default emmykit chose deliberately — see the gotcha
+below. That is what moved the gates from 301/30 to 299/28 and the suite from
+250 to 252.
+
+Of the two cross-repo prompts, the emmykit one
+(`docs/prompts/2026-08-14-emmykit-json-type-registry.md`) is done — 0.4.0 is
+released and installed. The utilities one
 (`docs/prompts/2026-08-14-utilities-adopt-emmykit-scripts.md`) is still
-outstanding — see Deferred items. The branch has not been merged into
-`main`; that decision is left to the coordinator.
+outstanding; see Deferred items.
 
 **Previous topic (complete):** Venv-cache matching — design approved
 2026-08-14, plan complete
@@ -218,16 +226,24 @@ wiring rationale and for two Minors deliberately left unfixed.
   files in place while changes were stashed, and that rewrite then blocked
   `git stash pop`. Use `git worktree add` on a side path for any comparison
   against another commit or state instead of stashing.
-- emmykit's `Options.args` is typed `argparse.Namespace`, while `veny.Options`
-  re-declares it as `argparse.Namespace | None` (`veny.py:110` as of this
-  task; the exact line drifts as the file changes). mypy reports this as an
-  incompatible override, and it is expected — one of the 30 baseline mypy
-  errors on `veny.py`/`veny_json_types.py`. It is harmless today because
-  emmykit only ever assigns `.args`, never reads it, but veny's `| None`
-  re-declaration must stay: defaulting to an empty `argparse.Namespace`
-  instead would turn a loud `AttributeError` on an unparsed run into a
-  silent "every flag is False". The real fix belongs upstream, in emmykit —
-  annotate `Options.args` there as `argparse.Namespace | None = None`.
+- **`Options.args` defaults to an empty `argparse.Namespace`, not to `None`,
+  and that is upstream's deliberate choice — do not "restore" the `| None`
+  form.** emmykit inherited it from `univ_defs` commit `67e054a` (2026-04-04,
+  "Fixed various issues raised by mypy"), which flipped all six
+  `self.args: argparse.Namespace | None = None` declarations to
+  `argparse.Namespace = argparse.Namespace()` and deleted the
+  `assert options.args is not None  # to appease mypy` that the optional type
+  had forced. veny re-declared `| None` anyway until 2026-08-15, which cost an
+  incompatible-override error from mypy plus two more `assert options.args is
+  not None` lines; dropping the re-declaration removed all three.
+  The safety argument for `| None` does not survive contact with the code:
+  `getattr(None, "flag", False)` and `getattr(Namespace(), "flag", False)`
+  both return `False` without raising, and veny reads every flag through
+  `getattr` with a default. Direct access (`options.args.alias`) raises
+  `AttributeError` under either spelling. The one real difference is
+  assignment — `options.args.last_used = True` fails on `None` and succeeds on
+  an empty `Namespace` — which cannot arise today because `parse_arguments`
+  runs first in `main()`.
 - Recording nothing and recording forever are both wrong for a failure whose
   cause is environmental. veny keeps `import_unavailable` in a *separate
   in-memory* store: filtered for the rest of the run so the same unusable wheel
@@ -282,8 +298,8 @@ wiring rationale and for two Minors deliberately left unfixed.
   not the `src/` package layout described in the global CLAUDE.md. New modules
   must travel alongside those files.
 - `pixi run lint` and `pixi run typecheck` fail repo-wide on pre-existing
-  `veny.py` errors (301 ruff, 30 mypy across `veny.py` + `veny_json_types.py`,
-  as of 2026-08-14, post-emmykit-migration). The pre-commit `mypy` hook is
+  `veny.py` errors (299 ruff, 28 mypy across `veny.py` + `veny_json_types.py`,
+  as of 2026-08-15, after dropping veny's `Options.args` re-declaration). The pre-commit `mypy` hook is
   literally `mypy .` with `pass_filenames: false`, so it always checks the
   whole repo and
   **cannot pass** while this debt exists — it is not a gate a change can
@@ -479,12 +495,6 @@ wiring rationale and for two Minors deliberately left unfixed.
   `tests/test_pypi_client.py`, `tests/test_split_imports.py`,
   `tests/test_stdlib_index.py`); broader coverage of `veny.py` beyond what
   these plans touched remains open.
-- emmykit annotates `Options.args` as `argparse.Namespace` while
-  `veny.Options` re-declares it `argparse.Namespace | None`, which mypy
-  reports as an incompatible override; harmless today because emmykit never
-  reads `.args`, and veny's re-declaration must stay; the permanent fix is
-  to annotate emmykit's `Options.args` as `argparse.Namespace | None = None`
-  upstream.
 - Smaller items carried from the alias-resolver ledger, not worth their own
   paragraph: unused `_CONNECT_TIMEOUT`; a `.`-prefixed zip member yields
   `"."` as a top-level name; single-file extension modules (`.so`/`.pyd`)
