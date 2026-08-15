@@ -121,3 +121,9 @@ def test_read_manifest_returns_none_when_a_package_entry_is_not_a_mapping(
 def test_write_manifest_returns_false_when_the_directory_is_missing(tmp_path: Path) -> None:
     """A venv that cannot record itself is still usable now; it just will not be reused."""
     assert venv_cache.write_manifest(tmp_path / "absent", a_manifest()) is False
+
+
+def test_read_manifest_returns_none_for_invalid_utf8(tmp_path: Path) -> None:
+    """A truncated multi-byte UTF-8 sequence must degrade to a cache miss, not raise."""
+    (tmp_path / venv_cache.MANIFEST_FILENAME).write_bytes(b'{"schema_version": 1, "created": "\xff\xfe"}')
+    assert venv_cache.read_manifest(tmp_path) is None

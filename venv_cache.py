@@ -196,7 +196,7 @@ def write_manifest(venv_dir: str | os.PathLike[str], manifest: Manifest) -> bool
         ],
     }
     try:
-        with open(path, "w") as handle:
+        with open(path, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, sort_keys=True)
     except OSError as exc:
         logging.warning("Could not write %s (%s); this venv will not be reused.", path, exc)
@@ -220,9 +220,9 @@ def read_manifest(venv_dir: str | os.PathLike[str]) -> Manifest | None:
     """
     path = Path(venv_dir) / MANIFEST_FILENAME
     try:
-        with open(path) as handle:
+        with open(path, encoding="utf-8") as handle:
             payload = json.load(handle)
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         logging.info("No usable manifest at %s (%s).", path, exc)
         return None
     try:
