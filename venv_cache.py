@@ -11,10 +11,17 @@ building a virtual environment.
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 MAX_NAMED_PACKAGES: int = 5
+
+MANIFEST_FILENAME: str = "veny_manifest.json"
+SCHEMA_VERSION: int = 1
 
 _NORMALIZE_RE = re.compile(r"[-_.]+")
 
@@ -117,3 +124,133 @@ def parse_folder_name(name: str) -> FolderName | None:
         packages=frozenset(items),
         unnamed_count=unnamed_count,
     )
+
+
+@dataclass(frozen=True)
+class PackageRecord:
+    """One package as a built virtual environment holds it.
+
+    Attributes:
+        import_name:       The name as written in the user's source.
+        pip_name:          The name pip received, unnormalized.
+        installed_version: The version the venv reports, or None if unknown.
+        requested_spec:    The --reqs spec that asked for it, or None.
+    """
+
+    import_name: str
+    pip_name: str
+    installed_version: str | None
+    requested_spec: str | None
+
+
+@dataclass(frozen=True)
+class Manifest:
+    """What a cached virtual environment is.
+
+    Attributes:
+        schema_version:   The format version, checked on read.
+        created:          The creation stamp, "YYYYMMDD-HHMMSS".
+        veny_version:     veny's version when the venv was built. Diagnostic
+                          only; never matched on.
+        interpreter_tag:  The "major.minor" tag the venv was built for.
+        interpreter_path: The interpreter that built it.
+        packages:         What it holds, in the order written.
+    """
+
+    schema_version: int
+    created: str
+    veny_version: str
+    interpreter_tag: str
+    interpreter_path: str
+    packages: tuple[PackageRecord, ...]
+
+
+def write_manifest(venv_dir: str | os.PathLike[str], manifest: Manifest) -> bool:
+    """Write a manifest into a virtual environment directory.
+
+    Best effort by design: a venv whose manifest could not be written is still
+    usable for this run and merely absent from the cache next time.
+
+    Args:
+        venv_dir: The virtual environment directory.
+        manifest: What to record.
+
+    Returns:
+        True if the file was written.
+    """
+    path = Path(venv_dir) / MANIFEST_FILENAME
+    payload = {
+        "schema_version": manifest.schema_version,
+        "created": manifest.created,
+        "veny_version": manifest.veny_version,
+        "interpreter_tag": manifest.interpreter_tag,
+        "interpreter_path": manifest.interpreter_path,
+        "packages": [
+            {
+                "import_name": record.import_name,
+                "pip_name": record.pip_name,
+                "installed_version": record.installed_version,
+                "requested_spec": record.requested_spec,
+            }
+            for record in manifest.packages
+        ],
+    }
+    try:
+        with open(path, "w") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+    except OSError as exc:
+        logging.warning("Could not write %s (%s); this venv will not be reused.", path, exc)
+        return False
+    return True
+
+
+def read_manifest(venv_dir: str | os.PathLike[str]) -> Manifest | None:
+    """Read the manifest of a cached virtual environment.
+
+    Every failure returns None rather than raising. A cached venv is an
+    optimization, so an unreadable one costs a rebuild -- unlike the alias
+    override file, which is fatal because it carries the user's explicit intent.
+
+    Args:
+        venv_dir: The virtual environment directory.
+
+    Returns:
+        The manifest, or None if it is absent, unreadable, malformed, or of a
+        schema version this build does not understand.
+    """
+    path = Path(venv_dir) / MANIFEST_FILENAME
+    try:
+        with open(path) as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        logging.info("No usable manifest at %s (%s).", path, exc)
+        return None
+    try:
+        if payload["schema_version"] != SCHEMA_VERSION:
+            logging.info(
+                "Ignoring %s: schema version %s, this veny understands %d.",
+                path,
+                payload["schema_version"],
+                SCHEMA_VERSION,
+            )
+            return None
+        packages = tuple(
+            PackageRecord(
+                import_name=str(entry["import_name"]),
+                pip_name=str(entry["pip_name"]),
+                installed_version=entry["installed_version"],
+                requested_spec=entry["requested_spec"],
+            )
+            for entry in payload["packages"]
+        )
+        return Manifest(
+            schema_version=SCHEMA_VERSION,
+            created=str(payload["created"]),
+            veny_version=str(payload["veny_version"]),
+            interpreter_tag=str(payload["interpreter_tag"]),
+            interpreter_path=str(payload["interpreter_path"]),
+            packages=packages,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        logging.info("Ignoring %s: it is not a manifest this veny can read (%s).", path, exc)
+        return None
