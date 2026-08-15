@@ -278,10 +278,10 @@ def test_find_match_dir_in_cache_returns_a_manifest_match(
 def test_find_match_dir_in_cache_tolerates_a_last_used_options_without_venv_dir(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A last-used JSON restored as a bare univ_defs.Options must be a cache miss, not an AttributeError.
+    """A last-used JSON restored as a bare emmykit.Options must be a cache miss, not an AttributeError.
 
     venv_dir is declared only in veny.Options.__init__, not in the
-    univ_defs.Options base class load_last_used_options builds from, so an
+    emmykit.Options base class load_last_used_options builds from, so an
     options JSON written before that field existed (or otherwise missing
     the key) must not crash the run.
     """

@@ -15,13 +15,11 @@ pixi install
 This installs the development tools used to work on veny itself (ruff, mypy,
 pytest, pre-commit) plus roughly twenty more packages pulled in by this
 project's scaffold baseline (linters, debuggers, packaging tools, and the
-like) — none of it is a runtime dependency of veny. veny itself has no
-third-party dependencies — it must run on a bare interpreter, since its job
-is to bootstrap environments for other scripts.
-
-veny requires the [emmykit](https://pypi.org/project/emmykit/) package
-(`pip install 'emmykit>=0.4.0'`), which provides its utility layer and the base
-`Options` class.
+like) — none of it is a runtime dependency of veny. veny's only runtime
+dependency is [emmykit](https://pypi.org/project/emmykit/)
+(`pip install 'emmykit>=0.4.0'`), which provides its utility layer and the
+base `Options` class; beyond that it must run on a bare interpreter, since
+its job is to bootstrap environments for other scripts.
 
 ## Quick usage
 
