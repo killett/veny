@@ -588,6 +588,7 @@ wiring rationale and for two Minors deliberately left unfixed.
   branch still exits 0. Deliberately out of scope for Task 4a, which only
   propagated the *script's* exit status. Recorded as an open question in the
   design doc `docs/superpowers/specs/2026-08-15-packaged-entry-point-design.md`.
+- emmykit's shell/alias helpers (`detect_shell`, `find_shell_rc_file`, `find_additional_alias_files`, and the `Options` fields `shell`, `rc_file`, `alias`, `alias_command`, `additional_alias_files`) have no caller in veny as of 2026-08-15. The usage audit is written up as a cross-repo prompt in `docs/prompts/2026-08-15-emmykit-shell-alias-helpers-audit.md` and has not been run yet. They are public API on a published 0.4.0, so removal is a breaking change and the prompt asks for a recommendation rather than a deletion.
 
 ## Open questions
 
