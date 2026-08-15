@@ -47,6 +47,23 @@ exclude-newer = "7d"
 # [exclude-newer]
 # affected-package = "0d"
 
+# Cooldown exemption for PyPI packages. emmykit -- the only entry under
+# [pypi-dependencies] -- is first-party (github.com/killett/emmykit) and is
+# veny's utility layer, so a release of it is not the third-party supply-chain
+# risk the 7-day cooldown exists to absorb, and waiting a week would strand the
+# emmykit migration half-done. The conda cooldown above is untouched and still
+# governs every conda-forge dependency.
+#
+# Note for whoever edits this next: on pixi 0.69 the per-package cooldown
+# override for a PyPI package is the `[pypi-exclude-newer]` table below, keyed
+# by package name. The `[exclude-newer]` table named in the comment above is
+# not accepted, and neither is `exclude-newer-package` (that spelling is uv's,
+# leaking through pixi's bundled resolver's error hint). A wrong spelling is
+# not always rejected outright -- `pixi update` can simply report "Lock-file
+# was already up-to-date" and silently leave the old version pinned.
+[pypi-exclude-newer]
+emmykit = "0d"
+
 [dependencies]
 python = ">=3.12,<3.14"
 ruff = "*"

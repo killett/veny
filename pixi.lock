@@ -205,7 +205,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/virtualenv-21.7.1-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/wcwidth-0.8.2-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
-      - pypi: https://files.pythonhosted.org/packages/ab/9f/5365f36d532a05ac256be49a1258c867797088a330d03bb6172592b7bcd1/emmykit-0.3.4-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/7d/95/f318326eeac4350228404dbdfd90bc82e0cc0c98548eaff214f0533db87d/emmykit-0.4.0-py3-none-any.whl
       linux-aarch64:
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/_openmp_mutex-4.5-20_gnu.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/alsa-lib-1.2.16.1-he30d5cf_0.conda
@@ -400,7 +400,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/virtualenv-21.7.1-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/wcwidth-0.8.2-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
-      - pypi: https://files.pythonhosted.org/packages/ab/9f/5365f36d532a05ac256be49a1258c867797088a330d03bb6172592b7bcd1/emmykit-0.3.4-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/7d/95/f318326eeac4350228404dbdfd90bc82e0cc0c98548eaff214f0533db87d/emmykit-0.4.0-py3-none-any.whl
       osx-64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_3.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/annotated-doc-0.0.5-pyhcf101f3_0.conda
@@ -539,7 +539,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/ukkonen-1.1.0-py313h252b9d7_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/yaml-0.2.5-h4132b18_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
-      - pypi: https://files.pythonhosted.org/packages/ab/9f/5365f36d532a05ac256be49a1258c867797088a330d03bb6172592b7bcd1/emmykit-0.3.4-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/7d/95/f318326eeac4350228404dbdfd90bc82e0cc0c98548eaff214f0533db87d/emmykit-0.4.0-py3-none-any.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_3.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/annotated-doc-0.0.5-pyhcf101f3_0.conda
@@ -679,7 +679,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/ukkonen-1.1.0-py313h5c29297_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/yaml-0.2.5-h925e9cb_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
-      - pypi: https://files.pythonhosted.org/packages/ab/9f/5365f36d532a05ac256be49a1258c867797088a330d03bb6172592b7bcd1/emmykit-0.3.4-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/7d/95/f318326eeac4350228404dbdfd90bc82e0cc0c98548eaff214f0533db87d/emmykit-0.4.0-py3-none-any.whl
 packages:
 - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
   build_number: 20
@@ -6022,10 +6022,10 @@ packages:
     - zstd >=1.5.7,<1.6.0a0
   size: 433413
   timestamp: 1764777166076
-- pypi: https://files.pythonhosted.org/packages/ab/9f/5365f36d532a05ac256be49a1258c867797088a330d03bb6172592b7bcd1/emmykit-0.3.4-py3-none-any.whl
+- pypi: https://files.pythonhosted.org/packages/7d/95/f318326eeac4350228404dbdfd90bc82e0cc0c98548eaff214f0533db87d/emmykit-0.4.0-py3-none-any.whl
   name: emmykit
-  version: 0.3.4
-  sha256: 90777304e5b898585c8538f0cdf584352f741531c8bf60a0466a8f467041bf62
+  version: 0.4.0
+  sha256: 7ff8a2f8219f69bf2fa95433ae2e5a9a0e5795c6d3f8f8cd9f3dac5f2cab4aab
   requires_dist:
   - astropy ; extra == 'all'
   - atomicwrites ; extra == 'all'
