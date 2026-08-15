@@ -741,7 +741,11 @@ echo "smoke: building the wheel"
 rm -rf dist
 python -m build --wheel --outdir dist >/dev/null
 
-wheel=$(ls dist/veny-*.whl | head -1)
+# find, not `ls dist/veny-*.whl | head -1`: under `set -euo pipefail` an
+# unmatched glob makes ls exit non-zero, pipefail propagates it through the
+# assignment, and set -e kills the script before the guard below can print
+# anything. find exits 0 on no-match, so the guard actually runs.
+wheel=$(find dist -maxdepth 1 -name 'veny-*.whl' -print -quit)
 [[ -n "$wheel" ]] || { echo "smoke: no wheel in dist/" >&2; exit 1; }
 echo "smoke: built $wheel"
 
@@ -815,6 +819,181 @@ Compare against the same count taken before Step 3. The numbers must match — t
 ```bash
 git add scripts/smoke-install.sh
 git commit -m "test: prove the installed console script and its exit status"
+```
+
+---
+
+### Task 4a: Propagate the wrapped script's exit status
+
+**Goal:** `veny script.py` exits with the status the script exited with, on every path that runs a script — so the Task 4 smoke gate can close as written.
+
+**Added 2026-08-15, mid-execution.** Task 4's smoke check failed with
+`smoke: FAIL — fixture exited 0, expected 7` and the investigation found a real
+pre-existing defect: `main()` discards the return code on all three paths that
+run the user's script. The design doc claimed the opposite; it has been
+corrected. The human partner chose to fix it in this branch rather than defer
+it. The defect predates this work — `git show 986bf40^:veny.py` has the same
+shape — so this is a bug fix, not a regression repair.
+
+**Files:**
+- Modify: `src/veny/cli.py` (`main()`, three `subprocess.run` call sites and the exit at the end)
+- Modify: `src/veny/__main__.py`
+- Modify: `tests/test_cli_entry_point.py`
+
+**Acceptance Criteria:**
+- [ ] The three script-running paths (`cli.py:385`, `392`, `423`) capture their `returncode`
+- [ ] `main()` exits with that status *after* its existing cleanup (`save_options_to_json`, the `failed-` rename, `ek.print_all_errors`, `logging.shutdown`) — no cleanup is skipped
+- [ ] `__main__.py` reads `sys.exit(main())`
+- [ ] A script exiting 0 still makes `veny` exit 0
+- [ ] `--justprint` and `--full` still exit 0
+- [ ] `pixi run test` reports 257 passed
+- [ ] `ruff check src/veny/cli.py --statistics` totals 294 or fewer
+
+**Verify:** `pixi run python -m pytest tests/test_cli_entry_point.py -v` → 5 passed, then `pixi run smoke` → `smoke: OK`
+
+**Steps:**
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `tests/test_cli_entry_point.py`:
+
+```python
+def test_module_entry_point_exits_with_mains_return_value():
+    # Catches: __main__.py calling main() bare instead of sys.exit(main()),
+    # which swallows any status main() returns rather than raises. Patching
+    # main keeps this a test of the __main__ wiring alone -- the real
+    # end-to-end proof that a wrapped script's status survives is
+    # scripts/smoke-install.sh, which asserts exit 7.
+    source = (
+        "import runpy, veny.cli\n"
+        "veny.cli.main = lambda: 3\n"
+        "runpy.run_module('veny', run_name='__main__')\n"
+    )
+    env = {**os.environ, "PYTHONPATH": os.fspath(REPO_ROOT / "src")}
+    result = subprocess.run(
+        [sys.executable, "-c", source],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+
+    assert result.returncode == 3, result.stderr
+```
+
+- [ ] **Step 2: Run it and confirm it fails**
+
+```bash
+pixi run python -m pytest tests/test_cli_entry_point.py::test_module_entry_point_exits_with_mains_return_value -v
+```
+
+Expected: FAIL, `assert 0 == 3` — `__main__.py` currently calls `main()` and ignores what it returns.
+
+- [ ] **Step 3: Fix `__main__.py`**
+
+```python
+"""Entry point for `python -m veny`."""
+
+from __future__ import annotations
+
+import sys
+
+from .cli import main
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+- [ ] **Step 4: Capture the return code on the three run paths**
+
+At `cli.py:385` and `cli.py:392`, the calls currently discard their result:
+
+```python
+        subprocess.run([sys.executable, os.fspath(options.python_script)] + options.script_args)
+```
+
+Assign it in both places, keeping the surrounding lines untouched:
+
+```python
+        result = subprocess.run([sys.executable, os.fspath(options.python_script)] + options.script_args)
+        script_exit_code = result.returncode
+```
+
+At `cli.py:423` the result is already captured as `result`; add the same
+assignment immediately after the existing `if result.returncode != 0 and not
+options.rawlog:` block, so the error logging is unchanged:
+
+```python
+                script_exit_code = result.returncode
+```
+
+Initialise `script_exit_code = 0` near the top of `main()`, beside the other
+locals, so every path that never runs a script (`--justprint`, `--full`, the
+"virtual environment does not have all the required packages" branch) still
+exits 0.
+
+- [ ] **Step 5: Exit with it, after cleanup**
+
+`main()` currently ends with:
+
+```python
+    ek.print_all_errors(memory_handler, options.rawlog)
+    logging.shutdown()
+```
+
+Return the status as the last statement, so nothing is skipped, and change the
+signature to match:
+
+```python
+def main() -> int:
+    """Main function.
+
+    Returns:
+        The wrapped script's exit status (0 on paths that run no script).
+    """
+    ...
+    ek.print_all_errors(memory_handler, options.rawlog)
+    logging.shutdown()
+    return script_exit_code
+```
+
+**Corrected 2026-08-15 after this task's review.** This step first said to keep
+`-> None` and end with `sys.exit(script_exit_code)`. That argued only against
+`NoReturn` and missed what the same task's `sys.exit(main())` implies: mypy
+reports `"main" does not return a value [func-returns-value]` on wrapping a
+`-> None` call, a new whole-repo error this task would otherwise introduce.
+`-> int` is also what the two real call sites already expect — pip generates
+`sys.exit(main())` for `[project.scripts]`, and `__main__.py` now matches it.
+Leave every pre-existing internal `sys.exit(...)` inside `main()` alone; only
+the final one becomes a `return`.
+
+- [ ] **Step 6: Run the tests**
+
+```bash
+pixi run python -m pytest tests/test_cli_entry_point.py -v
+pixi run test 2>&1 | tail -1
+ruff check src/veny/cli.py --statistics 2>&1 | tail -3
+pixi run python -m mypy src/veny/cli.py src/veny/json_types.py 2>&1 | tail -1
+```
+
+Expected: 5 passed; `257 passed`; a ruff total of 294 or fewer; 28 or fewer mypy errors.
+
+- [ ] **Step 7: Confirm a successful script still exits 0**
+
+```bash
+cd /tmp && printf 'print("ok")\n' > exit0.py \
+  && HOME=/tmp/venyhome pixi run --manifest-path /workspace/pixi.toml veny /tmp/exit0.py; echo "exit=$?"
+```
+
+Expected: `exit=0`. A fix that propagates failures but breaks the success path is worse than the bug.
+
+- [ ] **Step 8: Commit**
+
+```bash
+pixi run pre-commit run --files src/veny/__main__.py tests/test_cli_entry_point.py
+git add src/veny/cli.py src/veny/__main__.py tests/test_cli_entry_point.py
+git commit -m "fix: exit with the wrapped script's status"
 ```
 
 ---

@@ -23,8 +23,9 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-import alias_index
-import stdlib_index
+from . import alias_index
+from . import stdlib_index
+from . import __version__ as __version__
 try:
     import emmykit as ek
 except ImportError as exc:  # stdlib only: none of emmykit's helpers exist yet.
@@ -37,20 +38,17 @@ if not hasattr(ek, "register_json_type"):
         f"veny requires emmykit >= 0.4.0; found {getattr(ek, '__version__', 'unknown')}.\n"
         f"Upgrade it with:  pip install -U 'emmykit>=0.4.0'"
     )
-import venv_cache
-import veny_json_types
-
-__version__: str = "0.2.2"
+from . import json_types, venv_cache
 
 # An import name paired with the pip package that provides it. Defined in
 # alias_index, which imports nothing of veny's, and re-exported here because
-# veny is where it is used. Its JSON handlers live in veny_json_types.
+# veny is where it is used. Its JSON handlers live in json_types.
 ResolvedImport = alias_index.ResolvedImport
 
 # Registers veny's own types with emmykit's JSON registry. At module scope, not
 # inside main(), so that anything importing veny -- including every test -- gets
 # the same serialization behaviour production does. The call is idempotent.
-veny_json_types.register_types()
+json_types.register_types()
 
 
 class Options(ek.Options):
@@ -61,8 +59,7 @@ class Options(ek.Options):
         super().__init__()                  # Call the parent class's __init__ method from emmykit
         self.log_mode:                      int = logging.INFO  # Use --debug to change to logging.DEBUG.
         self.search_above_this_dir:        bool = True
-        self.my_filepath:                  Path = ek.ensure_path(sys.argv[0])  # Full (invoked) path to this script
-        self.my_name:                       str = self.my_filepath.stem  # The base name of this script without the .py extension
+        self.my_name:                       str = "veny"  # Fixed: the installed command's name, not whatever argv[0] happens to be.
         self.home:                         Path = Path.home()  # User's home directory
         # The "my_dir" is NOT the directory where this script is located.
         # Instead, it's the directory where this script will store its virtual environments and packages.
@@ -112,29 +109,6 @@ class Options(ek.Options):
         self.download_urls:                 list[Path] = []  # List of  URLs downloaded by the Python script.
         self.upload_urls:                   list[Path] = []  # List of  URLs uploaded   by the Python script.
         self.current_method_name:                  str = ""  # Name of the current method being executed.
-        self.manual_instructions:                  str = f"""
-This program acts as a wrapper around Python to automate the creation of virtual environments and the installation of any required packages. Instead of typing "python3 script.py", you can type "{self.my_name} script.py" to run script.py in a virtual environment which has all the required packages.
-
-It's convenient to add an alias to the shell configuration file so that typing ALIAS anywhere runs this program. This can either be done by running this program with the "--alias ALIAS" command line argument (for example: "python3 {self.my_name}.py --alias {self.my_name}") or by following the manual instructions below. The following steps assume this program is saved as {self.my_name}.py in your home directory (~), but you can adjust the path and filename to match your setup.
-
-If you're on a Mac you're probably using the zsh shell, so follow these steps to add the alias manually:
-1. Open your zsh configuration file (~/.zshrc) in a text editor. For example:
-   nano ~/.zshrc
-2. Add the following line to the end of the file:
-   alias {self.my_name}="python3 ~/{self.my_name}.py"
-3. Save the file and exit the text editor.
-4. Reload your zsh configuration by running the following command:
-   source ~/.zshrc
-
-If you're using the bash shell, follow these steps to add the alias manually:
-1. Open your bash configuration file (~/.bashrc) in a text editor. For example:
-   nano ~/.bashrc
-2. Add the following line to the end of the file:
-   alias {self.my_name}="python3 ~/{self.my_name}.py"
-3. Save the file and exit the text editor.
-4. Reload your bash configuration by running the following command:
-   source ~/.bashrc
-"""
         # Some imports also need other packages to be installed. Both the keys and
         # the values are *import* names: they are matched against and resolved
         # through options.aliases, which turns e.g. "netCDF4" into pip's "netcdf4".
@@ -186,7 +160,6 @@ def parse_arguments(options: Options) -> None:
     Args:
         options: Options object to store parsed arguments. Contains:
             - my_name:             Name of the program.
-            - manual_instructions: Instructions for manually adding the alias to the shell configuration file.
             - log_mode:            Logging mode (default is logging.INFO).
             - args:                Parsed arguments will be stored here.
 
@@ -194,13 +167,11 @@ def parse_arguments(options: Options) -> None:
         None, but updates options.args with parsed arguments.
 
     Raises:
-        SystemExit: If "-version" or "-manual" flags are provided, the program will print the relevant information and exit.
+        SystemExit: If the "-version" flag is provided, the program will print the version and exit.
         ValueError: If any of the arguments are invalid.
     """
-    parser = argparse.ArgumentParser(description="Run a python script with optional flags.")
+    parser = argparse.ArgumentParser(prog="veny", description="Run a python script with optional flags.")
     parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
-    parser.add_argument("--manual", action="store_true",
-                        help="Print instructions for manually adding the alias to the shell configuration file.")
     parser.add_argument("--feeling-lucky", action="store_true",
                         help="NOT FINISHED!!! Don't analyze imports, just try to run the script with the last used virtual environment. If that fails, try the latest virtual environment which has all the packages needed now.")
     parser.add_argument("-d", "--debug", action="store_true",
@@ -225,8 +196,6 @@ def parse_arguments(options: Options) -> None:
                         help="Refresh the custom modules cache and the pip list.")
     parser.add_argument("--reqs", action="store_true",
                         help="Read the extra_requirements.txt file in the current directory and install the packages listed there (with specific versions if present in the file) into the venv (along with the other packages needed to run the script as determined elsewhere in this program).")
-    parser.add_argument("--alias", type=str,
-                        help="Add an alias to the shell configuration file so that typing ALIAS anywhere runs this program.")
     parser.add_argument("--rawlog", action="store_true",
                         help=f"Do not add timestamps or INFO level to log messages, and do not add extra INFO level log statements. Just produce the same output that would be seen when running the program without {options.my_name}.")
     parser.add_argument("--justprint", action="store_true",
@@ -245,11 +214,6 @@ def parse_arguments(options: Options) -> None:
 
     # Otherwise, parse the arguments and store them in options.args for later use.
     options.args = parser.parse_args()
-
-    # Print instructions for manually adding the alias to the shell configuration file, etc.
-    if getattr(options.args, "manual", False):
-        print(options.manual_instructions)
-        sys.exit(0)
 
     if getattr(options.args, "debug", False):
         options.log_mode = logging.DEBUG
@@ -277,9 +241,16 @@ def build_alias_index(options: Options) -> alias_index.AliasIndex:
                              offline=getattr(options.args, "offline", False))
 
 
-def main() -> None:
-    """Main function."""
+def main() -> int:
+    """Main function.
+
+    Returns:
+        The wrapped script's exit status: 0 when no script was meant to run
+        (``--justprint``, ``--full``), and 1 when veny could not run the
+        script.
+    """
     start_time = dt.datetime.now()
+    script_exit_code = 0
     options: Options = Options()
     parse_arguments(options)
     script_string       = getattr(options.args, "script",       None)
@@ -298,7 +269,7 @@ def main() -> None:
             command_list = [os.fspath(last_used_venv_python), os.fspath(options.python_script)] + options.script_args
             result = subprocess.run(command_list)
             if result.returncode != 0 and not options.rawlog:
-                print(f"Error running script: {result.stderr}")
+                print(f"Script exited with status {result.returncode}")
             sys.exit(result.returncode)
         else:
             if not options.rawlog: print("No luck: no last used virtual environment found. Running the script as normal.")
@@ -330,12 +301,7 @@ def main() -> None:
         if not options.rawlog: logging.info("Directory %s does not exist yet, so it is being created.", options.packages_dir)
         options.packages_dir.mkdir(parents=True, exist_ok=True)
 
-    if getattr(options.args, "alias", False):
-        # Add the alias to the shell configuration file
-        options.alias = options.args.alias
-        add_alias(options)
-        sys.exit(0)
-    elif getattr(options.args, "full", False) and options.python_script:
+    if getattr(options.args, "full", False) and options.python_script:
         ek.my_critical_error("Full mode is not supported with a script argument.")
     elif options.python_script:
         pass  # If a script was provided as an argument, skip the rest of these checks.
@@ -364,7 +330,7 @@ def main() -> None:
     elif getattr(options.args, "full", False):  # implied by now: and not options.python_script:
         options.python_script = options.cwd
     else:
-        logging.info("You must specify either a script to run or one of these arguments: alias, manual, blank-slate (be careful using blank-slate because it deletes all cached virtual environments, among other things!).")
+        logging.info("You must specify either a script to run or one of these arguments: --full, --blank-slate (be careful using --blank-slate because it deletes all cached virtual environments, among other things!).")
 
     if getattr(options.args, "reqs", False):
         parse_extra_requirements(options)
@@ -423,19 +389,22 @@ def main() -> None:
     if not options.uninstalled_imports:
         if not options.rawlog: logging.info("All required packages are already installed.")
         start_raw_time = dt.datetime.now()
-        subprocess.run([sys.executable, os.fspath(options.python_script)] + options.script_args)
+        result = subprocess.run([sys.executable, os.fspath(options.python_script)] + options.script_args)
+        script_exit_code = result.returncode
         elapsed_raw_time = dt.datetime.now() - start_raw_time
         if not options.rawlog: logging.info("Runtime: %s", elapsed_raw_time)
     elif is_virtualenv():
         if not options.rawlog: logging.info("Already in a virtual environment.")
         if check_packages_in_venv(options):
             start_raw_time = dt.datetime.now()
-            subprocess.run([sys.executable, os.fspath(options.python_script)] + options.script_args)
+            result = subprocess.run([sys.executable, os.fspath(options.python_script)] + options.script_args)
+            script_exit_code = result.returncode
             elapsed_raw_time = dt.datetime.now() - start_raw_time
             if not options.rawlog: logging.info("Runtime: %s", elapsed_raw_time)
         else:
             logging.error("The current virtual environment does not have all the required packages.")
             if not options.rawlog: logging.info("Please deactivate the current virtual environment and run the script again.")
+            script_exit_code = 1
     else:
         if getattr(options.args, "no_cache", False):
             match_dir = None
@@ -448,6 +417,7 @@ def main() -> None:
                 created_new_venv = True
             else:
                 ek.my_critical_error("Failed to create a virtual environment.", choose_breakpoint=True)
+                script_exit_code = 1
         else:
             if not options.rawlog: logging.info("Using existing virtual environment: %s", match_dir)
             created_new_venv = False
@@ -467,7 +437,8 @@ def main() -> None:
                 if not options.rawlog: logging.info("Elapsed time since activating virtual environment: %s",
                                                     elapsed_time)
                 if result.returncode != 0 and not options.rawlog:
-                    logging.error("Error running script: %s", result.stderr)
+                    logging.error("Script exited with status %d", result.returncode)
+                script_exit_code = result.returncode
             if options.venv_dir.name.startswith("failed-") and options.simultaneous_success:
                 # If the program has made it to this point, it has run successfully, so the venv directory can be renamed because it DIDN'T fail.
                 rename_venv(options, options.venv_dir.name.removeprefix("failed-"))
@@ -481,113 +452,13 @@ def main() -> None:
 
     ek.print_all_errors(memory_handler, options.rawlog)
     logging.shutdown()
-
-
-def define_alias_command(options: Options) -> None:
-    """
-    Define the alias command for the shell, store in options.alias_command.
-
-    Args:
-        options: Options object containing the alias, python_command, and my_filepath attributes.
-
-    Returns:
-        None, but updates options.alias_command with the appropriate alias command string.
-
-    Raises:
-        None, but logs an error if no alias is specified or if the shell is unsupported.
-    """
-    if not options.alias:
-        logging.error("No alias specified, skipping alias command generation.")
-        options.alias_command = None
-        return
-
-    cmd = f"{options.python_command} {options.my_filepath}"
-    if options.shell in ["bash", "zsh"]:
-        options.alias_command = f'alias {options.alias}="{cmd}"'
-    elif options.shell == "fish":
-        options.alias_command = (f"function {options.alias};\n"
-                                 f"    {cmd} $argv;\n"
-                                 f"end")
-    elif options.shell in ["csh", "tcsh"]:
-        options.alias_command = f"alias {options.alias} '{cmd}'"
-    else:
-        logging.error(f"Unsupported shell for alias command: {options.shell}")
-        options.alias_command = None
-
-
-def alias_exists(this_file: str | os.PathLike[str], alias_pattern: str) -> bool:
-    """
-    Check if an alias exists in this_file using a regex pattern "alias_pattern".
-
-    Args:
-        this_file:     The file to check for the alias.
-        alias_pattern: The regex pattern to match the alias.
-
-    Returns:
-        True if the alias exists, False otherwise.
-
-    Raises:
-        None, but logs an error if the file cannot be found.
-    """
-    try:
-        with open(this_file, "r") as file:
-            lines = file.readlines()
-        return any(re.search(alias_pattern, line) for line in lines)
-    except FileNotFoundError:
-        logging.error(f"File {this_file} not found while checking for alias.")
-        return False
-
-
-def add_alias_to_rc_file(options: Options) -> None:
-    """Add an alias to the shell configuration file if it's not already there."""
-    if not (options.rc_file and options.alias and options.alias_command):
-        logging.error("Missing rc_file, alias, or alias_command. Skipping alias install.")
-        return
-    all_files = [options.rc_file] + options.additional_alias_files
-    alias_name = re.escape(options.alias)
-    # Only match alias <name> exactly, with optional spaces around "="
-    alias_pattern = rf'^\s*alias\s+{alias_name}(?:\s*=\s*|\s+).+'
-    # This "next" function will return the first file that contains the alias, or None if not found.
-    found_file = next((f for f in all_files if f and alias_exists(f, alias_pattern)), None)
-    if found_file:
-        logging.info("Alias %s already exists in %s", options.alias, found_file)
-        return
-    the_prompt = (f"Type 'yes' or 'y' to write this alias/function:\n\n"
-                  f"{options.alias_command}\n\n"
-                  f"into {options.rc_file}\n"
-                  f"...or anything else to cancel: ")
-    try:
-        if getattr(options.args, "y", False) or ek.prompt_then_confirm(the_prompt):
-            with open(options.rc_file, "a") as f:
-                f.write("\n" + options.alias_command + "\n")
-            logging.info("Alias added to %s", options.rc_file)
-    except OSError:
-        logging.exception("Failed to write alias to %s", options.rc_file)
-        logging.error(options.manual_instructions)
-
-
-def add_alias(options: Options) -> None:
-    """
-    This function detects the shell, finds the appropriate rc file,
-    and adds the alias command to it if it doesn't already exist.
-
-    Args:
-        options: Options object containing shell type, rc_file, alias, and alias_command attributes.
-
-    Returns:
-        None, but updates options.rc_file and options.alias_command as needed.
-
-    Raises:
-        None.
-    """
-    ek.detect_shell(options)
-    if options.shell:
-        ek.find_shell_rc_file(options)
-        ek.find_additional_alias_files(options)
-        if options.rc_file:
-            define_alias_command(options)
-            if options.alias_command:
-                add_alias_to_rc_file(options)
+    # A script killed by a signal yields a negative returncode (e.g. -9 for
+    # SIGKILL). Exiting a process with a negative status wraps around to the
+    # wrong shell status (-9 becomes 247), so normalize to the conventional
+    # 128 + signal number (-9 becomes 137) instead.
+    if script_exit_code < 0:
+        script_exit_code = 128 - script_exit_code
+    return script_exit_code
 
 
 def _literal_str(expr_node: ast.AST) -> str | None:
@@ -5092,7 +4963,3 @@ def dict_of_custom_modules(options: Options) -> dict[str, Path]:
             logging.info("Saving custom modules to %s", custom_filename)
         pickle.dump(custom_modules, f_out, protocol=pickle.HIGHEST_PROTOCOL)  # Use highest protocol for efficiency because we don't need backward compatibility for caching purposes
     return custom_modules
-
-
-if __name__ == "__main__":
-    main()

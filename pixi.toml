@@ -123,6 +123,15 @@ test-cov = "python -m pytest --cov"  # Later on, consider adding --cov-fail-unde
 lint = "python -m ruff check ."
 format = "python -m ruff format ."
 typecheck = "python -m mypy ."
+# Run veny from the working tree. PYTHONPATH=src is already exported by
+# [activation.env], so no editable install is needed inside pixi.
+veny = "python -m veny"
+# Build the sdist + wheel. python-build and hatchling are already pinned in
+# [dependencies].
+build = "python -m build"
+# Install the built wheel into a throwaway venv and prove the console script
+# works. Needs the network; deliberately not part of `pixi run test`.
+smoke = "bash scripts/smoke-install.sh"
 # pre-commit lives in the pixi env (see [dependencies] above) so its tools
 # stay pinned and exclude-newer-governed like everything else. Same `python -m`
 # shebang dodge as the tasks above. -install is what `docker-entrypoint.sh`

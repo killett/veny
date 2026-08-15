@@ -8,23 +8,65 @@ it.
 
 ## Installation
 
+veny is an application, so install it as a tool rather than into a project
+environment — that gives it a private virtual environment with a satisfying
+interpreter and its `emmykit` dependency resolved for it:
+
 ```
-pixi install
+uv tool install veny
 ```
 
-This installs the development tools used to work on veny itself (ruff, mypy,
-pytest, pre-commit) plus roughly twenty more packages pulled in by this
-project's scaffold baseline (linters, debuggers, packaging tools, and the
-like) — none of it is a runtime dependency of veny. veny's only runtime
-dependency is [emmykit](https://pypi.org/project/emmykit/)
-(`pip install 'emmykit>=0.4.0'`), which provides its utility layer and the
-base `Options` class; beyond that it must run on a bare interpreter, since
-its job is to bootstrap environments for other scripts.
+`pipx install veny` works the same way. To install from a clone instead, so
+that `git pull` takes effect with no reinstall:
+
+```
+uv tool install --editable ~/path/to/veny
+```
+
+Either way the `veny` command lands on your PATH — visible to scripts, cron and
+`subprocess`, not just to interactive shells. `uv tool upgrade veny` and
+`uv tool uninstall veny` manage it from there.
+
+### Upgrading from the alias install
+
+Earlier versions of veny installed themselves by appending a line to a shell
+configuration file. A shell alias takes precedence over PATH, so that line will
+keep running the old copy after you install the command. Delete it from your
+`~/.bashrc`, `~/.zshrc` or equivalent:
+
+```
+alias veny="python3 ~/veny.py"
+```
+
+then refresh the current shell's command lookup with `hash -r` (bash) or
+`rehash` (zsh), or just open a new terminal.
+
+### Working on veny itself
+
+```
+pixi install
+pixi run veny my_script.py
+```
+
+This installs the development tools (ruff, mypy, pytest, pre-commit) plus the
+scaffold baseline — none of it is a runtime dependency of veny. `pixi run veny`
+runs the working tree directly through `python -m veny`; no editable install is
+involved. veny's only runtime dependency is
+[emmykit](https://pypi.org/project/emmykit/) (`pip install 'emmykit>=0.4.0'`),
+which provides its utility layer and the base `Options` class; beyond that it
+must run on a bare interpreter, since its job is to bootstrap environments for
+other scripts.
 
 ## Quick usage
 
 ```
-pixi run python veny.py my_script.py [script args...]
+veny my_script.py [script args...]
+```
+
+or, inside a clone of this repo without installing:
+
+```
+pixi run veny my_script.py [script args...]
 ```
 
 veny inspects `my_script.py`'s imports, finds or builds a virtual
@@ -49,16 +91,23 @@ until removed by hand.
 ## Project structure
 
 ```
-veny.py           # Entry point: argument parsing, import analysis driving,
-                   # venv build/run orchestration.
-veny_json_types.py # Registers veny's own types with emmykit's JSON registry.
-alias_index.py     # Import-name -> pip-name resolution (overrides, cache,
+src/veny/
+    __init__.py    # Version literal.
+    __main__.py    # python -m veny.
+    cli.py         # Argument parsing, import analysis driving, venv
+                   # build/run orchestration.
+    alias_index.py # Import-name -> pip-name resolution (overrides, cache,
                    # target-interpreter probe, PyPI confirmation chain).
-stdlib_index.py    # Standard-library membership for the target interpreter.
-pypi_client.py     # Confirms a project provides an import name by reading a
+    json_types.py  # Registers veny's own types with emmykit's JSON registry.
+    pypi_client.py # Confirms a project provides an import name by reading a
                    # wheel's central directory over an HTTP range request.
-venv_cache.py      # Folder naming, manifests, and matching for cached
+    stdlib_index.py # Standard-library membership for the target interpreter.
+    venv_cache.py  # Folder naming, manifests, and matching for cached
                    # virtual environments.
+scripts/           # smoke-install.sh: wheel + console-script verification.
 tests/             # pytest test suite.
 docs/              # Design docs and implementation plans.
 ```
+
+Note that `alias_index.py` is about *import-name aliases* — it is unrelated to
+the shell alias this work removed, and it stays.

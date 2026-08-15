@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
-from pypi_client import PyPIClient
+from .pypi_client import PyPIClient
 
 
 class Source(enum.IntEnum):
@@ -81,8 +81,8 @@ class ResolvedImport:
     went into one set and import names into another, leaving every consumer to
     guess which kind of string it was holding.
 
-    This lives here rather than in veny.py so that veny_json_types can register
-    its JSON handlers without importing veny, which would close an import cycle.
+    This lives here rather than in veny.cli so that json_types can register
+    its JSON handlers without importing veny.cli, which would close an import cycle.
 
     Attributes:
         import_name: The name as written in the user's source.
@@ -687,10 +687,7 @@ class AliasIndex:
         rejected_normalized = {
             normalize_pip_name(name) for name in self.cache.rejected_names(import_name)
         }
-        if (
-            cached is not None
-            and normalize_pip_name(cached) not in rejected_normalized
-        ):
+        if cached is not None and normalize_pip_name(cached) not in rejected_normalized:
             return Resolution(
                 import_name,
                 (

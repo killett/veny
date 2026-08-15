@@ -2,7 +2,7 @@
 
 import argparse
 
-import veny
+from veny import cli as veny
 
 RETIRED_FIELDS = {
     "univ_defs_path",

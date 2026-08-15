@@ -16,9 +16,29 @@ considered and rejected as insufficient — it delegates interpreter choice to
 
 - Design doc: `docs/superpowers/specs/2026-08-15-packaged-entry-point-design.md`
   (approved 2026-08-15)
-- Implementation plan: not written yet
+- Implementation plan: `docs/superpowers/plans/2026-08-15-packaged-entry-point.md`
+  (7 tasks: 1, 2, 3, 4a, 4, 5, 6)
+- Task tracker: `docs/superpowers/plans/2026-08-15-packaged-entry-point.md.tasks.json`
 
-**Next action:** write the implementation plan from the approved design.
+**Next action:** none on this plan. All 7 tasks are complete on branch
+`packaged-entry-point` (14 commits), the whole-branch review is clean, and the
+branch is ready to merge. Gates: 257 passed; `ruff check src/veny/cli.py
+--statistics` 294 (was 299 for `veny.py`); `mypy src/veny/cli.py
+src/veny/json_types.py` 27 (was 28); `pixi run smoke` green, including the
+mutation check that proves its exit-status assertion can fail. The outstanding
+follow-up is the emmykit usage-audit prompt in `docs/prompts/`, which is
+written but has not been run in the emmykit repository — see Deferred items.
+
+Tasks 1-6 delivered: the six modules live in `src/veny/`, the alias installer and its
+four shell dialects are deleted, `pyproject.toml` declares a hatchling build
+backend and `[project.scripts] veny = "veny.cli:main"`, and `pixi run smoke`
+proves the installed console script propagates a wrapped script's exit
+status. Task 4a, inserted mid-plan after Task 4's smoke check caught it,
+fixed a pre-existing defect where `main()` discarded the subprocess return
+code on all three script-running paths, so `veny` exited 0 no matter how the
+wrapped script exited; `main()` is now `-> int`, captures `result.returncode`
+on all three paths and returns it after existing cleanup, and
+`src/veny/__main__.py` is `sys.exit(main())`.
 
 **Previous topic (complete):** Replaced `univ_defs.py` with the published `emmykit` package —
 design approved 2026-08-14, implementation plan executed on branch
@@ -219,8 +239,8 @@ wiring rationale and for two Minors deliberately left unfixed.
 
 ## Gotchas
 
-- veny's own types are serialized by `veny_json_types.register_types()`, called
-  at `veny.py` module scope, not inside `main()`. Anything that imports veny --
+- veny's own types are serialized by `json_types.register_types()`, called
+  at `src/veny/cli.py` module scope, not inside `main()`. Anything that imports veny --
   including every test -- gets production's serialization behaviour. If you move
   the call into `main()`, `save_options_to_json` will silently write
   `"ResolvedImport(...)"` repr strings for any consumer that does not go through
@@ -308,27 +328,34 @@ wiring rationale and for two Minors deliberately left unfixed.
 - CPython deliberately excludes `Lib/test` from `sys.stdlib_module_names`, so
   `test` does not count as standard library. A package named `test` exists on
   PyPI.
-- `split_imports` in `veny.py` builds a real temporary virtual environment, so
-  it cannot be unit tested directly. Pure logic must be extracted before it
-  can be covered.
-- The repository is a flat script layout (`veny.py` plus `alias_index.py`,
-  `pypi_client.py`, `stdlib_index.py`, `venv_cache.py`, `veny_json_types.py`),
-  not the `src/` package layout described in the global CLAUDE.md. New modules
-  must travel alongside those files.
+- `split_imports` in `src/veny/cli.py` builds a real temporary virtual
+  environment, so it cannot be unit tested directly. Pure logic must be
+  extracted before it can be covered.
+- The repository uses the `src/veny/` package layout as of 2026-08-15 (it was
+  a flat script layout before that; `veny.py` is now `src/veny/cli.py` and
+  `veny_json_types.py` is now `src/veny/json_types.py`). New modules go
+  inside `src/veny/` and are imported with `from . import <name>`. Tests
+  import them as `from veny import <name>`, and the five test files that
+  reference `veny.<name>` throughout use `from veny import cli as veny` to
+  keep those references working.
 - `pixi run lint` and `pixi run typecheck` fail repo-wide on pre-existing
-  `veny.py` errors (299 ruff, 28 mypy across `veny.py` + `veny_json_types.py`,
-  as of 2026-08-15, after dropping veny's `Options.args` re-declaration). The pre-commit `mypy` hook is
+  `src/veny/cli.py` errors (294 ruff, 28 mypy across `src/veny/cli.py` +
+  `src/veny/json_types.py`, as of 2026-08-15, after the packaged-entry-point
+  move). The pre-commit `mypy` hook is
   literally `mypy .` with `pass_filenames: false`, so it always checks the
   whole repo and
   **cannot pass** while this debt exists — it is not a gate a change can
   satisfy, only a check that must be scoped manually: use `mypy <files>`
-  on what you touched. Same logic applies to `ruff`: for `veny.py` itself,
-  gate on `ruff check veny.py --statistics` before/after, not the bare
-  `pixi run lint`.
-- **Never run pre-commit's `ruff`/`ruff-format` hooks against `veny.py`** —
-  a trial run during the alias-resolver plan rewrote ~2,000 lines of its
-  hand-aligned formatting. Its ruff count is now **302** (was 624; the
-  deleted hardcoded alias table was itself ~322 duplicate-key violations).
+  on what you touched. Same logic applies to `ruff`: for `src/veny/cli.py`
+  itself, gate on `ruff check src/veny/cli.py --statistics` before/after, not
+  the bare `pixi run lint`.
+- **Never run pre-commit's `ruff`/`ruff-format` hooks against
+  `src/veny/cli.py`** — a trial run during the alias-resolver plan rewrote
+  ~2,000 lines of its hand-aligned formatting. Its ruff count is now **294**
+  (was 624 as `veny.py`; the deleted hardcoded alias table was itself ~322
+  duplicate-key violations). As of 2026-08-15 both hooks carry
+  `exclude: '^src/veny/cli\.py$'` in `.pre-commit-config.yaml`, so this is now
+  enforced rather than merely remembered.
 - A malformed `~/veny/module_aliases.toml` override file is **fatal by
   design** — it raises `AliasOverrideError` and stops the run, rather than
   being skipped. Continuing would resolve import names contrary to what the
@@ -343,10 +370,10 @@ wiring rationale and for two Minors deliberately left unfixed.
   is deliberately forgotten: a failed install can be a transient network
   blip, and persisting it would blacklist an otherwise-correct package
   forever.
-- `alias_index.py` and `pypi_client.py` import nothing from `veny` or
-  `veny_json_types`; `pypi_client` also imports nothing from `alias_index`.
-  `veny_json_types.py` imports `alias_index` and `stdlib_index`, never
-  `veny` — same one-way dependency discipline as `stdlib_index.py`.
+- `alias_index.py` and `pypi_client.py` import nothing from `cli` or
+  `json_types`; `pypi_client` also imports nothing from `alias_index`.
+  `json_types.py` imports `alias_index` and `stdlib_index`, never
+  `cli` — same one-way dependency discipline as `stdlib_index.py`.
 - **`files.pythonhosted.org` answers `501 Unsupported client range` to
   suffix (`bytes=-N`) Range requests.** Only absolute tail ranges computed
   from the wheel's declared size work. This made the entire PyPI tier of
@@ -451,7 +478,7 @@ wiring rationale and for two Minors deliberately left unfixed.
   the embedded script constants these scripts were generated from, so 0.4.0
   no longer carries the source text to extract them from.
 - **A manifest can record an `interpreter_tag` and an `interpreter_path`
-  that disagree.** `interpreter_tag()` (`veny.py:3974`) reads
+  that disagree.** `interpreter_tag()` in `src/veny/cli.py` reads
   `options.stdlib.python_version`, while `venv_build_interpreter()` returns
   `options.python_command or sys.executable`. Those agree unless the stdlib
   probe degrades: `stdlib_index.for_interpreter` falls back to the *running*
@@ -468,8 +495,8 @@ wiring rationale and for two Minors deliberately left unfixed.
   Raised by the whole-branch review 2026-08-14, parked because it changes
   what the approved design says.
 - `satisfies()` runs twice on the winning cached venv: once inside
-  `cache_candidates` (`veny.py:4788`) and again inside `check_venv_dir`
-  (`veny.py:4695`), which re-reads the manifest from disk to do it. Correct
+  `cache_candidates()` and again inside `check_venv_dir()` (both in
+  `src/veny/cli.py`), which re-reads the manifest from disk to do it. Correct
   but redundant, and it reintroduces the "the folder changed underneath the
   run" re-read that `CacheCandidate` removed from the ranking loop. Fix
   shape: have `find_match_dir_in_cache` pass the manifest it already holds
@@ -490,8 +517,9 @@ wiring rationale and for two Minors deliberately left unfixed.
   `test_check_venv_dir_rejects_a_missing_directory` does not uniquely pin the
   `safe_is_dir` guard, since `read_manifest` also degrades on a missing
   directory.
-- `univ_defs.py` is gone, deleted in the emmykit migration. `veny.py` is
-  5,101 lines (`wc -l veny.py`, 2026-08-15).
+- `univ_defs.py` is gone, deleted in the emmykit migration. `src/veny/cli.py`
+  is 4,959 lines (`wc -l src/veny/cli.py`, 2026-08-15, after the
+  packaged-entry-point move dropped the alias-installer code).
 - `alias_index.py` is 732 lines, accepted over the plan's ~600-line split
   target by controller ruling (no further split this plan; see the ledger's
   Task 5b entry — the byte-identical move was verified symbol-by-symbol).
@@ -502,7 +530,7 @@ wiring rationale and for two Minors deliberately left unfixed.
 - `known_bad_imports` retains six project-specific local module names,
   hardcoded. If that list grows, move it to a config file under
   `options.my_dir`.
-- `also_needs` (`veny.py:120`) maps a package to further packages it needs.
+- `Options.also_needs` (in `src/veny/cli.py`) maps a package to further packages it needs.
   It is a different relation from the import-to-package aliases and was
   explicitly out of scope for the AliasIndex design; it remains hardcoded
   and deferred. (The module-alias half of this formerly-deferred item is
@@ -511,8 +539,8 @@ wiring rationale and for two Minors deliberately left unfixed.
 - The repository had no `tests/` directory before the stdlib work. Coverage
   now stands at 250 tests (`tests/test_alias_index.py`,
   `tests/test_pypi_client.py`, `tests/test_split_imports.py`,
-  `tests/test_stdlib_index.py`); broader coverage of `veny.py` beyond what
-  these plans touched remains open.
+  `tests/test_stdlib_index.py`); broader coverage of `src/veny/cli.py` beyond
+  what these plans touched remains open.
 - Smaller items carried from the alias-resolver ledger, not worth their own
   paragraph: unused `_CONNECT_TIMEOUT`; a `.`-prefixed zip member yields
   `"."` as a top-level name; single-file extension modules (`.so`/`.pyd`)
@@ -542,7 +570,7 @@ wiring rationale and for two Minors deliberately left unfixed.
   then removing the filter uninstalls the package and the existing
   `assert fake.uninstalled == []` fails. Found by mutation testing in the
   final review, 2026-08-13.
-- `veny.py:3306`/`3521` — the `Provided by:` line reports the *succeeding*
+- `run_import_check_in_venv()` in `src/veny/cli.py` — the `Provided by:` line reports the *succeeding*
   alternative while `successes.append(alternatives[0])` records the first,
   and `import_providers` unions across every such line. Provably equivalent
   today, because `report_providers=True` is only ever set with a single
@@ -558,6 +586,35 @@ wiring rationale and for two Minors deliberately left unfixed.
 - Garbage collection of stale venvs in `~/veny`, including the pre-manifest
   ones this plan's Task 10 orphans (no manifest means no match, so they are
   never selected again but are also never deleted).
+- **Two pre-existing `AssertionError` crashes, both found by the packaged
+  entry-point branch's final review (2026-08-15) and both left unfixed as out
+  of scope.** Neither is a regression — the reviewer confirmed both are
+  byte-identical in `git show 4db27ef:src/veny/cli.py`.
+  1. `veny -y` (or any flag set with no script argument, no `--full` and no
+     `--blank-slate`) prints the "you must specify..." message, then sets
+     `options.python_script = None` and crashes in `list_packages()` on
+     `assert options.python_script is not None`. The message should be
+     followed by an exit, not by falling through.
+  2. The "already inside a virtual environment that lacks the required
+     packages" branch crashes in `check_packages_in_venv` on
+     `assert options.venv_dir is not None` before it can reach its own error
+     path, because `options.venv_dir` is only set in the venv-*creation*
+     branch. **This makes that branch's `script_exit_code = 1` unreachable
+     through the front door** — the fix is correct but currently inert, and
+     was verified by monkeypatching around `main()` rather than organically.
+- `src/veny/cli.py`'s script-failure log lines read `result.returncode` as of
+  2026-08-15; they previously read `result.stderr`, which was always `None`
+  because none of the three script-running `subprocess.run` calls capture
+  output. If those calls ever gain `capture_output=True`, the child's output
+  stops reaching the terminal live — check both sites before changing them.
+- veny's own exit statuses beyond the two paths fixed on 2026-08-15
+  (`script_exit_code = 1` when it cannot run the script) have never been
+  designed as a set: `--justprint`, `--full`, the `ek.my_critical_error`
+  sites and the `sys.exit(1)` / `sys.exit(2)` sites each chose a value
+  independently. The design doc
+  `docs/superpowers/specs/2026-08-15-packaged-entry-point-design.md` records
+  this as its open question.
+- emmykit's shell/alias helpers (`detect_shell`, `find_shell_rc_file`, `find_additional_alias_files`, and the `Options` fields `shell`, `rc_file`, `alias`, `alias_command`, `additional_alias_files`) have no caller in veny as of 2026-08-15. The usage audit is written up as a cross-repo prompt in `docs/prompts/2026-08-15-emmykit-shell-alias-helpers-audit.md` and has not been run yet. They are public API on a published 0.4.0, so removal is a breaking change and the prompt asks for a recommendation rather than a deletion.
 
 ## Open questions
 

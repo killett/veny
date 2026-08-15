@@ -2,8 +2,8 @@ import io
 import json
 import zipfile
 
-import pypi_client
-from pypi_client import (
+from veny import pypi_client
+from veny.pypi_client import (
     MAX_WHEEL_BYTES,
     PyPIClient,
 )

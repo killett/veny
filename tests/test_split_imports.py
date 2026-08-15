@@ -6,11 +6,11 @@ from pathlib import Path
 
 import emmykit as ek
 
-import alias_index
-import stdlib_index
-import venv_cache
-import veny
-from alias_index import Candidate, Resolution, Source
+from veny import alias_index
+from veny import cli as veny
+from veny import stdlib_index
+from veny import venv_cache
+from veny.alias_index import Candidate, Resolution, Source
 
 
 def test_python2_name_is_classified_bad():

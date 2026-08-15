@@ -5,9 +5,9 @@ import json
 import emmykit as ek
 import pytest
 
-import alias_index
-import stdlib_index
-import veny_json_types
+from veny import alias_index
+from veny import stdlib_index
+from veny import json_types as veny_json_types
 
 
 @pytest.fixture(autouse=True)
@@ -190,7 +190,7 @@ def test_importing_veny_is_enough_to_register_the_types():
     from pathlib import Path
 
     source = (
-        "import veny, json, emmykit as ek, alias_index;"
+        "import veny.cli, json, emmykit as ek; from veny import alias_index;"
         "r = alias_index.ResolvedImport(import_name='cv2', pip_name='opencv-python');"
         "print(ek.from_jsonable(json.loads(json.dumps(ek.to_jsonable(r)))) == r)"
     )

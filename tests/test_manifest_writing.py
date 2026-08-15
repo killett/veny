@@ -4,10 +4,10 @@ import json
 import subprocess
 from pathlib import Path
 
-import stdlib_index
-import venv_cache
-import veny
-from alias_index import ResolvedImport
+from veny import cli as veny
+from veny import stdlib_index
+from veny import venv_cache
+from veny.alias_index import ResolvedImport
 
 
 def an_options() -> veny.Options:

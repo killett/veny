@@ -7,8 +7,8 @@ importing ``alias_index`` inside its own serializer -- veny supplies the
 knowledge here and emmykit supplies only the mechanism.
 
 This module imports ``emmykit``, ``alias_index`` and ``stdlib_index``. It must
-never import ``veny``: that would close an import cycle, since ``veny`` imports
-this module.
+never import ``veny.cli``: that would close an import cycle, since ``veny.cli``
+imports this module.
 """
 
 from __future__ import annotations
@@ -18,8 +18,7 @@ from typing import Any
 
 import emmykit as ek
 
-import alias_index
-import stdlib_index
+from . import alias_index, stdlib_index
 
 _registered = False
 

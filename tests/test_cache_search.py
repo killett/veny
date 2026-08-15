@@ -10,11 +10,11 @@ from pathlib import Path
 import emmykit as ek
 import pytest
 
-import alias_index
-import stdlib_index
-import venv_cache
-import veny
-from alias_index import ResolvedImport
+from veny import alias_index
+from veny import cli as veny
+from veny import stdlib_index
+from veny import venv_cache
+from veny.alias_index import ResolvedImport
 
 
 def an_options(records: set[ResolvedImport]) -> veny.Options:
