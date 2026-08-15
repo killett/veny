@@ -472,28 +472,7 @@ def main() -> None:
                     logging.error("Error running script: %s", result.stderr)
             if options.venv_dir.name.startswith("failed-") and options.simultaneous_success:
                 # If the program has made it to this point, it has run successfully, so the venv directory can be renamed because it DIDN'T fail.
-                new = options.venv_dir.with_name(options.venv_dir.name.removeprefix("failed-"))
-                if new != options.venv_dir:
-                    options.venv_dir.rename(new)
-                options.set_venv_dir(new)
-                cfg_file_path = options.venv_dir / "pyvenv.cfg"
-                with open(cfg_file_path, "r") as file:
-                    lines = file.readlines()
-                modified_lines = []
-                for line in lines:
-                    if line.startswith("command = "):
-                        line = line.replace(os.sep+"failed-", os.sep)
-                    modified_lines.append(line)
-                with open(cfg_file_path, "w") as file:
-                    file.writelines(modified_lines)
-                with open(options.download_script_path, "r") as file:
-                    lines = file.readlines()
-                modified_lines = []
-                for line in lines:
-                    line = line.replace(os.sep+"failed-", os.sep)
-                    modified_lines.append(line)
-                with open(options.download_script_path , "w") as file:
-                    file.writelines(modified_lines)
+                rename_venv(options, options.venv_dir.name.removeprefix("failed-"))
 
             ud.save_options_to_json(options)
 
@@ -4432,6 +4411,45 @@ def setup_virtualenv(options: Options) -> bool:
     verify_and_repair_imports(options)
     # Check that all packages can be imported in the venv.
     return check_packages_in_venv(options)
+
+
+def rename_venv(options: Options, new_name: str) -> None:
+    """Rename a virtual environment directory and fix the paths recorded inside it.
+
+    A venv records its own location in pyvenv.cfg and in the download script, so
+    a rename that touches only the directory leaves a venv that points at a path
+    that no longer exists. Two callers need this: dropping the "failed-" prefix
+    once a run succeeds, and re-naming a venv whose package list changed when
+    verify_and_repair_imports repaired a wrongly resolved pip name.
+
+    Args:
+        options:  Options object; reads and updates options.venv_dir.
+        new_name: The directory's new name, not a path.
+
+    Returns:
+        None. Failure to rewrite a recorded path is logged, not raised: the venv
+        has already moved and the run continues.
+    """
+    assert options.venv_dir is not None, "options.venv_dir must be set"
+    old_dir  = options.venv_dir
+    new_dir  = old_dir.with_name(new_name)
+    if new_dir == old_dir:
+        return
+    old_dir.rename(new_dir)
+    options.set_venv_dir(new_dir)
+    for path in (options.venv_dir / "pyvenv.cfg", options.download_script_path):
+        try:
+            contents = path.read_text()
+        except OSError as exc:
+            logging.warning("Could not read %s after renaming the venv (%s).", path, exc)
+            continue
+        updated = contents.replace(old_dir.name, new_dir.name)
+        if updated == contents:
+            continue
+        try:
+            path.write_text(updated)
+        except OSError as exc:
+            logging.warning("Could not update %s after renaming the venv (%s).", path, exc)
 
 
 def is_virtualenv() -> bool:
