@@ -332,6 +332,32 @@ wiring rationale and for two Minors deliberately left unfixed.
 
 ## Deferred items
 
+- **A manifest can record an `interpreter_tag` and an `interpreter_path`
+  that disagree.** `interpreter_tag()` (`veny.py:3974`) reads
+  `options.stdlib.python_version`, while `venv_build_interpreter()` returns
+  `options.python_command or sys.executable`. Those agree unless the stdlib
+  probe degrades: `stdlib_index.for_interpreter` falls back to the *running*
+  interpreter's index on a timeout or a non-zero exit, so a run whose target
+  is 3.13 can write `interpreter_tag: "3.11"` next to
+  `interpreter_path: "python3.13"`, and a second degraded run then matches
+  that tag and reuses a 3.13 venv labelled 3.11. Nothing validates the pair.
+  The design doc's creation flow says the tag comes from the build
+  interpreter, so the code and the doc currently disagree about which
+  interpreter the tag describes. Fix shape: `installed_versions_in_venv`
+  already spawns the venv's own Python — have it also return
+  `sys.version_info[:2]` and record *that* as the tag, making every manifest
+  field a fact about the venv rather than about the run that built it.
+  Raised by the whole-branch review 2026-08-14, parked because it changes
+  what the approved design says.
+- `satisfies()` runs twice on the winning cached venv: once inside
+  `cache_candidates` (`veny.py:4788`) and again inside `check_venv_dir`
+  (`veny.py:4695`), which re-reads the manifest from disk to do it. Correct
+  but redundant, and it reintroduces the "the folder changed underneath the
+  run" re-read that `CacheCandidate` removed from the ranking loop. Fix
+  shape: have `find_match_dir_in_cache` pass the manifest it already holds
+  through to `check_venv_dir`, leaving that function to do only the
+  import-level confirmation. Same shape as the Task 8 ruling, and best done
+  together with the interpreter-tag item above.
 - `univ_defs.py` is 9,734 lines and `veny.py` is 4,379 lines (down from
   5,475 before the alias-resolver plan removed the hardcoded alias table,
   and from 6,320 before the stdlib plan before that removed the hardcoded
