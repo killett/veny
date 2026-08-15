@@ -211,9 +211,12 @@ which is precisely the code this design retires.
 
 ### Tests and tooling
 
-**Test imports.** The four test files that do `import veny` become
-`from veny import cli as veny`, leaving their existing `veny.<name>` references
-intact. Rewriting roughly 200 call sites during a move that must be
+**Test imports.** The five test files that do `import veny`
+(`test_cache_search`, `test_manifest_writing`, `test_options_surface`,
+`test_rename_venv`, `test_split_imports`) become `from veny import cli as veny`,
+leaving their existing `veny.<name>` references intact. Two more files —
+`test_import_guard` and `test_json_types` — carry `import veny` inside
+subprocess source strings and need the same treatment there. Rewriting roughly 200 call sites during a move that must be
 behaviour-preserving adds risk without adding coverage. Sibling imports become
 `from veny import alias_index` and so on.
 `tests/test_manifest_writing.py`'s version assertion imports the package itself.
