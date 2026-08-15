@@ -3574,9 +3574,9 @@ def check_packages_in_venv(options: Options, record: ResolvedImport | None = Non
         record:       Optional resolved import to check. If None, checks all uninstalled imports.
         venv_dir:     Optional path to the virtual environment directory. If None, uses options.venv_dir.
         source_names: Optional import names known to come from the user's source.
-                      Defaults to options' own. check_venv_dir() passes the live
-                      run's names, because the Options it validates was loaded
-                      from JSON and carries someone else's.
+                      Defaults to options' own source_import_names(). check_venv_dir()
+                      passes this explicitly, to pin the live run's names as what
+                      governs its own call site rather than relying on the default.
 
     Returns:
         bool:       True if all packages can be imported successfully, False otherwise.
@@ -4740,9 +4740,11 @@ def check_venv_dir(options: Options, venv_dir: str | os.PathLike[str]) -> bool:
             logging.info("The cached venv directory %s cannot be used because %s.",
                          os.fspath(venv_dir), result.reason)
         return False
-    # The manifest says the packages are there; this says the imports really
-    # import. source_names comes from the live run, because the venv was built
-    # for whatever the run that created it wrote.
+    # The manifest says the packages are there; this confirms the imports
+    # really import. source_names is passed explicitly -- redundant with
+    # check_packages_in_venv's own default today, since both read off this
+    # same options -- so that this call site still names the live run's
+    # source imports as what governs even if that default ever changes.
     if check_packages_in_venv(options, venv_dir=venv_dir,
                               source_names=source_import_names(options)):
         return True
