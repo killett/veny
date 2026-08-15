@@ -19,6 +19,10 @@ like) — none of it is a runtime dependency of veny. veny itself has no
 third-party dependencies — it must run on a bare interpreter, since its job
 is to bootstrap environments for other scripts.
 
+veny requires the [emmykit](https://pypi.org/project/emmykit/) package
+(`pip install 'emmykit>=0.4.0'`), which provides its utility layer and the base
+`Options` class.
+
 ## Quick usage
 
 ```
@@ -49,7 +53,7 @@ until removed by hand.
 ```
 veny.py           # Entry point: argument parsing, import analysis driving,
                    # venv build/run orchestration.
-univ_defs.py       # Shared utilities and the base Options class.
+veny_json_types.py # Registers veny's own types with emmykit's JSON registry.
 alias_index.py     # Import-name -> pip-name resolution (overrides, cache,
                    # target-interpreter probe, PyPI confirmation chain).
 stdlib_index.py    # Standard-library membership for the target interpreter.

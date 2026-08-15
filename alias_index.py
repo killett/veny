@@ -8,7 +8,7 @@ metadata, a small curated seed, a user override file, and a cache of results
 that were verified by actually installing and importing them. See
 docs/superpowers/specs/2026-08-12-module-alias-resolver-design.md.
 
-This module deliberately imports nothing from veny or univ_defs, so it can be
+This module deliberately imports nothing from veny or emmykit, so it can be
 tested on its own and so the dependency direction stays one-way. It never
 installs anything: it produces ranked candidates and veny verifies them.
 """
@@ -81,8 +81,8 @@ class ResolvedImport:
     went into one set and import names into another, leaving every consumer to
     guess which kind of string it was holding.
 
-    This lives here rather than in veny.py so that univ_defs can serialize it
-    without importing veny, which would close an import cycle.
+    This lives here rather than in veny.py so that veny_json_types can register
+    its JSON handlers without importing veny, which would close an import cycle.
 
     Attributes:
         import_name: The name as written in the user's source.

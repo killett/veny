@@ -5,7 +5,7 @@ a cheap, human-readable prefilter, and ``veny_manifest.json`` inside it is the
 authority on what it holds and which interpreter it was built for.
 
 This module is pure and standard-library only. It imports nothing from veny,
-univ_defs, alias_index, or pypi_client, so it can be unit tested without
+emmykit, alias_index, or pypi_client, so it can be unit tested without
 building a virtual environment.
 """
 

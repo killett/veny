@@ -6,7 +6,7 @@ property of the interpreter which will run the user's script, so this module
 asks an interpreter instead of carrying a hardcoded list. See
 docs/superpowers/specs/2026-08-12-stdlib-index-design.md for the rationale.
 
-This module deliberately imports nothing from veny or univ_defs, so it can be
+This module deliberately imports nothing from veny or emmykit, so it can be
 tested on its own and so the dependency direction stays one-way.
 """
 

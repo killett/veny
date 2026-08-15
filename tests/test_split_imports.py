@@ -1428,33 +1428,6 @@ def test_the_repair_installer_reports_failure_instead_of_exiting(monkeypatch, tm
     assert veny.install_into_venv(options, "nonexistent-package") is False
 
 
-def test_univ_defs_imports_without_the_alias_modules_beside_it(tmp_path):
-    # univ_defs is deployed standalone alongside five helper scripts (mydiff,
-    # myaudit, multireplace, treeview, printall), each of which does
-    # "import univ_defs as ud". A module-scope "import alias_index" -- which
-    # also pulls in pypi_client -- makes every one of them fail with
-    # ModuleNotFoundError unless both new modules are copied there too.
-    # stdlib_index never had this problem because only veny.py imports it.
-    import os
-    import shutil
-
-    repo_root = Path(__file__).resolve().parent.parent
-    shutil.copy(repo_root / "univ_defs.py", tmp_path / "univ_defs.py")
-    assert not (tmp_path / "alias_index.py").exists()
-    environment = dict(os.environ, PYTHONPATH="")
-
-    result = subprocess.run(
-        [sys.executable, "-c", "import univ_defs"],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        env=environment,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
-
-
 def test_resolved_import_still_round_trips_when_alias_index_is_lazy():
     # Making the import lazy must not quietly turn the ResolvedImport and
     # AliasIndex handlers into dead code that falls through to str().
