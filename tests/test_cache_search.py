@@ -46,7 +46,7 @@ def test_a_hyphenated_package_does_not_disqualify_its_own_venv(tmp_path: Path) -
         [venv_cache.PackageRecord("ruamel.yaml", "ruamel-yaml", "0.18.6", None)],
     )
     options = an_options({ResolvedImport("ruamel.yaml", "ruamel-yaml")})
-    assert veny.cache_candidates(options, [venv_dir]) == [venv_dir]
+    assert [c.folder for c in veny.cache_candidates(options, [venv_dir])] == [venv_dir]
 
 
 def test_a_venv_without_a_manifest_is_skipped(tmp_path: Path) -> None:
@@ -91,7 +91,22 @@ def test_a_pin_is_checked_against_the_installed_version(tmp_path: Path) -> None:
     options.extra_requirements = {"numpy": ">=1.2"}
     assert veny.cache_candidates(options, [venv_dir]) == []
     options.extra_requirements = {"numpy": ">=0.9"}
-    assert veny.cache_candidates(options, [venv_dir]) == [venv_dir]
+    assert [c.folder for c in veny.cache_candidates(options, [venv_dir])] == [venv_dir]
+
+
+def test_a_folder_that_loses_its_manifest_between_calls_is_dropped_not_raised(
+    tmp_path: Path,
+) -> None:
+    """The cache directory can be mutated by another process; a vanished manifest must degrade, not crash."""
+    venv_dir = a_cached_venv(
+        tmp_path,
+        "myenv-py3.12-20260814-091500-numpy",
+        [venv_cache.PackageRecord("numpy", "numpy", "2.1.3", None)],
+    )
+    options = an_options({ResolvedImport("numpy", "numpy")})
+    assert [c.folder for c in veny.cache_candidates(options, [venv_dir])] == [venv_dir]
+    (venv_dir / venv_cache.MANIFEST_FILENAME).unlink()
+    assert veny.cache_candidates(options, [venv_dir]) == []
 
 
 def test_wanted_packages_carries_the_requested_specs() -> None:

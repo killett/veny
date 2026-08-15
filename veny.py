@@ -4764,7 +4764,27 @@ def wanted_packages(options: Options) -> list[venv_cache.Wanted]:
             for record in sorted(options.uninstalled_imports, key=lambda r: r.pip_name)]
 
 
-def cache_candidates(options: Options, folders: list[Path]) -> list[Path]:
+@dataclass(frozen=True)
+class CacheCandidate:
+    """A cached venv folder that has already been parsed and read once.
+
+    Carrying these along lets the ranking pass in find_match_dir_in_cache
+    consume them directly instead of re-parsing the name and re-reading the
+    manifest -- a second read that could only fail if the folder changed
+    underneath the run, and had no correct response to that failure.
+
+    Attributes:
+        folder:   The cached venv directory.
+        parsed:   The folder name, already parsed.
+        manifest: The venv's manifest, already read.
+    """
+
+    folder:   Path
+    parsed:   venv_cache.FolderName
+    manifest: venv_cache.Manifest
+
+
+def cache_candidates(options: Options, folders: list[Path]) -> list[CacheCandidate]:
     """Filter cached venv folders down to those that can serve this run.
 
     The folder name is a cheap reject; veny_manifest.json is the decision. A
@@ -4776,12 +4796,13 @@ def cache_candidates(options: Options, folders: list[Path]) -> list[Path]:
         folders: Candidate directories, already filtered by name prefix.
 
     Returns:
-        The folders that match, in the order given.
+        The folders that match, in the order given, each paired with the
+        parsed name and manifest already read while deciding.
     """
     tag    = interpreter_tag(options)
     wanted = wanted_packages(options)
     names  = [item.pip_name for item in wanted]
-    matches: list[Path] = []
+    matches: list[CacheCandidate] = []
     for folder in folders:
         parsed = venv_cache.parse_folder_name(folder.name)
         if parsed is None:
@@ -4802,7 +4823,7 @@ def cache_candidates(options: Options, folders: list[Path]) -> list[Path]:
                 logging.info("Skipping the cached venv %s because %s.",
                              os.fspath(folder), result.reason)
             continue
-        matches.append(folder)
+        matches.append(CacheCandidate(folder=folder, parsed=parsed, manifest=manifest))
     return matches
 
 
@@ -4840,15 +4861,9 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
     all_venv_folders = [f for f in options.my_dir.iterdir()
                         if ud.safe_is_dir(f) and f.name.startswith(options.venv_name)]
     final_venv_folders: dict[Path, dict[str, int]] = {}
-    for folder in cache_candidates(options, all_venv_folders):
-        parsed = venv_cache.parse_folder_name(folder.name)
-        if parsed is None:
-            raise RuntimeError("cache_candidates only returns folders whose names parse")
-        manifest = venv_cache.read_manifest(folder)
-        if manifest is None:
-            raise RuntimeError("cache_candidates only returns folders with a manifest")
-        final_venv_folders[folder] = {"timestamp"    : int(parsed.timestamp.replace("-", "")),
-                                      "num_packages" : len(manifest.packages)}
+    for candidate in cache_candidates(options, all_venv_folders):
+        final_venv_folders[candidate.folder] = {"timestamp"    : int(candidate.parsed.timestamp.replace("-", "")),
+                                                "num_packages" : len(candidate.manifest.packages)}
     if not final_venv_folders:
         if not options.rawlog: logging.info("No matching venv folders found in the cache.")
     else:
