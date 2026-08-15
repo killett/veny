@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 import venv_cache
 
 
@@ -127,3 +129,49 @@ def test_read_manifest_returns_none_for_invalid_utf8(tmp_path: Path) -> None:
     """A truncated multi-byte UTF-8 sequence must degrade to a cache miss, not raise."""
     (tmp_path / venv_cache.MANIFEST_FILENAME).write_bytes(b'{"schema_version": 1, "created": "\xff\xfe"}')
     assert venv_cache.read_manifest(tmp_path) is None
+
+
+@pytest.mark.parametrize(
+    ("installed", "spec", "expected"),
+    [
+        ("1.10.0", ">1.9", True),      # lexicographic compare would say "1.10" < "1.9"
+        ("1.2", ">=1.2.0", True),      # zero padding
+        ("1.2.0", "==1.2", True),      # zero padding, other direction
+        ("1.2.3", "~=1.2.0", True),    # compatible release, in range
+        ("1.3.0", "~=1.2.0", False),   # compatible release, above the bound
+        ("1.9.9", "~=1.2", True),      # two-component compatible release
+        ("2.0.0", "~=1.2", False),
+        ("1.2.5", "==1.2.*", True),    # prefix match on release segments
+        ("1.3.0", "==1.2.*", False),
+        ("1.20.0", "==1.2.*", False),  # string prefix matching would say True
+        ("1.5", ">=1.0,<2.0", True),   # every clause must hold
+        ("2.1", ">=1.0,<2.0", False),
+        ("1.5", "!=1.5", False),
+        ("1.5", "!=1.6", True),
+    ],
+)
+def test_version_satisfies_supported_forms(installed: str, spec: str, expected: bool) -> None:
+    """A comparator that compares strings, or honours only the first clause, fails here."""
+    assert venv_cache.version_satisfies(installed, spec) is expected
+
+
+@pytest.mark.parametrize(
+    ("installed", "spec"),
+    [
+        ("1.2b1", ">=1.0"),    # pre-release
+        ("1.2.post1", ">=1.0"),
+        ("1.2.dev0", ">=1.0"),
+        ("1.2+cpu", ">=1.0"),  # local version
+        ("1!2.0", ">=1.0"),    # epoch
+        ("1.2", "===1.2"),     # arbitrary equality
+        ("1.2", ">=1.0b1"),    # unsupported form on the spec side
+        ("1.2", "~=1"),        # compatible release needs two components
+        ("1.2", "1.2"),        # no operator
+        ("1.2", ""),           # present but empty
+        ("1.2", "@ https://example.invalid/x.whl"),
+        (None, ">=1.0"),       # unknown installed version
+    ],
+)
+def test_version_satisfies_fails_closed(installed: str | None, spec: str) -> None:
+    """Stripping a suffix and comparing anyway would report a pre-release as satisfying a pin."""
+    assert venv_cache.version_satisfies(installed, spec) is False

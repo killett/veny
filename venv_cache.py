@@ -18,6 +18,9 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+_RELEASE_RE = re.compile(r"\d+(?:\.\d+)*\Z")
+_CLAUSE_RE = re.compile(r"(==|!=|>=|<=|~=|>|<)(.+)\Z", re.DOTALL)
+
 MAX_NAMED_PACKAGES: int = 5
 
 MANIFEST_FILENAME: str = "veny_manifest.json"
@@ -254,3 +257,109 @@ def read_manifest(venv_dir: str | os.PathLike[str]) -> Manifest | None:
     except (KeyError, TypeError, ValueError) as exc:
         logging.info("Ignoring %s: it is not a manifest this veny can read (%s).", path, exc)
         return None
+
+
+def _release(text: str) -> tuple[int, ...] | None:
+    """Parse a release segment made only of dot-separated integers.
+
+    Args:
+        text: A version string.
+
+    Returns:
+        Its release components, or None if it uses any form this module does not
+        support -- epochs, pre/post/dev releases, local versions, wildcards.
+    """
+    text = text.strip()
+    if not _RELEASE_RE.match(text):
+        return None
+    return tuple(int(part) for part in text.split("."))
+
+
+def _compare(left: tuple[int, ...], right: tuple[int, ...]) -> int:
+    """Compare two release tuples, zero-padding the shorter one.
+
+    Args:
+        left:  The installed version's components.
+        right: The specified version's components.
+
+    Returns:
+        -1, 0, or 1, so that 1.2 and 1.2.0 compare equal.
+    """
+    width = max(len(left), len(right))
+    padded_left = left + (0,) * (width - len(left))
+    padded_right = right + (0,) * (width - len(right))
+    return (padded_left > padded_right) - (padded_left < padded_right)
+
+
+def _clause_holds(installed: tuple[int, ...], clause: str) -> bool:
+    """Test one comma-separated clause of a version specifier.
+
+    Args:
+        installed: The installed version's release components.
+        clause:    One clause, such as ">=1.2" or "==1.2.*".
+
+    Returns:
+        True if the clause holds. False for any form this module does not fully
+        support, which is what makes the whole comparator fail closed.
+    """
+    match = _CLAUSE_RE.match(clause.strip())
+    if match is None:
+        return False
+    operator, raw = match.group(1), match.group(2).strip()
+    if operator == "==" and raw.endswith(".*"):
+        prefix = _release(raw[:-2])
+        if prefix is None:
+            return False
+        width = len(prefix)
+        padded = installed + (0,) * max(0, width - len(installed))
+        return padded[:width] == prefix
+    wanted = _release(raw)
+    if wanted is None:
+        return False
+    if operator == "~=":
+        # PEP 440's compatible release: ~=X.Y.Z means >=X.Y.Z and <X.(Y+1).
+        if len(wanted) < 2:
+            return False
+        upper = wanted[:-2] + (wanted[-2] + 1,)
+        return _compare(installed, wanted) >= 0 and _compare(installed, upper) < 0
+    order = _compare(installed, wanted)
+    if operator == "==":
+        return order == 0
+    if operator == "!=":
+        return order != 0
+    if operator == ">=":
+        return order >= 0
+    if operator == "<=":
+        return order <= 0
+    if operator == ">":
+        return order > 0
+    return order < 0
+
+
+def version_satisfies(installed: str | None, spec: str | None) -> bool:
+    """Test whether an installed version satisfies a requested specifier.
+
+    This is deliberately not a PEP 440 implementation. It supports comma-
+    separated clauses using ==, !=, >=, <=, >, <, ~=, and ==X.Y.*, over versions
+    made only of dot-separated integers. It refuses everything else -- epochs,
+    pre/post/dev releases, local versions, arbitrary equality, URLs, environment
+    markers -- by returning False.
+
+    Refusing means "no match", which means a rebuild. That is the safe
+    direction: being wrong toward reuse hands back a virtual environment that
+    violates the user's pin and fails at their runtime, while being wrong toward
+    rebuild only costs time.
+
+    Args:
+        installed: The version the venv reports, or None if it is unknown.
+        spec:      The requested specifier, or None when nothing was requested.
+
+    Returns:
+        True only if every clause holds under the supported subset.
+    """
+    if installed is None or spec is None or not spec.strip():
+        return False
+    release = _release(installed)
+    if release is None:
+        return False
+    return all(_clause_holds(release, clause) for clause in spec.split(","))
