@@ -23,7 +23,8 @@ def test_veny_exits_with_an_install_message_when_emmykit_is_missing():
     assert result.returncode != 0
     assert "emmykit" in result.stderr
     assert "pip install" in result.stderr
-    assert "Traceback" not in result.stdout
+    assert "0.4.0" in result.stderr
+    assert result.stdout == ""
 
 
 def test_veny_imports_normally_when_emmykit_is_present():
