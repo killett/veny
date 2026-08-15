@@ -1,5 +1,7 @@
 """Tests for which fields veny's Options class carries."""
 
+import argparse
+
 import veny
 
 RETIRED_FIELDS = {
@@ -23,3 +25,9 @@ def test_options_still_carries_the_directories_veny_uses():
     options = veny.Options()
     assert options.my_dir == options.home / options.my_name
     assert options.packages_dir == options.my_dir / "packages"
+
+
+def test_options_args_defaults_to_none_after_the_emmykit_swap():
+    options = veny.Options()
+    assert options.args is None
+    assert not isinstance(options.args, argparse.Namespace)

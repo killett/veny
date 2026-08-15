@@ -179,3 +179,28 @@ def test_register_types_is_idempotent():
 
     record = alias_index.ResolvedImport(import_name="cv2", pip_name="opencv-python")
     assert roundtrip(record) == record
+
+
+def test_importing_veny_is_enough_to_register_the_types():
+    # Catches: register_types() never called from veny, or called only inside
+    # main() -- production would then write repr strings into the options file
+    # while every direct-registration test stayed green.
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    source = (
+        "import veny, json, emmykit as ek, alias_index;"
+        "r = alias_index.ResolvedImport(import_name='cv2', pip_name='opencv-python');"
+        "print(ek.from_jsonable(json.loads(json.dumps(ek.to_jsonable(r)))) == r)"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", source],
+        cwd=Path(__file__).resolve().parent.parent,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "True"

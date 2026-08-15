@@ -4,9 +4,10 @@ import sys
 import venv
 from pathlib import Path
 
+import emmykit as ek
+
 import alias_index
 import stdlib_index
-import univ_defs as ud
 import venv_cache
 import veny
 from alias_index import Candidate, Resolution, Source
@@ -1066,9 +1067,7 @@ def test_an_import_attributable_to_its_own_distribution_is_confirmed(
     index = _live_index(tmp_path)
     record = veny.ResolvedImport(import_name="thing", pip_name="thing-pkg")
     options = _options_with_venv(tmp_path, index, [record])
-    fake = _FakeInstalledVenv(
-        provides={"thing-pkg": "thing"}, installed=["thing-pkg"]
-    )
+    fake = _FakeInstalledVenv(provides={"thing-pkg": "thing"}, installed=["thing-pkg"])
     monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
     monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
 
@@ -1077,9 +1076,7 @@ def test_an_import_attributable_to_its_own_distribution_is_confirmed(
     assert index.cache.get("thing") == "thing-pkg"
 
 
-def test_an_import_the_batch_install_did_not_provide_is_repaired(
-    monkeypatch, tmp_path
-):
+def test_an_import_the_batch_install_did_not_provide_is_repaired(monkeypatch, tmp_path):
     # The batch install installs candidates[0] and nothing else, so a wrong
     # first candidate used to be final: ranking past position 0 had no
     # production effect at all.
@@ -1143,9 +1140,7 @@ def test_a_record_carrying_a_pip_spelling_is_never_repaired(monkeypatch, tmp_pat
     # fails, so treating that as a failed import would uninstall a package that
     # installed perfectly well and is exactly what the user asked for.
     index = _live_index(tmp_path)
-    record = veny.ResolvedImport(
-        import_name="opencv-python", pip_name="opencv-python"
-    )
+    record = veny.ResolvedImport(import_name="opencv-python", pip_name="opencv-python")
     options = _options_with_venv(tmp_path, index, [record])
     options.all_imports = set()  # nothing in the user's source
     fake = _FakeInstalledVenv(
@@ -1208,9 +1203,7 @@ def test_a_missing_shared_library_is_classified_as_machine_scoped(
     assert "libGL.so.1" in outcome.detail
 
 
-def test_an_absent_module_is_still_classified_as_a_package_fault(
-    monkeypatch, tmp_path
-):
+def test_an_absent_module_is_still_classified_as_a_package_fault(monkeypatch, tmp_path):
     # The distinction must stay sharp in both directions: a package that
     # installs and genuinely does not contain the module is a durable fact, and
     # must keep being remembered so it is not re-attempted every run.
@@ -1343,9 +1336,7 @@ def test_a_missing_shared_library_is_reported_to_the_user(
     assert any("cv2" in message for message in messages), messages
 
 
-def test_a_machine_scoped_failure_leaves_no_persisted_rejection(
-    monkeypatch, tmp_path
-):
+def test_a_machine_scoped_failure_leaves_no_persisted_rejection(monkeypatch, tmp_path):
     # opencv-python installed correctly and declares cv2; this machine just
     # lacks libGL.so.1. The in-session retry is still right -- headless may
     # genuinely be the answer -- but persisting a rejection suppresses the
@@ -1385,9 +1376,12 @@ def test_a_machine_scoped_failure_leaves_no_persisted_rejection(
     assert index.cache.rejected_names("cv2") == frozenset({"opencv-python"})
     # ...and nowhere else: the durable store is untouched, on disk and in memory.
     assert index.cache.rejections == {}
-    assert alias_index.AliasCache.load(
-        tmp_path / "alias_cache.json", interpreter_tag="3.12"
-    ).rejected_names("cv2") == frozenset()
+    assert (
+        alias_index.AliasCache.load(
+            tmp_path / "alias_cache.json", interpreter_tag="3.12"
+        ).rejected_names("cv2")
+        == frozenset()
+    )
 
 
 def test_a_package_that_lacks_the_import_is_still_rejected_durably(
@@ -1414,10 +1408,8 @@ def test_a_package_that_lacks_the_import_is_still_rejected_durably(
     assert index.cache.rejected_names("thing") == frozenset({"wrong-pkg"})
 
 
-def test_the_repair_installer_reports_failure_instead_of_exiting(
-    monkeypatch, tmp_path
-):
-    # install_package(), the batch path's installer, calls ud.my_critical_error()
+def test_the_repair_installer_reports_failure_instead_of_exiting(monkeypatch, tmp_path):
+    # install_package(), the batch path's installer, calls ek.my_critical_error()
     # -- i.e. sys.exit() -- when a download fails. resolve_and_verify's
     # installer must not be able to end the run: one unverifiable import is not
     # a reason to kill everything.
@@ -1427,7 +1419,9 @@ def test_the_repair_installer_reports_failure_instead_of_exiting(
     options.set_venv_dir(tmp_path / "venv")
 
     def fake_run(command, *args, **kwargs):
-        return subprocess.CompletedProcess(command, 1, stdout="", stderr="no such package")
+        return subprocess.CompletedProcess(
+            command, 1, stdout="", stderr="no such package"
+        )
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
@@ -1465,7 +1459,7 @@ def test_resolved_import_still_round_trips_when_alias_index_is_lazy():
     # Making the import lazy must not quietly turn the ResolvedImport and
     # AliasIndex handlers into dead code that falls through to str().
     record = veny.ResolvedImport(import_name="cv2", pip_name="opencv-python")
-    assert ud.from_jsonable(ud.to_jsonable(record)) == record
+    assert ek.from_jsonable(ek.to_jsonable(record)) == record
 
 
 def test_alias_index_is_serialized_as_structured_data():
@@ -1482,7 +1476,7 @@ def test_alias_index_is_serialized_as_structured_data():
         installed={},
         pypi=None,
     )
-    payload = ud.to_jsonable(index)
+    payload = ek.to_jsonable(index)
     assert isinstance(payload, dict)
     assert payload["overrides"] == {"cv2": "my-opencv"}
     assert payload["interpreter_tag"] == "3.12"
@@ -1496,5 +1490,5 @@ def test_resolved_import_round_trips_through_json():
     # each record stringifies to "ResolvedImport(import_name='cv2', ...)",
     # losing the structured data that the rest of the file depends on.
     record = veny.ResolvedImport(import_name="cv2", pip_name="opencv-python")
-    restored = ud.from_jsonable(ud.to_jsonable({record}))
+    restored = ek.from_jsonable(ek.to_jsonable({record}))
     assert restored == {record}

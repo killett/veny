@@ -293,7 +293,10 @@ def test_a_machine_scoped_import_failure_is_remembered_only_in_session(tmp_path)
     cache.reject("cv2", "opencv-python", "import_unavailable")
     assert cache.rejected_names("cv2") == frozenset({"opencv-python"})
     assert not path.exists()
-    assert AliasCache.load(path, interpreter_tag="3.12").rejected_names("cv2") == frozenset()
+    assert (
+        AliasCache.load(path, interpreter_tag="3.12").rejected_names("cv2")
+        == frozenset()
+    )
 
 
 def test_a_session_rejection_is_not_leaked_to_disk_by_a_later_confirm(tmp_path):
@@ -318,9 +321,9 @@ def test_a_package_that_simply_lacks_the_import_is_still_persisted(tmp_path):
     cache = AliasCache.load(path, interpreter_tag="3.12")
     cache.reject("cv2", "opencv", "import_failed")
     assert cache.rejected_names("cv2") == frozenset({"opencv"})
-    assert AliasCache.load(path, interpreter_tag="3.12").rejected_names("cv2") == frozenset(
-        {"opencv"}
-    )
+    assert AliasCache.load(path, interpreter_tag="3.12").rejected_names(
+        "cv2"
+    ) == frozenset({"opencv"})
 
 
 def test_an_unknown_interpreter_tag_matches_no_cache_entry(tmp_path):
@@ -381,7 +384,7 @@ def test_probe_degrades_on_nonzero_exit(monkeypatch):
 
 
 def test_probe_without_a_target_interpreter_spawns_nothing(monkeypatch):
-    # ud.find_preferred_python_version() returns None when the preferred Python
+    # ek.find_preferred_python_version() returns None when the preferred Python
     # is absent from PATH -- the bare-machine bootstrap case veny exists to
     # serve. os.fspath(None) raises TypeError, and it is called *outside* the
     # try, so the crash escapes probe_interpreter and aborts the whole run
@@ -399,7 +402,7 @@ def test_probe_without_a_target_interpreter_spawns_nothing(monkeypatch):
 def test_build_without_a_target_interpreter_returns_a_usable_index(
     tmp_path, monkeypatch
 ):
-    # veny.py passes ud.find_preferred_python_version() straight into build(),
+    # veny.py passes ek.find_preferred_python_version() straight into build(),
     # so build(None) is reached on exactly the machine that has no preferred
     # Python installed. It must degrade to the running interpreter -- which is
     # the one veny will build the venv with -- not raise.

@@ -25,27 +25,32 @@ from dataclasses import dataclass
 
 import alias_index
 import stdlib_index
-import univ_defs as ud
+import emmykit as ek
 import venv_cache
+import veny_json_types
 
 __version__: str = "0.2.2"
 
 # An import name paired with the pip package that provides it. Defined in
-# alias_index so that univ_defs can serialize it without importing veny (which
-# would close an import cycle), and re-exported here because veny is where it
-# is used.
+# alias_index, which imports nothing of veny's, and re-exported here because
+# veny is where it is used. Its JSON handlers live in veny_json_types.
 ResolvedImport = alias_index.ResolvedImport
 
+# Registers veny's own types with emmykit's JSON registry. At module scope, not
+# inside main(), so that anything importing veny -- including every test -- gets
+# the same serialization behaviour production does. The call is idempotent.
+veny_json_types.register_types()
 
-class Options(ud.Options):
+
+class Options(ek.Options):
     """Class that has all global options in one place."""
 
     def __init__(self) -> None:
         """Initialize the Options class with default values."""
-        super().__init__()                  # Call the parent class's __init__ method from univ_defs.py
+        super().__init__()                  # Call the parent class's __init__ method from emmykit
         self.log_mode:                      int = logging.INFO  # Use --debug to change to logging.DEBUG.
         self.search_above_this_dir:        bool = True
-        self.my_filepath:                  Path = ud.ensure_path(sys.argv[0])  # Full (invoked) path to this script
+        self.my_filepath:                  Path = ek.ensure_path(sys.argv[0])  # Full (invoked) path to this script
         self.my_name:                       str = self.my_filepath.stem  # The base name of this script without the .py extension
         self.home:                         Path = Path.home()  # User's home directory
         # The "my_dir" is NOT the directory where this script is located.
@@ -155,7 +160,7 @@ If you're using the bash shell, follow these steps to add the alias manually:
 
     def set_venv_dir(self, venv_dir: str | os.PathLike[str]) -> None:
         """Set the directory for the virtual environment."""
-        p = ud.ensure_path(venv_dir)
+        p = ek.ensure_path(venv_dir)
         self.venv_dir             = p
         self.venv_python          = p / "bin" / "python"  # Do NOT resolve() this symlink path
         self.venv_pip             = p / "bin" / "pip"     # Do NOT resolve() this symlink path
@@ -274,7 +279,7 @@ def main() -> None:
     if script_string is None:
         options.python_script = None
     else:
-        options.python_script = ud.ensure_file(script_string, raise_on_empty=True).resolve(strict=True)
+        options.python_script = ek.ensure_file(script_string, raise_on_empty=True).resolve(strict=True)
         options.script_dir    = options.python_script.parent.absolute()
         if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Directory where the script to run is located: %s", os.fspath(options.script_dir))
 
@@ -289,14 +294,14 @@ def main() -> None:
         else:
             if not options.rawlog: print("No luck: no last used virtual environment found. Running the script as normal.")
 
-    memory_handler = ud.configure_logging(options.my_name, log_level=options.log_mode,
+    memory_handler = ek.configure_logging(options.my_name, log_level=options.log_mode,
                                           rawlog=options.rawlog)
 
-    options.python_command = ud.find_preferred_python_version()
+    options.python_command = ek.find_preferred_python_version()
     if options.python_command:
-        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Python %s is available at: %s", ud.PY_VERSION, options.python_command)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Python %s is available at: %s", ek.PY_VERSION, options.python_command)
     else:
-        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Python %s is not available.", ud.PY_VERSION)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Python %s is not available.", ek.PY_VERSION)
     options.stdlib = stdlib_index.resolve(options.python_command)
     if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug(
         "Standard library index: %d names from Python %d.%d (source: %s)",
@@ -309,10 +314,10 @@ def main() -> None:
         len(options.aliases.overrides), len(options.aliases.cache.entries),
         options.aliases.cache.interpreter_tag)
 
-    if not ud.safe_is_dir(options.my_dir):
+    if not ek.safe_is_dir(options.my_dir):
         if not options.rawlog: logging.info("Directory %s does not exist yet, so it is being created.", options.my_dir)
         options.my_dir.mkdir(parents=True, exist_ok=True)
-    if not ud.safe_is_dir(options.packages_dir):
+    if not ek.safe_is_dir(options.packages_dir):
         if not options.rawlog: logging.info("Directory %s does not exist yet, so it is being created.", options.packages_dir)
         options.packages_dir.mkdir(parents=True, exist_ok=True)
 
@@ -322,12 +327,12 @@ def main() -> None:
         add_alias(options)
         sys.exit(0)
     elif getattr(options.args, "full", False) and options.python_script:
-        ud.my_critical_error("Full mode is not supported with a script argument.")
+        ek.my_critical_error("Full mode is not supported with a script argument.")
     elif options.python_script:
         pass  # If a script was provided as an argument, skip the rest of these checks.
     elif getattr(options.args, "blank_slate", False):
         if not getattr(options.args, "y", False):
-            if not ud.prompt_then_confirm(f"Are you sure you want to delete everything in ~/{options.my_name}/"
+            if not ek.prompt_then_confirm(f"Are you sure you want to delete everything in ~/{options.my_name}/"
                                           f" and all {options.my_name} .json files in the current directory? (y/n) "):
                 logging.info("Exiting without deleting anything.")
                 sys.exit(0)
@@ -336,7 +341,7 @@ def main() -> None:
         shutil.rmtree(options.my_dir, ignore_errors=True)
         for file in options.cwd.iterdir():
             if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Checking %s", file)
-            if ud.safe_is_file(file):
+            if ek.safe_is_file(file):
                 if (file.name.startswith(f".{options.my_name}-")                      and file.suffix.casefold() == ".out" ) or \
                    (file.name.startswith(f".{options.my_name}-")                      and file.suffix.casefold() == ".err" ) or \
                    (file.name.startswith(f".{options.my_name}_custom_modules_")       and file.suffix.casefold() == ".pkl" ) or \
@@ -403,7 +408,7 @@ def main() -> None:
             logging.info("Imported subfolders: %s", options.subfolders)
 
     if getattr(options.args, "justprint", False):
-        ud.print_all_errors(memory_handler, options.rawlog)
+        ek.print_all_errors(memory_handler, options.rawlog)
         sys.exit(0)
 
     if not options.uninstalled_imports:
@@ -433,7 +438,7 @@ def main() -> None:
                 match_dir        = options.venv_dir
                 created_new_venv = True
             else:
-                ud.my_critical_error("Failed to create a virtual environment.", choose_breakpoint=True)
+                ek.my_critical_error("Failed to create a virtual environment.", choose_breakpoint=True)
         else:
             if not options.rawlog: logging.info("Using existing virtual environment: %s", match_dir)
             created_new_venv = False
@@ -458,14 +463,14 @@ def main() -> None:
                 # If the program has made it to this point, it has run successfully, so the venv directory can be renamed because it DIDN'T fail.
                 rename_venv(options, options.venv_dir.name.removeprefix("failed-"))
 
-            ud.save_options_to_json(options)
+            ek.save_options_to_json(options)
 
             if getattr(options.args, "full", False):
                 built_or_found = "built" if created_new_venv else "found"
                 logging.info("Successfully %s a virtual environment that can run all python scripts in %s.\n"
                              "Use this virtual environment:\n%s", built_or_found, options.script_dir, options.venv_dir)
 
-    ud.print_all_errors(memory_handler, options.rawlog)
+    ek.print_all_errors(memory_handler, options.rawlog)
     logging.shutdown()
 
 
@@ -543,7 +548,7 @@ def add_alias_to_rc_file(options: Options) -> None:
                   f"into {options.rc_file}\n"
                   f"...or anything else to cancel: ")
     try:
-        if getattr(options.args, "y", False) or ud.prompt_then_confirm(the_prompt):
+        if getattr(options.args, "y", False) or ek.prompt_then_confirm(the_prompt):
             with open(options.rc_file, "a") as f:
                 f.write("\n" + options.alias_command + "\n")
             logging.info("Alias added to %s", options.rc_file)
@@ -566,10 +571,10 @@ def add_alias(options: Options) -> None:
     Raises:
         None.
     """
-    ud.detect_shell(options)
+    ek.detect_shell(options)
     if options.shell:
-        ud.find_shell_rc_file(options)
-        ud.find_additional_alias_files(options)
+        ek.find_shell_rc_file(options)
+        ek.find_additional_alias_files(options)
         if options.rc_file:
             define_alias_command(options)
             if options.alias_command:
@@ -615,7 +620,7 @@ def _record_IO(options: Options, file_content: str,
     snippet = ast.get_source_segment(file_content, node) or ""
     if not options.rawlog: logging.info("I/O operation → %s: %r (line %d: %s - found by %s)",
                                         attr, target, node.lineno, snippet.strip(),
-                                        ud.return_method_name(levels_up=2))
+                                        ek.return_method_name(levels_up=2))
     if target not in getattr(options, attr):
         getattr(options, attr).append(target)
 
@@ -2152,7 +2157,7 @@ def safe_eval(expr: str, pathlib_aliases: set[str] | None = None) -> Any | None:
         tree = ast.parse(expr, mode="eval")
         return _safe_eval_node(tree.body, pathlib_aliases=pathlib_aliases)  # tree.body is the root expr
     except (SyntaxError, ValueError) as e:
-        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("%s: Unsupported expression: %r: %s", ud.return_method_name(), expr, e)
+        if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("%s: Unsupported expression: %r: %s", ek.return_method_name(), expr, e)
         return None
 
 
@@ -2196,7 +2201,7 @@ def process_import(options: Options, module_name: str, file_path: str | os.PathL
         if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Skipping standard library import: %s", module_name)
         return False
 
-    file_path = ud.ensure_file(file_path)
+    file_path = ek.ensure_file(file_path)
 
     if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Processing import: %s from file %s", module_name, file_path)
 
@@ -2214,7 +2219,7 @@ def process_import(options: Options, module_name: str, file_path: str | os.PathL
 
     # Check if the import is a .py file in the same directory
     potential_file_path = (base_dir / f"{module_path_str}.py").expanduser().resolve()
-    if ud.safe_is_file(potential_file_path) and potential_file_path not in options.samedir_files:
+    if ek.safe_is_file(potential_file_path) and potential_file_path not in options.samedir_files:
         options.custom_modules[module_name] = potential_file_path
         options.loaded_custom_modules.add(module_name)
         options.samedir_files.append(potential_file_path)
@@ -2224,7 +2229,7 @@ def process_import(options: Options, module_name: str, file_path: str | os.PathL
     # Check if the import is a package (directory with __init__.py)
     potential_dir_path = (base_dir / module_path_str).expanduser().resolve()
     if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Constructed potential directory path: %s", potential_dir_path)
-    if ud.safe_is_dir(potential_dir_path) and ud.safe_is_file(potential_dir_path / "__init__.py") and module_path_str not in options.subfolders:
+    if ek.safe_is_dir(potential_dir_path) and ek.safe_is_file(potential_dir_path / "__init__.py") and module_path_str not in options.subfolders:
         options.custom_modules[module_name] = potential_dir_path
         options.loaded_custom_modules.add(module_name)
         if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Resolved local package to: %s", potential_dir_path)
@@ -2244,7 +2249,7 @@ def process_import(options: Options, module_name: str, file_path: str | os.PathL
     for root in getattr(options, "sys_path_hints", set()):
         # Look for a single-file module
         candidate = (root / f"{module_path_str}.py").expanduser().resolve()
-        if ud.safe_is_file(candidate):
+        if ek.safe_is_file(candidate):
             options.custom_modules[module_name] = candidate
             options.loaded_custom_modules.add(module_name)
             if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Resolved via sys.path hint (file): %s → %s", module_name, candidate)
@@ -2252,7 +2257,7 @@ def process_import(options: Options, module_name: str, file_path: str | os.PathL
 
         # Look for a package dir with __init__.py
         pkg = (root / module_path_str).expanduser().resolve()
-        if ud.safe_is_dir(pkg) and ud.safe_is_file(pkg / "__init__.py"):
+        if ek.safe_is_dir(pkg) and ek.safe_is_file(pkg / "__init__.py"):
             options.custom_modules[module_name] = pkg
             options.loaded_custom_modules.add(module_name)
             if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Resolved via sys.path hint (package): %s → %s", module_name, pkg)
@@ -2298,7 +2303,7 @@ class ImportFunctionCollector(ast.NodeVisitor):
         self.current_class:                    str | None = None
         self.aliases:                      dict[str, str] = {}
         self.options:                             Options = options
-        self.file_path:                              Path = ud.ensure_path(file_path)
+        self.file_path:                              Path = ek.ensure_path(file_path)
         self.base_classes:           dict[str, list[str]] = {}
         self.attr_types: defaultdict[str, dict[str, str]] = defaultdict(dict)  # {class_name: {attr_name: "QualifiedTypeName"}}
         self._param_types:                 dict[str, str] = {}  # param name -> "QualifiedTypeName"
@@ -2442,7 +2447,7 @@ class ImportFunctionCollector(ast.NodeVisitor):
                     if t in self.module_info.classes:
                         func_name = self._qual(f"{t}.{method_tail}")
                     else:
-                        # t might already be qualified by an alias (e.g., "ud.LLMs")
+                        # t might already be qualified by an alias (e.g., "ek.LLMs")
                         func_name = f"{t}.{method_tail}"
         if func_name:
             parts = func_name.split(".")
@@ -2660,9 +2665,9 @@ class ImportFunctionCollector(ast.NodeVisitor):
             if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Failed to resolve path %s given base_dir %s: %s", path_str, os.fspath(base_dir), e)
             return
         # Only accept .py files or a directory with __init__.py
-        if p.suffix == ".py" and ud.safe_exists(p):
+        if p.suffix == ".py" and ek.safe_exists(p):
             self.options.custom_modules[module_name] = p
-        elif ud.safe_is_dir(p) and ud.safe_exists(p / "__init__.py"):
+        elif ek.safe_is_dir(p) and ek.safe_exists(p / "__init__.py"):
             self.options.custom_modules[module_name] = p
 
     def extract_module_name_from_importlib_import_module(self, node: ast.Call) -> str | None:
@@ -2867,10 +2872,10 @@ def _analyze_module(options:          Options,
     Returns:
         (module_key, module_info) or None on failure.
     """
-    module_path = ud.ensure_path(module_path)
+    module_path = ek.ensure_path(module_path)
     module_key  = os.fspath(module_path.resolve())
 
-    file_content = ud.my_fopen(module_path, rawlog=options.rawlog)
+    file_content = ek.my_fopen(module_path, rawlog=options.rawlog)
     if not file_content:
         logging.error(f"Could not read file: {module_path}")
         return None
@@ -2897,7 +2902,7 @@ def _analyze_module(options:          Options,
             if not p:
                 continue
             P = (base_dir / p).expanduser().resolve() if not os.path.isabs(p) else Path(p).expanduser().resolve()
-            if ud.safe_is_dir(P):
+            if ek.safe_is_dir(P):
                 options.sys_path_hints.add(P)
 
     module_info = collector.module_info
@@ -2926,8 +2931,8 @@ def _enqueue_top_level_imports(options:           Options,
         possible_module_file_path = options.custom_modules.get(import_name)
         if possible_module_file_path is None:
             continue
-        actual_module_file_path = ud.ensure_path(possible_module_file_path)
-        if ud.safe_is_file(actual_module_file_path):
+        actual_module_file_path = ek.ensure_path(possible_module_file_path)
+        if ek.safe_is_file(actual_module_file_path):
             if actual_module_file_path not in processed_paths and actual_module_file_path not in modules_to_process:
                 modules_to_process.append(actual_module_file_path)
 
@@ -2950,8 +2955,8 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
         ValueError:        If the first_path exists but is not a regular file.
     """
     from collections import deque  # Allows for efficient first in, first out processing of modules
-    first_path = ud.ensure_file(first_path)
-    if not ud.is_python_script(first_path) or not ud.compile_code(first_path):
+    first_path = ek.ensure_file(first_path)
+    if not ek.is_python_script(first_path) or not ek.compile_code(first_path):
         logging.error(f"Skipping invalid Python script: {first_path}")
         return
     options.read_files                  = []
@@ -2966,21 +2971,21 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
     while modules_to_process:
         module_path = modules_to_process.popleft()  # first in, first out
         if not options.rawlog: logging.info("Processing module: %s where %s", module_path, type(module_path))
-        if ud.safe_is_dir(module_path):
+        if ek.safe_is_dir(module_path):
             pkg_dir = module_path
             init_py = pkg_dir / "__init__.py"
-            if ud.safe_is_file(init_py):
+            if ek.safe_is_file(init_py):
                 # 1) Parse the package __init__.py
                 module_path = init_py
                 # 2) Also enqueue all other .py modules in that same folder
                 for p in pkg_dir.iterdir():
-                    if ud.is_python_script(p) and p.name != "__init__.py":
+                    if ek.is_python_script(p) and p.name != "__init__.py":
                         if p not in modules_to_process and p not in processed_paths:
                             modules_to_process.append(p)
             else:
                 logging.error(f"No __init__.py in package directory {pkg_dir}, skipping.")
                 continue
-        elif not ud.safe_is_file(module_path):
+        elif not ek.safe_is_file(module_path):
             logging.error(f"Skipping {module_path} because it is not a file or directory.")
             continue
         if module_path in processed_paths:
@@ -3004,8 +3009,8 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
     # Build alias → file-path-key mapping for local modules
     _alias_to_key: dict[str, str] = {}
     for _mod_name, _mod_path in options.custom_modules.items():
-        _p = ud.ensure_path(_mod_path)
-        if ud.safe_is_file(_p):
+        _p = ek.ensure_path(_mod_path)
+        if ek.safe_is_file(_p):
             _alias_to_key[_mod_name] = os.fspath(_p.resolve())
 
     # Now build the call graph
@@ -3060,8 +3065,8 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
             process_import(options, import_name, first_path)
             if import_name in options.custom_modules:
                 # It's a known local module that we haven't processed yet
-                module_file_path = ud.ensure_path(options.custom_modules[import_name])
-                if not ud.safe_is_file(module_file_path):
+                module_file_path = ek.ensure_path(options.custom_modules[import_name])
+                if not ek.safe_is_file(module_file_path):
                     logging.error(f"Custom module path for {import_name} is not a file: {module_file_path}")
                     continue
                 new_module_key = os.fspath(module_file_path.resolve())
@@ -3083,8 +3088,8 @@ def find_imports_and_IO_in_script(options: Options, first_path: str | os.PathLik
                     continue
                 new_module_key, module_info = result
                 # Rebuild alias map and call graph with the new module included
-                _p = ud.ensure_path(module_file_path)
-                if ud.safe_is_file(_p):
+                _p = ek.ensure_path(module_file_path)
+                if ek.safe_is_file(_p):
                     _alias_to_key[import_name] = os.fspath(_p.resolve())
                 call_graph = build_call_graph(modules_info, _alias_to_key)
                 collect_imports_from_module(new_module_key)
@@ -3426,7 +3431,7 @@ def venv_python_for(options: Options, venv_dir: str | os.PathLike[str] | None = 
         assert options.venv_dir is not None, "options.venv_dir must be set"
         venv_dir = options.venv_dir
     else:
-        venv_dir = ud.ensure_dir(venv_dir)
+        venv_dir = ek.ensure_dir(venv_dir)
     if sys.platform == "win32":
         return (venv_dir / "Scripts" / "python.exe").absolute()
     # Do NOT use resolve() here because this is a symlink and resolve() would break it
@@ -3667,11 +3672,11 @@ def split_imports(options: Options) -> None:
             if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Checking if import %s is installed or uninstalled", imp)
             if imp in options.custom_modules.keys():
                 if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Custom module %s has path %s", imp, os.fspath(options.custom_modules[imp]))
-                status_str = f"{ud.ANSI_CYAN}YES - custom module{ud.ANSI_RESET}"
+                status_str = f"{ek.ANSI_CYAN}YES - custom module{ek.ANSI_RESET}"
             elif check_packages_in_venv(options, record=record,
                                         venv_dir=venv_dir):
                 if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Module %s can be imported in venv", imp)
-                status_str = f"{ud.ANSI_GREEN}YES -     installed{ud.ANSI_RESET}"
+                status_str = f"{ek.ANSI_GREEN}YES -     installed{ek.ANSI_RESET}"
                 # The pip name is left as the import name here because nothing
                 # needs it: an installed import is never handed to pip. If
                 # use_pip_list() later reclassifies this record, it resolves it.
@@ -3739,17 +3744,17 @@ def list_packages(options: Options) -> None:
         if not options.rawlog: logging.info("Building a virtual environment that can run every python script in %s", os.fspath(options.script_dir))
 
     if isinstance(options.python_script, (str, Path)):
-        options.python_script         = ud.ensure_path(options.python_script)
+        options.python_script         = ek.ensure_path(options.python_script)
         options.loaded_custom_modules = set()
-        if ud.safe_is_file(options.python_script):
-            if ud.is_python_script(options.python_script):
+        if ek.safe_is_file(options.python_script):
+            if ek.is_python_script(options.python_script):
                 if not options.rawlog: logging.info("Processing a single Python script: %s", os.fspath(options.python_script))
                 python_file = options.python_script
                 options.all_imports = set()
                 find_imports_and_IO_in_script(options, python_file)
             else:
                 raise ValueError(f"'{os.fspath(options.python_script)}' is not a valid Python script.")
-        elif ud.safe_is_dir(options.python_script):
+        elif ek.safe_is_dir(options.python_script):
             if not options.rawlog: logging.info("Processing an entire folder of Python scripts: %s",
                                                 os.fspath(options.python_script))
             python_dir = options.python_script
@@ -3774,25 +3779,25 @@ def list_packages(options: Options) -> None:
 
 def stayed_out_dir(options: Options, p: str | os.PathLike[str]) -> bool:
     """Check if the parent directory of path p contains any substrings from the stay_out_list."""
-    p          = ud.ensure_path(p)
+    p          = ek.ensure_path(p)
     parent_str = os.fspath(p.parent)
     return any(sub in parent_str for sub in options.stay_out_list)
 
 
 def get_all_imports(options: Options, directory: str | os.PathLike[str]) -> None:
     """Get all imports from all Python scripts in a directory."""
-    directory = ud.ensure_path(directory)
+    directory = ek.ensure_path(directory)
     options.all_imports = set()
     # Build one iterator of candidate files (recursive)
-    candidates = (p for p in directory.rglob("*") if ud.safe_is_file(p) and not stayed_out_dir(options, p))
+    candidates = (p for p in directory.rglob("*") if ek.safe_is_file(p) and not stayed_out_dir(options, p))
     # If you want a progress denominator that matches what you'll actually process:
-    total_files     = sum(1 for p in candidates if ud.is_python_script(p))
+    total_files     = sum(1 for p in candidates if ek.is_python_script(p))
     max_digits      = len(str(total_files))  # For formatting progress output
     processed_files = 0
     # Recreate the iterator (generators are single-use)
-    candidates = (p for p in directory.rglob("*") if ud.safe_is_file(p) and not stayed_out_dir(options, p))
+    candidates = (p for p in directory.rglob("*") if ek.safe_is_file(p) and not stayed_out_dir(options, p))
     for file_path in candidates:
-        if ud.is_python_script(file_path):
+        if ek.is_python_script(file_path):
             find_imports_and_IO_in_script(options, file_path)
             processed_files += 1
             if not options.rawlog:
@@ -3841,10 +3846,10 @@ def download_packages(options: Options) -> bool:
     try:
         assert options.download_script_path is not None, "Download script path is not set."
         if not options.rawlog: logging.info("Writing download script to %s", options.download_script_path)
-        options.download_script_path.write_text(download_script, encoding=ud.DEFAULT_ENCODING)
+        options.download_script_path.write_text(download_script, encoding=ek.DEFAULT_ENCODING)
         options.download_script_path.chmod(0o755)
         # Run the initial download script and capture the output
-        result = ud.my_popen([options.download_script_path])
+        result = ek.my_popen([options.download_script_path])
         return result.returncode == 0
     except OSError:
         logging.exception("Error writing or executing download script.")
@@ -3860,8 +3865,8 @@ def install_packages_simultaneously(options: Options) -> bool:
         "-r", options.requirements_file
     ]
     if not options.rawlog: logging.info("Installing all packages simultaneously...")
-    # Run the command and capture the output line by line using ud.my_popen
-    result = ud.my_popen(install_command)
+    # Run the command and capture the output line by line using ek.my_popen
+    result = ek.my_popen(install_command)
     if result.returncode == 0:
         if not options.rawlog: logging.info("All packages installed successfully.")
         return True
@@ -3903,7 +3908,7 @@ def install_package(package_name: str, options: Options) -> bool:
                             os.fspath(options.packages_dir), package_name]
         download_result = subprocess.run(download_command, capture_output=True, text=True)
         if download_result.returncode != 0:
-            ud.my_critical_error(f"Failed to download {package_name}. Error: {download_result.stderr}")
+            ek.my_critical_error(f"Failed to download {package_name}. Error: {download_result.stderr}")
         # Use pip to install package_name from the file that was just downloaded to options.packages_dir
         install_command = [os.fspath(options.venv_python), "-m", "pip", "install", "--no-index",
                            "--find-links", os.fspath(options.packages_dir), package_name]
@@ -4023,7 +4028,7 @@ print("\\n".join(installed_packages + available_modules + list(builtin_modules))
         if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("\noptions.pip_list = %s", options.pip_list)
 
         pip_list_filename = options.my_dir / f"pip_list_{options.timestamp}.txt"
-        pip_list_filename.write_text("\n".join(options.pip_list), encoding=ud.DEFAULT_ENCODING)
+        pip_list_filename.write_text("\n".join(options.pip_list), encoding=ek.DEFAULT_ENCODING)
 
     # options.pip_list holds distribution names, module names and builtin module
     # names all mixed together, so it is matched against the import name -- which
@@ -4065,7 +4070,7 @@ def parse_extra_requirements(options: Options) -> None:
         to the options object as extra_requirements.
     """
     options.extra_requirements = {}
-    file_content = ud.my_fopen(options.extra_requirements_file, suppress_errors=True, rawlog=options.rawlog)
+    file_content = ek.my_fopen(options.extra_requirements_file, suppress_errors=True, rawlog=options.rawlog)
     if not file_content:
         return
     # Regular expression to capture package name and version specifier
@@ -4130,7 +4135,7 @@ def run_pip_in_venv(options: Options, *args: str) -> subprocess.CompletedProcess
 def install_into_venv(options: Options, pip_name: str) -> bool:
     """Install one package into the venv, reporting failure instead of ending the run.
 
-    install_package(), the batch path's installer, calls ud.my_critical_error()
+    install_package(), the batch path's installer, calls ek.my_critical_error()
     -- which exits -- when a download fails. Verifying one import must never be
     able to kill the whole run, so this installer reports False for every
     failure instead. It offers the wheels already downloaded to packages_dir but,
@@ -4541,7 +4546,7 @@ def load_last_used_options(options: Options) -> Options | None:
         return None
     if len(json_files) > 1:
         json_files.sort(key=lambda x: dt.datetime.strptime(x.name.split("-")[-2] + x.name.split("-")[-1].replace(".json", ""), "%Y%m%d%H%M%S"), reverse=True)
-    return ud.load_options_from_json(options, options.script_dir / json_files[0])
+    return ek.load_options_from_json(options, options.script_dir / json_files[0])
 
 
 def load_last_used_venv_dir(options: Options) -> Path | None:
@@ -4556,7 +4561,7 @@ def load_last_used_venv_dir(options: Options) -> Path | None:
     elif last_used_options.venv_dir is None:
         if not options.rawlog: logging.info("Last used venv directory is None.")
         return None
-    elif not ud.safe_is_dir(last_used_options.venv_dir):
+    elif not ek.safe_is_dir(last_used_options.venv_dir):
         if not options.rawlog: logging.warning("Last used venv directory %s is no longer valid.",
                                                os.fspath(last_used_options.venv_dir))
         return None
@@ -4586,7 +4591,7 @@ def load_last_used_venv_python(options: Options) -> Path | None:
     elif last_used_options.venv_python is None:
         if not options.rawlog: logging.info("Last used venv_python is None.")
         return None
-    elif not ud.safe_is_file(last_used_options.venv_python):
+    elif not ek.safe_is_file(last_used_options.venv_python):
         if not options.rawlog: logging.warning("Last used venv_python %s is no longer valid.",
                                                os.fspath(last_used_options.venv_python))
         return None
@@ -4679,8 +4684,8 @@ def check_venv_dir(options: Options, venv_dir: str | os.PathLike[str]) -> bool:
         True if the venv holds what this run needs, for the right interpreter,
         and its imports really import.
     """
-    venv_dir = ud.ensure_path(venv_dir)
-    if not ud.safe_is_dir(venv_dir):
+    venv_dir = ek.ensure_path(venv_dir)
+    if not ek.safe_is_dir(venv_dir):
         if not options.rawlog:
             logging.info("The cached venv directory %s is no longer there.", os.fspath(venv_dir))
         return False
@@ -4822,14 +4827,14 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
         venv_dir_last_used = getattr(options_last_used, "venv_dir", None)
         if options_last_used is not None and venv_dir_last_used is not None \
            and check_venv_dir(options, venv_dir_last_used):
-            return ud.ensure_path(venv_dir_last_used)
+            return ek.ensure_path(venv_dir_last_used)
         else:
             if not options.rawlog: logging.info("Trying to load the latest matching venv now.")
         options.args.latest    = True  # If that didn't work, try to load the latest venv in the cache
         options.args.last_used = False  # And set this to False because it failed
     if not options.rawlog: logging.info("Checking the cache for a virtual environment with all the required packages...")
     all_venv_folders = [f for f in options.my_dir.iterdir()
-                        if ud.safe_is_dir(f) and f.name.startswith(options.venv_name)]
+                        if ek.safe_is_dir(f) and f.name.startswith(options.venv_name)]
     final_venv_folders: dict[Path, dict[str, int]] = {}
     for candidate in cache_candidates(options, all_venv_folders):
         final_venv_folders[candidate.folder] = {"timestamp"    : int(candidate.parsed.timestamp.replace("-", "")),
@@ -4903,7 +4908,7 @@ STANDARD_LIB_NAMES: tuple[str, ...] = ("lib", "lib64")
 
 def is_standard_path(options: Options, path: str | os.PathLike[str]) -> bool:
     """Check if the given path is a standard system path or part of a virtual environment."""
-    p = ud.ensure_path(path)
+    p = ek.ensure_path(path)
     # Check if path is inside standard system paths
     for std_path in STANDARD_LIB_PATHS:
         if p.is_relative_to(std_path):  # Python 3.9+
@@ -4970,7 +4975,7 @@ def dict_of_custom_modules(options: Options) -> dict[str, Path]:
             potential_files = [file for file in options.cwd.iterdir()
                                if file.name.startswith(f".{options.my_name}_custom_modules_") and
                                   file.suffix.casefold() == ".pkl" and
-                                  ud.COMPUTER_NAME in file.name and
+                                  ek.COMPUTER_NAME in file.name and
                                   search_constraint_filename_boolean(file.name, search_above_text_to_match)]
             if not potential_files:
                 if not options.rawlog:
@@ -4980,7 +4985,7 @@ def dict_of_custom_modules(options: Options) -> dict[str, Path]:
                 potential_files_with_timestamps: list[tuple[Path, str]] = [
                     (file, ts)
                     for file in potential_files
-                    if (ts := ud.extract_timestamp(file.name)) is not None
+                    if (ts := ek.extract_timestamp(file.name)) is not None
                 ]
                 if not potential_files_with_timestamps:
                     if not options.rawlog:
@@ -5001,10 +5006,10 @@ def dict_of_custom_modules(options: Options) -> dict[str, Path]:
                                          "paths were stored as Paths (which happened on %s). "
                                          "Converting all paths to pathlib.Path objects.",
                                          most_recent_file, most_recent_timestamp, options.pathlibcutoff)
-                        normalized: dict[str, Path] = {k: ud.ensure_path(v) for k, v in loaded_modules.items()}
+                        normalized: dict[str, Path] = {k: ek.ensure_path(v) for k, v in loaded_modules.items()}
                     else:
                         # If the pickle already contains Paths, narrow the type for mypy
-                        normalized = {k: (v if isinstance(v, Path) else ud.ensure_path(v)) for k, v in loaded_modules.items()}
+                        normalized = {k: (v if isinstance(v, Path) else ek.ensure_path(v)) for k, v in loaded_modules.items()}
                     return normalized
         except Exception:
             logging.exception("Error loading custom modules from pickle file.")
@@ -5021,9 +5026,9 @@ def dict_of_custom_modules(options: Options) -> dict[str, Path]:
 
     # Prebind a few globals/attributes to locals before os.walk to cut repeated global lookups:
     is_std       = _is_std_path_cached
-    endswith_ext = ud.PYTHON_EXTENSIONS
-    safe_is_file = ud.safe_is_file
-    safe_is_dir  = ud.safe_is_dir
+    endswith_ext = ek.PYTHON_EXTENSIONS
+    safe_is_file = ek.safe_is_file
+    safe_is_dir  = ek.safe_is_dir
 
     if log.isEnabledFor(logging.DEBUG): logging.debug("Generating custom modules dictionary from sys.path...")
     for path in map(Path, sys.path):
@@ -5073,7 +5078,7 @@ def dict_of_custom_modules(options: Options) -> dict[str, Path]:
 
     # Now save to a pickle file:
     current_time = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    custom_filename = f".{options.my_name}_custom_modules_{ud.COMPUTER_NAME}{search_above_text_to_write}{current_time}.pkl"
+    custom_filename = f".{options.my_name}_custom_modules_{ek.COMPUTER_NAME}{search_above_text_to_write}{current_time}.pkl"
     with open(custom_filename, "wb") as f_out:
         if not options.rawlog:
             logging.info("Saving custom modules to %s", custom_filename)
