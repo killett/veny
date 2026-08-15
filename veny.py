@@ -91,13 +91,6 @@ class Options(ud.Options):
         self.check_interval:                       int =  5  # Number of seconds to wait between checks.
         self.rawlog:                              bool = False
         self.pipreqs_available:                   bool = False
-        self.univ_defs_path:                      Path = ud.ensure_path(ud.__file__).resolve(strict=True)
-        self.univ_defs_sys_path_script:           Path = self.my_dir / "univ_defs_sys_path_script.py"
-        self.mydiff_path:                         Path = self.my_dir / "mydiff.py"
-        self.myaudit_path:                        Path = self.my_dir / "myaudit.py"
-        self.multireplace_path:                   Path = self.my_dir / "multireplace.py"
-        self.treeview_path:                       Path = self.my_dir / "treeview.py"
-        self.printall_path:                       Path = self.my_dir / "printall.py"
         self.read_files:                    list[Path] = []  # List of files read       by the Python script.
         self.write_files:                   list[Path] = []  # List of files written    by the Python script.
         self.download_urls:                 list[Path] = []  # List of  URLs downloaded by the Python script.
@@ -322,13 +315,6 @@ def main() -> None:
     if not ud.safe_is_dir(options.packages_dir):
         if not options.rawlog: logging.info("Directory %s does not exist yet, so it is being created.", options.packages_dir)
         options.packages_dir.mkdir(parents=True, exist_ok=True)
-
-    ud.verify_script(options, options.univ_defs_sys_path_script, ud.UNIV_DEFS_SYS_PATH_SCRIPT)
-    ud.verify_script(options, options.mydiff_path,               ud.MYDIFF_SCRIPT)
-    ud.verify_script(options, options.myaudit_path,              ud.MYAUDIT_SCRIPT)
-    ud.verify_script(options, options.multireplace_path,         ud.MULTIREPLACE_SCRIPT)
-    ud.verify_script(options, options.treeview_path,             ud.TREEVIEW_SCRIPT)
-    ud.verify_script(options, options.printall_path,             ud.PRINTALL_SCRIPT)
 
     if getattr(options.args, "alias", False):
         # Add the alias to the shell configuration file
