@@ -25,8 +25,21 @@ in 0.4.0.
 The veny branch is built now but merged only after emmykit 0.4.0 exists, so
 that no known-degraded state reaches `main`.
 
-**Next action:** run Tasks 1 and 2 (both unblocked today); paste the emmykit
-prompt to unblock Task 3 onward.
+**Next action:** Migration complete. Tasks 0–7 are all done on branch
+`emmykit-migration`. `pyproject.toml` and `pixi.toml` pin
+`emmykit>=0.4.0,<1.0` (installed: 0.4.0); the `[pypi-exclude-newer]`
+override that exempts emmykit from the workspace's 7-day cooldown stays in
+`pixi.toml`. Full suite: 250 passed. `ruff check veny.py --statistics` and
+`mypy veny.py veny_json_types.py` are unchanged from the pre-pin baseline
+(301 / 30 errors respectively). A live run against a real script (installing
+PyYAML into a fresh/reused venv) succeeded end to end; see
+`.superpowers/sdd/2026-08-14-emmykit-migration/task-7-report.md` for full
+captured output. Both cross-repo prompts: the emmykit prompt
+(`docs/prompts/2026-08-14-emmykit-json-type-registry.md`) is done — emmykit
+0.4.0 is released and installed; the utilities prompt
+(`docs/prompts/2026-08-14-utilities-adopt-emmykit-scripts.md`) is still
+outstanding — see Deferred items. The branch has not been merged into
+`main`; that decision is left to the coordinator.
 
 **Previous topic (complete):** Venv-cache matching — design approved
 2026-08-14, plan complete
@@ -180,6 +193,41 @@ wiring rationale and for two Minors deliberately left unfixed.
 
 ## Gotchas
 
+- veny's own types are serialized by `veny_json_types.register_types()`, called
+  at `veny.py` module scope, not inside `main()`. Anything that imports veny --
+  including every test -- gets production's serialization behaviour. If you move
+  the call into `main()`, `save_options_to_json` will silently write
+  `"ResolvedImport(...)"` repr strings for any consumer that does not go through
+  `main()`, and no test will notice unless it runs in a subprocess.
+- `alias_index.AliasIndex` is registered **encode-only** on purpose. It holds
+  `installed` (probed from the target interpreter) and a live `pypi` client, so a
+  decoder would return an index that reports nothing as installed while looking
+  identical to a real one. It reloads as a plain dict by design.
+- pixi's per-package cooldown override for a PyPI package is a
+  `[pypi-exclude-newer]` table keyed by package name (`pixi.toml`'s
+  `emmykit = "0d"`). The `[exclude-newer]` table the surrounding comment
+  points at is not accepted for PyPI packages, and neither is the spelling
+  `exclude-newer-package` (that one belongs to uv, and leaks through as a
+  hint from pixi's bundled resolver). Getting the table name wrong does not
+  reliably error: `pixi update` can just report "Lock-file was already
+  up-to-date" and leave the old version pinned, so a silently-wrong spelling
+  looks identical to success.
+- `git stash` / `git stash pop` is unsafe for the same reason CLAUDE.md
+  already warns off `git checkout <sha>` for investigative baselines:
+  mid-task in this session, pre-commit's `ruff-format` hook rewrote test
+  files in place while changes were stashed, and that rewrite then blocked
+  `git stash pop`. Use `git worktree add` on a side path for any comparison
+  against another commit or state instead of stashing.
+- emmykit's `Options.args` is typed `argparse.Namespace`, while `veny.Options`
+  re-declares it as `argparse.Namespace | None` (`veny.py:110` as of this
+  task; the exact line drifts as the file changes). mypy reports this as an
+  incompatible override, and it is expected — one of the 30 baseline mypy
+  errors on `veny.py`/`veny_json_types.py`. It is harmless today because
+  emmykit only ever assigns `.args`, never reads it, but veny's `| None`
+  re-declaration must stay: defaulting to an empty `argparse.Namespace`
+  instead would turn a loud `AttributeError` on an unparsed run into a
+  silent "every flag is False". The real fix belongs upstream, in emmykit —
+  annotate `Options.args` there as `argparse.Namespace | None = None`.
 - Recording nothing and recording forever are both wrong for a failure whose
   cause is environmental. veny keeps `import_unavailable` in a *separate
   in-memory* store: filtered for the rest of the run so the same unusable wheel
@@ -364,6 +412,13 @@ wiring rationale and for two Minors deliberately left unfixed.
 
 ## Deferred items
 
+- The five helper scripts (`mydiff`, `myaudit`, `multireplace`, `treeview`,
+  `printall`) that veny used to write into `~/veny` still need adopting as
+  real, standalone files in the `killett/utilities` repository, per
+  `docs/prompts/2026-08-14-utilities-adopt-emmykit-scripts.md`. They must be
+  extracted from **emmykit 0.3.4**, not the current 0.4.0 — 0.4.0 removed
+  the embedded script constants these scripts were generated from, so 0.4.0
+  no longer carries the source text to extract them from.
 - **A manifest can record an `interpreter_tag` and an `interpreter_path`
   that disagree.** `interpreter_tag()` (`veny.py:3974`) reads
   `options.stdlib.python_version`, while `venv_build_interpreter()` returns

@@ -4828,7 +4828,7 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
        not getattr(options.args, "smallest",  False):
         options_last_used = load_last_used_options(options)
         # venv_dir is declared in veny.Options.__init__, not in the base
-        # univ_defs.Options that load_last_used_options builds from, so a
+        # emmykit.Options that load_last_used_options builds from, so a
         # last-used JSON written without that key must not raise here.
         venv_dir_last_used = getattr(options_last_used, "venv_dir", None)
         if options_last_used is not None and venv_dir_last_used is not None \

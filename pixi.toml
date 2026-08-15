@@ -96,7 +96,7 @@ hatch-vcs = "*"
 twine = "*"
 
 [pypi-dependencies]
-emmykit = ">=0.3.4"
+emmykit = ">=0.4.0, <1.0"
 
 # Group-derived PyPI-only packages.
 
