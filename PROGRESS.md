@@ -2,7 +2,31 @@
 
 ## Current work
 
-**Topic:** Venv-cache matching — design approved 2026-08-14, plan in progress
+**Topic:** Replace `univ_defs.py` with the published `emmykit` package —
+design approved 2026-08-14, implementation plan not yet written. `veny.py`
+imports `univ_defs as ud` at 93 call sites (7 more in tests); all 41 symbols
+it uses exist in emmykit 0.3.4 with identical signatures. The swap deletes
+the 9,757-line local file, renames the alias `ud` → `ek`, drops the five
+helper scripts veny writes but never runs, and moves veny's own
+serialization out of the utility library and into a registry emmykit gains
+in 0.4.0.
+
+- Design doc: `docs/superpowers/specs/2026-08-14-emmykit-migration-design.md`
+  (approved 2026-08-14)
+- Cross-repo prompt (emmykit): `docs/prompts/2026-08-14-emmykit-json-type-registry.md`
+  — adds the JSON type registry and removes the embedded script constants;
+  ships as emmykit 0.4.0
+- Cross-repo prompt (utilities): `docs/prompts/2026-08-14-utilities-adopt-emmykit-scripts.md`
+  — adopts the five standalone scripts as real files
+- Implementation plan: not yet written
+
+The veny branch is built now but merged only after emmykit 0.4.0 exists, so
+that no known-degraded state reaches `main`.
+
+**Next action:** write the implementation plan for the emmykit migration.
+
+**Previous topic (complete):** Venv-cache matching — design approved
+2026-08-14, plan complete
 on branch `venv-cache`. Cached virtual environments are matched from a folder
 name that splits on `-` (so no hyphenated pip name survives) and from
 `requirements.txt`, which is pip's input rather than a record of the venv.
@@ -86,11 +110,10 @@ options.stdlib.python_version rather than probing the build interpreter;
 satisfies() running twice on the winning candidate) were deliberately left
 unfixed, escalated to the human partner as needing a design decision.
 
-**Next action:** none outstanding on this plan. Tasks 1–11 all complete, the
-whole-branch review's findings are all fixed, and the venv-cache-matching
-plan is done.
+Nothing outstanding on that plan: tasks 1–11 all complete, the whole-branch
+review's findings all fixed, merged to `main` at `66d60bf`.
 
-**Previous topic (complete):** Module-alias resolver. Replaced the 1,219-line
+**Earlier topic (complete):** Module-alias resolver. Replaced the 1,219-line
 hardcoded import-name-to-pip-name table in `veny.py` with `alias_index.py`
 (data model, override/cache stores, target-interpreter probe, resolution
 chain) and `pypi_client.py` (confirms a project provides an import name by
@@ -120,7 +143,7 @@ and two of the five evidence tiers were unreachable. It is now wired into
 really imported and repairs what did not. See the Task 9 report for the
 wiring rationale and for two Minors deliberately left unfixed.
 
-**Earlier topic (complete):** the `StdlibIndex` resolver.
+**Earliest topic (complete):** the `StdlibIndex` resolver.
 
 - Design doc: `docs/superpowers/specs/2026-08-12-stdlib-index-design.md`
 - Implementation plan: `docs/superpowers/plans/2026-08-12-stdlib-index.md`
@@ -136,7 +159,13 @@ wiring rationale and for two Minors deliberately left unfixed.
 - **No third-party dependency may be required to run veny.** veny is a
   bootstrapping tool that must work on a bare interpreter, so packages such as
   `stdlib_list` are ruled out on principle, not on preference. Decided
-  2026-08-12.
+  2026-08-12. **Superseded 2026-08-14** by the emmykit migration: veny now
+  requires `emmykit>=0.4.0` and exits with an install message when it is
+  absent. The original decision was argued against `stdlib_list`, an external
+  package supplying data veny could derive for itself; emmykit is the utility
+  layer veny is already built on, first-party, and stdlib-only in its base.
+  The principle still holds for everything else — no *further* runtime
+  dependency may be added without the same kind of argument.
 - **Being wrong toward "skip the install" is worse than being wrong toward
   "attempt the install."** A wrong skip fails at the user's runtime, after
   veny reports success; a wrong install attempt fails loudly at install time.
