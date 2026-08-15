@@ -2,7 +2,25 @@
 
 ## Current work
 
-**Topic:** Replaced `univ_defs.py` with the published `emmykit` package —
+**Topic:** Replacing veny's rc-file shell alias with a packaged console-script
+entry point. veny installs itself today by appending `alias veny="python3
+~/veny.py"` to a shell configuration file, which costs four shell dialects plus
+rc-file discovery, is invisible to scripts and cron, and cannot guarantee the
+interpreter it names satisfies `requires-python >=3.12,<3.14` or has emmykit
+installed. The repository moves to a `src/veny/` package (`veny.py` → `cli.py`
+verbatim, minus the alias code), gains a `[build-system]` and
+`[project.scripts] veny = "veny.cli:main"`, and is installed with
+`uv tool install`. A PATH symlink (the `clean-caches.sh --install` approach) was
+considered and rejected as insufficient — it delegates interpreter choice to
+`#!/usr/bin/env python3`, which resolves emmykit and the Python floor by luck.
+
+- Design doc: `docs/superpowers/specs/2026-08-15-packaged-entry-point-design.md`
+  (approved 2026-08-15)
+- Implementation plan: not written yet
+
+**Next action:** write the implementation plan from the approved design.
+
+**Previous topic (complete):** Replaced `univ_defs.py` with the published `emmykit` package —
 design approved 2026-08-14, implementation plan executed on branch
 `emmykit-migration`. `veny.py` imported `univ_defs as ud` at 93 call sites
 (7 more in tests); all 41 symbols it used existed in emmykit 0.3.4 with
@@ -25,7 +43,7 @@ the JSON type registry emmykit gained in 0.4.0.
 The branch was held back until emmykit 0.4.0 existed, so that no
 known-degraded state reached `main`.
 
-**Next action:** none on this plan. Tasks 0–7 are all complete and branch
+**Outcome:** nothing outstanding on that plan. Tasks 0–7 are all complete and branch
 `emmykit-migration` is merged into `main` (14 commits, deleted after merge).
 `pyproject.toml` and `pixi.toml` pin `emmykit>=0.4.0,<1.0` (installed:
 0.4.0); the `[pypi-exclude-newer]` override that exempts emmykit from the
@@ -49,7 +67,7 @@ released and installed. The utilities one
 (`docs/prompts/2026-08-14-utilities-adopt-emmykit-scripts.md`) is still
 outstanding; see Deferred items.
 
-**Previous topic (complete):** Venv-cache matching — design approved
+**Earlier topic (complete):** Venv-cache matching — design approved
 2026-08-14, plan complete
 on branch `venv-cache`. Cached virtual environments are matched from a folder
 name that splits on `-` (so no hyphenated pip name survives) and from
@@ -137,7 +155,7 @@ unfixed, escalated to the human partner as needing a design decision.
 Nothing outstanding on that plan: tasks 1–11 all complete, the whole-branch
 review's findings all fixed, merged to `main` at `66d60bf`.
 
-**Earlier topic (complete):** Module-alias resolver. Replaced the 1,219-line
+**Earlier still (complete):** Module-alias resolver. Replaced the 1,219-line
 hardcoded import-name-to-pip-name table in `veny.py` with `alias_index.py`
 (data model, override/cache stores, target-interpreter probe, resolution
 chain) and `pypi_client.py` (confirms a project provides an import name by
