@@ -304,6 +304,15 @@ Removing any of them is a breaking change to a published 0.4.0, so the prompt
 asks whether each is used elsewhere inside emmykit and what the recommended
 disposition is, leaving the decision to a follow-up.
 
+The prompt must also carry a ready-to-paste `fd` command that counts
+occurrences of those names under an arbitrary directory. The audit the prompt
+requests covers the emmykit repository only; the command covers everywhere
+else, so that a call site in some other project is not missed before anything
+is removed. It uses `fd` to select the files and `rg` to count within them,
+excludes vendored copies (`.pixi`, `site-packages`, `.git`), and is written as
+several short lines rather than one long one, per the shell-command convention
+in the global `CLAUDE.md`.
+
 ## Out of scope
 
 - Publishing to PyPI (this design makes it possible; the upload is a separate
