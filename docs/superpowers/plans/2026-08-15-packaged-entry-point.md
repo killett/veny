@@ -741,7 +741,11 @@ echo "smoke: building the wheel"
 rm -rf dist
 python -m build --wheel --outdir dist >/dev/null
 
-wheel=$(ls dist/veny-*.whl | head -1)
+# find, not `ls dist/veny-*.whl | head -1`: under `set -euo pipefail` an
+# unmatched glob makes ls exit non-zero, pipefail propagates it through the
+# assignment, and set -e kills the script before the guard below can print
+# anything. find exits 0 on no-match, so the guard actually runs.
+wheel=$(find dist -maxdepth 1 -name 'veny-*.whl' -print -quit)
 [[ -n "$wheel" ]] || { echo "smoke: no wheel in dist/" >&2; exit 1; }
 echo "smoke: built $wheel"
 
@@ -938,17 +942,31 @@ exits 0.
     logging.shutdown()
 ```
 
-Add the exit as the last statement, so nothing is skipped:
+Return the status as the last statement, so nothing is skipped, and change the
+signature to match:
 
 ```python
+def main() -> int:
+    """Main function.
+
+    Returns:
+        The wrapped script's exit status (0 on paths that run no script).
+    """
+    ...
     ek.print_all_errors(memory_handler, options.rawlog)
     logging.shutdown()
-    sys.exit(script_exit_code)
+    return script_exit_code
 ```
 
-Leave `main()`'s `-> None` annotation as it is: `sys.exit` raises, so the
-function still never returns normally, and `NoReturn` would be wrong for a
-function whose other paths fall through to it.
+**Corrected 2026-08-15 after this task's review.** This step first said to keep
+`-> None` and end with `sys.exit(script_exit_code)`. That argued only against
+`NoReturn` and missed what the same task's `sys.exit(main())` implies: mypy
+reports `"main" does not return a value [func-returns-value]` on wrapping a
+`-> None` call, a new whole-repo error this task would otherwise introduce.
+`-> int` is also what the two real call sites already expect — pip generates
+`sys.exit(main())` for `[project.scripts]`, and `__main__.py` now matches it.
+Leave every pre-existing internal `sys.exit(...)` inside `main()` alone; only
+the final one becomes a `return`.
 
 - [ ] **Step 6: Run the tests**
 
