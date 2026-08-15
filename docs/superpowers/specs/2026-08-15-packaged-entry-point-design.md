@@ -181,10 +181,29 @@ Beyond the move, six changes. Everything else is untouched.
    and 3.13, argparse derives `prog` from `basename(sys.argv[0])`, so
    `python -m veny --help` would print `usage: __main__.py ...` and `--version`
    would print `__main__.py 0.2.2` through the `%(prog)s` template.
-6. **`__main__.py` delegates to `cli.main()`.** Exit codes need no work:
-   `main()` is annotated `-> None` but propagates the wrapped script's status by
-   raising `SystemExit` (`sys.exit(result.returncode)`), and a console-script
-   wrapper lets `SystemExit` through untouched.
+6. **`__main__.py` delegates to `cli.main()`, and exit-code propagation is
+   fixed.** This section originally claimed exit codes needed no work, on the
+   strength of the `sys.exit(result.returncode)` at `cli.py:266`. That line is
+   inside the `--feeling-lucky` branch, whose own help text reads
+   `NOT FINISHED!!!`. The three paths that actually run the user's script
+   (`cli.py:385`, `392`, `423`) discard the return code, so `veny` exits 0 no
+   matter how the wrapped script exits. Corrected 2026-08-15, after Task 4's
+   smoke check caught it; the defect predates this work (`git show
+   986bf40^:veny.py` has the same shape).
+
+   That matters more under a console script than it did under an alias:
+   `veny script.py && deploy` runs `deploy` after a failure, and CI reads every
+   failure as a pass — scripts and cron being exactly the callers a PATH
+   install reaches and an alias never did. So this design now also propagates
+   the wrapped script's status: the three run paths capture their return code,
+   `main()` exits with it after its normal cleanup, and `__main__.py` uses
+   `sys.exit(main())`.
+
+   Out of scope, recorded as an open question: what veny should exit with when
+   *veny itself* cannot run the script — the "current virtual environment does
+   not have all the required packages" path (`cli.py:396`) also exits 0 today.
+   That is a question about veny's own status codes rather than about
+   propagating the script's, and it is left for a follow-up.
 
 ### Deleted surface
 
