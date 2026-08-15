@@ -33,6 +33,16 @@ def test_resolved_import_survives_a_real_json_round_trip():
     assert restored.pip_name == "opencv-python"
 
 
+def test_resolved_import_tag_is_pinned():
+    # Catches: renaming the "resolved_import" tag string. The round-trip test
+    # above stays green under a rename -- only the encoder and decoder need to
+    # agree with each other, not with the string already written to disk in
+    # existing options files -- so the wire tag needs its own assertion.
+    record = alias_index.ResolvedImport(import_name="cv2", pip_name="opencv-python")
+
+    assert ek.to_jsonable(record)["__type__"] == "resolved_import"
+
+
 def test_resolved_imports_survive_inside_a_set():
     # Catches: an encoder that works on a bare record but not on the shape veny
     # actually stores -- options.uninstalled_imports is a set, and sets are
@@ -63,6 +73,55 @@ def test_stdlib_index_survives_a_real_json_round_trip():
     assert restored.source == stdlib_index.SOURCE_PROBE
     assert "xml.etree.ElementTree" in restored
     assert "cv2" not in restored
+
+
+def test_stdlib_index_tag_is_pinned():
+    # Catches: renaming the "stdlib_index" tag string -- same wire-format
+    # concern as the ResolvedImport tag above.
+    index = stdlib_index.StdlibIndex(
+        names=frozenset(), python_version=(3, 12), source=stdlib_index.SOURCE_DEGRADED
+    )
+
+    assert ek.to_jsonable(index)["__type__"] == "stdlib_index"
+
+
+def test_stdlib_index_encodes_a_readable_diff_stable_payload():
+    # Catches: encoding `names` as a raw frozenset or `python_version` as a
+    # raw tuple instead of a sorted list -- both would still round-trip
+    # correctly, since frozenset and tuple are themselves tagged types emmykit
+    # already knows how to nest, but the on-disk payload would become a
+    # nested {"__type__": "frozenset", "value": [...]} blob with
+    # nondeterministic member ordering, destroying the readable, diff-stable
+    # options file this encoder is meant to produce.
+    index = stdlib_index.StdlibIndex(
+        names=frozenset({"os", "sys", "xml"}),
+        python_version=(3, 13),
+        source=stdlib_index.SOURCE_PROBE,
+    )
+
+    payload = ek.to_jsonable(index)
+
+    assert payload["names"] == ["os", "sys", "xml"]
+    assert payload["python_version"] == [3, 13]
+
+
+@pytest.mark.parametrize("raw_version", [3, ["a", "b"]])
+def test_stdlib_index_decode_falls_back_to_zero_zero_on_malformed_version(raw_version):
+    # Catches: a decoder that raises a bare TypeError (non-iterable input,
+    # e.g. a plain int) or ValueError (a list of non-numeric entries) out of
+    # from_jsonable instead of landing on the single documented (0, 0)
+    # fallback -- either crash would take down loading a whole options file
+    # over one corrupt field instead of degrading to an inert index.
+    payload = {
+        "__type__": "stdlib_index",
+        "names": ["os"],
+        "python_version": raw_version,
+        "source": stdlib_index.SOURCE_PROBE,
+    }
+
+    restored = ek.from_jsonable(payload)
+
+    assert restored.python_version == (0, 0)
 
 
 def test_an_empty_stdlib_index_round_trips_as_an_empty_frozenset():

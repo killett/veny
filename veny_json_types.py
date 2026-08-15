@@ -82,14 +82,34 @@ def _decode_stdlib_index(payload: dict[str, Any]) -> stdlib_index.StdlibIndex:
     because a list would make ``__contains__`` linear and would compare unequal
     to every freshly built index.
     """
-    version = tuple(payload.get("python_version", []))
     return stdlib_index.StdlibIndex(
         names=frozenset(payload.get("names", [])),
-        python_version=(int(version[0]), int(version[1]))
-        if len(version) == 2
-        else (0, 0),
+        python_version=_coerce_python_version(payload.get("python_version")),
         source=payload.get("source", stdlib_index.SOURCE_DEGRADED),
     )
+
+
+def _coerce_python_version(raw: object) -> tuple[int, int]:
+    """Coerce a JSON value into a ``(major, minor)`` version tuple.
+
+    Every malformed shape -- absent, not iterable, the wrong length, or
+    holding non-numeric entries -- lands on the single documented fallback
+    ``(0, 0)`` instead of raising a bare ``TypeError`` or ``ValueError`` out
+    of ``from_jsonable``. ``(0, 0)`` matches no real interpreter, so a
+    corrupt options file degrades to an inert index rather than crashing.
+
+    Args:
+        raw: The ``python_version`` value read from the JSON payload.
+
+    Returns:
+        A two-int tuple, or ``(0, 0)`` if ``raw`` cannot be coerced into one.
+    """
+    if not isinstance(raw, (list, tuple)) or len(raw) != 2:
+        return (0, 0)
+    try:
+        return (int(raw[0]), int(raw[1]))
+    except (TypeError, ValueError):
+        return (0, 0)
 
 
 def _encode_alias_index(index: alias_index.AliasIndex) -> dict[str, Any]:
