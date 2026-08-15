@@ -57,7 +57,7 @@
     {
       "id": 6,
       "subject": "Task 6: Write the emmykit usage-audit prompt",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         2,
         5
