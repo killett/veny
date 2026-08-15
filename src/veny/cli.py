@@ -25,7 +25,7 @@ from dataclasses import dataclass
 
 from . import alias_index
 from . import stdlib_index
-from . import __version__
+from . import __version__ as __version__
 try:
     import emmykit as ek
 except ImportError as exc:  # stdlib only: none of emmykit's helpers exist yet.
@@ -38,8 +38,7 @@ if not hasattr(ek, "register_json_type"):
         f"veny requires emmykit >= 0.4.0; found {getattr(ek, '__version__', 'unknown')}.\n"
         f"Upgrade it with:  pip install -U 'emmykit>=0.4.0'"
     )
-from . import json_types
-from . import venv_cache
+from . import json_types, venv_cache
 
 # An import name paired with the pip package that provides it. Defined in
 # alias_index, which imports nothing of veny's, and re-exported here because
