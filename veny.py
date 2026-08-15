@@ -25,7 +25,13 @@ from dataclasses import dataclass
 
 import alias_index
 import stdlib_index
-import emmykit as ek
+try:
+    import emmykit as ek
+except ImportError as exc:  # stdlib only: none of emmykit's helpers exist yet.
+    raise SystemExit(
+        "veny requires the emmykit package (>=0.4.0), which is not installed.\n"
+        "Install it with:  pip install 'emmykit>=0.4.0'"
+    ) from exc
 import venv_cache
 import veny_json_types
 
