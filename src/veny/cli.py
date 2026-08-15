@@ -241,8 +241,12 @@ def build_alias_index(options: Options) -> alias_index.AliasIndex:
                              offline=getattr(options.args, "offline", False))
 
 
-def main() -> None:
-    """Main function."""
+def main() -> int:
+    """Main function.
+
+    Returns:
+        The wrapped script's exit status (0 on paths that run no script).
+    """
     start_time = dt.datetime.now()
     script_exit_code = 0
     options: Options = Options()
@@ -444,7 +448,7 @@ def main() -> None:
 
     ek.print_all_errors(memory_handler, options.rawlog)
     logging.shutdown()
-    sys.exit(script_exit_code)
+    return script_exit_code
 
 
 def _literal_str(expr_node: ast.AST) -> str | None:
