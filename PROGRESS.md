@@ -457,7 +457,7 @@ wiring rationale and for two Minors deliberately left unfixed.
   `safe_is_dir` guard, since `read_manifest` also degrades on a missing
   directory.
 - `univ_defs.py` is gone, deleted in the emmykit migration. `veny.py` is
-  5,096 lines (`wc -l veny.py`, 2026-08-14).
+  5,101 lines (`wc -l veny.py`, 2026-08-15).
 - `alias_index.py` is 732 lines, accepted over the plan's ~600-line split
   target by controller ruling (no further split this plan; see the ledger's
   Task 5b entry — the byte-identical move was verified symbol-by-symbol).
