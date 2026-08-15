@@ -3959,8 +3959,6 @@ def recover_pip_versions(output: str, options: Options) -> None:
 def pretty_packages_list(options: Options) -> str:
     """Create a pretty string of the first five package names and the number of remaining packages."""
     maxnum = 5
-    # Pip names, so this string matches the requirements.txt contents that
-    # find_match_dir_in_cache() compares a cached venv folder against.
     packages_list = sorted(record.pip_name for record in options.uninstalled_imports)
     if len(packages_list) > maxnum:
         first_five = "-".join(packages_list[:maxnum])
@@ -4751,6 +4749,63 @@ def check_venv_dir(options: Options, options_from_cache: Options) -> bool:
     return False
 
 
+def wanted_packages(options: Options) -> list[venv_cache.Wanted]:
+    """Describe what this run needs, for matching against a cached venv.
+
+    Args:
+        options: Options object; reads options.uninstalled_imports and
+                 options.extra_requirements.
+
+    Returns:
+        One entry per record, carrying its pip name and any --reqs spec.
+    """
+    return [venv_cache.Wanted(pip_name=record.pip_name,
+                              spec=options.extra_requirements.get(record.pip_name))
+            for record in sorted(options.uninstalled_imports, key=lambda r: r.pip_name)]
+
+
+def cache_candidates(options: Options, folders: list[Path]) -> list[Path]:
+    """Filter cached venv folders down to those that can serve this run.
+
+    The folder name is a cheap reject; veny_manifest.json is the decision. A
+    folder with no readable manifest is skipped, which is what retires every
+    virtual environment built before manifests existed.
+
+    Args:
+        options: Options object; reads the records, the specs, and the tag.
+        folders: Candidate directories, already filtered by name prefix.
+
+    Returns:
+        The folders that match, in the order given.
+    """
+    tag    = interpreter_tag(options)
+    wanted = wanted_packages(options)
+    names  = [item.pip_name for item in wanted]
+    matches: list[Path] = []
+    for folder in folders:
+        parsed = venv_cache.parse_folder_name(folder.name)
+        if parsed is None:
+            if logging.getLogger().isEnabledFor(logging.DEBUG):
+                logging.debug("Skipping %s: not a venv folder name veny wrote.", os.fspath(folder))
+            continue
+        if parsed.interpreter_tag != tag or not venv_cache.name_allows(parsed, names):
+            continue
+        manifest = venv_cache.read_manifest(folder)
+        if manifest is None:
+            if not options.rawlog:
+                logging.info("Skipping the cached venv %s: it has no readable manifest.",
+                             os.fspath(folder))
+            continue
+        result = venv_cache.satisfies(manifest, wanted, tag)
+        if not result.matched:
+            if not options.rawlog:
+                logging.info("Skipping the cached venv %s because %s.",
+                             os.fspath(folder), result.reason)
+            continue
+        matches.append(folder)
+    return matches
+
+
 def find_match_dir_in_cache(options: Options) -> Path | None:
     """
     Try to find a matching virtual environment directory in the cache.
@@ -4782,44 +4837,18 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
         options.args.latest    = True  # If that didn't work, try to load the latest venv in the cache
         options.args.last_used = False  # And set this to False because it failed
     if not options.rawlog: logging.info("Checking the cache for a virtual environment with all the required packages...")
-    # Search for all venv_name folders in my_dir:
     all_venv_folders = [f for f in options.my_dir.iterdir()
                         if ud.safe_is_dir(f) and f.name.startswith(options.venv_name)]
-    # Loop through the folders and eliminate folders that clearly don't have the right packages just based on their names:
-    venv_folders = []
-    for folder in all_venv_folders:
-        # Extract the part of the folder name after the date/time:
-        pretty_list = folder.name.split("-")[4:]
-        # Create a known_packages set from the pretty_list:
-        known_packages:     set[str] = set()
-        number_unknown_packages: int = 0
-        for item in pretty_list:
-            if item == "and":
-                # Extract the number of unknown packages from the last part of the pretty_list:
-                number_unknown_packages = int(pretty_list[-2].split("-")[0])
-                break
-            known_packages.add(item)
-        # Folder names are built from pretty_packages_list(), which uses pip names.
-        missing_packages = {record.pip_name for record in options.uninstalled_imports} - known_packages
-        if len(missing_packages) <= number_unknown_packages:
-            venv_folders.append(folder)
-    # Loop through possibly valid venv folders and compare requirements in detail.
     final_venv_folders: dict[Path, dict[str, int]] = {}
-    for folder in venv_folders:
-        this_requirements_file: Path = options.my_dir / folder / "requirements.txt"
-        with open(this_requirements_file, "r") as file:
-            requirements = set(file.read().splitlines())
-        # requirements.txt holds pip names, so compare pip names against it.
-        if {record.pip_name for record in options.uninstalled_imports}.issubset(requirements):
-            match = re.search(r'(\d{8})-(\d{6})', folder.name)
-            if not match:
-                if logging.getLogger().isEnabledFor(logging.DEBUG):
-                    logging.debug("Skipping folder %s because no YYYYMMDD-HHMMSS timestamp was found.",
-                                os.fspath(folder))
-                continue
-            ts_int = int(match.group(1) + match.group(2))
-            final_venv_folders[folder] = {"timestamp"    : ts_int,
-                                          "num_packages" : len(requirements)}
+    for folder in cache_candidates(options, all_venv_folders):
+        parsed = venv_cache.parse_folder_name(folder.name)
+        if parsed is None:
+            raise RuntimeError("cache_candidates only returns folders whose names parse")
+        manifest = venv_cache.read_manifest(folder)
+        if manifest is None:
+            raise RuntimeError("cache_candidates only returns folders with a manifest")
+        final_venv_folders[folder] = {"timestamp"    : int(parsed.timestamp.replace("-", "")),
+                                      "num_packages" : len(manifest.packages)}
     if not final_venv_folders:
         if not options.rawlog: logging.info("No matching venv folders found in the cache.")
     else:
