@@ -4383,12 +4383,15 @@ def installed_versions_in_venv(options: Options) -> dict[str, str]:
     versions pip chose for unpinned packages.
 
     Args:
-        options: Options object; reads options.venv_python.
+        options: Options object; reads options.venv_python, which callers must
+                 have already set -- a None value is a caller-contract error
+                 and asserts rather than returning empty.
 
     Returns:
-        A mapping of normalized pip name to version. Empty on any failure --
-        a version veny could not read is recorded as unknown, which makes any
-        later pin check on that package fail closed.
+        A mapping of normalized pip name to version. Empty if the probe could
+        not be run or its output could not be read -- a version veny could not
+        read is recorded as unknown, which makes any later pin check on that
+        package fail closed.
     """
     assert options.venv_python is not None, "Virtual environment Python executable is not set."
     command = [os.fspath(options.venv_python), "-c", _VERSION_PROBE_CODE]
