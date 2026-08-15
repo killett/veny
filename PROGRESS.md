@@ -30,8 +30,50 @@ name-building and requirements-comparison code the manifest replaced
 (`pretty_packages_list`, `options.pretty_list`, `options.pretty_requirements`)
 plus documenting the manifest and folder-name format in README.md.
 
-**Next action:** Task 11 — prove it on a real run (verification only, no
-code changes expected).
+Task 11 (verification, no code changes) is complete. Mutation-checked all
+three guards named in the brief — each deletion produced a real test
+failure, each restoration left `git diff` empty and the full suite green
+(223 passed):
+
+- `venv_cache.satisfies`'s `manifest.interpreter_tag != interpreter_tag`
+  early return: deleting it failed
+  `test_satisfies_rejects_a_different_interpreter`.
+- `venv_cache.version_satisfies`'s `installed is None` fail-closed term:
+  deleting it failed `test_version_satisfies_fails_closed[None->=1.0]` and
+  `test_satisfies_rejects_a_pin_when_the_installed_version_is_unknown`.
+- `veny.record_venv_state`'s rename branch: deleting it failed
+  `test_record_venv_state_renames_before_writing_the_manifest`.
+
+Live two-run verification against `ruamel.yaml` (pip name `ruamel-yaml`,
+the brief's chosen hyphenated-pip-name package) confirmed the whole path
+end to end:
+
+- Run 1 built `~/veny/myenv-py3.13-20260814-201804-ruamel-yaml`, printed
+  `ok ruamel.yaml`, and wrote a `veny_manifest.json` with
+  `schema_version: 1`, `interpreter_tag: "3.13"`, and a package record
+  `pip_name: "ruamel-yaml"`, `installed_version: "0.19.1"`.
+- Run 2 logged `Using existing virtual environment:
+  /home/claudeuser/veny/myenv-py3.13-20260814-201804-ruamel-yaml` — the
+  identical folder — and printed `ok ruamel.yaml` again.
+- `ls ~/veny` before vs. after the two runs differs by exactly one venv
+  folder (`myenv-py3.13-20260814-201804-ruamel-yaml`), plus expected
+  incidental files (`module_aliases_cache.json`, a `pip_list_*.txt`, and
+  veny's own `test` probe dir — none are second venv folders).
+
+One environmental blocker required a workaround, recorded as a gotcha
+below: the alias resolver could not discover `ruamel` → `ruamel-yaml` on
+its own (a pre-existing, unrelated gap in `alias_index.py`'s mutation
+generator, not in this plan's code), so a `module_aliases.toml` override
+was used to supply that mapping. This is a legitimate, documented
+mechanism (`AliasIndex.resolve`'s OVERRIDE tier) and does not touch any
+code this plan changed.
+
+Full verification detail, including all captured command output, is in
+`.superpowers/sdd/2026-08-14-venv-cache-matching/task-11-report.md` (not
+checked in — `.superpowers/` is gitignored).
+
+**Next action:** none outstanding on this plan. Tasks 1–11 all complete;
+the venv-cache-matching plan is done.
 
 **Previous topic (complete):** Module-alias resolver. Replaced the 1,219-line
 hardcoded import-name-to-pip-name table in `veny.py` with `alias_index.py`
@@ -238,6 +280,19 @@ wiring rationale and for two Minors deliberately left unfixed.
   post-releases, dev releases, local version identifiers, epochs), so an
   installed pre-release always fails the match and forces a rebuild — this is
   fail-closed by design, not a bug to fix casually.
+- `alias_index.mutations()` cannot discover a pip name that adds a suffix
+  unrelated to case/separator changes, e.g. `ruamel` (the import) →
+  `ruamel-yaml` (the pip name): its generated forms are only
+  `dash-for-underscore`, `python-<name>`, `<name>-python`, `py<name>`, and
+  the `py`-prefix strip. `ruamel-yaml` matches none of them, and there is
+  no `SEED` entry for `ruamel`, so `AliasIndex.resolve("ruamel")` returns
+  no candidates and `split_imports` falls back to using the bare import
+  name as the pip name — which does not exist on PyPI and fails to
+  install. Found live during Task 11's verification run, worked around
+  with a `module_aliases.toml` override (`ruamel = "ruamel-yaml"`); not a
+  bug in this plan's code, since `alias_index.py` belongs to the earlier
+  module-alias-resolver plan. Left as a gap for that resolver, not fixed
+  here.
 
 ## Deferred items
 
