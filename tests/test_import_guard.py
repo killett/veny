@@ -18,7 +18,7 @@ def run_python(source):
 
 
 def test_veny_exits_with_an_install_message_when_emmykit_is_missing():
-    result = run_python("import sys; sys.modules['emmykit'] = None; import veny")
+    result = run_python("import sys; sys.modules['emmykit'] = None; import veny.cli")
 
     assert result.returncode != 0
     assert "emmykit" in result.stderr
@@ -28,7 +28,7 @@ def test_veny_exits_with_an_install_message_when_emmykit_is_missing():
 
 
 def test_veny_imports_normally_when_emmykit_is_present():
-    result = run_python("import veny; print(veny.__version__)")
+    result = run_python("import veny.cli; import veny; print(veny.__version__)")
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "0.2.2"
@@ -49,7 +49,7 @@ def test_veny_exits_with_an_upgrade_message_when_emmykit_is_too_old():
         "    pass\n"
         "stub.Options = Options\n"
         "sys.modules['emmykit'] = stub\n"
-        "import veny\n"
+        "import veny.cli\n"
     )
     result = run_python(source)
 

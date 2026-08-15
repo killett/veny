@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-import veny
+from veny import cli as veny
 
 
 def a_venv(root: Path, name: str) -> veny.Options:

@@ -18,8 +18,7 @@ from typing import Any
 
 import emmykit as ek
 
-import alias_index
-import stdlib_index
+from . import alias_index, stdlib_index
 
 _registered = False
 

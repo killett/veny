@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-import stdlib_index
-from stdlib_index import StdlibIndex
+from veny import stdlib_index
+from veny.stdlib_index import StdlibIndex
 
 
 @pytest.fixture(autouse=True)

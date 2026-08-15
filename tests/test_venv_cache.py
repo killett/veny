@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-import venv_cache
+from veny import venv_cache
 
 
 def test_build_folder_name_normalizes_and_joins_with_underscores() -> None:

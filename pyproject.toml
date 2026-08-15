@@ -55,7 +55,7 @@ disallow_untyped_calls = false
 
 [tool.pytest.ini_options]
 addopts = "-v"
-pythonpath = ["src", "."]  # "." because veny.py and stdlib_index.py live at the repository root, not under src/
+pythonpath = ["src"]
 
 [tool.coverage.run]
 source = ["src"]

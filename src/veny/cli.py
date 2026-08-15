@@ -23,8 +23,9 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-import alias_index
-import stdlib_index
+from . import alias_index
+from . import stdlib_index
+from . import __version__
 try:
     import emmykit as ek
 except ImportError as exc:  # stdlib only: none of emmykit's helpers exist yet.
@@ -37,20 +38,18 @@ if not hasattr(ek, "register_json_type"):
         f"veny requires emmykit >= 0.4.0; found {getattr(ek, '__version__', 'unknown')}.\n"
         f"Upgrade it with:  pip install -U 'emmykit>=0.4.0'"
     )
-import venv_cache
-import veny_json_types
-
-__version__: str = "0.2.2"
+from . import json_types
+from . import venv_cache
 
 # An import name paired with the pip package that provides it. Defined in
 # alias_index, which imports nothing of veny's, and re-exported here because
-# veny is where it is used. Its JSON handlers live in veny_json_types.
+# veny is where it is used. Its JSON handlers live in json_types.
 ResolvedImport = alias_index.ResolvedImport
 
 # Registers veny's own types with emmykit's JSON registry. At module scope, not
 # inside main(), so that anything importing veny -- including every test -- gets
 # the same serialization behaviour production does. The call is idempotent.
-veny_json_types.register_types()
+json_types.register_types()
 
 
 class Options(ek.Options):

@@ -4,8 +4,8 @@ import sys
 
 import pytest
 
-import alias_index
-from alias_index import (
+from veny import alias_index
+from veny.alias_index import (
     AliasCache,
     AliasIndex,
     AliasOverrideError,
@@ -239,7 +239,7 @@ def test_probe_reads_version_and_distributions(monkeypatch):
         calls.append(command)
         return subprocess.CompletedProcess(command, 0, stdout=payload, stderr="")
 
-    monkeypatch.setattr("alias_index.subprocess.run", fake_run)
+    monkeypatch.setattr("veny.alias_index.subprocess.run", fake_run)
     tag, packages = alias_index.probe_interpreter("/usr/bin/python3")
     assert tag == "3.12"
     assert packages == {"cv2": ["opencv-python"]}
@@ -251,7 +251,7 @@ def test_probe_degrades_when_the_interpreter_cannot_run(monkeypatch, caplog):
     def fake_run(command, **kwargs):
         raise OSError("no such executable")
 
-    monkeypatch.setattr("alias_index.subprocess.run", fake_run)
+    monkeypatch.setattr("veny.alias_index.subprocess.run", fake_run)
     with caplog.at_level("WARNING"):
         tag, packages = alias_index.probe_interpreter("/nope/python3")
     assert packages == {}
@@ -270,7 +270,7 @@ def test_a_probe_failure_reports_an_unknown_interpreter_tag(monkeypatch):
     def fake_run(command, **kwargs):
         return subprocess.CompletedProcess(command, 1, stdout="", stderr="boom")
 
-    monkeypatch.setattr("alias_index.subprocess.run", fake_run)
+    monkeypatch.setattr("veny.alias_index.subprocess.run", fake_run)
     tag, packages = alias_index.probe_interpreter("/usr/bin/python3")
     assert tag is None
     assert packages == {}
@@ -369,7 +369,7 @@ def test_probe_degrades_on_unparseable_output(monkeypatch):
     def fake_run(command, **kwargs):
         return subprocess.CompletedProcess(command, 0, stdout="not json", stderr="")
 
-    monkeypatch.setattr("alias_index.subprocess.run", fake_run)
+    monkeypatch.setattr("veny.alias_index.subprocess.run", fake_run)
     _, packages = alias_index.probe_interpreter("/usr/bin/python3")
     assert packages == {}
 
@@ -378,7 +378,7 @@ def test_probe_degrades_on_nonzero_exit(monkeypatch):
     def fake_run(command, **kwargs):
         return subprocess.CompletedProcess(command, 1, stdout="", stderr="boom")
 
-    monkeypatch.setattr("alias_index.subprocess.run", fake_run)
+    monkeypatch.setattr("veny.alias_index.subprocess.run", fake_run)
     _, packages = alias_index.probe_interpreter("/usr/bin/python3")
     assert packages == {}
 
@@ -393,7 +393,7 @@ def test_probe_without_a_target_interpreter_spawns_nothing(monkeypatch):
     def _boom(*args, **kwargs):
         raise AssertionError("there is no interpreter to probe")
 
-    monkeypatch.setattr("alias_index.subprocess.run", _boom)
+    monkeypatch.setattr("veny.alias_index.subprocess.run", _boom)
     tag, packages = alias_index.probe_interpreter(None)
     assert tag == f"{sys.version_info.major}.{sys.version_info.minor}"
     assert packages == {}
@@ -409,7 +409,7 @@ def test_build_without_a_target_interpreter_returns_a_usable_index(
     def _boom(*args, **kwargs):
         raise AssertionError("there is no interpreter to probe")
 
-    monkeypatch.setattr("alias_index.subprocess.run", _boom)
+    monkeypatch.setattr("veny.alias_index.subprocess.run", _boom)
     index = alias_index.build(None, tmp_path, offline=True)
     assert index.installed == {}
     assert index.cache.interpreter_tag == (
@@ -429,7 +429,7 @@ def test_probe_degrades_on_timeout(monkeypatch, caplog):
     def fake_run(command, **kwargs):
         raise subprocess.TimeoutExpired(command, timeout=kwargs.get("timeout", 10))
 
-    monkeypatch.setattr("alias_index.subprocess.run", fake_run)
+    monkeypatch.setattr("veny.alias_index.subprocess.run", fake_run)
     with caplog.at_level("WARNING"):
         _, packages = alias_index.probe_interpreter("/usr/bin/python3")
     assert packages == {}
@@ -443,7 +443,7 @@ def test_probe_degrades_on_malformed_payload(monkeypatch):
     def fake_run(command, **kwargs):
         return subprocess.CompletedProcess(command, 0, stdout=payload, stderr="")
 
-    monkeypatch.setattr("alias_index.subprocess.run", fake_run)
+    monkeypatch.setattr("veny.alias_index.subprocess.run", fake_run)
     _, packages = alias_index.probe_interpreter("/usr/bin/python3")
     assert packages == {}
 

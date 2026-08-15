@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
-from pypi_client import PyPIClient
+from .pypi_client import PyPIClient
 
 
 class Source(enum.IntEnum):
@@ -687,10 +687,7 @@ class AliasIndex:
         rejected_normalized = {
             normalize_pip_name(name) for name in self.cache.rejected_names(import_name)
         }
-        if (
-            cached is not None
-            and normalize_pip_name(cached) not in rejected_normalized
-        ):
+        if cached is not None and normalize_pip_name(cached) not in rejected_normalized:
             return Resolution(
                 import_name,
                 (
