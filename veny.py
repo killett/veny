@@ -68,7 +68,6 @@ class Options(ud.Options):
         self.samedir_files:          list[Path] = []
         self.pip_list:                list[str] = []
         self.loaded_custom_modules:    set[str] = set()
-        self.pretty_list:                   str = ""  # A pretty-printed string listing "all" imports
         self.timestamp:                     str = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
         self.sys_path_hints:          set[Path] = set()  # Filled by SysPathVisitor
         self.python_script:         Path | None = None
@@ -86,7 +85,6 @@ class Options(ud.Options):
         self.requirements_file:            Path | None = None
         self.extra_requirements: dict[str, str | None] = {}
         self.extra_requirements_file:              str = "extra_requirements.txt"
-        self.pretty_requirements:                  str = ""
         self.download_script_path:         Path | None = None
         self.simultaneous_success:                bool = False
         self.max_checks:                           int = 10  # Maximum number of times to check any repeated process.
@@ -3955,20 +3953,6 @@ def recover_pip_versions(output: str, options: Options) -> None:
         logging.warning("Failed to recover new pip version from output.")
 
 
-def pretty_packages_list(options: Options) -> str:
-    """Create a pretty string of the first five package names and the number of remaining packages."""
-    maxnum = 5
-    packages_list = sorted(record.pip_name for record in options.uninstalled_imports)
-    if len(packages_list) > maxnum:
-        first_five = "-".join(packages_list[:maxnum])
-        suffix = f"-and-{len(packages_list) - maxnum}-more"
-    else:
-        first_five = "-".join(packages_list)
-        suffix = ""
-
-    return first_five + suffix
-
-
 def venv_build_interpreter(options: Options) -> str:
     """Return the interpreter that should create the virtual environment.
 
@@ -4111,43 +4095,23 @@ def parse_extra_requirements(options: Options) -> None:
 
 
 def write_requirements_file_with_extras(options: Options) -> None:
-    """Write the requirements file with the extra requirements added and generate a 'pretty' requirements string."""
+    """Write the requirements file with the extra requirements added."""
     if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Writing packages to %s", options.requirements_file)
-    options.pretty_requirements = ""
-    # Define the symbol replacements
-    replacements = [(">=", "_ge"),
-                    ("<=", "_le"),
-                    ("==", "_eq"),
-                    ("~=", "_approx"),
-                    (">", "_gt"),
-                    ("<", "_lt"),
-                    (",", "_and")]
     assert options.requirements_file   is not None, "options.requirements_file must be set"
     assert options.uninstalled_imports is not None, "options.uninstalled_imports must be set"
     assert options.extra_requirements  is not None, "options.extra_requirements must be set"
     with open(options.requirements_file, "w") as f:
         # Write the packages in alphabetical order so the requirements file is
         # deterministic. pip reads this file, so it gets the pip names.
-        for idx, package in enumerate(sorted(record.pip_name for record in options.uninstalled_imports)):
+        for package in sorted(record.pip_name for record in options.uninstalled_imports):
             if package in options.extra_requirements:
                 version_spec = options.extra_requirements[package]
                 if version_spec:
                     f.write(f"{package}{version_spec}\n")
-                    # Replace symbols in version_spec for the pretty_requirements string
-                    pretty_version_spec = version_spec
-                    for old, new in replacements:
-                        pretty_version_spec = pretty_version_spec.replace(old, new)
-                    pretty_package = f"{package}{pretty_version_spec}"
                 else:
                     f.write(f"{package}\n")
-                    pretty_package = package
             else:
                 f.write(f"{package}\n")
-                pretty_package = package
-            # Append to the pretty_requirements string with underscores
-            if idx > 0:
-                options.pretty_requirements += "_"
-            options.pretty_requirements += pretty_package
 
 
 def run_pip_in_venv(options: Options, *args: str) -> subprocess.CompletedProcess[str] | None:

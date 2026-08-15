@@ -20,14 +20,18 @@ while imports are classified against `options.python_command`.
 - Task briefs / reports: `.superpowers/sdd/2026-08-14-venv-cache-matching/`
   (not checked in — `.superpowers/` is gitignored)
 
-Tasks 1–7 complete: folder naming, the manifest data model, the version
+Tasks 1–10 complete: folder naming, the manifest data model, the version
 comparator, the match predicate, building the venv with the classified
-interpreter, the `rename_venv` helper, and (Task 7, this commit) writing
-`veny_manifest.json` after install and repair, renaming the folder first if
-repairs changed the package set.
+interpreter, the `rename_venv` helper, writing `veny_manifest.json` after
+install and repair (renaming the folder first if repairs changed the package
+set), matching cached venvs from the manifest, judging every cached venv —
+last-used included — by its manifest, and (Task 10) deleting the
+name-building and requirements-comparison code the manifest replaced
+(`pretty_packages_list`, `options.pretty_list`, `options.pretty_requirements`)
+plus documenting the manifest and folder-name format in README.md.
 
-**Next action:** Task 8 — match cached venvs from the manifest
-(`find_match_dir_in_cache` / `check_venv_dir`, currently untouched by design).
+**Next action:** Task 11 — prove it on a real run (verification only, no
+code changes expected).
 
 **Previous topic (complete):** Module-alias resolver. Replaced the 1,219-line
 hardcoded import-name-to-pip-name table in `veny.py` with `alias_index.py`
@@ -222,6 +226,19 @@ wiring rationale and for two Minors deliberately left unfixed.
   `sys.stdlib_module_names` (see the gotcha above); it does not generalize to
   any name that CPython actually reports as standard library.
 
+- `venv_cache.normalize_pip_name` duplicates `alias_index.normalize_pip_name`
+  deliberately (one-way imports — `venv_cache.py` must not import `alias_index`
+  the way `alias_index.py` must not import `veny`), and the two must be
+  changed together.
+- The folder name is a prefilter only, and a stale one costs a rebuild, which
+  is why `record_venv_state` renames after repairs — the manifest is the
+  source of truth, but a wrong folder name still causes a wasted match
+  attempt before the manifest is even read.
+- `version_satisfies` refuses every non-numeric version form (pre-releases,
+  post-releases, dev releases, local version identifiers, epochs), so an
+  installed pre-release always fails the match and forces a rebuild — this is
+  fail-closed by design, not a bug to fix casually.
+
 ## Deferred items
 
 - `univ_defs.py` is 9,734 lines and `veny.py` is 4,379 lines (down from
@@ -304,6 +321,13 @@ wiring rationale and for two Minors deliberately left unfixed.
 - Attribution keys on top-level module names, since `packages_distributions()`
   maps `foo` and not `foo.bar`. A dotted import name attributes to nothing
   and skips the cache write — fails closed, correct direction, untested.
+
+- Full PEP 440 support in `venv_cache.version_satisfies` — today it only
+  compares dotted-numeric versions and fails closed on every pre-release,
+  post-release, dev-release, local-version, and epoch form.
+- Garbage collection of stale venvs in `~/veny`, including the pre-manifest
+  ones this plan's Task 10 orphans (no manifest means no match, so they are
+  never selected again but are also never deleted).
 
 ## Open questions
 
