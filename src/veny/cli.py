@@ -245,7 +245,9 @@ def main() -> int:
     """Main function.
 
     Returns:
-        The wrapped script's exit status (0 on paths that run no script).
+        The wrapped script's exit status: 0 when no script was meant to run
+        (``--justprint``, ``--full``), and 1 when veny could not run the
+        script.
     """
     start_time = dt.datetime.now()
     script_exit_code = 0
@@ -267,7 +269,7 @@ def main() -> int:
             command_list = [os.fspath(last_used_venv_python), os.fspath(options.python_script)] + options.script_args
             result = subprocess.run(command_list)
             if result.returncode != 0 and not options.rawlog:
-                print(f"Error running script: {result.stderr}")
+                print(f"Script exited with status {result.returncode}")
             sys.exit(result.returncode)
         else:
             if not options.rawlog: print("No luck: no last used virtual environment found. Running the script as normal.")
@@ -328,7 +330,7 @@ def main() -> int:
     elif getattr(options.args, "full", False):  # implied by now: and not options.python_script:
         options.python_script = options.cwd
     else:
-        logging.info("You must specify either a script to run or one of these arguments: alias, manual, blank-slate (be careful using blank-slate because it deletes all cached virtual environments, among other things!).")
+        logging.info("You must specify either a script to run or one of these arguments: --full, --blank-slate (be careful using --blank-slate because it deletes all cached virtual environments, among other things!).")
 
     if getattr(options.args, "reqs", False):
         parse_extra_requirements(options)
@@ -402,6 +404,7 @@ def main() -> int:
         else:
             logging.error("The current virtual environment does not have all the required packages.")
             if not options.rawlog: logging.info("Please deactivate the current virtual environment and run the script again.")
+            script_exit_code = 1
     else:
         if getattr(options.args, "no_cache", False):
             match_dir = None
@@ -414,6 +417,7 @@ def main() -> int:
                 created_new_venv = True
             else:
                 ek.my_critical_error("Failed to create a virtual environment.", choose_breakpoint=True)
+                script_exit_code = 1
         else:
             if not options.rawlog: logging.info("Using existing virtual environment: %s", match_dir)
             created_new_venv = False
@@ -433,7 +437,7 @@ def main() -> int:
                 if not options.rawlog: logging.info("Elapsed time since activating virtual environment: %s",
                                                     elapsed_time)
                 if result.returncode != 0 and not options.rawlog:
-                    logging.error("Error running script: %s", result.stderr)
+                    logging.error("Script exited with status %d", result.returncode)
                 script_exit_code = result.returncode
             if options.venv_dir.name.startswith("failed-") and options.simultaneous_success:
                 # If the program has made it to this point, it has run successfully, so the venv directory can be renamed because it DIDN'T fail.
@@ -448,6 +452,12 @@ def main() -> int:
 
     ek.print_all_errors(memory_handler, options.rawlog)
     logging.shutdown()
+    # A script killed by a signal yields a negative returncode (e.g. -9 for
+    # SIGKILL). Exiting a process with a negative status wraps around to the
+    # wrong shell status (-9 becomes 247), so normalize to the conventional
+    # 128 + signal number (-9 becomes 137) instead.
+    if script_exit_code < 0:
+        script_exit_code = 128 - script_exit_code
     return script_exit_code
 
 
@@ -4953,7 +4963,3 @@ def dict_of_custom_modules(options: Options) -> dict[str, Path]:
             logging.info("Saving custom modules to %s", custom_filename)
         pickle.dump(custom_modules, f_out, protocol=pickle.HIGHEST_PROTOCOL)  # Use highest protocol for efficiency because we don't need backward compatibility for caching purposes
     return custom_modules
-
-
-if __name__ == "__main__":
-    main()

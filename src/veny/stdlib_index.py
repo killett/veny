@@ -183,7 +183,7 @@ def resolve(python: str | os.PathLike[str] | None) -> StdlibIndex:
 
 # Python 2 standard-library names. They are not installable under any Python 3,
 # so veny must never hand them to pip. This is a fact about Python, not about
-# any one user's projects -- which is why it lives here and not in veny.py.
+# any one user's projects -- which is why it lives here and not in veny.cli.
 PYTHON2_ONLY: Final[frozenset[str]] = frozenset(
     {
         "BaseHTTPServer",

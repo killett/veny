@@ -2,6 +2,7 @@
 name = "veny"
 dynamic = ["version"]  # Single-sourced from src/veny/__init__.py by hatchling.
 description = "Run a Python script in a virtual environment built from its imports."
+readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = ["emmykit>=0.4.0,<1.0"]
 

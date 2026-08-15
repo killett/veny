@@ -36,10 +36,10 @@ def test_veny_imports_normally_when_emmykit_is_present():
 
 def test_veny_exits_with_an_upgrade_message_when_emmykit_is_too_old():
     # A pre-0.4.0 emmykit satisfies every plain `import`/attribute access
-    # veny.py performs before its own version check -- register_json_type is
+    # veny.cli performs before its own version check -- register_json_type is
     # the only symbol that is new in 0.4.0 -- so the stub only needs to omit
     # that one attribute to reproduce the old-emmykit shape. `Options` is
-    # included anyway because veny.py subclasses it later in the module; a
+    # included anyway because veny.cli subclasses it later in the module; a
     # real 0.3.x emmykit would have it too.
     source = (
         "import sys, types\n"

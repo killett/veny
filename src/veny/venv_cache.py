@@ -34,7 +34,7 @@ def normalize_pip_name(name: str) -> str:
     """Reduce a pip project name to its PEP 503 normalized form.
 
     This duplicates alias_index.normalize_pip_name deliberately: this module may
-    not import alias_index, because veny.py imports both and the dependency must
+    not import alias_index, because veny.cli imports both and the dependency must
     stay one-way. The two implementations must be kept identical -- a second,
     silent implementation of a comparison rule is exactly the kind of thing that
     drifts apart.
