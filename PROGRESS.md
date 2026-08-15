@@ -72,8 +72,23 @@ Full verification detail, including all captured command output, is in
 `.superpowers/sdd/2026-08-14-venv-cache-matching/task-11-report.md` (not
 checked in — `.superpowers/` is gitignored).
 
-**Next action:** none outstanding on this plan. Tasks 1–11 all complete;
-the venv-cache-matching plan is done.
+A subsequent whole-branch review of `venv-cache` found 4 Important and 6
+Minor findings; all 10 were fixed in one wave (2026-08-14), including the
+most consequential one: nothing in the 223-test suite asserted a cached venv
+is ever *accepted* -- `check_venv_dir`'s `return True` and all of
+`find_match_dir_in_cache` were unreached, so `def check_venv_dir(...):
+return False` silently disabled every venv reuse and still passed the whole
+suite. Full detail, including load-bearing mutation evidence for every
+fix, is in
+`.superpowers/sdd/2026-08-14-venv-cache-matching/final-fix-report.md` (not
+checked in). Two reviewer findings (interpreter_tag reading
+options.stdlib.python_version rather than probing the build interpreter;
+satisfies() running twice on the winning candidate) were deliberately left
+unfixed, escalated to the human partner as needing a design decision.
+
+**Next action:** none outstanding on this plan. Tasks 1–11 all complete, the
+whole-branch review's findings are all fixed, and the venv-cache-matching
+plan is done.
 
 **Previous topic (complete):** Module-alias resolver. Replaced the 1,219-line
 hardcoded import-name-to-pip-name table in `veny.py` with `alias_index.py`
@@ -293,6 +308,27 @@ wiring rationale and for two Minors deliberately left unfixed.
   bug in this plan's code, since `alias_index.py` belongs to the earlier
   module-alias-resolver plan. Left as a gap for that resolver, not fixed
   here.
+- **Renaming a directory carries everything already written inside it,
+  so a test asserting end-state file layout cannot distinguish "write then
+  rename" from "rename then write."** `record_venv_state`'s test asserted
+  `not (old_dir / MANIFEST_FILENAME).exists()` to pin that the manifest is
+  written after the rename -- but `old_dir` no longer exists at all by that
+  point either way, making the assertion vacuous, and swapping the two
+  calls still leaves a valid manifest under `new_dir` regardless of order.
+  When call order matters but produces identical end state, spy on the call
+  itself (capture the argument a wrapped function was actually invoked
+  with) rather than inspecting what's left on disk afterward.
+- **A dict `.get()` lookup silently returns `None` for a spelling mismatch;
+  it never raises, so the failure is invisible unless something asserts the
+  positive case.** `manifest_for` and `wanted_packages` both looked up
+  `options.extra_requirements` (user-typed spelling) by `record.pip_name`
+  (however alias resolution happened to spell it) with no normalization,
+  one line away from a versions dict that *was* keyed normalized. Same
+  fix both places: build a normalized view of the dict once, look up by
+  `normalize_pip_name` on both sides. Whenever two spellings of the same
+  project name might meet at a dict boundary, that boundary needs
+  `normalize_pip_name` on both the write side and the read side, not just
+  one.
 
 ## Deferred items
 
