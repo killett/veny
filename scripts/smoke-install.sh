@@ -21,7 +21,11 @@ echo "smoke: building the wheel"
 rm -rf dist
 python -m build --wheel --outdir dist >/dev/null
 
-wheel=$(ls dist/veny-*.whl | head -1)
+# find, not `ls dist/veny-*.whl | head -1`: under `set -euo pipefail` an
+# unmatched glob makes ls exit non-zero, pipefail propagates it through the
+# assignment, and set -e kills the script before the guard below can print
+# anything. find exits 0 on no-match, so the guard actually runs.
+wheel=$(find dist -maxdepth 1 -name 'veny-*.whl' -print -quit)
 [[ -n "$wheel" ]] || { echo "smoke: no wheel in dist/" >&2; exit 1; }
 echo "smoke: built $wheel"
 
