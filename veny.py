@@ -4830,9 +4830,13 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
        not getattr(options.args, "latest",    False) and \
        not getattr(options.args, "smallest",  False):
         options_last_used = load_last_used_options(options)
-        if options_last_used is not None and options_last_used.venv_dir is not None \
-           and check_venv_dir(options, options_last_used.venv_dir):
-            return ud.ensure_path(options_last_used.venv_dir)
+        # venv_dir is declared in veny.Options.__init__, not in the base
+        # univ_defs.Options that load_last_used_options builds from, so a
+        # last-used JSON written without that key must not raise here.
+        venv_dir_last_used = getattr(options_last_used, "venv_dir", None)
+        if options_last_used is not None and venv_dir_last_used is not None \
+           and check_venv_dir(options, venv_dir_last_used):
+            return ud.ensure_path(venv_dir_last_used)
         else:
             if not options.rawlog: logging.info("Trying to load the latest matching venv now.")
         options.args.latest    = True  # If that didn't work, try to load the latest venv in the cache
