@@ -66,3 +66,27 @@ def test_retired_alias_flags_are_rejected(argv_tail, monkeypatch):
         cli.parse_arguments(options)
 
     assert excinfo.value.code == 2
+
+
+def test_module_entry_point_exits_with_mains_return_value():
+    # Catches: __main__.py calling main() bare instead of sys.exit(main()),
+    # which swallows any status main() returns rather than raises. Patching
+    # main keeps this a test of the __main__ wiring alone -- the real
+    # end-to-end proof that a wrapped script's status survives is
+    # scripts/smoke-install.sh, which asserts exit 7.
+    source = (
+        "import runpy, veny.cli\n"
+        "veny.cli.main = lambda: 3\n"
+        "runpy.run_module('veny', run_name='__main__')\n"
+    )
+    env = {**os.environ, "PYTHONPATH": os.fspath(REPO_ROOT / "src")}
+    result = subprocess.run(
+        [sys.executable, "-c", source],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+
+    assert result.returncode == 3, result.stderr

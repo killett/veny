@@ -244,6 +244,7 @@ def build_alias_index(options: Options) -> alias_index.AliasIndex:
 def main() -> None:
     """Main function."""
     start_time = dt.datetime.now()
+    script_exit_code = 0
     options: Options = Options()
     parse_arguments(options)
     script_string       = getattr(options.args, "script",       None)
@@ -382,14 +383,16 @@ def main() -> None:
     if not options.uninstalled_imports:
         if not options.rawlog: logging.info("All required packages are already installed.")
         start_raw_time = dt.datetime.now()
-        subprocess.run([sys.executable, os.fspath(options.python_script)] + options.script_args)
+        result = subprocess.run([sys.executable, os.fspath(options.python_script)] + options.script_args)
+        script_exit_code = result.returncode
         elapsed_raw_time = dt.datetime.now() - start_raw_time
         if not options.rawlog: logging.info("Runtime: %s", elapsed_raw_time)
     elif is_virtualenv():
         if not options.rawlog: logging.info("Already in a virtual environment.")
         if check_packages_in_venv(options):
             start_raw_time = dt.datetime.now()
-            subprocess.run([sys.executable, os.fspath(options.python_script)] + options.script_args)
+            result = subprocess.run([sys.executable, os.fspath(options.python_script)] + options.script_args)
+            script_exit_code = result.returncode
             elapsed_raw_time = dt.datetime.now() - start_raw_time
             if not options.rawlog: logging.info("Runtime: %s", elapsed_raw_time)
         else:
@@ -427,6 +430,7 @@ def main() -> None:
                                                     elapsed_time)
                 if result.returncode != 0 and not options.rawlog:
                     logging.error("Error running script: %s", result.stderr)
+                script_exit_code = result.returncode
             if options.venv_dir.name.startswith("failed-") and options.simultaneous_success:
                 # If the program has made it to this point, it has run successfully, so the venv directory can be renamed because it DIDN'T fail.
                 rename_venv(options, options.venv_dir.name.removeprefix("failed-"))
@@ -440,6 +444,7 @@ def main() -> None:
 
     ek.print_all_errors(memory_handler, options.rawlog)
     logging.shutdown()
+    sys.exit(script_exit_code)
 
 
 def _literal_str(expr_node: ast.AST) -> str | None:
