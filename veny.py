@@ -26,6 +26,7 @@ from dataclasses import dataclass
 import alias_index
 import stdlib_index
 import univ_defs as ud
+import venv_cache
 
 __version__: str = "0.2.2"
 
@@ -3991,6 +3992,41 @@ def pretty_packages_list(options: Options) -> str:
     return first_five + suffix
 
 
+def venv_build_interpreter(options: Options) -> str:
+    """Return the interpreter that should create the virtual environment.
+
+    options.python_command is what stdlib and alias resolution were probed
+    against, so it is what the venv must be built with; building with
+    sys.executable instead classifies imports for one Python and installs them
+    for another. find_preferred_python_version() returns "" when the preferred
+    Python is absent from PATH, and only then does the running interpreter serve.
+
+    Args:
+        options: Options object; reads options.python_command.
+
+    Returns:
+        A path or command name for the interpreter to build with.
+    """
+    return options.python_command or sys.executable
+
+
+def interpreter_tag(options: Options) -> str:
+    """Return the "major.minor" tag of the interpreter this run is classified against.
+
+    Taken from the standard-library index rather than probed again, so the tag in
+    a venv's folder name, the tag in its manifest, and the version whose stdlib
+    names decided what needed installing can never disagree.
+
+    Args:
+        options: Options object; reads options.stdlib.
+
+    Returns:
+        A tag such as "3.12".
+    """
+    major, minor = options.stdlib.python_version
+    return f"{major}.{minor}"
+
+
 def use_pip_list(options: Options) -> None:
     """Use the pip list command to find all installed packages and use that pip list to modify the uninstalled and installed imports. Add packages from the options.extra_requirements dictionary if "--reqs" is specified as a runtime argument."""
     # Add packages from the options.extra_requirements dictionary if "--reqs" is specified as a runtime argument.
@@ -4354,15 +4390,23 @@ def verify_and_repair_imports(options: Options) -> None:
 def setup_virtualenv(options: Options) -> bool:
     """Setup a virtual environment and install packages."""
     use_pip_list(options)
-    options.pretty_list = pretty_packages_list(options)
+    # The folder name is a cheap prefilter for the cache search; veny_manifest.json
+    # inside the venv is the authority. venv_cache owns the encoding so a
+    # hyphenated pip name cannot be mistaken for a field separator.
+    folder_name = venv_cache.build_folder_name(
+        venv_name=options.venv_name,
+        interpreter_tag=interpreter_tag(options),
+        timestamp=options.timestamp,
+        pip_names=[record.pip_name for record in options.uninstalled_imports],
+    )
     # Create a virtual environment directory that starts with "failed" in case the process fails. Only remove the "failed" part if this process completes successfully.
-    options.set_venv_dir(options.my_dir / f"failed-{options.venv_name}-versionless-{options.timestamp}-{options.pretty_list}")
+    options.set_venv_dir(options.my_dir / f"failed-{folder_name}")
 
     write_requirements_file_with_extras(options)
 
     if not options.rawlog: logging.info("Creating virtual environment...")
     assert options.venv_dir is not None, "options.venv_dir must be set"
-    subprocess.check_call([sys.executable, "-m", "venv", os.fspath(options.venv_dir)])
+    subprocess.check_call([venv_build_interpreter(options), "-m", "venv", os.fspath(options.venv_dir)])
     if not options.rawlog: logging.info("Virtual environment created.")
 
     # Activate virtual environment and install wheel
