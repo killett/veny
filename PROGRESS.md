@@ -20,9 +20,16 @@ considered and rejected as insufficient — it delegates interpreter choice to
   (7 tasks: 1, 2, 3, 4a, 4, 5, 6)
 - Task tracker: `docs/superpowers/plans/2026-08-15-packaged-entry-point.md.tasks.json`
 
-**Next action:** Task 6 — write the emmykit usage-audit prompt at
-`docs/prompts/2026-08-15-emmykit-shell-alias-helpers-audit.md`. Tasks 1-5 are
-complete: the six modules live in `src/veny/`, the alias installer and its
+**Next action:** none on this plan. All 7 tasks are complete on branch
+`packaged-entry-point` (14 commits), the whole-branch review is clean, and the
+branch is ready to merge. Gates: 257 passed; `ruff check src/veny/cli.py
+--statistics` 294 (was 299 for `veny.py`); `mypy src/veny/cli.py
+src/veny/json_types.py` 27 (was 28); `pixi run smoke` green, including the
+mutation check that proves its exit-status assertion can fail. The outstanding
+follow-up is the emmykit usage-audit prompt in `docs/prompts/`, which is
+written but has not been run in the emmykit repository — see Deferred items.
+
+Tasks 1-6 delivered: the six modules live in `src/veny/`, the alias installer and its
 four shell dialects are deleted, `pyproject.toml` declares a hatchling build
 backend and `[project.scripts] veny = "veny.cli:main"`, and `pixi run smoke`
 proves the installed console script propagates a wrapped script's exit
@@ -579,15 +586,34 @@ wiring rationale and for two Minors deliberately left unfixed.
 - Garbage collection of stale venvs in `~/veny`, including the pre-manifest
   ones this plan's Task 10 orphans (no manifest means no match, so they are
   never selected again but are also never deleted).
-- `src/veny/cli.py`'s `"Error running script: %s"` log line reads
-  `result.stderr`, which is always `None` because none of the three
-  script-running `subprocess.run` calls capture output. Pre-existing;
-  surfaced during Task 4a.
-- What veny should exit with when *veny itself* cannot run the script — the
-  "current virtual environment does not have all the required packages"
-  branch still exits 0. Deliberately out of scope for Task 4a, which only
-  propagated the *script's* exit status. Recorded as an open question in the
-  design doc `docs/superpowers/specs/2026-08-15-packaged-entry-point-design.md`.
+- **Two pre-existing `AssertionError` crashes, both found by the packaged
+  entry-point branch's final review (2026-08-15) and both left unfixed as out
+  of scope.** Neither is a regression — the reviewer confirmed both are
+  byte-identical in `git show 4db27ef:src/veny/cli.py`.
+  1. `veny -y` (or any flag set with no script argument, no `--full` and no
+     `--blank-slate`) prints the "you must specify..." message, then sets
+     `options.python_script = None` and crashes in `list_packages()` on
+     `assert options.python_script is not None`. The message should be
+     followed by an exit, not by falling through.
+  2. The "already inside a virtual environment that lacks the required
+     packages" branch crashes in `check_packages_in_venv` on
+     `assert options.venv_dir is not None` before it can reach its own error
+     path, because `options.venv_dir` is only set in the venv-*creation*
+     branch. **This makes that branch's `script_exit_code = 1` unreachable
+     through the front door** — the fix is correct but currently inert, and
+     was verified by monkeypatching around `main()` rather than organically.
+- `src/veny/cli.py`'s script-failure log lines read `result.returncode` as of
+  2026-08-15; they previously read `result.stderr`, which was always `None`
+  because none of the three script-running `subprocess.run` calls capture
+  output. If those calls ever gain `capture_output=True`, the child's output
+  stops reaching the terminal live — check both sites before changing them.
+- veny's own exit statuses beyond the two paths fixed on 2026-08-15
+  (`script_exit_code = 1` when it cannot run the script) have never been
+  designed as a set: `--justprint`, `--full`, the `ek.my_critical_error`
+  sites and the `sys.exit(1)` / `sys.exit(2)` sites each chose a value
+  independently. The design doc
+  `docs/superpowers/specs/2026-08-15-packaged-entry-point-design.md` records
+  this as its open question.
 - emmykit's shell/alias helpers (`detect_shell`, `find_shell_rc_file`, `find_additional_alias_files`, and the `Options` fields `shell`, `rc_file`, `alias`, `alias_command`, `additional_alias_files`) have no caller in veny as of 2026-08-15. The usage audit is written up as a cross-repo prompt in `docs/prompts/2026-08-15-emmykit-shell-alias-helpers-audit.md` and has not been run yet. They are public API on a published 0.4.0, so removal is a breaking change and the prompt asks for a recommendation rather than a deletion.
 
 ## Open questions
