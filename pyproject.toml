@@ -1,8 +1,23 @@
 [project]
 name = "veny"
-version = "0.1.0"  # Required by PEP 621. Keep set even without a [build-system] so any uv-using tool that walks up into this directory doesn't fail PEP 621 validation.
+dynamic = ["version"]  # Single-sourced from src/veny/__init__.py by hatchling.
+description = "Run a Python script in a virtual environment built from its imports."
 requires-python = ">=3.12,<3.14"
 dependencies = ["emmykit>=0.4.0,<1.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+veny = "veny.cli:main"
+
+[tool.hatch.version]
+path = "src/veny/__init__.py"
+pattern = "__version__[^=]*= ['\"](?P<version>[^'\"]*)['\"]"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/veny"]
 
 [tool.ruff.lint]
 select = [

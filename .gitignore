@@ -24,3 +24,7 @@ logs/
 
 # superpowers subagent-driven-development scratch workspace
 .superpowers/
+
+# Packaging build outputs
+dist/
+build/
