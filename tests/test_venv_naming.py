@@ -18,7 +18,10 @@ def an_options(python_command: str) -> veny.Options:
 
 def test_venv_build_interpreter_prefers_the_classified_interpreter() -> None:
     """Building with sys.executable installs into a venv for the wrong Python."""
-    assert veny.venv_build_interpreter(an_options("/usr/bin/python3.12")) == "/usr/bin/python3.12"
+    assert (
+        veny.venv_build_interpreter(an_options("/usr/bin/python3.12"))
+        == "/usr/bin/python3.12"
+    )
 
 
 def test_venv_build_interpreter_falls_back_when_no_preferred_python_was_found() -> None:
@@ -27,5 +30,14 @@ def test_venv_build_interpreter_falls_back_when_no_preferred_python_was_found() 
 
 
 def test_interpreter_tag_comes_from_the_stdlib_index() -> None:
-    """A tag probed separately could disagree with the index the imports were classified against."""
-    assert veny.interpreter_tag(an_options("/usr/bin/python3.12")) == "3.12"
+    """A mutation reading the tag out of python_command must fail here: the two sources disagree.
+
+    an_options() always builds stdlib for (3, 12); giving python_command a
+    different minor version means "3.12" can only come from options.stdlib.
+    """
+    options = an_options("/usr/bin/python3.9")
+    assert options.stdlib.python_version == (
+        3,
+        12,
+    )  # sanity: the two sources really disagree
+    assert veny.interpreter_tag(options) == "3.12"
