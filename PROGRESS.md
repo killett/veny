@@ -2,21 +2,32 @@
 
 ## Current work
 
-**Topic:** Venv-cache matching — design approved 2026-08-14, not yet planned.
-Cached virtual environments are matched from a folder name that splits on `-`
-(so no hyphenated pip name survives) and from `requirements.txt`, which is
-pip's input rather than a record of the venv. Replace both with a versioned
-`veny_manifest.json` inside each venv, a correctly encoded folder name used
-only as a cheap prefilter, and one comparison key — the PEP 503 normalized pip
-name — at every layer. Also fixes the interpreter mismatch where the venv is
-built with `sys.executable` while imports are classified against
-`options.python_command`.
+**Topic:** Venv-cache matching — design approved 2026-08-14, plan in progress
+on branch `venv-cache`. Cached virtual environments are matched from a folder
+name that splits on `-` (so no hyphenated pip name survives) and from
+`requirements.txt`, which is pip's input rather than a record of the venv.
+Replace both with a versioned `veny_manifest.json` inside each venv, a
+correctly encoded folder name used only as a cheap prefilter, and one
+comparison key — the PEP 503 normalized pip name — at every layer. Also
+fixes the interpreter mismatch where the venv is built with `sys.executable`
+while imports are classified against `options.python_command`.
 
 - Design doc: `docs/superpowers/specs/2026-08-14-venv-cache-matching-design.md`
   (approved 2026-08-14)
-- Implementation plan: not written yet.
+- Implementation plan: `docs/superpowers/plans/2026-08-14-venv-cache-matching.md`
+  (11 tasks, executed on branch `venv-cache`)
+- Task tracker: `docs/superpowers/plans/2026-08-14-venv-cache-matching.md.tasks.json`
+- Task briefs / reports: `.superpowers/sdd/2026-08-14-venv-cache-matching/`
+  (not checked in — `.superpowers/` is gitignored)
 
-**Next action:** write the implementation plan from the approved design.
+Tasks 1–7 complete: folder naming, the manifest data model, the version
+comparator, the match predicate, building the venv with the classified
+interpreter, the `rename_venv` helper, and (Task 7, this commit) writing
+`veny_manifest.json` after install and repair, renaming the folder first if
+repairs changed the package set.
+
+**Next action:** Task 8 — match cached venvs from the manifest
+(`find_match_dir_in_cache` / `check_venv_dir`, currently untouched by design).
 
 **Previous topic (complete):** Module-alias resolver. Replaced the 1,219-line
 hardcoded import-name-to-pip-name table in `veny.py` with `alias_index.py`
