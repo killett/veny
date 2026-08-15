@@ -2,21 +2,93 @@
 
 ## Current work
 
-**Topic:** Venv-cache matching — design approved 2026-08-14, not yet planned.
-Cached virtual environments are matched from a folder name that splits on `-`
-(so no hyphenated pip name survives) and from `requirements.txt`, which is
-pip's input rather than a record of the venv. Replace both with a versioned
-`veny_manifest.json` inside each venv, a correctly encoded folder name used
-only as a cheap prefilter, and one comparison key — the PEP 503 normalized pip
-name — at every layer. Also fixes the interpreter mismatch where the venv is
-built with `sys.executable` while imports are classified against
-`options.python_command`.
+**Topic:** Venv-cache matching — design approved 2026-08-14, plan in progress
+on branch `venv-cache`. Cached virtual environments are matched from a folder
+name that splits on `-` (so no hyphenated pip name survives) and from
+`requirements.txt`, which is pip's input rather than a record of the venv.
+Replace both with a versioned `veny_manifest.json` inside each venv, a
+correctly encoded folder name used only as a cheap prefilter, and one
+comparison key — the PEP 503 normalized pip name — at every layer. Also
+fixes the interpreter mismatch where the venv is built with `sys.executable`
+while imports are classified against `options.python_command`.
 
 - Design doc: `docs/superpowers/specs/2026-08-14-venv-cache-matching-design.md`
   (approved 2026-08-14)
-- Implementation plan: not written yet.
+- Implementation plan: `docs/superpowers/plans/2026-08-14-venv-cache-matching.md`
+  (11 tasks, executed on branch `venv-cache`)
+- Task tracker: `docs/superpowers/plans/2026-08-14-venv-cache-matching.md.tasks.json`
+- Task briefs / reports: `.superpowers/sdd/2026-08-14-venv-cache-matching/`
+  (not checked in — `.superpowers/` is gitignored)
 
-**Next action:** write the implementation plan from the approved design.
+Tasks 1–10 complete: folder naming, the manifest data model, the version
+comparator, the match predicate, building the venv with the classified
+interpreter, the `rename_venv` helper, writing `veny_manifest.json` after
+install and repair (renaming the folder first if repairs changed the package
+set), matching cached venvs from the manifest, judging every cached venv —
+last-used included — by its manifest, and (Task 10) deleting the
+name-building and requirements-comparison code the manifest replaced
+(`pretty_packages_list`, `options.pretty_list`, `options.pretty_requirements`)
+plus documenting the manifest and folder-name format in README.md.
+
+Task 11 (verification, no code changes) is complete. Mutation-checked all
+three guards named in the brief — each deletion produced a real test
+failure, each restoration left `git diff` empty and the full suite green
+(223 passed):
+
+- `venv_cache.satisfies`'s `manifest.interpreter_tag != interpreter_tag`
+  early return: deleting it failed
+  `test_satisfies_rejects_a_different_interpreter`.
+- `venv_cache.version_satisfies`'s `installed is None` fail-closed term:
+  deleting it failed `test_version_satisfies_fails_closed[None->=1.0]` and
+  `test_satisfies_rejects_a_pin_when_the_installed_version_is_unknown`.
+- `veny.record_venv_state`'s rename branch: deleting it failed
+  `test_record_venv_state_renames_before_writing_the_manifest`.
+
+Live two-run verification against `ruamel.yaml` (pip name `ruamel-yaml`,
+the brief's chosen hyphenated-pip-name package) confirmed the whole path
+end to end:
+
+- Run 1 built `~/veny/myenv-py3.13-20260814-201804-ruamel-yaml`, printed
+  `ok ruamel.yaml`, and wrote a `veny_manifest.json` with
+  `schema_version: 1`, `interpreter_tag: "3.13"`, and a package record
+  `pip_name: "ruamel-yaml"`, `installed_version: "0.19.1"`.
+- Run 2 logged `Using existing virtual environment:
+  /home/claudeuser/veny/myenv-py3.13-20260814-201804-ruamel-yaml` — the
+  identical folder — and printed `ok ruamel.yaml` again.
+- `ls ~/veny` before vs. after the two runs differs by exactly one venv
+  folder (`myenv-py3.13-20260814-201804-ruamel-yaml`), plus expected
+  incidental files (`module_aliases_cache.json`, a `pip_list_*.txt`, and
+  veny's own `test` probe dir — none are second venv folders).
+
+One environmental blocker required a workaround, recorded as a gotcha
+below: the alias resolver could not discover `ruamel` → `ruamel-yaml` on
+its own (a pre-existing, unrelated gap in `alias_index.py`'s mutation
+generator, not in this plan's code), so a `module_aliases.toml` override
+was used to supply that mapping. This is a legitimate, documented
+mechanism (`AliasIndex.resolve`'s OVERRIDE tier) and does not touch any
+code this plan changed.
+
+Full verification detail, including all captured command output, is in
+`.superpowers/sdd/2026-08-14-venv-cache-matching/task-11-report.md` (not
+checked in — `.superpowers/` is gitignored).
+
+A subsequent whole-branch review of `venv-cache` found 4 Important and 6
+Minor findings; all 10 were fixed in one wave (2026-08-14), including the
+most consequential one: nothing in the 223-test suite asserted a cached venv
+is ever *accepted* -- `check_venv_dir`'s `return True` and all of
+`find_match_dir_in_cache` were unreached, so `def check_venv_dir(...):
+return False` silently disabled every venv reuse and still passed the whole
+suite. Full detail, including load-bearing mutation evidence for every
+fix, is in
+`.superpowers/sdd/2026-08-14-venv-cache-matching/final-fix-report.md` (not
+checked in). Two reviewer findings (interpreter_tag reading
+options.stdlib.python_version rather than probing the build interpreter;
+satisfies() running twice on the winning candidate) were deliberately left
+unfixed, escalated to the human partner as needing a design decision.
+
+**Next action:** none outstanding on this plan. Tasks 1–11 all complete, the
+whole-branch review's findings are all fixed, and the venv-cache-matching
+plan is done.
 
 **Previous topic (complete):** Module-alias resolver. Replaced the 1,219-line
 hardcoded import-name-to-pip-name table in `veny.py` with `alias_index.py`
@@ -211,8 +283,95 @@ wiring rationale and for two Minors deliberately left unfixed.
   `sys.stdlib_module_names` (see the gotcha above); it does not generalize to
   any name that CPython actually reports as standard library.
 
+- `venv_cache.normalize_pip_name` duplicates `alias_index.normalize_pip_name`
+  deliberately (one-way imports — `venv_cache.py` must not import `alias_index`
+  the way `alias_index.py` must not import `veny`), and the two must be
+  changed together.
+- The folder name is a prefilter only, and a stale one costs a rebuild, which
+  is why `record_venv_state` renames after repairs — the manifest is the
+  source of truth, but a wrong folder name still causes a wasted match
+  attempt before the manifest is even read.
+- `version_satisfies` refuses every non-numeric version form (pre-releases,
+  post-releases, dev releases, local version identifiers, epochs), so an
+  installed pre-release always fails the match and forces a rebuild — this is
+  fail-closed by design, not a bug to fix casually.
+- `alias_index.mutations()` cannot discover a pip name that adds a suffix
+  unrelated to case/separator changes, e.g. `ruamel` (the import) →
+  `ruamel-yaml` (the pip name): its generated forms are only
+  `dash-for-underscore`, `python-<name>`, `<name>-python`, `py<name>`, and
+  the `py`-prefix strip. `ruamel-yaml` matches none of them, and there is
+  no `SEED` entry for `ruamel`, so `AliasIndex.resolve("ruamel")` returns
+  no candidates and `split_imports` falls back to using the bare import
+  name as the pip name — which does not exist on PyPI and fails to
+  install. Found live during Task 11's verification run, worked around
+  with a `module_aliases.toml` override (`ruamel = "ruamel-yaml"`); not a
+  bug in this plan's code, since `alias_index.py` belongs to the earlier
+  module-alias-resolver plan. Left as a gap for that resolver, not fixed
+  here.
+- **Renaming a directory carries everything already written inside it,
+  so a test asserting end-state file layout cannot distinguish "write then
+  rename" from "rename then write."** `record_venv_state`'s test asserted
+  `not (old_dir / MANIFEST_FILENAME).exists()` to pin that the manifest is
+  written after the rename -- but `old_dir` no longer exists at all by that
+  point either way, making the assertion vacuous, and swapping the two
+  calls still leaves a valid manifest under `new_dir` regardless of order.
+  When call order matters but produces identical end state, spy on the call
+  itself (capture the argument a wrapped function was actually invoked
+  with) rather than inspecting what's left on disk afterward.
+- **A dict `.get()` lookup silently returns `None` for a spelling mismatch;
+  it never raises, so the failure is invisible unless something asserts the
+  positive case.** `manifest_for` and `wanted_packages` both looked up
+  `options.extra_requirements` (user-typed spelling) by `record.pip_name`
+  (however alias resolution happened to spell it) with no normalization,
+  one line away from a versions dict that *was* keyed normalized. Same
+  fix both places: build a normalized view of the dict once, look up by
+  `normalize_pip_name` on both sides. Whenever two spellings of the same
+  project name might meet at a dict boundary, that boundary needs
+  `normalize_pip_name` on both the write side and the read side, not just
+  one.
+
 ## Deferred items
 
+- **A manifest can record an `interpreter_tag` and an `interpreter_path`
+  that disagree.** `interpreter_tag()` (`veny.py:3974`) reads
+  `options.stdlib.python_version`, while `venv_build_interpreter()` returns
+  `options.python_command or sys.executable`. Those agree unless the stdlib
+  probe degrades: `stdlib_index.for_interpreter` falls back to the *running*
+  interpreter's index on a timeout or a non-zero exit, so a run whose target
+  is 3.13 can write `interpreter_tag: "3.11"` next to
+  `interpreter_path: "python3.13"`, and a second degraded run then matches
+  that tag and reuses a 3.13 venv labelled 3.11. Nothing validates the pair.
+  The design doc's creation flow says the tag comes from the build
+  interpreter, so the code and the doc currently disagree about which
+  interpreter the tag describes. Fix shape: `installed_versions_in_venv`
+  already spawns the venv's own Python — have it also return
+  `sys.version_info[:2]` and record *that* as the tag, making every manifest
+  field a fact about the venv rather than about the run that built it.
+  Raised by the whole-branch review 2026-08-14, parked because it changes
+  what the approved design says.
+- `satisfies()` runs twice on the winning cached venv: once inside
+  `cache_candidates` (`veny.py:4788`) and again inside `check_venv_dir`
+  (`veny.py:4695`), which re-reads the manifest from disk to do it. Correct
+  but redundant, and it reintroduces the "the folder changed underneath the
+  run" re-read that `CacheCandidate` removed from the ranking loop. Fix
+  shape: have `find_match_dir_in_cache` pass the manifest it already holds
+  through to `check_venv_dir`, leaving that function to do only the
+  import-level confirmation. Same shape as the Task 8 ruling, and best done
+  together with the interpreter-tag item above.
+- Smaller items carried from the venv-cache branch's review ledger, none
+  blocking: `venv_cache` logs through the root logger rather than
+  `logging.getLogger(__name__)` (consistent with the rest of the codebase);
+  `build_folder_name` documents but does not enforce "`venv_name` must not
+  contain `-`" (unreachable today — `venv_name` is the hardcoded `"myenv"`);
+  the `_and_N_more` tail parse could misfire on a PyPI project literally
+  named `and` or `more` beside a digit-named one (worst case, one wasted
+  match attempt the manifest then rejects); `_RELEASE_RE`/`_CLAUSE_RE` sit at
+  the top of `venv_cache.py` rather than beside `_release`/`_clause_holds`;
+  no test covers `satisfies` with an empty wanted list, an empty
+  `manifest.packages`, or two pip names normalizing to one key (last wins);
+  `test_check_venv_dir_rejects_a_missing_directory` does not uniquely pin the
+  `safe_is_dir` guard, since `read_manifest` also degrades on a missing
+  directory.
 - `univ_defs.py` is 9,734 lines and `veny.py` is 4,379 lines (down from
   5,475 before the alias-resolver plan removed the hardcoded alias table,
   and from 6,320 before the stdlib plan before that removed the hardcoded
@@ -293,6 +452,13 @@ wiring rationale and for two Minors deliberately left unfixed.
 - Attribution keys on top-level module names, since `packages_distributions()`
   maps `foo` and not `foo.bar`. A dotted import name attributes to nothing
   and skips the cache write — fails closed, correct direction, untested.
+
+- Full PEP 440 support in `venv_cache.version_satisfies` — today it only
+  compares dotted-numeric versions and fails closed on every pre-release,
+  post-release, dev-release, local-version, and epoch form.
+- Garbage collection of stale venvs in `~/veny`, including the pre-manifest
+  ones this plan's Task 10 orphans (no manifest means no match, so they are
+  never selected again but are also never deleted).
 
 ## Open questions
 

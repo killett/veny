@@ -5678,9 +5678,14 @@ def _to_jsonable(obj: Any, *, roundtrip: bool, _seen: set[int]) -> Any:
     # These must be handled before the str() fallback below, or an AliasIndex is
     # flattened to its repr and every later lookup degrades to substring matching,
     # which returns wrong answers silently instead of raising. ResolvedImport is
-    # tagged so it round-trips: options.uninstalled_imports is written to the
-    # last-used options file and read back by veny's check_venv_dir(), whose
-    # issubset() check could never match a set of stringified records.
+    # tagged for the same reason: options.uninstalled_imports is written to the
+    # last-used options file, and without a handler here it would fall through
+    # to that same str() fallback, round-tripping as a set of repr strings
+    # instead of ResolvedImport records. No current reader takes that field
+    # back off a *restored* options object -- check_venv_dir and the cache
+    # search path both compare against the live run's own records, never a
+    # loaded one -- so this is precautionary: it guards whichever future
+    # reader is first to access .import_name/.pip_name on a restored record.
     # (The equivalent StdlibIndex gap is still open; it falls through to str().)
     # Imported here, not at module scope: see the note beside the imports.
     # Absent alongside a standalone univ_defs, there is nothing of its to

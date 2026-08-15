@@ -7,6 +7,7 @@ from pathlib import Path
 import alias_index
 import stdlib_index
 import univ_defs as ud
+import venv_cache
 import veny
 from alias_index import Candidate, Resolution, Source
 
@@ -786,33 +787,42 @@ def test_check_packages_in_venv_bulk_branch_fails_an_unprovided_source_import(
     assert veny.check_packages_in_venv(options, venv_dir=tmp_path) is False
 
 
-def test_check_venv_dir_judges_a_cached_venv_by_the_live_runs_source_imports(
+def test_check_venv_dir_rejects_a_manifest_match_whose_import_does_not_actually_import(
     monkeypatch, tmp_path
 ):
-    # check_venv_dir validates an Options loaded from a previous run's JSON,
-    # which carries that run's all_imports -- or none at all. Reading the
-    # source names off it would leave the cached-venv gate judging every record
-    # by installed metadata alone, and veny would reuse a venv that cannot run
-    # this script.
+    # The manifest can say a package is there while the venv is actually
+    # broken (a half-finished install, a corrupted site-packages). check_venv_dir
+    # must not stop at the manifest match -- it has to run the same import-level
+    # confirmation check_packages_in_venv performs, and reject the venv when
+    # that fails, even though venv_cache.satisfies() alone would have accepted it.
     cached_dir = tmp_path / "cached-venv"
     cached_dir.mkdir()
-    record = veny.ResolvedImport(import_name="thing", pip_name="wrong-pkg")
+    record = veny.ResolvedImport(import_name="thing", pip_name="thing-pkg")
     options = veny.Options()
     options.all_imports = {"thing"}
     options.uninstalled_imports = {record}
-    options_from_cache = veny.Options()
-    options_from_cache.all_imports = set()
-    options_from_cache.uninstalled_imports = {record}
-    options_from_cache.set_venv_dir(cached_dir)
+    venv_cache.write_manifest(
+        cached_dir,
+        venv_cache.Manifest(
+            schema_version=venv_cache.SCHEMA_VERSION,
+            created="20260814-091500",
+            veny_version="0.2.2",
+            interpreter_tag=veny.interpreter_tag(options),
+            interpreter_path="/usr/bin/python3",
+            packages=(venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None),),
+        ),
+    )
     monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     monkeypatch.setattr(
         alias_index,
         "probe_interpreter",
-        lambda python, timeout=30.0: ("3.12", {"something_else": ["wrong-pkg"]}),
+        lambda python, timeout=30.0: ("3.12", {"thing": ["thing-pkg"]}),
     )
-    _run_check_against_fake_venv(monkeypatch, importable={"something_else"})
+    # The manifest matches (same pip name, same interpreter tag) but nothing
+    # actually imports in this venv.
+    _run_check_against_fake_venv(monkeypatch, importable=set())
 
-    assert veny.check_venv_dir(options, options_from_cache) is False
+    assert veny.check_venv_dir(options, cached_dir) is False
 
 
 def test_check_packages_in_venv_still_fails_a_genuinely_missing_package(
@@ -990,6 +1000,10 @@ def test_setup_virtualenv_verifies_every_import_before_reporting_success(
 
     monkeypatch.setattr(veny, "verify_and_repair_imports", fake_verify)
     monkeypatch.setattr(veny, "check_packages_in_venv", fake_check)
+    # record_venv_state probes the venv's real interpreter for installed
+    # versions, which this test's fake subprocess.run cannot answer -- it is
+    # unrelated to the ordering this test checks, so it is stubbed out too.
+    monkeypatch.setattr(veny, "record_venv_state", lambda opts: None)
 
     assert veny.setup_virtualenv(options) is True
     # Verification has to happen before the gate that drops the "failed-"
@@ -1477,10 +1491,10 @@ def test_alias_index_is_serialized_as_structured_data():
 
 
 def test_resolved_import_round_trips_through_json():
-    # uninstalled_imports is written to the last-used options file and read
-    # back by check_venv_dir. Without a handler each record stringifies to
-    # "ResolvedImport(import_name='cv2', ...)", so the issubset() check against
-    # the cached set can never match and veny rebuilds a venv every run.
+    # uninstalled_imports is written to the last-used options file, which
+    # check_venv_dir still reads for its venv_dir pointer. Without a handler
+    # each record stringifies to "ResolvedImport(import_name='cv2', ...)",
+    # losing the structured data that the rest of the file depends on.
     record = veny.ResolvedImport(import_name="cv2", pip_name="opencv-python")
     restored = ud.from_jsonable(ud.to_jsonable({record}))
     assert restored == {record}

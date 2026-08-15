@@ -8,8 +8,8 @@ import subprocess
 import datetime as dt
 import argparse
 import ast
+import json
 import re
-import copy
 import shutil
 import venv
 import pickle
@@ -26,6 +26,7 @@ from dataclasses import dataclass
 import alias_index
 import stdlib_index
 import univ_defs as ud
+import venv_cache
 
 __version__: str = "0.2.2"
 
@@ -67,7 +68,6 @@ class Options(ud.Options):
         self.samedir_files:          list[Path] = []
         self.pip_list:                list[str] = []
         self.loaded_custom_modules:    set[str] = set()
-        self.pretty_list:                   str = ""  # A pretty-printed string listing "all" imports
         self.timestamp:                     str = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
         self.sys_path_hints:          set[Path] = set()  # Filled by SysPathVisitor
         self.python_script:         Path | None = None
@@ -85,7 +85,6 @@ class Options(ud.Options):
         self.requirements_file:            Path | None = None
         self.extra_requirements: dict[str, str | None] = {}
         self.extra_requirements_file:              str = "extra_requirements.txt"
-        self.pretty_requirements:                  str = ""
         self.download_script_path:         Path | None = None
         self.simultaneous_success:                bool = False
         self.max_checks:                           int = 10  # Maximum number of times to check any repeated process.
@@ -471,28 +470,7 @@ def main() -> None:
                     logging.error("Error running script: %s", result.stderr)
             if options.venv_dir.name.startswith("failed-") and options.simultaneous_success:
                 # If the program has made it to this point, it has run successfully, so the venv directory can be renamed because it DIDN'T fail.
-                new = options.venv_dir.with_name(options.venv_dir.name.removeprefix("failed-"))
-                if new != options.venv_dir:
-                    options.venv_dir.rename(new)
-                options.set_venv_dir(new)
-                cfg_file_path = options.venv_dir / "pyvenv.cfg"
-                with open(cfg_file_path, "r") as file:
-                    lines = file.readlines()
-                modified_lines = []
-                for line in lines:
-                    if line.startswith("command = "):
-                        line = line.replace(os.sep+"failed-", os.sep)
-                    modified_lines.append(line)
-                with open(cfg_file_path, "w") as file:
-                    file.writelines(modified_lines)
-                with open(options.download_script_path, "r") as file:
-                    lines = file.readlines()
-                modified_lines = []
-                for line in lines:
-                    line = line.replace(os.sep+"failed-", os.sep)
-                    modified_lines.append(line)
-                with open(options.download_script_path , "w") as file:
-                    file.writelines(modified_lines)
+                rename_venv(options, options.venv_dir.name.removeprefix("failed-"))
 
             ud.save_options_to_json(options)
 
@@ -3594,9 +3572,9 @@ def check_packages_in_venv(options: Options, record: ResolvedImport | None = Non
         record:       Optional resolved import to check. If None, checks all uninstalled imports.
         venv_dir:     Optional path to the virtual environment directory. If None, uses options.venv_dir.
         source_names: Optional import names known to come from the user's source.
-                      Defaults to options' own. check_venv_dir() passes the live
-                      run's names, because the Options it validates was loaded
-                      from JSON and carries someone else's.
+                      Defaults to options' own source_import_names(). check_venv_dir()
+                      passes this explicitly, to pin the live run's names as what
+                      governs its own call site rather than relying on the default.
 
     Returns:
         bool:       True if all packages can be imported successfully, False otherwise.
@@ -3975,20 +3953,39 @@ def recover_pip_versions(output: str, options: Options) -> None:
         logging.warning("Failed to recover new pip version from output.")
 
 
-def pretty_packages_list(options: Options) -> str:
-    """Create a pretty string of the first five package names and the number of remaining packages."""
-    maxnum = 5
-    # Pip names, so this string matches the requirements.txt contents that
-    # find_match_dir_in_cache() compares a cached venv folder against.
-    packages_list = sorted(record.pip_name for record in options.uninstalled_imports)
-    if len(packages_list) > maxnum:
-        first_five = "-".join(packages_list[:maxnum])
-        suffix = f"-and-{len(packages_list) - maxnum}-more"
-    else:
-        first_five = "-".join(packages_list)
-        suffix = ""
+def venv_build_interpreter(options: Options) -> str:
+    """Return the interpreter that should create the virtual environment.
 
-    return first_five + suffix
+    options.python_command is what stdlib and alias resolution were probed
+    against, so it is what the venv must be built with; building with
+    sys.executable instead classifies imports for one Python and installs them
+    for another. find_preferred_python_version() returns "" when the preferred
+    Python is absent from PATH, and only then does the running interpreter serve.
+
+    Args:
+        options: Options object; reads options.python_command.
+
+    Returns:
+        A path or command name for the interpreter to build with.
+    """
+    return options.python_command or sys.executable
+
+
+def interpreter_tag(options: Options) -> str:
+    """Return the "major.minor" tag of the interpreter this run is classified against.
+
+    Taken from the standard-library index rather than probed again, so the tag in
+    a venv's folder name, the tag in its manifest, and the version whose stdlib
+    names decided what needed installing can never disagree.
+
+    Args:
+        options: Options object; reads options.stdlib.
+
+    Returns:
+        A tag such as "3.12".
+    """
+    major, minor = options.stdlib.python_version
+    return f"{major}.{minor}"
 
 
 def use_pip_list(options: Options) -> None:
@@ -4098,43 +4095,23 @@ def parse_extra_requirements(options: Options) -> None:
 
 
 def write_requirements_file_with_extras(options: Options) -> None:
-    """Write the requirements file with the extra requirements added and generate a 'pretty' requirements string."""
+    """Write the requirements file with the extra requirements added."""
     if logging.getLogger().isEnabledFor(logging.DEBUG): logging.debug("Writing packages to %s", options.requirements_file)
-    options.pretty_requirements = ""
-    # Define the symbol replacements
-    replacements = [(">=", "_ge"),
-                    ("<=", "_le"),
-                    ("==", "_eq"),
-                    ("~=", "_approx"),
-                    (">", "_gt"),
-                    ("<", "_lt"),
-                    (",", "_and")]
     assert options.requirements_file   is not None, "options.requirements_file must be set"
     assert options.uninstalled_imports is not None, "options.uninstalled_imports must be set"
     assert options.extra_requirements  is not None, "options.extra_requirements must be set"
     with open(options.requirements_file, "w") as f:
         # Write the packages in alphabetical order so the requirements file is
         # deterministic. pip reads this file, so it gets the pip names.
-        for idx, package in enumerate(sorted(record.pip_name for record in options.uninstalled_imports)):
+        for package in sorted(record.pip_name for record in options.uninstalled_imports):
             if package in options.extra_requirements:
                 version_spec = options.extra_requirements[package]
                 if version_spec:
                     f.write(f"{package}{version_spec}\n")
-                    # Replace symbols in version_spec for the pretty_requirements string
-                    pretty_version_spec = version_spec
-                    for old, new in replacements:
-                        pretty_version_spec = pretty_version_spec.replace(old, new)
-                    pretty_package = f"{package}{pretty_version_spec}"
                 else:
                     f.write(f"{package}\n")
-                    pretty_package = package
             else:
                 f.write(f"{package}\n")
-                pretty_package = package
-            # Append to the pretty_requirements string with underscores
-            if idx > 0:
-                options.pretty_requirements += "_"
-            options.pretty_requirements += pretty_package
 
 
 def run_pip_in_venv(options: Options, *args: str) -> subprocess.CompletedProcess[str] | None:
@@ -4351,18 +4328,139 @@ def verify_and_repair_imports(options: Options) -> None:
         write_requirements_file_with_extras(options)
 
 
+_VERSION_PROBE_CODE = (
+    "import json\n"
+    "from importlib.metadata import distributions\n"
+    "print(json.dumps({d.metadata['Name']: d.version for d in distributions()"
+    " if d.metadata['Name']}))\n"
+)
+
+
+def installed_versions_in_venv(options: Options) -> dict[str, str]:
+    """Ask a virtual environment which versions it actually has.
+
+    This is what the manifest records, rather than what was requested or what
+    pip printed: only the venv itself knows what ended up installed, including
+    versions pip chose for unpinned packages.
+
+    Args:
+        options: Options object; reads options.venv_python, which callers must
+                 have already set -- a None value is a caller-contract error
+                 and asserts rather than returning empty.
+
+    Returns:
+        A mapping of normalized pip name to version. Empty if the probe could
+        not be run or its output could not be read -- a version veny could not
+        read is recorded as unknown, which makes any later pin check on that
+        package fail closed.
+    """
+    assert options.venv_python is not None, "Virtual environment Python executable is not set."
+    command = [os.fspath(options.venv_python), "-c", _VERSION_PROBE_CODE]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True,  # noqa: S603
+                                check=False, timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        logging.warning("Could not list installed versions in the venv (%s).", exc)
+        return {}
+    if result.returncode != 0:
+        logging.warning("Could not list installed versions in the venv: %s", result.stderr.strip())
+        return {}
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        logging.warning("Could not read the installed versions reported by the venv (%s).", exc)
+        return {}
+    return {venv_cache.normalize_pip_name(name): str(version)
+            for name, version in payload.items()}
+
+
+def manifest_for(options: Options, versions: dict[str, str]) -> venv_cache.Manifest:
+    """Build the manifest describing a finished virtual environment.
+
+    Args:
+        options:  Options object; reads options.uninstalled_imports (after any
+                  repairs), options.extra_requirements, and the interpreter.
+        versions: Installed versions, keyed by normalized pip name.
+
+    Returns:
+        The manifest to write into the venv.
+    """
+    # extra_requirements is keyed by whatever spelling the user typed on the
+    # command line, which need not match record.pip_name's spelling -- the
+    # versions dict a line below is already keyed normalized, so this lookup
+    # must be too. Normalized once here rather than per record.
+    normalized_requirements = {venv_cache.normalize_pip_name(name): spec
+                               for name, spec in options.extra_requirements.items()}
+    packages = tuple(
+        venv_cache.PackageRecord(
+            import_name=record.import_name,
+            pip_name=record.pip_name,
+            installed_version=versions.get(venv_cache.normalize_pip_name(record.pip_name)),
+            requested_spec=normalized_requirements.get(venv_cache.normalize_pip_name(record.pip_name)),
+        )
+        for record in sorted(options.uninstalled_imports, key=lambda r: r.pip_name)
+    )
+    return venv_cache.Manifest(
+        schema_version=venv_cache.SCHEMA_VERSION,
+        created=options.timestamp,
+        veny_version=__version__,
+        interpreter_tag=interpreter_tag(options),
+        interpreter_path=venv_build_interpreter(options),
+        packages=packages,
+    )
+
+
+def record_venv_state(options: Options) -> None:
+    """Rename the venv if repairs changed its packages, then write its manifest.
+
+    verify_and_repair_imports can replace a record whose pip_name was wrong, so
+    the folder name written before installing may list a package the venv does
+    not have. The name is only a prefilter, but a stale one rejects a venv the
+    manifest would accept -- so the name is brought back into agreement first.
+
+    Args:
+        options: Options object; reads the final records and updates
+                 options.venv_dir if a rename happens.
+
+    Returns:
+        None.
+    """
+    assert options.venv_dir is not None, "options.venv_dir must be set"
+    wanted_name = venv_cache.build_folder_name(
+        venv_name=options.venv_name,
+        interpreter_tag=interpreter_tag(options),
+        timestamp=options.timestamp,
+        pip_names=[record.pip_name for record in options.uninstalled_imports],
+    )
+    prefix       = "failed-" if options.venv_dir.name.startswith("failed-") else ""
+    if options.venv_dir.name != prefix + wanted_name:
+        if not options.rawlog:
+            logging.info("Repairs changed this venv's packages; renaming it to %s.",
+                         prefix + wanted_name)
+        rename_venv(options, prefix + wanted_name)
+    venv_cache.write_manifest(options.venv_dir, manifest_for(options, installed_versions_in_venv(options)))
+
+
 def setup_virtualenv(options: Options) -> bool:
     """Setup a virtual environment and install packages."""
     use_pip_list(options)
-    options.pretty_list = pretty_packages_list(options)
+    # The folder name is a cheap prefilter for the cache search; veny_manifest.json
+    # inside the venv is the authority. venv_cache owns the encoding so a
+    # hyphenated pip name cannot be mistaken for a field separator.
+    folder_name = venv_cache.build_folder_name(
+        venv_name=options.venv_name,
+        interpreter_tag=interpreter_tag(options),
+        timestamp=options.timestamp,
+        pip_names=[record.pip_name for record in options.uninstalled_imports],
+    )
     # Create a virtual environment directory that starts with "failed" in case the process fails. Only remove the "failed" part if this process completes successfully.
-    options.set_venv_dir(options.my_dir / f"failed-{options.venv_name}-versionless-{options.timestamp}-{options.pretty_list}")
+    options.set_venv_dir(options.my_dir / f"failed-{folder_name}")
 
     write_requirements_file_with_extras(options)
 
     if not options.rawlog: logging.info("Creating virtual environment...")
     assert options.venv_dir is not None, "options.venv_dir must be set"
-    subprocess.check_call([sys.executable, "-m", "venv", os.fspath(options.venv_dir)])
+    subprocess.check_call([venv_build_interpreter(options), "-m", "venv", os.fspath(options.venv_dir)])
     if not options.rawlog: logging.info("Virtual environment created.")
 
     # Activate virtual environment and install wheel
@@ -4386,8 +4484,52 @@ def setup_virtualenv(options: Options) -> bool:
     # "failed-" prefix. This is also the only place that ever writes the alias
     # cache, so it must run on the successful path too, not just on failure.
     verify_and_repair_imports(options)
+    # The manifest records the venv's final state, so it is written after any
+    # repair -- it must describe what really provided each import, not what was
+    # first attempted.
+    record_venv_state(options)
     # Check that all packages can be imported in the venv.
     return check_packages_in_venv(options)
+
+
+def rename_venv(options: Options, new_name: str) -> None:
+    """Rename a virtual environment directory and fix the paths recorded inside it.
+
+    A venv records its own location in pyvenv.cfg and in the download script, so
+    a rename that touches only the directory leaves a venv that points at a path
+    that no longer exists. Two callers need this: dropping the "failed-" prefix
+    once a run succeeds, and re-naming a venv whose package list changed when
+    verify_and_repair_imports repaired a wrongly resolved pip name.
+
+    Args:
+        options:  Options object; reads and updates options.venv_dir.
+        new_name: The directory's new name, not a path.
+
+    Returns:
+        None. Failure to rewrite a recorded path is logged, not raised: the venv
+        has already moved and the run continues.
+    """
+    assert options.venv_dir is not None, "options.venv_dir must be set"
+    old_dir  = options.venv_dir
+    new_dir  = old_dir.with_name(new_name)
+    if new_dir == old_dir:
+        return
+    old_dir.rename(new_dir)
+    options.set_venv_dir(new_dir)
+    assert options.download_script_path is not None, "options.download_script_path must be set"
+    for path in (options.venv_dir / "pyvenv.cfg", options.download_script_path):
+        try:
+            contents = path.read_text()
+        except OSError as exc:
+            logging.warning("Could not read %s after renaming the venv (%s).", path, exc)
+            continue
+        updated = contents.replace(old_dir.name, new_dir.name)
+        if updated == contents:
+            continue
+        try:
+            path.write_text(updated)
+        except OSError as exc:
+            logging.warning("Could not update %s after renaming the venv (%s).", path, exc)
 
 
 def is_virtualenv() -> bool:
@@ -4534,46 +4676,134 @@ def smallest_venv(final_venv_folders: dict[Path, dict[str, int]]) -> Path | None
     return smallest_folder
 
 
-def check_venv_dir(options: Options, options_from_cache: Options) -> bool:
-    """
-    Check if the last used venv is still valid.
-    
+def check_venv_dir(options: Options, venv_dir: str | os.PathLike[str]) -> bool:
+    """Check whether a cached venv directory can serve this run.
+
+    The venv's own manifest is the authority. An options JSON written by an
+    earlier run says what that run wanted, not what the venv holds, and its
+    records compare by exact spelling -- so a venv built when "yaml" resolved to
+    "PyYAML" was rejected by a run spelling it "pyyaml". Asking the manifest puts
+    every candidate, last-used or not, through one comparison.
+
     Args:
-        options:            Options object containing the current settings.
-        options_from_cache: Options object loaded from the last used JSON file.
+        options:  Options object containing the current settings.
+        venv_dir: The cached virtual environment directory.
 
     Returns:
-        True if the cached venv directory is valid and meets the current requirements,
-        False otherwise.
+        True if the venv holds what this run needs, for the right interpreter,
+        and its imports really import.
     """
-    if hasattr(options_from_cache, "venv_dir") and options_from_cache.venv_dir is not None:
-        # This might be loaded from an old options file which used strings.
-        options_from_cache.venv_dir = ud.ensure_path(options_from_cache.venv_dir)
-        if ud.safe_is_dir(options_from_cache.venv_dir):
-            if options.uninstalled_imports.issubset(options_from_cache.uninstalled_imports):
-                options_from_cache.uninstalled_imports = options.uninstalled_imports
-                options_from_cache.installed_imports   = options.installed_imports
-                # options_from_cache was loaded from JSON and carries whatever
-                # all_imports the run that wrote it had, so the live run's
-                # source names are passed in explicitly. Without them a record
-                # whose pip_name resolved wrongly would be judged against the
-                # top-level names of whatever that pip_name installed, and a
-                # venv that cannot run this script would be reused.
-                if check_packages_in_venv(options_from_cache,
-                                          source_names=source_import_names(options)):
-                    return True
-                else:
-                    logging.error("The cached venv directory %s failed check_packages_in_venv.",
-                                  os.fspath(options_from_cache.venv_dir))
-            else:
-                if not options.rawlog:
-                    logging.info("The cached venv directory %s does not have all the currently required packages.",
-                                 os.fspath(options_from_cache.venv_dir))
-        else:
-            if not options.rawlog:
-                logging.info("The cached venv directory %s is no longer valid.",
-                             os.fspath(options_from_cache.venv_dir))
+    venv_dir = ud.ensure_path(venv_dir)
+    if not ud.safe_is_dir(venv_dir):
+        if not options.rawlog:
+            logging.info("The cached venv directory %s is no longer there.", os.fspath(venv_dir))
+        return False
+    manifest = venv_cache.read_manifest(venv_dir)
+    if manifest is None:
+        if not options.rawlog:
+            logging.info("The cached venv directory %s has no readable manifest.",
+                         os.fspath(venv_dir))
+        return False
+    result = venv_cache.satisfies(manifest, wanted_packages(options), interpreter_tag(options))
+    if not result.matched:
+        if not options.rawlog:
+            logging.info("The cached venv directory %s cannot be used because %s.",
+                         os.fspath(venv_dir), result.reason)
+        return False
+    # The manifest says the packages are there; this confirms the imports
+    # really import. source_names is passed explicitly -- redundant with
+    # check_packages_in_venv's own default today, since both read off this
+    # same options -- so that this call site still names the live run's
+    # source imports as what governs even if that default ever changes.
+    if check_packages_in_venv(options, venv_dir=venv_dir,
+                              source_names=source_import_names(options)):
+        return True
+    logging.error("The cached venv directory %s failed check_packages_in_venv.",
+                  os.fspath(venv_dir))
     return False
+
+
+def wanted_packages(options: Options) -> list[venv_cache.Wanted]:
+    """Describe what this run needs, for matching against a cached venv.
+
+    Args:
+        options: Options object; reads options.uninstalled_imports and
+                 options.extra_requirements.
+
+    Returns:
+        One entry per record, carrying its pip name and any --reqs spec.
+    """
+    # See manifest_for: extra_requirements' keys are user-typed spellings, not
+    # necessarily record.pip_name's spelling, so the lookup must normalize both
+    # sides. Built once per call rather than inside the list comprehension.
+    normalized_requirements = {venv_cache.normalize_pip_name(name): spec
+                               for name, spec in options.extra_requirements.items()}
+    return [venv_cache.Wanted(pip_name=record.pip_name,
+                              spec=normalized_requirements.get(venv_cache.normalize_pip_name(record.pip_name)))
+            for record in sorted(options.uninstalled_imports, key=lambda r: r.pip_name)]
+
+
+@dataclass(frozen=True)
+class CacheCandidate:
+    """A cached venv folder that has already been parsed and read once.
+
+    Carrying these along lets the ranking pass in find_match_dir_in_cache
+    consume them directly instead of re-parsing the name and re-reading the
+    manifest -- a second read that could only fail if the folder changed
+    underneath the run, and had no correct response to that failure.
+
+    Attributes:
+        folder:   The cached venv directory.
+        parsed:   The folder name, already parsed.
+        manifest: The venv's manifest, already read.
+    """
+
+    folder:   Path
+    parsed:   venv_cache.FolderName
+    manifest: venv_cache.Manifest
+
+
+def cache_candidates(options: Options, folders: list[Path]) -> list[CacheCandidate]:
+    """Filter cached venv folders down to those that can serve this run.
+
+    The folder name is a cheap reject; veny_manifest.json is the decision. A
+    folder with no readable manifest is skipped, which is what retires every
+    virtual environment built before manifests existed.
+
+    Args:
+        options: Options object; reads the records, the specs, and the tag.
+        folders: Candidate directories, already filtered by name prefix.
+
+    Returns:
+        The folders that match, in the order given, each paired with the
+        parsed name and manifest already read while deciding.
+    """
+    tag    = interpreter_tag(options)
+    wanted = wanted_packages(options)
+    names  = [item.pip_name for item in wanted]
+    matches: list[CacheCandidate] = []
+    for folder in folders:
+        parsed = venv_cache.parse_folder_name(folder.name)
+        if parsed is None:
+            if logging.getLogger().isEnabledFor(logging.DEBUG):
+                logging.debug("Skipping %s: not a venv folder name veny wrote.", os.fspath(folder))
+            continue
+        if parsed.interpreter_tag != tag or not venv_cache.name_allows(parsed, names):
+            continue
+        manifest = venv_cache.read_manifest(folder)
+        if manifest is None:
+            if not options.rawlog:
+                logging.info("Skipping the cached venv %s: it has no readable manifest.",
+                             os.fspath(folder))
+            continue
+        result = venv_cache.satisfies(manifest, wanted, tag)
+        if not result.matched:
+            if not options.rawlog:
+                logging.info("Skipping the cached venv %s because %s.",
+                             os.fspath(folder), result.reason)
+            continue
+        matches.append(CacheCandidate(folder=folder, parsed=parsed, manifest=manifest))
+    return matches
 
 
 def find_match_dir_in_cache(options: Options) -> Path | None:
@@ -4600,51 +4830,24 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
        not getattr(options.args, "latest",    False) and \
        not getattr(options.args, "smallest",  False):
         options_last_used = load_last_used_options(options)
-        if options_last_used is not None and check_venv_dir(options, options_last_used):
-            return options_last_used.venv_dir
+        # venv_dir is declared in veny.Options.__init__, not in the base
+        # univ_defs.Options that load_last_used_options builds from, so a
+        # last-used JSON written without that key must not raise here.
+        venv_dir_last_used = getattr(options_last_used, "venv_dir", None)
+        if options_last_used is not None and venv_dir_last_used is not None \
+           and check_venv_dir(options, venv_dir_last_used):
+            return ud.ensure_path(venv_dir_last_used)
         else:
             if not options.rawlog: logging.info("Trying to load the latest matching venv now.")
         options.args.latest    = True  # If that didn't work, try to load the latest venv in the cache
         options.args.last_used = False  # And set this to False because it failed
     if not options.rawlog: logging.info("Checking the cache for a virtual environment with all the required packages...")
-    # Search for all venv_name folders in my_dir:
     all_venv_folders = [f for f in options.my_dir.iterdir()
                         if ud.safe_is_dir(f) and f.name.startswith(options.venv_name)]
-    # Loop through the folders and eliminate folders that clearly don't have the right packages just based on their names:
-    venv_folders = []
-    for folder in all_venv_folders:
-        # Extract the part of the folder name after the date/time:
-        pretty_list = folder.name.split("-")[4:]
-        # Create a known_packages set from the pretty_list:
-        known_packages:     set[str] = set()
-        number_unknown_packages: int = 0
-        for item in pretty_list:
-            if item == "and":
-                # Extract the number of unknown packages from the last part of the pretty_list:
-                number_unknown_packages = int(pretty_list[-2].split("-")[0])
-                break
-            known_packages.add(item)
-        # Folder names are built from pretty_packages_list(), which uses pip names.
-        missing_packages = {record.pip_name for record in options.uninstalled_imports} - known_packages
-        if len(missing_packages) <= number_unknown_packages:
-            venv_folders.append(folder)
-    # Loop through possibly valid venv folders and compare requirements in detail.
     final_venv_folders: dict[Path, dict[str, int]] = {}
-    for folder in venv_folders:
-        this_requirements_file: Path = options.my_dir / folder / "requirements.txt"
-        with open(this_requirements_file, "r") as file:
-            requirements = set(file.read().splitlines())
-        # requirements.txt holds pip names, so compare pip names against it.
-        if {record.pip_name for record in options.uninstalled_imports}.issubset(requirements):
-            match = re.search(r'(\d{8})-(\d{6})', folder.name)
-            if not match:
-                if logging.getLogger().isEnabledFor(logging.DEBUG):
-                    logging.debug("Skipping folder %s because no YYYYMMDD-HHMMSS timestamp was found.",
-                                os.fspath(folder))
-                continue
-            ts_int = int(match.group(1) + match.group(2))
-            final_venv_folders[folder] = {"timestamp"    : ts_int,
-                                          "num_packages" : len(requirements)}
+    for candidate in cache_candidates(options, all_venv_folders):
+        final_venv_folders[candidate.folder] = {"timestamp"    : int(candidate.parsed.timestamp.replace("-", "")),
+                                                "num_packages" : len(candidate.manifest.packages)}
     if not final_venv_folders:
         if not options.rawlog: logging.info("No matching venv folders found in the cache.")
     else:
@@ -4655,58 +4858,46 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
            not getattr(options.args, "last_used", False) and \
            not getattr(options.args, "smallest",  False):
             # Return the latest venv in the cache which has all the packages needed now
-            options_latest = copy.deepcopy(options)
             latest_venv_folder: Path | None = latest_venv(final_venv_folders)
             if latest_venv_folder is None:
                 if not options.rawlog:
                     logging.error("Could not determine the latest venv folder from the cache.")
                 return None
-            options_latest.set_venv_dir(latest_venv_folder)
-            options_latest.uninstalled_imports = options.uninstalled_imports
-            if check_venv_dir(options, options_latest):
-                return options_latest.venv_dir
-            else:
-                if not options.rawlog:
-                    logging.error("The latest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
-                return None
+            if check_venv_dir(options, latest_venv_folder):
+                return latest_venv_folder
+            if not options.rawlog:
+                logging.error("The latest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
+            return None
         elif        getattr(options.args, "oldest",    False) and \
                 not getattr(options.args, "latest",    False) and \
                 not getattr(options.args, "last_used", False) and \
                 not getattr(options.args, "smallest",  False):
             # Return the oldest venv in the cache which has all the packages needed now
-            options_oldest = copy.deepcopy(options)
             oldest_venv_folder: Path | None = oldest_venv(final_venv_folders)
             if oldest_venv_folder is None:
                 if not options.rawlog:
                     logging.error("Could not determine the oldest venv folder from the cache.")
                 return None
-            options_oldest.set_venv_dir(oldest_venv_folder)
-            options_oldest.uninstalled_imports = options.uninstalled_imports
-            if check_venv_dir(options, options_oldest):
-                return options_oldest.venv_dir
-            else:
-                if not options.rawlog:
-                    logging.error("The oldest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
-                return None
+            if check_venv_dir(options, oldest_venv_folder):
+                return oldest_venv_folder
+            if not options.rawlog:
+                logging.error("The oldest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
+            return None
         elif        getattr(options.args, "smallest",  False) and \
                 not getattr(options.args, "latest",    False) and \
                 not getattr(options.args, "oldest",    False) and \
                 not getattr(options.args, "last_used", False):
             # Return the smallest venv in the cache which has all the packages needed now
-            options_smallest = copy.deepcopy(options)
             smallest_venv_folder: Path | None = smallest_venv(final_venv_folders)
             if smallest_venv_folder is None:
                 if not options.rawlog:
                     logging.error("Could not determine the smallest venv folder from the cache.")
                 return None
-            options_smallest.set_venv_dir(smallest_venv_folder)
-            options_smallest.uninstalled_imports = options.uninstalled_imports
-            if check_venv_dir(options, options_smallest):
-                return options_smallest.venv_dir
-            else:
-                if not options.rawlog:
-                    logging.error("The smallest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
-                return None
+            if check_venv_dir(options, smallest_venv_folder):
+                return smallest_venv_folder
+            if not options.rawlog:
+                logging.error("The smallest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
+            return None
         else:  # This should never happen
             logging.error(f"Invalid combination of flags!\n"
                           f"{getattr(options.args, 'latest',    False) = }\n"
