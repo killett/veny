@@ -4385,12 +4385,18 @@ def manifest_for(options: Options, versions: dict[str, str]) -> venv_cache.Manif
     Returns:
         The manifest to write into the venv.
     """
+    # extra_requirements is keyed by whatever spelling the user typed on the
+    # command line, which need not match record.pip_name's spelling -- the
+    # versions dict a line below is already keyed normalized, so this lookup
+    # must be too. Normalized once here rather than per record.
+    normalized_requirements = {venv_cache.normalize_pip_name(name): spec
+                               for name, spec in options.extra_requirements.items()}
     packages = tuple(
         venv_cache.PackageRecord(
             import_name=record.import_name,
             pip_name=record.pip_name,
             installed_version=versions.get(venv_cache.normalize_pip_name(record.pip_name)),
-            requested_spec=options.extra_requirements.get(record.pip_name),
+            requested_spec=normalized_requirements.get(venv_cache.normalize_pip_name(record.pip_name)),
         )
         for record in sorted(options.uninstalled_imports, key=lambda r: r.pip_name)
     )
@@ -4727,8 +4733,13 @@ def wanted_packages(options: Options) -> list[venv_cache.Wanted]:
     Returns:
         One entry per record, carrying its pip name and any --reqs spec.
     """
+    # See manifest_for: extra_requirements' keys are user-typed spellings, not
+    # necessarily record.pip_name's spelling, so the lookup must normalize both
+    # sides. Built once per call rather than inside the list comprehension.
+    normalized_requirements = {venv_cache.normalize_pip_name(name): spec
+                               for name, spec in options.extra_requirements.items()}
     return [venv_cache.Wanted(pip_name=record.pip_name,
-                              spec=options.extra_requirements.get(record.pip_name))
+                              spec=normalized_requirements.get(venv_cache.normalize_pip_name(record.pip_name)))
             for record in sorted(options.uninstalled_imports, key=lambda r: r.pip_name)]
 
 
