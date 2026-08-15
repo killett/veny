@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -363,3 +364,90 @@ def version_satisfies(installed: str | None, spec: str | None) -> bool:
     if release is None:
         return False
     return all(_clause_holds(release, clause) for clause in spec.split(","))
+
+
+@dataclass(frozen=True)
+class Wanted:
+    """One package this run needs.
+
+    Attributes:
+        pip_name: The pip name this run resolved, unnormalized.
+        spec:     The --reqs version specifier, or None.
+    """
+
+    pip_name: str
+    spec: str | None = None
+
+
+@dataclass(frozen=True)
+class MatchResult:
+    """Whether a cached venv can serve this run, and why not when it cannot.
+
+    Attributes:
+        matched: True if the venv satisfies every wanted package.
+        reason:  A short explanation, suitable for logging either way.
+    """
+
+    matched: bool
+    reason: str
+
+
+def satisfies(
+    manifest: Manifest, wanted: Iterable[Wanted], interpreter_tag: str
+) -> MatchResult:
+    """Decide whether a cached virtual environment can serve this run.
+
+    Packages are matched by normalized pip name. Import names are deliberately
+    not part of this key: "does this venv hold the right distributions" is a
+    question about distributions, and "does this venv work for this script" is
+    answered afterwards by actually importing the names, in
+    veny.check_packages_in_venv.
+
+    A venv holding packages beyond those wanted still matches; extras are what
+    the --smallest flag exists to discriminate between.
+
+    Args:
+        manifest:        The cached venv's manifest.
+        wanted:          What this run needs.
+        interpreter_tag: The "major.minor" tag this run is classified against.
+
+    Returns:
+        The decision, with a reason string for logging.
+    """
+    if manifest.interpreter_tag != interpreter_tag:
+        return MatchResult(
+            False,
+            f"it was built for Python {manifest.interpreter_tag}, "
+            f"and this run needs Python {interpreter_tag}",
+        )
+    held = {normalize_pip_name(record.pip_name): record for record in manifest.packages}
+    for item in sorted(wanted, key=lambda entry: entry.pip_name):
+        record = held.get(normalize_pip_name(item.pip_name))
+        if record is None:
+            return MatchResult(False, f"it does not have {item.pip_name}")
+        if item.spec and not version_satisfies(record.installed_version, item.spec):
+            return MatchResult(
+                False,
+                f"its {item.pip_name} {record.installed_version} "
+                f"does not satisfy {item.spec}",
+            )
+    return MatchResult(True, "it has every required package")
+
+
+def name_allows(parsed: FolderName, wanted_pip_names: Iterable[str]) -> bool:
+    """Test whether a folder name leaves room for every wanted package.
+
+    This is a cheap reject before reading a manifest, not a decision. A name
+    lists at most MAX_NAMED_PACKAGES packages and summarises the rest, so a
+    wanted package missing from the listed names may still be among the
+    summarised ones.
+
+    Args:
+        parsed:           The parsed folder name.
+        wanted_pip_names: The pip names this run needs, unnormalized.
+
+    Returns:
+        True if the folder could hold everything wanted.
+    """
+    missing = {normalize_pip_name(name) for name in wanted_pip_names} - parsed.packages
+    return len(missing) <= parsed.unnamed_count
