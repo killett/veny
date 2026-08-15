@@ -990,6 +990,10 @@ def test_setup_virtualenv_verifies_every_import_before_reporting_success(
 
     monkeypatch.setattr(veny, "verify_and_repair_imports", fake_verify)
     monkeypatch.setattr(veny, "check_packages_in_venv", fake_check)
+    # record_venv_state probes the venv's real interpreter for installed
+    # versions, which this test's fake subprocess.run cannot answer -- it is
+    # unrelated to the ordering this test checks, so it is stubbed out too.
+    monkeypatch.setattr(veny, "record_venv_state", lambda opts: None)
 
     assert veny.setup_virtualenv(options) is True
     # Verification has to happen before the gate that drops the "failed-"

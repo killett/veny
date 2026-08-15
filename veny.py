@@ -8,6 +8,7 @@ import subprocess
 import datetime as dt
 import argparse
 import ast
+import json
 import re
 import copy
 import shutil
@@ -4366,6 +4367,110 @@ def verify_and_repair_imports(options: Options) -> None:
         write_requirements_file_with_extras(options)
 
 
+_VERSION_PROBE_CODE = (
+    "import json\n"
+    "from importlib.metadata import distributions\n"
+    "print(json.dumps({d.metadata['Name']: d.version for d in distributions()"
+    " if d.metadata['Name']}))\n"
+)
+
+
+def installed_versions_in_venv(options: Options) -> dict[str, str]:
+    """Ask a virtual environment which versions it actually has.
+
+    This is what the manifest records, rather than what was requested or what
+    pip printed: only the venv itself knows what ended up installed, including
+    versions pip chose for unpinned packages.
+
+    Args:
+        options: Options object; reads options.venv_python.
+
+    Returns:
+        A mapping of normalized pip name to version. Empty on any failure --
+        a version veny could not read is recorded as unknown, which makes any
+        later pin check on that package fail closed.
+    """
+    assert options.venv_python is not None, "Virtual environment Python executable is not set."
+    command = [os.fspath(options.venv_python), "-c", _VERSION_PROBE_CODE]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True,  # noqa: S603
+                                check=False, timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        logging.warning("Could not list installed versions in the venv (%s).", exc)
+        return {}
+    if result.returncode != 0:
+        logging.warning("Could not list installed versions in the venv: %s", result.stderr.strip())
+        return {}
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        logging.warning("Could not read the installed versions reported by the venv (%s).", exc)
+        return {}
+    return {venv_cache.normalize_pip_name(name): str(version)
+            for name, version in payload.items()}
+
+
+def manifest_for(options: Options, versions: dict[str, str]) -> venv_cache.Manifest:
+    """Build the manifest describing a finished virtual environment.
+
+    Args:
+        options:  Options object; reads options.uninstalled_imports (after any
+                  repairs), options.extra_requirements, and the interpreter.
+        versions: Installed versions, keyed by normalized pip name.
+
+    Returns:
+        The manifest to write into the venv.
+    """
+    packages = tuple(
+        venv_cache.PackageRecord(
+            import_name=record.import_name,
+            pip_name=record.pip_name,
+            installed_version=versions.get(venv_cache.normalize_pip_name(record.pip_name)),
+            requested_spec=options.extra_requirements.get(record.pip_name),
+        )
+        for record in sorted(options.uninstalled_imports, key=lambda r: r.pip_name)
+    )
+    return venv_cache.Manifest(
+        schema_version=venv_cache.SCHEMA_VERSION,
+        created=options.timestamp,
+        veny_version=__version__,
+        interpreter_tag=interpreter_tag(options),
+        interpreter_path=venv_build_interpreter(options),
+        packages=packages,
+    )
+
+
+def record_venv_state(options: Options) -> None:
+    """Rename the venv if repairs changed its packages, then write its manifest.
+
+    verify_and_repair_imports can replace a record whose pip_name was wrong, so
+    the folder name written before installing may list a package the venv does
+    not have. The name is only a prefilter, but a stale one rejects a venv the
+    manifest would accept -- so the name is brought back into agreement first.
+
+    Args:
+        options: Options object; reads the final records and updates
+                 options.venv_dir if a rename happens.
+
+    Returns:
+        None.
+    """
+    assert options.venv_dir is not None, "options.venv_dir must be set"
+    wanted_name = venv_cache.build_folder_name(
+        venv_name=options.venv_name,
+        interpreter_tag=interpreter_tag(options),
+        timestamp=options.timestamp,
+        pip_names=[record.pip_name for record in options.uninstalled_imports],
+    )
+    prefix       = "failed-" if options.venv_dir.name.startswith("failed-") else ""
+    if options.venv_dir.name != prefix + wanted_name:
+        if not options.rawlog:
+            logging.info("Repairs changed this venv's packages; renaming it to %s.",
+                         prefix + wanted_name)
+        rename_venv(options, prefix + wanted_name)
+    venv_cache.write_manifest(options.venv_dir, manifest_for(options, installed_versions_in_venv(options)))
+
+
 def setup_virtualenv(options: Options) -> bool:
     """Setup a virtual environment and install packages."""
     use_pip_list(options)
@@ -4409,6 +4514,10 @@ def setup_virtualenv(options: Options) -> bool:
     # "failed-" prefix. This is also the only place that ever writes the alias
     # cache, so it must run on the successful path too, not just on failure.
     verify_and_repair_imports(options)
+    # The manifest records the venv's final state, so it is written after any
+    # repair -- it must describe what really provided each import, not what was
+    # first attempted.
+    record_venv_state(options)
     # Check that all packages can be imported in the venv.
     return check_packages_in_venv(options)
 
