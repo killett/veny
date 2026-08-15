@@ -4437,6 +4437,7 @@ def rename_venv(options: Options, new_name: str) -> None:
         return
     old_dir.rename(new_dir)
     options.set_venv_dir(new_dir)
+    assert options.download_script_path is not None, "options.download_script_path must be set"
     for path in (options.venv_dir / "pyvenv.cfg", options.download_script_path):
         try:
             contents = path.read_text()
