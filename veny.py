@@ -32,6 +32,11 @@ except ImportError as exc:  # stdlib only: none of emmykit's helpers exist yet.
         "veny requires the emmykit package (>=0.4.0), which is not installed.\n"
         "Install it with:  pip install 'emmykit>=0.4.0'"
     ) from exc
+if not hasattr(ek, "register_json_type"):
+    raise SystemExit(
+        f"veny requires emmykit >= 0.4.0; found {getattr(ek, '__version__', 'unknown')}.\n"
+        f"Upgrade it with:  pip install -U 'emmykit>=0.4.0'"
+    )
 import venv_cache
 import veny_json_types
 

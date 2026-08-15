@@ -2,14 +2,14 @@
 
 ## Current work
 
-**Topic:** Replace `univ_defs.py` with the published `emmykit` package —
-design approved 2026-08-14, implementation plan not yet written. `veny.py`
-imports `univ_defs as ud` at 93 call sites (7 more in tests); all 41 symbols
-it uses exist in emmykit 0.3.4 with identical signatures. The swap deletes
-the 9,757-line local file, renames the alias `ud` → `ek`, drops the five
-helper scripts veny writes but never runs, and moves veny's own
-serialization out of the utility library and into a registry emmykit gains
-in 0.4.0.
+**Topic:** Replaced `univ_defs.py` with the published `emmykit` package —
+design approved 2026-08-14, implementation plan executed on branch
+`emmykit-migration`. `veny.py` imported `univ_defs as ud` at 93 call sites
+(7 more in tests); all 41 symbols it used existed in emmykit 0.3.4 with
+identical signatures. The swap deleted the 9,757-line local file, renamed
+the alias `ud` → `ek`, dropped the five helper scripts veny wrote but never
+ran, and moved veny's own serialization out of the utility library and into
+the JSON type registry emmykit gained in 0.4.0.
 
 - Design doc: `docs/superpowers/specs/2026-08-14-emmykit-migration-design.md`
   (approved 2026-08-14)
@@ -277,13 +277,15 @@ wiring rationale and for two Minors deliberately left unfixed.
 - `split_imports` in `veny.py` builds a real temporary virtual environment, so
   it cannot be unit tested directly. Pure logic must be extracted before it
   can be covered.
-- The repository is a flat two-script layout (`veny.py` + `univ_defs.py`),
+- The repository is a flat script layout (`veny.py` plus `alias_index.py`,
+  `pypi_client.py`, `stdlib_index.py`, `venv_cache.py`, `veny_json_types.py`),
   not the `src/` package layout described in the global CLAUDE.md. New modules
-  must travel alongside those two files.
+  must travel alongside those files.
 - `pixi run lint` and `pixi run typecheck` fail repo-wide on pre-existing
-  `veny.py` / `univ_defs.py` errors (850 ruff, 170 mypy as of 2026-08-12,
-  post-alias-resolver). The pre-commit `mypy` hook is literally `mypy .`
-  with `pass_filenames: false`, so it always checks the whole repo and
+  `veny.py` errors (301 ruff, 30 mypy across `veny.py` + `veny_json_types.py`,
+  as of 2026-08-14, post-emmykit-migration). The pre-commit `mypy` hook is
+  literally `mypy .` with `pass_filenames: false`, so it always checks the
+  whole repo and
   **cannot pass** while this debt exists — it is not a gate a change can
   satisfy, only a check that must be scoped manually: use `mypy <files>`
   on what you touched. Same logic applies to `ruff`: for `veny.py` itself,
@@ -308,9 +310,9 @@ wiring rationale and for two Minors deliberately left unfixed.
   blip, and persisting it would blacklist an otherwise-correct package
   forever.
 - `alias_index.py` and `pypi_client.py` import nothing from `veny` or
-  `univ_defs`; `pypi_client` also imports nothing from `alias_index`.
-  `univ_defs.py` imports `alias_index`, never the reverse — same one-way
-  dependency discipline as `stdlib_index.py`.
+  `veny_json_types`; `pypi_client` also imports nothing from `alias_index`.
+  `veny_json_types.py` imports `alias_index` and `stdlib_index`, never
+  `veny` — same one-way dependency discipline as `stdlib_index.py`.
 - **`files.pythonhosted.org` answers `501 Unsupported client range` to
   suffix (`bytes=-N`) Range requests.** Only absolute tail ranges computed
   from the wheel's declared size work. This made the entire PyPI tier of
@@ -328,11 +330,6 @@ wiring rationale and for two Minors deliberately left unfixed.
   `options.aliases` now lives. `check_venv_dir`'s `issubset()` check fails
   once against such a file and rebuilds the venv a single time; it is
   self-healing after that one rebuild.
-- The `to_jsonable` branch for `AliasIndex` (`univ_defs.py:5682`) is not
-  tagged for round-trip, so a reloaded `options.aliases` comes back as a
-  plain `dict`, not an `AliasIndex`. Nothing breaks today because no
-  current reader resolves off a cached options object — but it is a latent
-  `AttributeError` waiting for one that does.
 - `scripts/review-package` can truncate large diffs mid-hunk. A reviewer
   that trusts its output without checking the tail against the working
   tree can sign off on a hunk it never actually saw.
@@ -459,10 +456,8 @@ wiring rationale and for two Minors deliberately left unfixed.
   `test_check_venv_dir_rejects_a_missing_directory` does not uniquely pin the
   `safe_is_dir` guard, since `read_manifest` also degrades on a missing
   directory.
-- `univ_defs.py` is 9,734 lines and `veny.py` is 4,379 lines (down from
-  5,475 before the alias-resolver plan removed the hardcoded alias table,
-  and from 6,320 before the stdlib plan before that removed the hardcoded
-  stdlib list). Both are overdue for splitting.
+- `univ_defs.py` is gone, deleted in the emmykit migration. `veny.py` is
+  5,096 lines (`wc -l veny.py`, 2026-08-14).
 - `alias_index.py` is 732 lines, accepted over the plan's ~600-line split
   target by controller ruling (no further split this plan; see the ledger's
   Task 5b entry — the byte-identical move was verified symbol-by-symbol).
@@ -480,27 +475,16 @@ wiring rationale and for two Minors deliberately left unfixed.
   now done — see the completed alias-resolver plan under Current work.
   `also_needs` itself was never part of that plan and stays open.)
 - The repository had no `tests/` directory before the stdlib work. Coverage
-  now stands at 153 tests (`tests/test_alias_index.py`,
+  now stands at 250 tests (`tests/test_alias_index.py`,
   `tests/test_pypi_client.py`, `tests/test_split_imports.py`,
-  `tests/test_stdlib_index.py`); broader coverage of `veny.py` /
-  `univ_defs.py` beyond what these plans touched remains open.
-- `univ_defs.to_jsonable` still has no handler for `StdlibIndex` — this gap
-  is now StdlibIndex-only; `AliasIndex` got its own handler
-  (`univ_defs.py:5682`) during the alias-resolver plan, so `options.aliases`
-  no longer falls through to `repr()`. The `StdlibIndex` mechanism of harm
-  is unchanged: `save_options_to_json` still serializes `options.stdlib` via
-  `repr()` as a plain string, and every current caller of
-  `load_last_used_options` reads only `.venv_dir` / `.venv_python` off the
-  restored options, so nothing raises today — but if a restored
-  `options.stdlib` were ever used for membership testing, the `repr()`
-  string would silently do substring matching instead of the real lookup
-  (`"ma" in restored` is `True` because the string representation contains
-  "ma" somewhere), giving wrong stdlib classifications with no error. Fix by
-  adding a `to_jsonable` handler for `StdlibIndex`, mirroring the
-  `AliasIndex` one, before any caller starts reading other fields off
-  restored options. (`AliasIndex`'s new handler has its own gap — it is not
-  tagged for round-trip, so a reloaded `options.aliases` comes back as a
-  plain `dict` rather than an `AliasIndex` — see Gotchas.)
+  `tests/test_stdlib_index.py`); broader coverage of `veny.py` beyond what
+  these plans touched remains open.
+- emmykit annotates `Options.args` as `argparse.Namespace` while
+  `veny.Options` re-declares it `argparse.Namespace | None`, which mypy
+  reports as an incompatible override; harmless today because emmykit never
+  reads `.args`, and veny's re-declaration must stay; the permanent fix is
+  to annotate emmykit's `Options.args` as `argparse.Namespace | None = None`
+  upstream.
 - Smaller items carried from the alias-resolver ledger, not worth their own
   paragraph: unused `_CONNECT_TIMEOUT`; a `.`-prefixed zip member yields
   `"."` as a top-level name; single-file extension modules (`.so`/`.pyd`)
