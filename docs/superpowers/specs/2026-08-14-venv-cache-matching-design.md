@@ -132,6 +132,7 @@ Names that do not parse are skipped, not repaired.
 {
   "schema_version": 1,
   "created": "20260814-091500",
+  "veny_version": "0.2.2",
   "interpreter_tag": "3.12",
   "interpreter_path": "/usr/bin/python3.12",
   "packages": [
@@ -160,8 +161,11 @@ Names that do not parse are skipped, not repaired.
 - The manifest describes the venv's final state. It is written after
   installation *and* after `verify_and_repair_imports`, so a repaired venv
   records the package that actually provided the import.
-- There is no `veny_version` field. The codebase has no version constant to
-  record and `schema_version` carries what matters.
+- `veny_version` records `veny.__version__` (`veny.py:30`) as it stood when the
+  venv was built. It is diagnostic only and is never matched on: compatibility
+  is `schema_version`'s job, and rejecting a venv because veny itself has since
+  been upgraded would discard good caches for no reason. `venv_cache` may not
+  import `veny`, so the caller supplies the value.
 
 ### Matching
 
