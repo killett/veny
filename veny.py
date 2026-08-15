@@ -10,7 +10,6 @@ import argparse
 import ast
 import json
 import re
-import copy
 import shutil
 import venv
 import pickle
@@ -4707,45 +4706,48 @@ def smallest_venv(final_venv_folders: dict[Path, dict[str, int]]) -> Path | None
     return smallest_folder
 
 
-def check_venv_dir(options: Options, options_from_cache: Options) -> bool:
-    """
-    Check if the last used venv is still valid.
-    
+def check_venv_dir(options: Options, venv_dir: str | os.PathLike[str]) -> bool:
+    """Check whether a cached venv directory can serve this run.
+
+    The venv's own manifest is the authority. An options JSON written by an
+    earlier run says what that run wanted, not what the venv holds, and its
+    records compare by exact spelling -- so a venv built when "yaml" resolved to
+    "PyYAML" was rejected by a run spelling it "pyyaml". Asking the manifest puts
+    every candidate, last-used or not, through one comparison.
+
     Args:
-        options:            Options object containing the current settings.
-        options_from_cache: Options object loaded from the last used JSON file.
+        options:  Options object containing the current settings.
+        venv_dir: The cached virtual environment directory.
 
     Returns:
-        True if the cached venv directory is valid and meets the current requirements,
-        False otherwise.
+        True if the venv holds what this run needs, for the right interpreter,
+        and its imports really import.
     """
-    if hasattr(options_from_cache, "venv_dir") and options_from_cache.venv_dir is not None:
-        # This might be loaded from an old options file which used strings.
-        options_from_cache.venv_dir = ud.ensure_path(options_from_cache.venv_dir)
-        if ud.safe_is_dir(options_from_cache.venv_dir):
-            if options.uninstalled_imports.issubset(options_from_cache.uninstalled_imports):
-                options_from_cache.uninstalled_imports = options.uninstalled_imports
-                options_from_cache.installed_imports   = options.installed_imports
-                # options_from_cache was loaded from JSON and carries whatever
-                # all_imports the run that wrote it had, so the live run's
-                # source names are passed in explicitly. Without them a record
-                # whose pip_name resolved wrongly would be judged against the
-                # top-level names of whatever that pip_name installed, and a
-                # venv that cannot run this script would be reused.
-                if check_packages_in_venv(options_from_cache,
-                                          source_names=source_import_names(options)):
-                    return True
-                else:
-                    logging.error("The cached venv directory %s failed check_packages_in_venv.",
-                                  os.fspath(options_from_cache.venv_dir))
-            else:
-                if not options.rawlog:
-                    logging.info("The cached venv directory %s does not have all the currently required packages.",
-                                 os.fspath(options_from_cache.venv_dir))
-        else:
-            if not options.rawlog:
-                logging.info("The cached venv directory %s is no longer valid.",
-                             os.fspath(options_from_cache.venv_dir))
+    venv_dir = ud.ensure_path(venv_dir)
+    if not ud.safe_is_dir(venv_dir):
+        if not options.rawlog:
+            logging.info("The cached venv directory %s is no longer there.", os.fspath(venv_dir))
+        return False
+    manifest = venv_cache.read_manifest(venv_dir)
+    if manifest is None:
+        if not options.rawlog:
+            logging.info("The cached venv directory %s has no readable manifest.",
+                         os.fspath(venv_dir))
+        return False
+    result = venv_cache.satisfies(manifest, wanted_packages(options), interpreter_tag(options))
+    if not result.matched:
+        if not options.rawlog:
+            logging.info("The cached venv directory %s cannot be used because %s.",
+                         os.fspath(venv_dir), result.reason)
+        return False
+    # The manifest says the packages are there; this says the imports really
+    # import. source_names comes from the live run, because the venv was built
+    # for whatever the run that created it wrote.
+    if check_packages_in_venv(options, venv_dir=venv_dir,
+                              source_names=source_import_names(options)):
+        return True
+    logging.error("The cached venv directory %s failed check_packages_in_venv.",
+                  os.fspath(venv_dir))
     return False
 
 
@@ -4851,8 +4853,9 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
        not getattr(options.args, "latest",    False) and \
        not getattr(options.args, "smallest",  False):
         options_last_used = load_last_used_options(options)
-        if options_last_used is not None and check_venv_dir(options, options_last_used):
-            return options_last_used.venv_dir
+        if options_last_used is not None and options_last_used.venv_dir is not None \
+           and check_venv_dir(options, options_last_used.venv_dir):
+            return ud.ensure_path(options_last_used.venv_dir)
         else:
             if not options.rawlog: logging.info("Trying to load the latest matching venv now.")
         options.args.latest    = True  # If that didn't work, try to load the latest venv in the cache
@@ -4874,58 +4877,46 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
            not getattr(options.args, "last_used", False) and \
            not getattr(options.args, "smallest",  False):
             # Return the latest venv in the cache which has all the packages needed now
-            options_latest = copy.deepcopy(options)
             latest_venv_folder: Path | None = latest_venv(final_venv_folders)
             if latest_venv_folder is None:
                 if not options.rawlog:
                     logging.error("Could not determine the latest venv folder from the cache.")
                 return None
-            options_latest.set_venv_dir(latest_venv_folder)
-            options_latest.uninstalled_imports = options.uninstalled_imports
-            if check_venv_dir(options, options_latest):
-                return options_latest.venv_dir
-            else:
-                if not options.rawlog:
-                    logging.error("The latest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
-                return None
+            if check_venv_dir(options, latest_venv_folder):
+                return latest_venv_folder
+            if not options.rawlog:
+                logging.error("The latest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
+            return None
         elif        getattr(options.args, "oldest",    False) and \
                 not getattr(options.args, "latest",    False) and \
                 not getattr(options.args, "last_used", False) and \
                 not getattr(options.args, "smallest",  False):
             # Return the oldest venv in the cache which has all the packages needed now
-            options_oldest = copy.deepcopy(options)
             oldest_venv_folder: Path | None = oldest_venv(final_venv_folders)
             if oldest_venv_folder is None:
                 if not options.rawlog:
                     logging.error("Could not determine the oldest venv folder from the cache.")
                 return None
-            options_oldest.set_venv_dir(oldest_venv_folder)
-            options_oldest.uninstalled_imports = options.uninstalled_imports
-            if check_venv_dir(options, options_oldest):
-                return options_oldest.venv_dir
-            else:
-                if not options.rawlog:
-                    logging.error("The oldest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
-                return None
+            if check_venv_dir(options, oldest_venv_folder):
+                return oldest_venv_folder
+            if not options.rawlog:
+                logging.error("The oldest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
+            return None
         elif        getattr(options.args, "smallest",  False) and \
                 not getattr(options.args, "latest",    False) and \
                 not getattr(options.args, "oldest",    False) and \
                 not getattr(options.args, "last_used", False):
             # Return the smallest venv in the cache which has all the packages needed now
-            options_smallest = copy.deepcopy(options)
             smallest_venv_folder: Path | None = smallest_venv(final_venv_folders)
             if smallest_venv_folder is None:
                 if not options.rawlog:
                     logging.error("Could not determine the smallest venv folder from the cache.")
                 return None
-            options_smallest.set_venv_dir(smallest_venv_folder)
-            options_smallest.uninstalled_imports = options.uninstalled_imports
-            if check_venv_dir(options, options_smallest):
-                return options_smallest.venv_dir
-            else:
-                if not options.rawlog:
-                    logging.error("The smallest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
-                return None
+            if check_venv_dir(options, smallest_venv_folder):
+                return smallest_venv_folder
+            if not options.rawlog:
+                logging.error("The smallest venv in the cache is invalid. Giving up on the cache and starting from scratch.")
+            return None
         else:  # This should never happen
             logging.error(f"Invalid combination of flags!\n"
                           f"{getattr(options.args, 'latest',    False) = }\n"

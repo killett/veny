@@ -19,8 +19,9 @@ def an_options(records: set[ResolvedImport]) -> veny.Options:
     return options
 
 
-def a_cached_venv(root: Path, name: str, packages: list[venv_cache.PackageRecord],
-                  tag: str = "3.12") -> Path:
+def a_cached_venv(
+    root: Path, name: str, packages: list[venv_cache.PackageRecord], tag: str = "3.12"
+) -> Path:
     """Create a cached venv directory with a manifest."""
     venv_dir = root / name
     venv_dir.mkdir(parents=True, exist_ok=True)
@@ -76,7 +77,9 @@ def test_a_venv_missing_a_package_is_skipped(tmp_path: Path) -> None:
         "myenv-py3.12-20260814-091500-numpy",
         [venv_cache.PackageRecord("numpy", "numpy", "2.1.3", None)],
     )
-    options = an_options({ResolvedImport("numpy", "numpy"), ResolvedImport("scipy", "scipy")})
+    options = an_options(
+        {ResolvedImport("numpy", "numpy"), ResolvedImport("scipy", "scipy")}
+    )
     assert veny.cache_candidates(options, [venv_dir]) == []
 
 
@@ -114,3 +117,28 @@ def test_wanted_packages_carries_the_requested_specs() -> None:
     options = an_options({ResolvedImport("numpy", "numpy")})
     options.extra_requirements = {"numpy": ">=1.2"}
     assert veny.wanted_packages(options) == [venv_cache.Wanted("numpy", ">=1.2")]
+
+
+def test_check_venv_dir_rejects_a_directory_with_no_manifest(tmp_path: Path) -> None:
+    """The last-used pointer can outlive the venv it points at."""
+    venv_dir = tmp_path / "myenv-py3.12-20260814-091500-numpy"
+    venv_dir.mkdir()
+    options = an_options({ResolvedImport("numpy", "numpy")})
+    assert veny.check_venv_dir(options, venv_dir) is False
+
+
+def test_check_venv_dir_rejects_a_missing_directory(tmp_path: Path) -> None:
+    """A deleted venv must be a cache miss, not an exception."""
+    options = an_options({ResolvedImport("numpy", "numpy")})
+    assert veny.check_venv_dir(options, tmp_path / "gone") is False
+
+
+def test_check_venv_dir_rejects_a_manifest_that_does_not_match(tmp_path: Path) -> None:
+    """Reusing a venv that lacks a package fails at the user's runtime."""
+    venv_dir = a_cached_venv(
+        tmp_path,
+        "myenv-py3.12-20260814-091500-numpy",
+        [venv_cache.PackageRecord("numpy", "numpy", "2.1.3", None)],
+    )
+    options = an_options({ResolvedImport("scipy", "scipy")})
+    assert veny.check_venv_dir(options, venv_dir) is False
