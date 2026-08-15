@@ -2,7 +2,7 @@
 name = "veny"
 version = "0.1.0"  # Required by PEP 621. Keep set even without a [build-system] so any uv-using tool that walks up into this directory doesn't fail PEP 621 validation.
 requires-python = ">=3.12,<3.14"
-dependencies = []
+dependencies = ["emmykit>=0.3.4"]  # Tightened to >=0.4.0,<1.0 once emmykit 0.4.0 ships (Task 7).
 
 [tool.ruff.lint]
 select = [
