@@ -358,6 +358,20 @@ wiring rationale and for two Minors deliberately left unfixed.
   through to `check_venv_dir`, leaving that function to do only the
   import-level confirmation. Same shape as the Task 8 ruling, and best done
   together with the interpreter-tag item above.
+- Smaller items carried from the venv-cache branch's review ledger, none
+  blocking: `venv_cache` logs through the root logger rather than
+  `logging.getLogger(__name__)` (consistent with the rest of the codebase);
+  `build_folder_name` documents but does not enforce "`venv_name` must not
+  contain `-`" (unreachable today — `venv_name` is the hardcoded `"myenv"`);
+  the `_and_N_more` tail parse could misfire on a PyPI project literally
+  named `and` or `more` beside a digit-named one (worst case, one wasted
+  match attempt the manifest then rejects); `_RELEASE_RE`/`_CLAUSE_RE` sit at
+  the top of `venv_cache.py` rather than beside `_release`/`_clause_holds`;
+  no test covers `satisfies` with an empty wanted list, an empty
+  `manifest.packages`, or two pip names normalizing to one key (last wins);
+  `test_check_venv_dir_rejects_a_missing_directory` does not uniquely pin the
+  `safe_is_dir` guard, since `read_manifest` also degrades on a missing
+  directory.
 - `univ_defs.py` is 9,734 lines and `veny.py` is 4,379 lines (down from
   5,475 before the alias-resolver plan removed the hardcoded alias table,
   and from 6,320 before the stdlib plan before that removed the hardcoded
