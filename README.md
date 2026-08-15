@@ -12,10 +12,12 @@ it.
 pixi install
 ```
 
-This installs veny's own development dependencies (ruff, mypy, pytest,
-pre-commit). veny itself has no third-party dependencies — it must run on a
-bare interpreter, since its job is to bootstrap environments for other
-scripts.
+This installs the development tools used to work on veny itself (ruff, mypy,
+pytest, pre-commit) plus roughly twenty more packages pulled in by this
+project's scaffold baseline (linters, debuggers, packaging tools, and the
+like) — none of it is a runtime dependency of veny. veny itself has no
+third-party dependencies — it must run on a bare interpreter, since its job
+is to bootstrap environments for other scripts.
 
 ## Quick usage
 
@@ -35,9 +37,12 @@ Each cached virtual environment carries a `veny_manifest.json` recording the
 interpreter it was built for and, per package, the import name, the pip name,
 the installed version, and any `--reqs` pin. veny matches a cached environment
 against that file; the folder name
-(`<venv_name>-py<major.minor>-<YYYYMMDD>-<HHMMSS>-<packages>`) is only a quick
-filter. Environments built by earlier versions of veny have no manifest and are
-rebuilt once.
+(`<venv_name>-py<major.minor>-<YYYYMMDD>-<HHMMSS>-<packages>`, packages
+normalized and joined with `_`, truncated to the first 5 with an
+`_and_N_more` tail beyond that) is only a quick filter. Environments built by
+earlier versions of veny have no manifest, so they are never matched again —
+but they are also never deleted, so they accumulate in the cache directory
+until removed by hand.
 
 ## Project structure
 

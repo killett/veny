@@ -116,7 +116,12 @@ def parse_folder_name(name: str) -> FolderName | None:
         return None
     items = package_section.split("_")
     unnamed_count = 0
-    if len(items) > 3 and items[-3] == "and" and items[-2].isdigit() and items[-1] == "more":
+    if (
+        len(items) > 3
+        and items[-3] == "and"
+        and items[-2].isdigit()
+        and items[-1] == "more"
+    ):
         unnamed_count = int(items[-2])
         items = items[:-3]
     if not items or any(not item for item in items):
@@ -138,7 +143,10 @@ class PackageRecord:
         import_name:       The name as written in the user's source.
         pip_name:          The name pip received, unnormalized.
         installed_version: The version the venv reports, or None if unknown.
-        requested_spec:    The --reqs spec that asked for it, or None.
+        requested_spec:    The --reqs spec that asked for it, or None. Diagnostic
+                           only: satisfies() compares only installed_version
+                           against the *current* run's spec, never this stored
+                           one.
     """
 
     import_name: str
@@ -203,7 +211,9 @@ def write_manifest(venv_dir: str | os.PathLike[str], manifest: Manifest) -> bool
         with open(path, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, sort_keys=True)
     except OSError as exc:
-        logging.warning("Could not write %s (%s); this venv will not be reused.", path, exc)
+        logging.warning(
+            "Could not write %s (%s); this venv will not be reused.", path, exc
+        )
         return False
     return True
 
@@ -256,7 +266,9 @@ def read_manifest(venv_dir: str | os.PathLike[str]) -> Manifest | None:
             packages=packages,
         )
     except (KeyError, TypeError, ValueError) as exc:
-        logging.info("Ignoring %s: it is not a manifest this veny can read (%s).", path, exc)
+        logging.info(
+            "Ignoring %s: it is not a manifest this veny can read (%s).", path, exc
+        )
         return None
 
 
