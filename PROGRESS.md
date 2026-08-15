@@ -18,12 +18,15 @@ in 0.4.0.
   ships as emmykit 0.4.0
 - Cross-repo prompt (utilities): `docs/prompts/2026-08-14-utilities-adopt-emmykit-scripts.md`
   — adopts the five standalone scripts as real files
-- Implementation plan: not yet written
+- Implementation plan: `docs/superpowers/plans/2026-08-14-emmykit-migration.md`
+  (8 tasks, 0-7; Task 0 is the external emmykit release and blocks Tasks 3-7)
+- Task tracker: `docs/superpowers/plans/2026-08-14-emmykit-migration.md.tasks.json`
 
 The veny branch is built now but merged only after emmykit 0.4.0 exists, so
 that no known-degraded state reaches `main`.
 
-**Next action:** write the implementation plan for the emmykit migration.
+**Next action:** run Tasks 1 and 2 (both unblocked today); paste the emmykit
+prompt to unblock Task 3 onward.
 
 **Previous topic (complete):** Venv-cache matching — design approved
 2026-08-14, plan complete
