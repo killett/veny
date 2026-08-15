@@ -2,7 +2,23 @@
 
 ## Current work
 
-**Topic:** Module-alias resolver — complete. Replaced the 1,219-line
+**Topic:** Venv-cache matching — design approved 2026-08-14, not yet planned.
+Cached virtual environments are matched from a folder name that splits on `-`
+(so no hyphenated pip name survives) and from `requirements.txt`, which is
+pip's input rather than a record of the venv. Replace both with a versioned
+`veny_manifest.json` inside each venv, a correctly encoded folder name used
+only as a cheap prefilter, and one comparison key — the PEP 503 normalized pip
+name — at every layer. Also fixes the interpreter mismatch where the venv is
+built with `sys.executable` while imports are classified against
+`options.python_command`.
+
+- Design doc: `docs/superpowers/specs/2026-08-14-venv-cache-matching-design.md`
+  (approved 2026-08-14)
+- Implementation plan: not written yet.
+
+**Next action:** write the implementation plan from the approved design.
+
+**Previous topic (complete):** Module-alias resolver. Replaced the 1,219-line
 hardcoded import-name-to-pip-name table in `veny.py` with `alias_index.py`
 (data model, override/cache stores, target-interpreter probe, resolution
 chain) and `pypi_client.py` (confirms a project provides an import name by
@@ -32,14 +48,7 @@ and two of the five evidence tiers were unreachable. It is now wired into
 really imported and repairs what did not. See the Task 9 report for the
 wiring rationale and for two Minors deliberately left unfixed.
 
-**Next action:** fix `find_match_dir_in_cache` — it splits venv folder names
-on `-`, which cannot survive a hyphenated pip name (see Deferred items).
-The old hardcoded table only ever produced 21 curated names, so this bug
-was latent; AliasIndex can now resolve arbitrary PyPI distribution names,
-which widens the exposure to all of them. Strongest candidate on the
-deferred list.
-
-**Previous topic (complete):** the `StdlibIndex` resolver.
+**Earlier topic (complete):** the `StdlibIndex` resolver.
 
 - Design doc: `docs/superpowers/specs/2026-08-12-stdlib-index-design.md`
 - Implementation plan: `docs/superpowers/plans/2026-08-12-stdlib-index.md`
@@ -215,12 +224,6 @@ deferred list.
   (~95 lines) are genuinely separable seams — self-contained, coupled to
   the resolution logic only through constructor injection — for a future
   `alias_cache.py` / `interpreter_probe.py` split.
-- **`find_match_dir_in_cache` splits venv folder names on `-`,** which
-  cannot survive a hyphenated pip name. Predates this plan, but the plan
-  widens its exposure: the old hardcoded table produced only 21 curated
-  pip names, so the bug was effectively latent; `AliasIndex` can resolve
-  any PyPI distribution name, many of which are hyphenated. Strongest
-  candidate for the next session (see Current work).
 - `known_bad_imports` retains six project-specific local module names,
   hardcoded. If that list grows, move it to a config file under
   `options.my_dir`.
