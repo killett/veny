@@ -1686,14 +1686,12 @@ def _analyze_module(
     options: Options,
     module_path: Path,
     modules_info: dict[str, ModuleInfo],
-    module_contents: dict[str, str],
-    module_trees: dict[str, ast.AST],
     do_sys_path_scan: bool,
 ) -> tuple[str, ModuleInfo] | None:
     """Read, parse, and analyze one module file.
 
     - Optionally scans for sys.path mutations (current behavior: only for the first loop).
-    - Updates modules_info / module_contents / module_trees.
+    - Updates modules_info.
 
     Args:
         options:          Options object containing configuration and state. Contains:
@@ -1703,8 +1701,6 @@ def _analyze_module(
             - options.rawlog:           Boolean indicating whether to log raw file contents.
         module_path:      Path to the module file to analyze.
         modules_info:     Dictionary mapping module keys to ModuleInfo objects.
-        module_contents:  Dictionary mapping module keys to their source code.
-        module_trees:     Dictionary mapping module keys to their ASTs.
         do_sys_path_scan: Whether to scan for sys.path mutations in this module.
 
     Returns:
@@ -1723,9 +1719,6 @@ def _analyze_module(
     except Exception:
         logging.error(f"Failed to parse the file: {module_path}")
         return None
-
-    module_contents[module_key] = file_content
-    module_trees[module_key] = tree
 
     collector = ImportFunctionCollector(options, module_key, module_path)
     collector.visit(tree)
@@ -1814,8 +1807,6 @@ def find_imports_and_IO_in_script(
     processed_paths: set[Path] = set()
     modules_info: dict[str, ModuleInfo] = {}
     modules_to_process: deque[Path] = deque([first_path])
-    module_contents: dict[str, str] = {}
-    module_trees: dict[str, ast.AST] = {}
     while modules_to_process:
         module_path = modules_to_process.popleft()  # first in, first out
         if not options.rawlog:
@@ -1850,8 +1841,6 @@ def find_imports_and_IO_in_script(
             options,
             module_path,
             modules_info,
-            module_contents,
-            module_trees,
             do_sys_path_scan=True,
         )
         if result is None:
@@ -1970,8 +1959,6 @@ def find_imports_and_IO_in_script(
                     options,
                     module_file_path,
                     modules_info,
-                    module_contents,
-                    module_trees,
                     do_sys_path_scan=False,
                 )
                 if result is None:
