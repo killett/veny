@@ -20,6 +20,13 @@ pattern = "__version__[^=]*= ['\"](?P<version>[^'\"]*)['\"]"
 [tool.hatch.build.targets.wheel]
 packages = ["src/veny"]
 
+[tool.ruff]
+# This ruff formats Python code blocks inside Markdown. docs/ holds design docs
+# and implementation plans whose code blocks are a record of what the code was
+# at approval time -- reformatting them silently rewrites history. A bare
+# `ruff format .` rewrote 696 lines across eight of them before this exclusion.
+extend-exclude = ["docs/"]
+
 [tool.ruff.lint]
 select = [
     "F",      # Pyflakes — unused imports, undefined names, etc.
@@ -42,6 +49,12 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["ANN", "D", "S"]  # Otherwise Claude would either over-annotate every test or fight ruff constantly.
+# cli.py's asserts are internal invariants, not input validation; its
+# subprocess calls are the whole point of the program (it builds venvs and
+# runs the user's script); the pickle is its own module cache, written and
+# read by veny alone. Scoped to this one file so a genuinely unsafe call
+# elsewhere still gets flagged.
+"src/veny/cli.py" = ["S101", "S301", "S603"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
