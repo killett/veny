@@ -574,6 +574,33 @@ wiring rationale and for two Minors deliberately left unfixed.
 
 ## Deferred items
 
+- **Parked by phase 2's reviews, 2026-08-16.** None blocking; each was ruled
+  real but out of scope, and the phase they belong to is named.
+  - `options.installed_imports` is **write-only** — written in `split_imports`,
+    reset alongside `uninstalled_imports`, read nowhere. Deleting `use_pip_list`
+    took its last reader. Phase 4's `Requirements` dataclass is where its fate
+    belongs. (Same shape as phase 1's `FunctionInfo.ast_node`, still open.)
+  - `venv_build_interpreter()`'s `shutil.which()` fallback returns the
+    **unresolved bare name** when nothing is found, which reintroduces exactly
+    the resolution bug it exists to prevent — `uv venv --python python3` picks
+    by uv's own discovery, not PATH. The branch is untested and believed
+    practically dead (a `python_command` that is not on PATH). Worth either a
+    `sys.executable` fallback or a test.
+  - `rename_venv` loops over a single-element tuple, `for path in (venv_dir /
+    "pyvenv.cfg",)`, left that way when the download-script half went. Simplify
+    when `cache_search.py` is extracted in phase 3.
+  - `create_venv` uses `subprocess.check_call`, so uv's `Using CPython …` and
+    `Creating virtual environment at: …` lines reach the terminal even under
+    `--rawlog`, whose contract is "the same output you would see without veny".
+  - The import-check probe venv no longer seeds pip/setuptools, so `setuptools`,
+    `pkg_resources` and `pip` now classify as *not installed* and get installed
+    into the real venv. Follows from the sanctioned no-seed decision; benign but
+    undocumented for users.
+  - Two orphaned environments in `~/veny` (`myenv-py3.13-20260816-141521-pyyaml`
+    and `…-141900-pyyaml`) carry `interpreter_tag: "3.12"` under a `py3.13`
+    folder name, built mid-phase before the interpreter-resolution fix. They can
+    never be matched and are never collected — a concrete instance of the
+    garbage-collection item further down this list.
 - **FIXED 2026-08-16 (Task 8, commit `10400f7`).** `setup_virtualenv`
   used to crash with an unhandled `subprocess.CalledProcessError` on every
   fresh venv build, because `uv venv` refuses a non-empty target directory
