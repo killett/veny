@@ -203,7 +203,7 @@ Run: `pixi run python -m pytest tests/test_uv_backend.py -v`
 Expected: `3 passed`
 
 Run: `pixi run test`
-Expected: `263 passed` (260 + 3)
+Expected: `262 passed` (260 + 3)
 
 - [ ] **Step 5: Prove test 1 can fail**
 
@@ -235,7 +235,7 @@ git commit -m "feat: declare uv as a runtime dependency and locate its binary"
 - [ ] `setup_virtualenv` builds with the interpreter `venv_build_interpreter()` returns, not a default
 - [ ] All tests pass
 
-**Verify:** `pixi run test` → 263 passed
+**Verify:** `pixi run test` → 262 passed
 
 **Why the wheel step cannot survive:** it ran `options.venv_pip install wheel`, and `uv venv` seeds no pip, so there is no `bin/pip` to run. uv builds source distributions without needing `wheel` installed in the target environment.
 
@@ -324,7 +324,7 @@ Run: `pixi run lint`
 Expected: zero. `import venv` is **not** orphaned by this task — `use_pip_list` still calls `venv.create`, and it survives until Task 4. Do not remove the import here.
 
 Run: `pixi run test`
-Expected: `263 passed`
+Expected: `262 passed`
 
 Run: `rg -n 'venv\.create|"-m", "venv"' src/veny/cli.py`
 Expected: exactly one hit, the `venv.create` inside `use_pip_list`.
@@ -354,7 +354,7 @@ git commit -m "refactor: create virtual environments with uv"
 - [ ] `options.simultaneous_success` is renamed `options.install_succeeded` and still gates the `failed-` prefix drop in `main()`
 - [ ] All tests pass
 
-**Verify:** `pixi run test` → 263 passed
+**Verify:** `pixi run test` → 262 passed
 
 **Note on `install_package`:** it is the only caller of `ek.my_critical_error` on the install path, i.e. the only place a failed install killed the run. Removing it means a failed batch install now leaves `install_succeeded` False, the venv keeps its `failed-` prefix, and `verify_and_repair_imports` gets its turn — which is the better behaviour and the reason the individual sweep is redundant.
 
@@ -511,7 +511,7 @@ Delete `download_packages`, `install_packages_simultaneously`, `install_packages
 Run: `pixi run lint` — delete exactly the imports it flags as unused, nothing more.
 
 Run: `pixi run test`
-Expected: `263 passed`. If `tests/test_split_imports.py` or `tests/test_rename_venv.py` fail, they reference deleted symbols — read the failure and update the test to the new surface rather than restoring the symbol. Report any test you change and why.
+Expected: `262 passed`. If `tests/test_split_imports.py` or `tests/test_rename_venv.py` fail, they reference deleted symbols — read the failure and update the test to the new surface rather than restoring the symbol. Report any test you change and why.
 
 Run the acceptance `rg` checks. All must be empty.
 
@@ -539,7 +539,7 @@ git commit -m "refactor: install packages with uv and delete the download layer"
 - [ ] `resolve_records` still has at least one caller (it was used by `use_pip_list`; confirm and report if it does not)
 - [ ] All tests pass
 
-**Verify:** `pixi run test` → 263 passed
+**Verify:** `pixi run test` → 262 passed
 
 **Why this is safe** (recorded in the design doc, phase 2, group two): `split_imports` builds its own bare venv and actually imports every name through `check_packages_in_venv`, which is stronger evidence than membership in a name inventory. `main()` loaded the newest `pip_list_*.txt` from `~/veny/` unless `--rc` was passed, so the inventory a run reclassified against was usually one an earlier run wrote, possibly under a different interpreter. Its `--reqs` union duplicates the one at the end of `split_imports`.
 
@@ -589,7 +589,7 @@ Run: `rg -n 'use_pip_list|pip_list' src/veny/cli.py`
 Expected: no output.
 
 Run: `pixi run test`
-Expected: `263 passed`. `tests/test_split_imports.py` and `tests/test_cache_search.py` both reference `pip_list`; update them to the new surface and report what you changed.
+Expected: `262 passed`. `tests/test_split_imports.py` and `tests/test_cache_search.py` both reference `pip_list`; update them to the new surface and report what you changed.
 
 Run: `pixi run lint` — clear anything it flags.
 
@@ -618,7 +618,7 @@ git commit -m "refactor: delete the bare-venv name inventory and its reclassific
 - [ ] Re-adding any one retired field to `Options.__init__` makes `test_options_no_longer_carries_helper_script_paths` fail
 - [ ] All tests pass
 
-**Verify:** `pixi run test` → 263 passed
+**Verify:** `pixi run test` → 262 passed
 
 **Steps:**
 
@@ -682,7 +682,7 @@ Temporarily re-add `self.packages_dir: Path = self.my_dir / "packages"` to `Opti
 
 `pixi run python -m pytest tests/test_options_surface.py -v`
 
-Expected: `test_options_no_longer_carries_helper_script_paths` FAILS with `retired fields still on Options: ['packages_dir']`. Remove the line again, confirm the suite is back to 263 passed, and confirm `git diff src/veny/cli.py` shows no leftover.
+Expected: `test_options_no_longer_carries_helper_script_paths` FAILS with `retired fields still on Options: ['packages_dir']`. Remove the line again, confirm the suite is back to 262 passed, and confirm `git diff src/veny/cli.py` shows no leftover.
 
 Edit in place — `PYTHONPATH = "src"` in pixi's `[activation.env]` overwrites an inherited value, so a side copy tests the real source.
 
@@ -712,7 +712,7 @@ git commit -m "refactor: retire the Options fields the uv migration orphaned"
 - [ ] `tests/test_manifest_writing.py:99` and `:146`, which name the old function, are updated to the new name and return shape
 - [ ] All tests pass
 
-**Verify:** `pixi run test` → 265 passed (263 + 2)
+**Verify:** `pixi run test` → 264 passed (262 + 2)
 
 **The bug being closed:** `interpreter_tag()` reads `options.stdlib.python_version`, while `venv_build_interpreter()` returns `options.python_command or sys.executable`. `stdlib_index.for_interpreter` falls back to the *running* interpreter's index on a timeout or non-zero exit, so a run targeting 3.13 can write `interpreter_tag: "3.11"` beside `interpreter_path: "python3.13"`. A later degraded run then matches that tag and reuses a 3.13 venv labelled 3.11. `installed_versions_in_venv` already spawns the venv's own interpreter, so it can report the truth for free.
 
@@ -830,7 +830,7 @@ The first test also asserts `interpreter_path` is unchanged, pinning that this f
 - [ ] **Step 7: Run and mutate**
 
 Run: `pixi run test`
-Expected: `265 passed`
+Expected: `264 passed`
 
 Then revert `manifest_for`'s `interpreter_tag=` to `interpreter_tag(options)` and confirm the new test FAILS with `assert '3.11' == '3.13'`. Restore.
 
@@ -855,7 +855,7 @@ git commit -m "fix: record the venv's own interpreter version in its manifest"
 **Acceptance Criteria:**
 - [ ] README states that veny requires uv, and that cached environments no longer contain `pip`
 - [ ] README's "Virtual environment cache" section does not describe pre-downloaded wheels in `~/veny/packages`
-- [ ] `pixi run test` passes with 265 tests
+- [ ] `pixi run test` passes with 264 tests
 - [ ] `ruff check .` zero; `ruff format --check .` every file formatted
 - [ ] `pixi run typecheck 2>&1 | tail -1` at or below 39 errors
 - [ ] `pixi run smoke` green, or the completion note says it was skipped for lack of network
