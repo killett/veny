@@ -30,7 +30,7 @@ Gotchas entry (`uv venv --python <bare name> does not mean...`) for the fix
 and live verification. Phase 2's gates (`pixi run test` 266 passed,
 `ruff check .` zero, `ruff format --check .` all formatted, `pixi run
 typecheck` 37 errors, `pixi run smoke` green) are all green, and
-`src/veny/cli.py` is 4,102 lines (was 4,362 after phase 1, 6,020 before
+`src/veny/cli.py` is 4,143 lines (was 4,362 after phase 1, 6,020 before
 phase 1). A live run (`pixi run veny --no-cache`, importing `yaml`) now
 succeeds end to end: it resolves `yaml` to `PyYAML`, builds a fresh venv
 under `~/veny/` with a resolved absolute-path interpreter, installs with uv,
@@ -45,7 +45,7 @@ frozen per-subsystem dataclasses, carried by the phase 3 extractions rather
 than done separately. Phases 1 and 2 are independent of the architecture and
 land first; the original combined estimate for both was 6,020 down to
 roughly 3,870 lines before any extraction begins. Phase 1 landed at 4,362
-lines and phase 2 landed at 4,102 — 260 lines lighter, short of the original
+lines and phase 2 landed at 4,143 — 219 lines lighter, short of the original
 combined estimate, so phase 3's extraction has more to move than that
 estimate assumed.
 
@@ -666,8 +666,9 @@ wiring rationale and for two Minors deliberately left unfixed.
   `safe_is_dir` guard, since `read_manifest` also degrades on a missing
   directory.
 - `univ_defs.py` is gone, deleted in the emmykit migration. `src/veny/cli.py`
-  is **4,102 lines** (`wc -l src/veny/cli.py`, 2026-08-16, after phase 2 of
-  the re-architecture migrated the environment layer to `uv`). Before that it
+  is **4,143 lines** (`wc -l src/veny/cli.py`, 2026-08-16, after phase 2 of
+  the re-architecture migrated the environment layer to `uv`, plus the
+  whole-branch review's finding-1/finding-2 fixes). Before that it
   was 4,362 lines, measured after phase 1 deleted the file/network visitor
   block; before phase 1 it was 6,020 lines; an earlier note here said 4,959,
   measured before `ruff format` rewrote ~3,200 lines of it and unwound the

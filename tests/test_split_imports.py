@@ -1,4 +1,5 @@
 import logging
+import shutil
 import subprocess
 import sys
 import venv
@@ -402,6 +403,46 @@ def test_split_imports_falls_back_to_the_import_name_when_nothing_resolves(monke
     assert options.uninstalled_imports == {
         veny.ResolvedImport(import_name="mysterylib", pip_name="mysterylib")
     }
+
+
+def test_split_imports_probe_venv_is_given_the_classified_interpreter(monkeypatch):
+    """split_imports' probe venv must be built with the interpreter imports
+    were classified against, not whatever uv's own discovery order picks.
+
+    Before this fix, split_imports called create_venv(venv_dir) with no
+    interpreter argument. `uv venv` with no --python resolves through uv's
+    own discovery order, which was measured to disagree with the interpreter
+    veny classified imports against (uv picked 3.12 while PATH's python3 was
+    3.13). A stdlib module removed in 3.13 (e.g. `cgi`) then imports
+    successfully in the mismatched 3.12 probe venv and gets marked
+    "installed", even though it is not installed -- and not installable --
+    for the interpreter the venv is actually built with. If this regresses
+    to create_venv(venv_dir) with no second argument, the captured uv
+    command below carries no --python flag at all and this test fails.
+    """
+    options = veny.Options()
+    options.python_command = "python3"
+    options.aliases = _index_with({})
+    options.all_imports = {"widgetlib"}
+    monkeypatch.setattr(
+        shutil,
+        "which",
+        lambda name: "/resolved/bin/python3" if name == "python3" else None,
+    )
+    monkeypatch.setattr(veny, "uv_binary", lambda: "/packaged/uv")
+    captured: list[list[str]] = []
+    monkeypatch.setattr(
+        subprocess, "check_call", lambda command: captured.append(command)
+    )
+    monkeypatch.setattr(veny, "check_packages_in_venv", lambda *a, **k: False)
+
+    veny.split_imports(options)
+
+    assert len(captured) == 1, "expected exactly one probe venv build"
+    probe_command = captured[0]
+    assert "--python" in probe_command
+    python_index = probe_command.index("--python")
+    assert probe_command[python_index + 1] == "/resolved/bin/python3"
 
 
 def test_the_offline_argument_keeps_the_index_off_the_network(monkeypatch, tmp_path):
@@ -1379,10 +1420,10 @@ def test_a_package_that_lacks_the_import_is_still_rejected_durably(
 
 
 def test_the_repair_installer_reports_failure_instead_of_exiting(monkeypatch, tmp_path):
-    # install_package(), the batch path's installer, calls ek.my_critical_error()
-    # -- i.e. sys.exit() -- when a download fails. resolve_and_verify's
-    # installer must not be able to end the run: one unverifiable import is not
-    # a reason to kill everything.
+    # install_into_venv drives a single `uv pip install` and, on a nonzero
+    # return code, logs the error and returns False rather than raising or
+    # exiting. resolve_and_verify's installer must not be able to end the
+    # run: one unverifiable import is not a reason to kill everything.
     options = veny.Options()
     options.my_dir = tmp_path
     options.set_venv_dir(tmp_path / "venv")

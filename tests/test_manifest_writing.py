@@ -134,6 +134,63 @@ def test_record_venv_state_renames_before_writing_the_manifest(monkeypatch, tmp_
     assert by_pip["numpy"].installed_version == "2.1.3"
 
 
+def test_record_venv_state_renames_into_agreement_when_the_venvs_tag_differs_from_the_runs(
+    monkeypatch, tmp_path
+):
+    """The folder name must track the manifest's tag, not just the run's.
+
+    build_folder_name is called with the run's classified tag
+    (interpreter_tag(options)) in setup_virtualenv, before the venv exists --
+    nothing better is available there. But the manifest record_venv_state
+    writes uses the venv's own probed tag. If the venv's real interpreter
+    ends up differing from the run's -- a degraded probe, or uv resolving to
+    a different Python than veny classified imports against -- those two tags
+    disagree, and venv_cache.satisfies rejects this venv on every later run
+    because its folder tag mismatches its own manifest, forcing a silent
+    rebuild forever with the mismatched venv left as an orphan. This test
+    pins that record_venv_state renames the folder to the manifest's tag even
+    when no package changed -- only the tag did -- not just when
+    verify_and_repair_imports changed which packages are listed.
+    """
+    options = an_options()  # classifies against "3.12"
+    old_name = "failed-" + venv_cache.build_folder_name(
+        venv_name=options.venv_name,
+        interpreter_tag=veny.interpreter_tag(options),  # "3.12", the run's tag
+        timestamp=options.timestamp,
+        pip_names=[record.pip_name for record in options.uninstalled_imports],
+    )
+    old_dir = tmp_path / old_name
+    options.set_venv_dir(old_dir)  # Creates old_dir on disk.
+
+    # The venv actually reports 3.13 -- disagreeing with the run's 3.12 -- and
+    # no package changed.
+    monkeypatch.setattr(
+        veny,
+        "installed_state_in_venv",
+        lambda opts: ({"pyyaml": "6.0.2", "numpy": "2.1.3"}, "3.13"),
+    )
+
+    veny.record_venv_state(options)
+
+    wanted_name = venv_cache.build_folder_name(
+        venv_name=options.venv_name,
+        interpreter_tag="3.13",
+        timestamp=options.timestamp,
+        pip_names=[record.pip_name for record in options.uninstalled_imports],
+    )
+    new_dir = tmp_path / f"failed-{wanted_name}"
+
+    assert old_dir != new_dir, "the test setup must simulate an actual tag mismatch"
+    assert "py3.13" in new_dir.name
+    assert options.venv_dir == new_dir
+    assert new_dir.is_dir()
+    assert not old_dir.exists()
+
+    manifest = venv_cache.read_manifest(new_dir)
+    assert manifest is not None
+    assert manifest.interpreter_tag == "3.13"
+
+
 def test_installed_state_in_venv_returns_empty_on_oserror(monkeypatch):
     """A probe that cannot even launch must cost a rebuild, not raise out of record_venv_state."""
     options = veny.Options()

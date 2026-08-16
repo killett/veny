@@ -2603,7 +2603,7 @@ def split_imports(options: Options) -> None:
     )  # Maximum number of digits in import count, also used for formatting
 
     with tempfile.TemporaryDirectory() as venv_dir:
-        create_venv(venv_dir)
+        create_venv(venv_dir, venv_build_interpreter(options))
         for i, imp in enumerate(options.all_imports, 1):
             # The import name is all either check below needs, and resolution is
             # deliberately not done yet: see the else branch.
@@ -3290,12 +3290,19 @@ def manifest_for(
 
 
 def record_venv_state(options: Options) -> None:
-    """Rename the venv if repairs changed its packages, then write its manifest.
+    """Rename the venv if its folder name has drifted, then write its manifest.
 
-    verify_and_repair_imports can replace a record whose pip_name was wrong, so
-    the folder name written before installing may list a package the venv does
-    not have. The name is only a prefilter, but a stale one rejects a venv the
-    manifest would accept -- so the name is brought back into agreement first.
+    Two things can make the folder name written before installing wrong by the
+    time this runs. verify_and_repair_imports can replace a record whose
+    pip_name was wrong, so the name may list a package the venv does not have.
+    And the folder name is built from the run's stdlib tag
+    (interpreter_tag(options)) before the venv exists, while the manifest uses
+    the venv's own probed tag -- if the probe interpreter degrades (or uv's
+    resolution disagreed with what veny classified against), those two tags
+    can differ. Either way the name is only a prefilter, but a stale one
+    rejects a venv the manifest would accept -- so the name is brought back
+    into agreement with the manifest here, using the same tag the manifest is
+    about to record.
 
     Args:
         options: Options object; reads the final records and updates
@@ -3305,9 +3312,14 @@ def record_venv_state(options: Options) -> None:
         None.
     """
     assert options.venv_dir is not None, "options.venv_dir must be set"
+    # Probed here, before build_folder_name, so the folder name and the
+    # manifest can never disagree on which interpreter tag they record: both
+    # come from this one call. Falls back to the run's own tag when the probe
+    # could not run (empty venv_tag), matching manifest_for's fallback below.
+    versions, venv_tag = installed_state_in_venv(options)
     wanted_name = venv_cache.build_folder_name(
         venv_name=options.venv_name,
-        interpreter_tag=interpreter_tag(options),
+        interpreter_tag=venv_tag or interpreter_tag(options),
         timestamp=options.timestamp,
         pip_names=[record.pip_name for record in options.uninstalled_imports],
     )
@@ -3315,11 +3327,11 @@ def record_venv_state(options: Options) -> None:
     if options.venv_dir.name != prefix + wanted_name:
         if not options.rawlog:
             logging.info(
-                "Repairs changed this venv's packages; renaming it to %s.",
+                "This venv's packages or interpreter tag no longer match its "
+                "folder name; renaming it to %s.",
                 prefix + wanted_name,
             )
         rename_venv(options, prefix + wanted_name)
-    versions, venv_tag = installed_state_in_venv(options)
     venv_cache.write_manifest(
         options.venv_dir, manifest_for(options, versions, venv_tag)
     )
