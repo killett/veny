@@ -20,7 +20,7 @@ def _scan(script: Path, custom_modules: dict[str, Path]) -> cli.Options:
     options.python_script = script
     options.script_dir = script.parent
     options.custom_modules = custom_modules
-    cli.find_imports_and_IO_in_script(options, script)
+    cli.find_imports_in_script(options, script)
     return options
 
 

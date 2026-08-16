@@ -1777,19 +1777,19 @@ def _enqueue_top_level_imports(
                 modules_to_process.append(actual_module_file_path)
 
 
-def find_imports_and_IO_in_script(
+def find_imports_in_script(
     options: Options, first_path: str | os.PathLike[str]
 ) -> None:
-    """Find all imports and I/O in the script.
+    """Find all imports in the script.
 
     Includes functions and classes that it imports from its dependencies.
 
     Args:
         options:    Options object containing paths to the python script and custom modules.
-        first_path: Path to the Python script to analyze for imports and I/O.
+        first_path: Path to the Python script to analyze for imports.
 
     Returns:
-        None - modifies options to include all imports and I/O operations found in the script.
+        None - modifies options to include all imports found in the script.
 
     Raises:
         FileNotFoundError: If the first_path does not exist.
@@ -2692,7 +2692,7 @@ def list_packages(options: Options) -> None:
                     )
                 python_file = options.python_script
                 options.all_imports = set()
-                find_imports_and_IO_in_script(options, python_file)
+                find_imports_in_script(options, python_file)
             else:
                 raise ValueError(
                     f"'{os.fspath(options.python_script)}' is not a valid Python script."
@@ -2750,7 +2750,7 @@ def get_all_imports(options: Options, directory: str | os.PathLike[str]) -> None
     )
     for file_path in candidates:
         if ek.is_python_script(file_path):
-            find_imports_and_IO_in_script(options, file_path)
+            find_imports_in_script(options, file_path)
             processed_files += 1
             if not options.rawlog:
                 # OLD: logging.info(f"Processing file {processed_files:>{max_digits}}/{total_files} : {file_path}")
