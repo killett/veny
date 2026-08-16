@@ -115,7 +115,12 @@ import-name-to-pip-name resolution with attribution behind it — `alias_index`,
 **Locating the binary.** `uv` is declared as a runtime dependency in
 `pyproject.toml` alongside `emmykit`, and the binary is located with
 `uv.find_uv_bin()`. The `uv` PyPI package ships the binary and exposes that
-entry point. Because veny is installed with `uv tool install`, the binary lands
+entry point — verified 2026-08-16 against uv 0.12.5: `import uv` exposes exactly
+`find_uv_bin`, which returns the path to a working binary. Note the module has
+no `__version__`; read the version from the binary if it is ever needed. The
+conda-forge `uv` package ships only the binary, so the dev environment takes
+this as a `[pypi-dependencies]` entry in `pixi.toml` alongside `emmykit`, not a
+conda one. Because veny is installed with `uv tool install`, the binary lands
 in veny's own tool environment and is found deterministically rather than by
 PATH lookup — the same failure mode that motivated retiring the shell-alias
 install. Falls back to a PATH lookup if the import fails, and exits with an
@@ -130,21 +135,68 @@ declared, version-pinned dependency is a strictly weaker requirement than
 
 **Command mapping.**
 
+Line numbers below are post-phase-1, as of `ae90edc`.
+
 | Today | Under uv |
 |---|---|
-| `venv.create(venv_dir, with_pip=True)` (`cli.py:4239`) | `uv venv <dir> --python <target>` |
-| `[python, "-m", "venv", dir]` (`cli.py:5231`) | `uv venv <dir> --python <target>` |
-| `venv_python -m pip install <pkg>` | `uv pip install --python <venv_python> <pkg>` |
+| `venv.create(venv_dir, with_pip=True)` in `split_imports` (`cli.py:2581`) | `uv venv <dir>` — the import check never needs pip, so no seed |
+| `venv.create(options.test_dir, ...)` in `use_pip_list` (`cli.py:2998`) | deleted with `use_pip_list` |
+| `[python, "-m", "venv", dir]` in `setup_virtualenv` (`cli.py:3573`) | `uv venv <dir> --python <target>` |
+| `venv_pip install wheel` (`cli.py:3579-3585`) | deleted; uv needs no `wheel`, and `uv venv` ships no pip to run it |
+| `venv_python -m pip install <pkg>` (`run_pip_in_venv`, `cli.py:3150`) | `uv pip install --python <venv_python> <pkg>` |
 | `venv_python -m pip uninstall <pkg>` | `uv pip uninstall --python <venv_python> <pkg>` |
-| `venv_python -m pip list` | `uv pip list --python <venv_python> --format json` |
 | `download_packages` + `--find-links` + `--no-index` | deleted; uv's global cache serves this purpose |
 
-**Deleted with this phase:** `download_packages`, `packages_dir`,
-`download_packages.sh`, the `--no-index` install paths,
-`install_packages_simultaneously`, `install_packages_individually`,
-`install_package`, `recover_pip_versions`, `use_pip_list`, and
-`options.pip_list`. This machinery exists to avoid re-downloading wheels; uv's
-global hardlinked cache does that job better.
+`installed_versions_in_venv` needs **no** change for the tool swap: it already
+runs `_VERSION_PROBE_CODE` through the venv's own interpreter and parses JSON,
+never touching pip. It is still where ledger item 1 gets fixed, because it is
+already spawning that interpreter. (`uv pip list --python <venv> --format json`
+exists and returns `[{"name":…,"version":…}]`, but adopting it would replace a
+working stdlib probe with a subprocess dependency for no gain.)
+
+**Deleted with this phase**, in two groups with different justifications.
+*Corrected 2026-08-16, while planning the phase: an earlier revision of this
+paragraph listed all of these under one rationale — "this machinery exists to
+avoid re-downloading wheels" — which is true of the first group and false of
+the second.*
+
+*Group one, obsoleted by uv's global hardlinked wheel cache:*
+`download_packages`, `packages_dir`, `download_packages.sh`, the `--no-index`
+install paths, `install_packages_simultaneously`,
+`install_packages_individually`, `install_package`, and
+`recover_pip_versions`. These exist to pre-download wheels into `~/veny/packages`
+and install from there offline, and to parse versions back out of pip's stdout.
+uv's cache does the first job better and `installed_versions_in_venv` already
+does the second by asking the venv. The batch/individual split also loses its
+purpose: it existed to discover *which* package failed, and
+`verify_and_repair_imports` already establishes that per import, afterwards, with
+better evidence.
+
+*Group two, `use_pip_list` and `options.pip_list`, deleted on different grounds.*
+Despite the name this has nothing to do with pip-the-tool. It builds a bare venv,
+inventories its distributions plus `pkgutil.iter_modules()` names plus builtins,
+caches that list to `~/veny/pip_list_<timestamp>.txt`, and uses it to demote any
+`installed_imports` record whose import name is absent from the inventory. It is
+deleted because it is a weaker, staler second opinion on a question already
+answered better: `split_imports` builds its own bare venv and *actually imports*
+every name through `check_packages_in_venv`, which is stronger evidence than
+membership in a name list — and `main()` loads the newest `pip_list_*` file from
+disk unless `--rc` is passed, so the inventory a run reclassifies against is
+usually one an earlier run wrote, possibly under a different interpreter. Its
+`--reqs` union is redundant with the one at the end of `split_imports`. Deleting
+it also removes a second bare-venv build per run. Decided 2026-08-16.
+
+**One field survives that the deletion list implies should not.**
+`options.simultaneous_success` is set in `setup_virtualenv` but *read in
+`main()`*, where it gates dropping the venv's `failed-` prefix. That consumer
+outlives both install functions, so the flag is renamed rather than removed:
+`options.install_succeeded`, set from the single `uv pip install` result. The
+"simultaneous versus individual" distinction it was named for no longer exists.
+
+**Two tests that assert the deleted surface** and must move with it:
+`tests/test_options_surface.py` asserts `options.packages_dir == options.my_dir /
+"packages"`, so that assertion goes and `packages_dir`, `pip_list`,
+`simultaneous_success`, `venv_pip` and `test_dir` join `RETIRED_FIELDS`.
 
 **Behaviour change to document, not bury:** `uv venv` does not seed `pip` into
 the environment, whereas `venv.create(with_pip=True)` does. A user script that
