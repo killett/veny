@@ -338,24 +338,27 @@ wiring rationale and for two Minors deliberately left unfixed.
   import them as `from veny import <name>`, and the five test files that
   reference `veny.<name>` throughout use `from veny import cli as veny` to
   keep those references working.
-- `pixi run lint` and `pixi run typecheck` fail repo-wide on pre-existing
-  `src/veny/cli.py` errors (294 ruff, 28 mypy across `src/veny/cli.py` +
-  `src/veny/json_types.py`, as of 2026-08-15, after the packaged-entry-point
-  move). The pre-commit `mypy` hook is
+- **`pixi run lint` and `pixi run format` now pass repo-wide, and must stay
+  that way.** As of 2026-08-15 `ruff check .` reports zero and
+  `ruff format --check .` reports every file formatted. Both pre-commit ruff
+  hooks run over every file with no `exclude`. This reverses the long-standing
+  rule that `src/veny/cli.py` must never be formatted: the hand-aligned column
+  style was retired on the owner's instruction, and `ruff format` rewrote
+  ~3,200 lines of it in one go. Do not reintroduce hand-alignment — the
+  formatter will simply undo it, producing noise in the next diff.
+- **`pixi run typecheck` still cannot pass.** The pre-commit `mypy` hook is
   literally `mypy .` with `pass_filenames: false`, so it always checks the
-  whole repo and
-  **cannot pass** while this debt exists — it is not a gate a change can
-  satisfy, only a check that must be scoped manually: use `mypy <files>`
-  on what you touched. Same logic applies to `ruff`: for `src/veny/cli.py`
-  itself, gate on `ruff check src/veny/cli.py --statistics` before/after, not
-  the bare `pixi run lint`.
-- **Never run pre-commit's `ruff`/`ruff-format` hooks against
-  `src/veny/cli.py`** — a trial run during the alias-resolver plan rewrote
-  ~2,000 lines of its hand-aligned formatting. Its ruff count is now **294**
-  (was 624 as `veny.py`; the deleted hardcoded alias table was itself ~322
-  duplicate-key violations). As of 2026-08-15 both hooks carry
-  `exclude: '^src/veny/cli\.py$'` in `.pre-commit-config.yaml`, so this is now
-  enforced rather than merely remembered.
+  whole repo, and 47 pre-existing errors remain across `src/veny/cli.py` and
+  `tests/test_split_imports.py` (down from 49 — the `pipreqs` lazy import fixed
+  two). It is not a gate a change can satisfy, only a check to scope manually:
+  use `mypy <files>` on what you touched, and confirm the whole-repo count has
+  not risen.
+- **`ruff format` also formats Python code blocks inside Markdown** in this
+  version. A bare `ruff format .` rewrote 696 lines across eight design docs
+  and plans, whose code blocks are a record of what the code looked like at
+  approval time. `pyproject.toml`'s `[tool.ruff] extend-exclude = ["docs/"]`
+  now prevents that; do not remove it. The pre-commit hooks were never at risk
+  here — they carry `types: [python]`, so Markdown never reaches them.
 - A malformed `~/veny/module_aliases.toml` override file is **fatal by
   design** — it raises `AliasOverrideError` and stops the run, rather than
   being skipped. Continuing would resolve import names contrary to what the
@@ -586,6 +589,20 @@ wiring rationale and for two Minors deliberately left unfixed.
 - Garbage collection of stale venvs in `~/veny`, including the pre-manifest
   ones this plan's Task 10 orphans (no manifest means no match, so they are
   never selected again but are also never deleted).
+- **`generate_requirements()` calls a pipreqs API that probably does not
+  exist.** Making the repo ruff-clean on 2026-08-15 surfaced (via `F821`) that
+  the function referenced `pipreqs` with no import in its scope, so every call
+  raised `NameError` — on any machine where the probe at the top of
+  `list_packages()` had set `options.pipreqs_available`, which is the only
+  condition under which it is called. A lazy `import pipreqs` was added so the
+  name resolves, but that is the smaller half: it calls
+  `pipreqs.generate_requirements(...)` and catches `pipreqs.PipreqsError` /
+  `pipreqs.PipreqsWarning`, and pipreqs' actual public surface is
+  `pipreqs.pipreqs.init(args)` — none of those three names appear to exist.
+  The function has therefore probably never run successfully. Decide whether
+  to fix the call against the real API or delete the pipreqs path entirely
+  (veny has had its own resolver since the module-alias-resolver plan, so it
+  may be vestigial).
 - **Two pre-existing `AssertionError` crashes, both found by the packaged
   entry-point branch's final review (2026-08-15) and both left unfixed as out
   of scope.** Neither is a regression — the reviewer confirmed both are
