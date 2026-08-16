@@ -1,4 +1,5 @@
 import logging
+import shutil
 import subprocess
 import sys
 import venv
@@ -404,6 +405,46 @@ def test_split_imports_falls_back_to_the_import_name_when_nothing_resolves(monke
     }
 
 
+def test_split_imports_probe_venv_is_given_the_classified_interpreter(monkeypatch):
+    """split_imports' probe venv must be built with the interpreter imports
+    were classified against, not whatever uv's own discovery order picks.
+
+    Before this fix, split_imports called create_venv(venv_dir) with no
+    interpreter argument. `uv venv` with no --python resolves through uv's
+    own discovery order, which was measured to disagree with the interpreter
+    veny classified imports against (uv picked 3.12 while PATH's python3 was
+    3.13). A stdlib module removed in 3.13 (e.g. `cgi`) then imports
+    successfully in the mismatched 3.12 probe venv and gets marked
+    "installed", even though it is not installed -- and not installable --
+    for the interpreter the venv is actually built with. If this regresses
+    to create_venv(venv_dir) with no second argument, the captured uv
+    command below carries no --python flag at all and this test fails.
+    """
+    options = veny.Options()
+    options.python_command = "python3"
+    options.aliases = _index_with({})
+    options.all_imports = {"widgetlib"}
+    monkeypatch.setattr(
+        shutil,
+        "which",
+        lambda name: "/resolved/bin/python3" if name == "python3" else None,
+    )
+    monkeypatch.setattr(veny, "uv_binary", lambda: "/packaged/uv")
+    captured: list[list[str]] = []
+    monkeypatch.setattr(
+        subprocess, "check_call", lambda command: captured.append(command)
+    )
+    monkeypatch.setattr(veny, "check_packages_in_venv", lambda *a, **k: False)
+
+    veny.split_imports(options)
+
+    assert len(captured) == 1, "expected exactly one probe venv build"
+    probe_command = captured[0]
+    assert "--python" in probe_command
+    python_index = probe_command.index("--python")
+    assert probe_command[python_index + 1] == "/resolved/bin/python3"
+
+
 def test_the_offline_argument_keeps_the_index_off_the_network(monkeypatch, tmp_path):
     # build() has taken an offline flag since it was written and nothing ever
     # passed True, so there was no way to stop veny opening PyPI sockets --
@@ -472,24 +513,6 @@ def test_only_genuinely_uninstalled_imports_are_resolved(monkeypatch):
     }
 
 
-def test_an_import_reclassified_by_pip_list_gets_its_pip_name_resolved(monkeypatch):
-    # use_pip_list() moves an import back to uninstalled when pip's list does
-    # not know it, and those records go straight to pip. Now that split_imports
-    # no longer resolves installed imports, resolution has to happen here or
-    # pip is asked to install "cv2".
-    options = veny.Options()
-    options.aliases = _index_with({"cv2": "opencv-python"})
-    options.installed_imports = {veny.ResolvedImport(import_name="cv2", pip_name="cv2")}
-    options.pip_list = ["numpy"]  # Non-empty, so no probe venv is built.
-
-    veny.use_pip_list(options)
-
-    assert options.uninstalled_imports == {
-        veny.ResolvedImport(import_name="cv2", pip_name="opencv-python")
-    }
-    assert options.installed_imports == set()
-
-
 def _captured_venv_check_code(monkeypatch):
     """Capture the source that check_packages_in_venv runs inside the venv.
 
@@ -545,7 +568,6 @@ def test_check_packages_in_venv_without_a_record_checks_every_import_name(
         veny.ResolvedImport(import_name="cv2", pip_name="opencv-python"),
         veny.ResolvedImport(import_name="yaml", pip_name="PyYAML"),
     }
-    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     monkeypatch.setattr(
         alias_index, "probe_interpreter", lambda python, timeout=30.0: ("3.12", {})
     )
@@ -571,7 +593,6 @@ def test_check_packages_in_venv_bulk_branch_resolves_requirement_via_venv_metada
     options.uninstalled_imports = {
         veny.ResolvedImport(import_name="opencv-python", pip_name="opencv-python"),
     }
-    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     monkeypatch.setattr(
         alias_index,
         "probe_interpreter",
@@ -596,7 +617,6 @@ def test_check_packages_in_venv_bulk_branch_matches_pep503_spelling(
     options.uninstalled_imports = {
         veny.ResolvedImport(import_name="opencv_python", pip_name="opencv_python"),
     }
-    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     monkeypatch.setattr(
         alias_index,
         "probe_interpreter",
@@ -620,7 +640,6 @@ def test_check_packages_in_venv_bulk_branch_falls_back_when_distribution_unknown
     options.uninstalled_imports = {
         veny.ResolvedImport(import_name="numpy", pip_name="numpy"),
     }
-    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     monkeypatch.setattr(
         alias_index,
         "probe_interpreter",
@@ -642,7 +661,6 @@ def test_check_packages_in_venv_probes_the_venv_once_per_call(monkeypatch, tmp_p
         veny.ResolvedImport(import_name="yaml", pip_name="PyYAML"),
         veny.ResolvedImport(import_name="numpy", pip_name="numpy"),
     }
-    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     probe_calls = []
 
     def fake_probe(python, timeout=30.0):
@@ -708,7 +726,6 @@ def test_check_packages_in_venv_passes_when_any_top_level_name_imports(
     options.uninstalled_imports = {
         veny.ResolvedImport(import_name="opencv-python", pip_name="opencv-python"),
     }
-    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     monkeypatch.setattr(
         alias_index,
         "probe_interpreter",
@@ -739,7 +756,6 @@ def test_check_packages_in_venv_bulk_branch_checks_the_records_own_import_name(
     options.uninstalled_imports = {
         veny.ResolvedImport(import_name="setuptools", pip_name="setuptools"),
     }
-    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     monkeypatch.setattr(
         alias_index,
         "probe_interpreter",
@@ -775,7 +791,6 @@ def test_check_packages_in_venv_bulk_branch_fails_an_unprovided_source_import(
     options.uninstalled_imports = {
         veny.ResolvedImport(import_name="thing", pip_name="wrong-pkg"),
     }
-    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     monkeypatch.setattr(
         alias_index,
         "probe_interpreter",
@@ -811,7 +826,6 @@ def test_check_venv_dir_rejects_a_manifest_match_whose_import_does_not_actually_
             packages=(venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None),),
         ),
     )
-    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     monkeypatch.setattr(
         alias_index,
         "probe_interpreter",
@@ -834,7 +848,6 @@ def test_check_packages_in_venv_still_fails_a_genuinely_missing_package(
     options.uninstalled_imports = {
         veny.ResolvedImport(import_name="cv2", pip_name="opencv-python"),
     }
-    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     monkeypatch.setattr(
         alias_index,
         "probe_interpreter",
@@ -947,7 +960,6 @@ def _options_with_venv(tmp_path, index, records):
     """Build an Options far enough along to run the post-install verification."""
     options = veny.Options()
     options.my_dir = tmp_path
-    options.packages_dir = tmp_path / "packages"
     options.aliases = index
     options.all_imports = {record.import_name for record in records}
     options.uninstalled_imports = set(records)
@@ -983,12 +995,13 @@ def test_setup_virtualenv_verifies_every_import_before_reporting_success(
         veny.ResolvedImport(import_name="thing", pip_name="thing-pkg")
     }
     calls = []
-    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     monkeypatch.setattr(veny, "write_requirements_file_with_extras", lambda opts: None)
-    monkeypatch.setattr(veny, "download_packages", lambda opts: True)
-    monkeypatch.setattr(veny, "install_packages_simultaneously", lambda opts: True)
     monkeypatch.setattr(subprocess, "check_call", lambda *a, **k: 0)
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(a[0] if a else [], 0),
+    )
 
     def fake_verify(opts):
         calls.append("verify")
@@ -1407,13 +1420,12 @@ def test_a_package_that_lacks_the_import_is_still_rejected_durably(
 
 
 def test_the_repair_installer_reports_failure_instead_of_exiting(monkeypatch, tmp_path):
-    # install_package(), the batch path's installer, calls ek.my_critical_error()
-    # -- i.e. sys.exit() -- when a download fails. resolve_and_verify's
-    # installer must not be able to end the run: one unverifiable import is not
-    # a reason to kill everything.
+    # install_into_venv drives a single `uv pip install` and, on a nonzero
+    # return code, logs the error and returns False rather than raising or
+    # exiting. resolve_and_verify's installer must not be able to end the
+    # run: one unverifiable import is not a reason to kill everything.
     options = veny.Options()
     options.my_dir = tmp_path
-    options.packages_dir = tmp_path / "packages"
     options.set_venv_dir(tmp_path / "venv")
 
     def fake_run(command, *args, **kwargs):

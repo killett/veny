@@ -18,22 +18,36 @@ gotchas ledger.
   and task breakdown belong to the per-phase plans.
 - Implementation plans: one per phase, not yet written.
 
-**Next action:** write the phase 2 implementation plan (migrate to `uv`, with
-veny keeping its own venv cache). Phase 1 is complete: the file/network visitor
-block is deleted, `src/veny/cli.py` is 4,362 lines (was 6,020), and
-`tests/test_import_discovery.py` pins the import set that deletion had to
-preserve.
+**Next action:** write the phase 3 implementation plan (extract the survivors
+into the module layout the design doc specifies). The BLOCKING live-run
+defect that used to be listed here is fixed — see Deferred items below for
+the fix commit and verification. Task 9 (2026-08-16) closed a second
+live-run-only defect the 265-test suite could not see: `venv_build_interpreter()`
+handed uv a bare `"python3"`, which `uv venv --python` resolves through its
+own interpreter discovery order rather than PATH, silently building against a
+different Python than the one imports were classified against — see the
+Gotchas entry (`uv venv --python <bare name> does not mean...`) for the fix
+and live verification. Phase 2's gates (`pixi run test` 266 passed,
+`ruff check .` zero, `ruff format --check .` all formatted, `pixi run
+typecheck` 37 errors, `pixi run smoke` green) are all green, and
+`src/veny/cli.py` is 4,143 lines (was 4,362 after phase 1, 6,020 before
+phase 1). A live run (`pixi run veny --no-cache`, importing `yaml`) now
+succeeds end to end: it resolves `yaml` to `PyYAML`, builds a fresh venv
+under `~/veny/` with a resolved absolute-path interpreter, installs with uv,
+prints the parsed result, and drops the venv folder's `failed-` prefix, with
+the manifest's `interpreter_tag` agreeing with the folder name's `pyX.Y`.
 
 Phase order and expected size: (1) delete the visitor block, ~1,600 lines,
 complete on branch `delete-visitor-block`; (2) migrate to `uv` with veny
-keeping its own venv cache, ~550 lines; (3) extract the survivors into the
-module layout in the design doc; (4) drain `Options` into frozen
-per-subsystem dataclasses, carried by the phase 3 extractions rather than
-done separately. Phases 1 and 2 are independent of the architecture and land
-first; the original combined estimate for both was 6,020 down to roughly
-3,870 lines before any extraction begins. Phase 1 alone landed at 4,362
-lines — phase 2's contribution is still to be measured once its plan is
-written.
+keeping its own venv cache, complete on branch `uv-migration`; (3) extract the
+survivors into the module layout in the design doc; (4) drain `Options` into
+frozen per-subsystem dataclasses, carried by the phase 3 extractions rather
+than done separately. Phases 1 and 2 are independent of the architecture and
+land first; the original combined estimate for both was 6,020 down to
+roughly 3,870 lines before any extraction begins. Phase 1 landed at 4,362
+lines and phase 2 landed at 4,143 — 219 lines lighter, short of the original
+combined estimate, so phase 3's extraction has more to move than that
+estimate assumed.
 
 **Previous topic (complete):** Replacing veny's rc-file shell alias with a packaged console-script
 entry point. veny installs itself today by appending `alias veny="python3
@@ -504,9 +518,145 @@ wiring rationale and for two Minors deliberately left unfixed.
   project name might meet at a dict boundary, that boundary needs
   `normalize_pip_name` on both the write side and the read side, not just
   one.
+- **`uv venv` seeds no pip, so `options.venv_python` is the only interpreter
+  in a veny environment.** There is no `bin/pip` to shell out to, by design
+  (see README's "Cached environments have no pip"). A related, easy-to-miss
+  fact: `uv venv`'s `pyvenv.cfg` carries only `home`, `implementation`, `uv`,
+  `version_info` and `include-system-site-packages` — unlike stdlib `venv`,
+  it records no path to the venv's own directory (stdlib `venv` writes a
+  `command = ... -m venv <dir>` line). That absence is *why*
+  `rename_venv`'s `pyvenv.cfg` rewrite still exists in `src/veny/cli.py`
+  despite `uv venv` needing no such fix-up itself: the rewrite still matters
+  for stdlib-built venvs already sitting in users' `~/veny` caches from
+  before this migration, which do record their own path and would break on
+  rename without it.
+- **`uv venv` refuses to build into a directory that already exists and is
+  non-empty.** Found live during phase 2 Task 7's Step 3
+  (`pixi run veny --no-cache /tmp/veny-live.py`, 2026-08-16), because
+  `setup_virtualenv` always creates the target directory
+  (`Options.set_venv_dir`'s `mkdir`) and used to write `requirements.txt`
+  into it (`write_requirements_file_with_extras`) before calling
+  `create_venv` — stdlib `venv.create` tolerated that ordering, `uv venv`
+  does not. **Fixed in Task 8** (2026-08-16): `create_venv` now runs before
+  `write_requirements_file_with_extras`; see the Deferred-items entry above
+  for the fix, its regression test, and mutation evidence. `--clear` /
+  `UV_VENV_CLEAR=1` is not the fix — it deletes the directory's existing
+  contents, which would erase `requirements.txt` before the install that
+  reads it.
+- **`uv venv --python <bare name>` does not mean "the `<bare name>` found on
+  PATH."** Found live in Task 9, fixed 2026-08-16, commit `cc64b8b`.
+  `venv_build_interpreter()`
+  returned `options.python_command or sys.executable`, and `python_command`
+  is the bare string `"python3"` from `ek.find_preferred_python_version()`.
+  `python3 --version` on PATH and `python3 -m venv` (what veny built with
+  before the uv migration) agreed with each other; `uv venv --python python3`
+  resolved to a *different* interpreter on the same machine, through uv's own
+  interpreter discovery order rather than a PATH lookup. Since
+  `options.python_command` is also what stdlib and alias resolution were
+  probed against, this silently built an environment for the wrong Python
+  after classifying imports against a different one. Fixed by resolving the
+  interpreter with `shutil.which()` inside `venv_build_interpreter()` before
+  it reaches `create_venv` — chosen over resolving only inside `create_venv`
+  because `venv_build_interpreter()`'s return value is also recorded as the
+  manifest's `interpreter_path` field, where an absolute path is strictly
+  more useful than a bare name. When `shutil.which()` finds nothing, the bare
+  name is returned unchanged (today's pre-fix behaviour) and a warning is
+  logged, since the invariant can no longer be guaranteed for that run. Test:
+  `tests/test_uv_backend.py::test_create_venv_is_given_a_resolved_interpreter_path_not_a_bare_command`.
+  Verified live: `pixi run veny --no-cache` against a script importing
+  `yaml` built a venv whose `bin/python --version` matched `python3` on PATH
+  (both 3.13.14, resolved through the pixi env's PATH order to
+  `.pixi/envs/default/bin/python3`), and whose manifest `interpreter_tag`
+  (`"3.13"`) agreed with the folder name's `py3.13` — before the fix, a
+  reproduction with no veny involved showed `uv venv --python python3`
+  picking 3.12 against the same PATH where `python3 --version` reports
+  3.13.14.
 
 ## Deferred items
 
+- **Parked by phase 2's reviews, 2026-08-16.** None blocking; each was ruled
+  real but out of scope, and the phase they belong to is named.
+  - `options.installed_imports` is **write-only** — written in `split_imports`,
+    reset alongside `uninstalled_imports`, read nowhere. Deleting `use_pip_list`
+    took its last reader. Phase 4's `Requirements` dataclass is where its fate
+    belongs. (Same shape as phase 1's `FunctionInfo.ast_node`, still open.)
+  - `venv_build_interpreter()`'s `shutil.which()` fallback returns the
+    **unresolved bare name** when nothing is found, which reintroduces exactly
+    the resolution bug it exists to prevent — `uv venv --python python3` picks
+    by uv's own discovery, not PATH. The branch is untested and believed
+    practically dead (a `python_command` that is not on PATH). Worth either a
+    `sys.executable` fallback or a test.
+  - `rename_venv` loops over a single-element tuple, `for path in (venv_dir /
+    "pyvenv.cfg",)`, left that way when the download-script half went. Simplify
+    when `cache_search.py` is extracted in phase 3.
+  - `create_venv` uses `subprocess.check_call`, so uv's `Using CPython …` and
+    `Creating virtual environment at: …` lines reach the terminal even under
+    `--rawlog`, whose contract is "the same output you would see without veny".
+  - The import-check probe venv no longer seeds pip/setuptools, so `setuptools`,
+    `pkg_resources` and `pip` now classify as *not installed* and get installed
+    into the real venv. Follows from the sanctioned no-seed decision; benign but
+    undocumented for users.
+  - Two orphaned environments in `~/veny` (`myenv-py3.13-20260816-141521-pyyaml`
+    and `…-141900-pyyaml`) carry `interpreter_tag: "3.12"` under a `py3.13`
+    folder name, built mid-phase before the interpreter-resolution fix. They can
+    never be matched and are never collected — a concrete instance of the
+    garbage-collection item further down this list.
+- **FIXED 2026-08-16 (Task 8, commit `10400f7`).** `setup_virtualenv`
+  used to crash with an unhandled `subprocess.CalledProcessError` on every
+  fresh venv build, because `uv venv` refuses a non-empty target directory
+  and `setup_virtualenv` always handed it one. Original writeup, kept for
+  the historical mechanism:
+  - Reproduction: `pixi run veny --no-cache /tmp/veny-live.py` against a
+    clean throwaway script importing `yaml`. Crashed every time; confirmed
+    by also running `uv venv` by hand against an empty vs. a non-empty
+    directory (empty succeeds, non-empty fails with `error: Failed to
+    create virtual environment / Caused by: A directory already exists
+    at: <path> / hint: Use the --clear flag or set UV_VENV_CLEAR=1`).
+  - Mechanism: `setup_virtualenv` (`src/veny/cli.py:3304`) calls
+    `options.set_venv_dir(options.my_dir / f"failed-{folder_name}")`, whose
+    `set_venv_dir` (`cli.py:229`) does `p.mkdir(parents=True,
+    exist_ok=True)` — creating the target directory. It used to then call
+    `write_requirements_file_with_extras(options)` (`cli.py:2860`), which
+    opens `options.requirements_file` (`venv_dir / "requirements.txt"`) for
+    writing — putting a file inside the now-existing directory — before
+    calling `create_venv(options.venv_dir, ...)` (`cli.py:3323`), which runs
+    `uv venv <target>`. Stdlib `venv.create()` (what this code path was
+    written against, pre-migration) tolerates a pre-existing, non-empty
+    target directory; `uv venv` does not, and raised. Nothing caught the
+    resulting `CalledProcessError`, so the whole run died with a Python
+    traceback instead of veny's normal error handling.
+  - Why the unit suite (264 passing) never caught it: every test stubbed
+    the `uv venv` subprocess call, so none of them exercised the real
+    ordering constraint uv enforces on its target directory.
+  - Scope: hit every "build a new venv" path through `setup_virtualenv` —
+    i.e. any run where no cache match is found, which includes a new
+    user's very first invocation with an empty `~/veny`. The
+    `tempfile.TemporaryDirectory()`-based `create_venv` call at
+    `cli.py:2606` (inside the alias-resolution probe path) was unaffected,
+    because nothing writes into that directory before `create_venv` runs.
+  - **The fix:** `setup_virtualenv` now calls `create_venv` first and only
+    calls `write_requirements_file_with_extras` after it returns
+    successfully — `--clear`/`UV_VENV_CLEAR=1` was considered and rejected,
+    because it deletes the target directory's contents and would wipe
+    `requirements.txt` out from under the `uv pip install -r` that reads it
+    right after. Everything else in `setup_virtualenv` kept its order.
+  - **Regression test:**
+    `tests/test_uv_backend.py::test_setup_virtualenv_builds_the_venv_before_writing_requirements_txt`
+    calls the real `create_venv` (real `uv venv` subprocess, not stubbed)
+    against a directory `Options.set_venv_dir` prepared exactly the way
+    `setup_virtualenv` prepares it, with only the network/interpreter-probe
+    calls (`run_uv_pip`, `verify_and_repair_imports`,
+    `check_packages_in_venv`, `record_venv_state`) stubbed. Mutation-checked:
+    restoring the old (write-requirements-before-create_venv) ordering made
+    this test fail with the exact `CalledProcessError` /
+    "A directory already exists at" error the live run hit; restoring the
+    fix made it pass again, alongside the rest of the 265-test suite.
+  - Live end-to-end re-verification (`pixi run veny --no-cache`, a script
+    importing `yaml`): resolved `yaml` → `PyYAML`, built
+    `~/veny/myenv-py3.13-20260816-141521-pyyaml`, installed with uv, printed
+    `{'a': 1}`, and dropped the venv folder's `failed-` prefix on success.
+    `ls ~/veny/myenv-py3.13-20260816-141521-pyyaml/bin/` confirms no `pip`
+    binary — the venv uv built has none, by design.
 - The five helper scripts (`mydiff`, `myaudit`, `multireplace`, `treeview`,
   `printall`) that veny used to write into `~/veny` still need adopting as
   real, standalone files in the `killett/utilities` repository, per
@@ -518,13 +668,16 @@ wiring rationale and for two Minors deliberately left unfixed.
   work), which is now the single place these are tracked: the
   `interpreter_tag`/`interpreter_path` disagreement in manifests (a degraded
   stdlib probe can label a 3.13 venv 3.11, and a later degraded run then
-  matches that tag); the duplicate `satisfies()` call between
-  `cache_candidates()` and `check_venv_dir()`; the unreachable, never-working
-  `--full` mode, resolved there as *delete*; veny's exit statuses never having
-  been designed as a set; and `check_venv_dir`'s `issubset()` self-heal
-  against options files predating `options.aliases`. Every one of them was
-  parked on "it changes what the approved design says" — and that design doc
-  is the new design.
+  matches that tag) — **closed by phase 2's Task 6** (2026-08-16), which now
+  tags the manifest from the venv's own reported `sys.version_info` rather
+  than from the run's classified interpreter, so the two no longer have
+  independent sources to disagree from; the duplicate `satisfies()` call
+  between `cache_candidates()` and `check_venv_dir()`; the unreachable,
+  never-working `--full` mode, resolved there as *delete*; veny's exit
+  statuses never having been designed as a set; and `check_venv_dir`'s
+  `issubset()` self-heal against options files predating `options.aliases`.
+  The remaining four were parked on "it changes what the approved design
+  says" — and that design doc is the new design.
 - Smaller items carried from the venv-cache branch's review ledger, none
   blocking: `venv_cache` logs through the root logger rather than
   `logging.getLogger(__name__)` (consistent with the rest of the codebase);
@@ -540,10 +693,12 @@ wiring rationale and for two Minors deliberately left unfixed.
   `safe_is_dir` guard, since `read_manifest` also degrades on a missing
   directory.
 - `univ_defs.py` is gone, deleted in the emmykit migration. `src/veny/cli.py`
-  is **4,362 lines** (`wc -l src/veny/cli.py`, 2026-08-16, after phase 1 of
-  the re-architecture deleted the file/network visitor block). Before that
-  deletion it was 6,020 lines; an earlier note here said 4,959, measured
-  before `ruff format` rewrote ~3,200 lines of it and unwound the
+  is **4,143 lines** (`wc -l src/veny/cli.py`, 2026-08-16, after phase 2 of
+  the re-architecture migrated the environment layer to `uv`, plus the
+  whole-branch review's finding-1/finding-2 fixes). Before that it
+  was 4,362 lines, measured after phase 1 deleted the file/network visitor
+  block; before phase 1 it was 6,020 lines; an earlier note here said 4,959,
+  measured before `ruff format` rewrote ~3,200 lines of it and unwound the
   hand-aligned column style — the formatting reversal, not new code,
   accounted for that earlier difference.
 - `FunctionInfo.ast_node` (`src/veny/cli.py:1005`) is write-only as of phase 1.

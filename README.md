@@ -10,7 +10,7 @@ it.
 
 veny is an application, so install it as a tool rather than into a project
 environment — that gives it a private virtual environment with a satisfying
-interpreter and its `emmykit` dependency resolved for it:
+interpreter and its `emmykit` and `uv` dependencies resolved for it:
 
 ```
 uv tool install veny
@@ -51,11 +51,13 @@ pixi run veny my_script.py
 This installs the development tools (ruff, mypy, pytest, pre-commit) plus the
 scaffold baseline — none of it is a runtime dependency of veny. `pixi run veny`
 runs the working tree directly through `python -m veny`; no editable install is
-involved. veny's only runtime dependency is
+involved. veny's runtime dependencies are
 [emmykit](https://pypi.org/project/emmykit/) (`pip install 'emmykit>=0.4.0'`),
-which provides its utility layer and the base `Options` class; beyond that it
-must run on a bare interpreter, since its job is to bootstrap environments for
-other scripts.
+which provides its utility layer and the base `Options` class, and
+[uv](https://pypi.org/project/uv/), installed alongside it as a PyPI
+dependency and located through `uv.find_uv_bin()`; beyond that it must run on
+a bare interpreter, since its job is to bootstrap environments for other
+scripts.
 
 ## Quick usage
 
@@ -87,6 +89,13 @@ normalized and joined with `_`, truncated to the first 5 with an
 earlier versions of veny have no manifest, so they are never matched again —
 but they are also never deleted, so they accumulate in the cache directory
 until removed by hand.
+
+### Cached environments have no pip
+
+veny builds its environments with `uv venv`, which does not install `pip` into
+them. A script that shells out to `pip` from inside its veny-built environment
+will not find one. This is deliberate: veny manages the environment's packages,
+and a script installing into it is working against that.
 
 ## Project structure
 

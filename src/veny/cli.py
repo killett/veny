@@ -9,6 +9,7 @@ import argparse
 import ast
 import collections  # For the collections.deque annotation on the first-pass queue.
 import datetime as dt
+import functools
 import json
 import logging
 import os
@@ -19,7 +20,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import venv
 from collections import defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -43,6 +43,65 @@ if not hasattr(ek, "register_json_type"):
         f"Upgrade it with:  pip install -U 'emmykit>=0.4.0'"
     )
 from . import json_types, venv_cache
+
+
+@functools.cache
+def uv_binary() -> str:
+    """Return the uv executable veny drives its environment layer with.
+
+    Prefers the binary shipped by the ``uv`` PyPI package, which is installed
+    alongside veny and so carries a version pinned with veny's own. Falls back
+    to whatever is on PATH, which resolves by luck -- the weakness that retired
+    the shell-alias install -- and is only preferable to failing outright.
+
+    Returns:
+        A path or command name to invoke uv with.
+
+    Raises:
+        SystemExit: If neither the packaged binary nor PATH yields a uv.
+    """
+    try:
+        import uv
+    except ImportError:
+        pass
+    else:
+        return os.fspath(uv.find_uv_bin())
+    on_path = shutil.which("uv")
+    if on_path:
+        logging.warning(
+            "Using the uv found on PATH (%s). The uv package is not installed "
+            "alongside veny, so its version is not pinned to veny's.",
+            on_path,
+        )
+        return on_path
+    raise SystemExit(
+        "veny requires uv, which is not installed and is not on PATH.\n"
+        "Reinstall veny with:  uv tool install veny"
+    )
+
+
+def create_venv(target: str | os.PathLike[str], python: str = "") -> None:
+    """Create a virtual environment at target using uv.
+
+    No pip is seeded: veny drives installs through uv, and a script that
+    installs into the environment veny built for it is working against veny.
+
+    Args:
+        target: Directory to create the environment in.
+        python: Interpreter for uv to build against. Empty means uv chooses.
+
+    Raises:
+        subprocess.CalledProcessError: If uv could not create the environment.
+    """
+    command = [uv_binary(), "venv", os.fspath(target)]
+    if python:
+        command += ["--python", python]
+    if logging.getLogger().isEnabledFor(logging.DEBUG):
+        logging.debug(
+            "Creating venv: %s", " ".join(shlex.quote(str(arg)) for arg in command)
+        )
+    subprocess.check_call(command)
+
 
 # An import name paired with the pip package that provides it. Defined in
 # alias_index, which imports nothing of veny's, and re-exported here because
@@ -71,8 +130,6 @@ class Options(ek.Options):
         self.python_command: str = ""
         self.cwd: Path = Path.cwd().expanduser().resolve(strict=True)
         self.venv_name: str = "myenv"  # Can NOT include dashes ("-")
-        self.packages_dir: Path = self.my_dir / "packages"
-        self.test_dir: Path = self.my_dir / "test"
         # Both sets hold ResolvedImport records, so every consumer can pick the
         # right name instead of guessing which kind of string it was handed.
         self.uninstalled_imports: set[alias_index.ResolvedImport] = set()
@@ -85,7 +142,6 @@ class Options(ek.Options):
         ] = {}  # Maps custom module names to their file Paths
         self.subfolders: list[str] = []
         self.samedir_files: list[Path] = []
-        self.pip_list: list[str] = []
         self.loaded_custom_modules: set[str] = set()
         self.timestamp: str = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
         self.sys_path_hints: set[Path] = set()  # Filled by SysPathVisitor
@@ -100,12 +156,10 @@ class Options(ek.Options):
         self.new_pip_version: str = ""
         self.venv_dir: Path | None = None
         self.venv_python: Path | None = None
-        self.venv_pip: Path | None = None
         self.requirements_file: Path | None = None
         self.extra_requirements: dict[str, str | None] = {}
         self.extra_requirements_file: str = "extra_requirements.txt"
-        self.download_script_path: Path | None = None
-        self.simultaneous_success: bool = False
+        self.install_succeeded: bool = False
         self.max_checks: int = (
             10  # Maximum number of times to check any repeated process.
         )
@@ -177,9 +231,7 @@ class Options(ek.Options):
         p = ek.ensure_path(venv_dir)
         self.venv_dir = p
         self.venv_python = p / "bin" / "python"  # Do NOT resolve() this symlink path
-        self.venv_pip = p / "bin" / "pip"  # Do NOT resolve() this symlink path
         self.requirements_file = p / "requirements.txt"
-        self.download_script_path = p / "download_packages.sh"
         p.mkdir(parents=True, exist_ok=True)  # Create the directory if it doesn't exist
 
 
@@ -235,7 +287,7 @@ def parse_arguments(options: Options) -> None:
     parser.add_argument(
         "--no-cache",
         action="store_true",
-        help="Don't search the cache. Instead, create a new virtual environment. Also, refresh the custom modules cache and the pip list.",
+        help="Don't search the cache. Instead, create a new virtual environment. Also, refresh the custom modules cache.",
     )
     parser.add_argument(
         "--latest",
@@ -260,7 +312,7 @@ def parse_arguments(options: Options) -> None:
     parser.add_argument(
         "--rc",
         action="store_true",
-        help="Refresh the custom modules cache and the pip list.",
+        help="Refresh the custom modules cache.",
     )
     parser.add_argument(
         "--reqs",
@@ -410,13 +462,6 @@ def main() -> int:
                 options.my_dir,
             )
         options.my_dir.mkdir(parents=True, exist_ok=True)
-    if not ek.safe_is_dir(options.packages_dir):
-        if not options.rawlog:
-            logging.info(
-                "Directory %s does not exist yet, so it is being created.",
-                options.packages_dir,
-            )
-        options.packages_dir.mkdir(parents=True, exist_ok=True)
 
     if getattr(options.args, "full", False) and options.python_script:
         ek.my_critical_error("Full mode is not supported with a script argument.")
@@ -489,25 +534,6 @@ def main() -> int:
     elapsed_time = time2 - time1
     if not options.rawlog:
         logging.info("dict_of_custom_modules() took %s", elapsed_time)
-
-    # Look for files in options.my_dir that start with pip_list and load the most recent one.
-    options.pip_list = []
-    pip_list_files = sorted(
-        [f for f in options.my_dir.iterdir() if f.name.startswith("pip_list")],
-        reverse=True,
-    )
-    if logging.getLogger().isEnabledFor(logging.DEBUG):
-        logging.debug(
-            "pip_list_files = %s", " ".join(os.fspath(f) for f in pip_list_files)
-        )
-    # If --rc was not specified, look for a text file with the pip list the last time this script was run.
-    if not getattr(options.args, "rc", False) and pip_list_files:
-        try:
-            with open(options.my_dir / pip_list_files[0]) as file:
-                for line in file:
-                    options.pip_list.append(line.strip())
-        except BaseException:
-            logging.error(f"Error reading {pip_list_files[0]}")
 
     start_list_packages_time = dt.datetime.now()
     elapsed_time = start_list_packages_time - start_time
@@ -621,7 +647,7 @@ def main() -> int:
                 script_exit_code = result.returncode
             if (
                 options.venv_dir.name.startswith("failed-")
-                and options.simultaneous_success
+                and options.install_succeeded
             ):
                 # If the program has made it to this point, it has run successfully, so the venv directory can be renamed because it DIDN'T fail.
                 rename_venv(options, options.venv_dir.name.removeprefix("failed-"))
@@ -2469,7 +2495,6 @@ def check_packages_in_venv(
         # alternatives: one name per entry to try; passes if any one imports.
         alternatives = [[record.import_name]]
     else:
-        use_pip_list(options)
         # Ask the venv what it actually has, instead of import-checking every
         # record under its pip spelling: requirement_records() sets
         # import_name == pip_name for --reqs entries (a requirements line is
@@ -2578,7 +2603,7 @@ def split_imports(options: Options) -> None:
     )  # Maximum number of digits in import count, also used for formatting
 
     with tempfile.TemporaryDirectory() as venv_dir:
-        venv.create(venv_dir, with_pip=True)
+        create_venv(venv_dir, venv_build_interpreter(options))
         for i, imp in enumerate(options.all_imports, 1):
             # The import name is all either check below needs, and resolution is
             # deliberately not done yet: see the else branch.
@@ -2598,8 +2623,8 @@ def split_imports(options: Options) -> None:
                     logging.debug("Module %s can be imported in venv", imp)
                 status_str = f"{ek.ANSI_GREEN}YES -     installed{ek.ANSI_RESET}"
                 # The pip name is left as the import name here because nothing
-                # needs it: an installed import is never handed to pip. If
-                # use_pip_list() later reclassifies this record, it resolves it.
+                # needs it: an installed import is never handed to pip, and
+                # nothing downstream re-resolves it.
                 options.installed_imports.add(record)
             else:
                 # Only a genuinely uninstalled import needs a pip name, so this
@@ -2765,192 +2790,6 @@ def get_all_imports(options: Options, directory: str | os.PathLike[str]) -> None
         logging.info("Finished processing files in %s", os.fspath(directory))
 
 
-def download_packages(options: Options) -> bool:
-    """Install packages in a virtual environment."""
-    download_script = f"""#!/bin/bash
-    source {options.venv_dir}/bin/activate
-
-    # Upgrade pip
-    echo "Upgrading pip..."
-    pip install --upgrade pip
-
-    # Ensure setuptools and wheel are available locally
-    if ls {options.packages_dir}/setuptools-*.whl 1> /dev/null 2>&1; then
-        echo "Local setuptools files found."
-    else
-        echo "Downloading setuptools..."
-        {options.venv_pip} download --only-binary=:all: setuptools -d {options.packages_dir}
-    fi
-
-    if ls {options.packages_dir}/wheel-*.whl 1> /dev/null 2>&1; then
-        echo "Local wheel files found."
-    else
-        echo "Downloading wheel..."
-        {options.venv_pip} download --only-binary=:all: wheel -d {options.packages_dir}
-    fi
-
-    # Download required packages
-    echo "Downloading packages..."
-    {options.venv_pip} download -r {options.requirements_file} -d {options.packages_dir}"""
-
-    try:
-        assert options.download_script_path is not None, (
-            "Download script path is not set."
-        )
-        if not options.rawlog:
-            logging.info("Writing download script to %s", options.download_script_path)
-        options.download_script_path.write_text(
-            download_script, encoding=ek.DEFAULT_ENCODING
-        )
-        options.download_script_path.chmod(0o755)
-        # Run the initial download script and capture the output
-        result = ek.my_popen([options.download_script_path])
-        return result.returncode == 0
-    except OSError:
-        logging.exception("Error writing or executing download script.")
-        return False
-
-
-def install_packages_simultaneously(options: Options) -> bool:
-    """Install all packages simultaneously in the virtual environment."""
-    # Construct the install command
-    install_command = [
-        options.venv_python,
-        "-m",
-        "pip",
-        "install",
-        "--no-index",
-        "--find-links",
-        options.packages_dir,
-        "-r",
-        options.requirements_file,
-    ]
-    if not options.rawlog:
-        logging.info("Installing all packages simultaneously...")
-    # Run the command and capture the output line by line using ek.my_popen
-    result = ek.my_popen(install_command)
-    if result.returncode == 0:
-        if not options.rawlog:
-            logging.info("All packages installed successfully.")
-        return True
-    else:
-        logging.error("Failed to install some packages.")
-        return False
-
-
-def install_packages_individually(options: Options) -> bool:
-    """Install packages individually in the virtual environment."""
-    failed_packages = []
-    # pip is being invoked, so this is the one place that wants the pip name.
-    for record in options.uninstalled_imports:
-        if not install_package(record.pip_name, options):
-            failed_packages.append(record.pip_name)
-
-    if failed_packages:
-        logging.error(
-            "Failed to install the following packages: %s",
-            ", ".join(sorted(failed_packages)),
-        )
-        return False
-    else:
-        if not options.rawlog:
-            logging.info("All packages installed successfully.")
-        return True
-
-
-def install_package(package_name: str, options: Options) -> bool:
-    """Install a single package and return the success status (True if successful, False otherwise)."""
-    assert options.venv_python is not None, (
-        "Virtual environment Python executable is not set."
-    )
-    assert options.packages_dir is not None, "Packages directory is not set."
-    the_command = [
-        os.fspath(options.venv_python),
-        "-m",
-        "pip",
-        "install",
-        package_name,
-        "--no-index",
-        "--find-links",
-        os.fspath(options.packages_dir),
-    ]
-    logging.info(
-        "Running pip install: %s",
-        " ".join(shlex.quote(str(arg)) for arg in the_command),
-    )
-    result = subprocess.run(the_command, capture_output=True, text=True)
-    if not options.rawlog:
-        logging.info(result.stdout)
-    if result.stderr:
-        logging.error(result.stderr)
-    if result.returncode != 0:
-        # Use pip to download files for package_name to options.packages_dir
-        download_command = [
-            os.fspath(options.venv_python),
-            "-m",
-            "pip",
-            "download",
-            "--dest",
-            os.fspath(options.packages_dir),
-            package_name,
-        ]
-        download_result = subprocess.run(
-            download_command, capture_output=True, text=True
-        )
-        if download_result.returncode != 0:
-            ek.my_critical_error(
-                f"Failed to download {package_name}. Error: {download_result.stderr}"
-            )
-        # Use pip to install package_name from the file that was just downloaded to options.packages_dir
-        install_command = [
-            os.fspath(options.venv_python),
-            "-m",
-            "pip",
-            "install",
-            "--no-index",
-            "--find-links",
-            os.fspath(options.packages_dir),
-            package_name,
-        ]
-        install_result = subprocess.run(install_command, capture_output=True, text=True)
-        if install_result.returncode != 0:
-            logging.error(
-                "Failed to install %s. Error: %s", package_name, install_result.stderr
-            )
-        else:
-            if not options.rawlog:
-                logging.info("Successfully installed %s", package_name)
-        return result.returncode == 0
-    return result.returncode == 0
-
-
-def recover_pip_versions(output: str, options: Options) -> None:
-    """Parse the output to recover the current and new pip versions."""
-    if hasattr(output, "read"):
-        output = output.read()
-    current_version_pattern = re.compile(r"Current pip version: (.+)")
-    new_version_pattern = re.compile(r"New     pip version: (.+)")
-
-    current_version_match = current_version_pattern.search(output)
-    new_version_match = new_version_pattern.search(output)
-
-    if current_version_match:
-        options.current_pip_version = current_version_match.group(1)
-        if not options.rawlog:
-            logging.info(
-                "Recovered current pip version: %s", options.current_pip_version
-            )
-    else:
-        logging.warning("Failed to recover current pip version from output.")
-
-    if new_version_match:
-        options.new_pip_version = new_version_match.group(1)
-        if not options.rawlog:
-            logging.info("Recovered new pip version: %s", options.new_pip_version)
-    else:
-        logging.warning("Failed to recover new pip version from output.")
-
-
 def venv_build_interpreter(options: Options) -> str:
     """Return the interpreter that should create the virtual environment.
 
@@ -2960,13 +2799,37 @@ def venv_build_interpreter(options: Options) -> str:
     for another. find_preferred_python_version() returns "" when the preferred
     Python is absent from PATH, and only then does the running interpreter serve.
 
+    The result is resolved to an absolute path with shutil.which() before it is
+    returned. A bare command name like "python3" is not safe to hand to `uv
+    venv --python`: uv treats a bare name as a request and resolves it through
+    its own interpreter discovery order, which is not guaranteed to agree with
+    (and was measured to disagree with) whichever "python3" PATH resolves to --
+    silently building the venv against a different interpreter than the one
+    imports were classified against. Resolving here, rather than only in
+    create_venv, also fixes the manifest's interpreter_path field (see
+    manifest_for), where an absolute path is strictly more useful than a bare
+    name.
+
     Args:
         options: Options object; reads options.python_command.
 
     Returns:
-        A path or command name for the interpreter to build with.
+        An absolute path to the interpreter to build with, when shutil.which()
+        can resolve one. Falls back to the unresolved command/path (today's
+        pre-fix behaviour) if it cannot -- logged, because the invariant above
+        is no longer guaranteed to hold for that run.
     """
-    return options.python_command or sys.executable
+    command = options.python_command or sys.executable
+    resolved = shutil.which(command)
+    if resolved is None:
+        logging.warning(
+            "Could not resolve interpreter %r to an absolute path; passing it "
+            "to uv unresolved. uv's own interpreter discovery may then choose "
+            "a different Python than the one imports were classified against.",
+            command,
+        )
+        return command
+    return resolved
 
 
 def interpreter_tag(options: Options) -> str:
@@ -2984,106 +2847,6 @@ def interpreter_tag(options: Options) -> str:
     """
     major, minor = options.stdlib.python_version
     return f"{major}.{minor}"
-
-
-def use_pip_list(options: Options) -> None:
-    """Use the pip list command to find all installed packages and use that pip list to modify the uninstalled and installed imports. Add packages from the options.extra_requirements dictionary if "--reqs" is specified as a runtime argument."""
-    # Add packages from the options.extra_requirements dictionary if "--reqs" is specified as a runtime argument.
-    if getattr(options.args, "reqs", False):
-        options.uninstalled_imports = options.uninstalled_imports.union(
-            requirement_records(options.extra_requirements.keys())
-        )
-    if len(options.pip_list) == 0:
-        # Create virtual environment
-        venv.create(options.test_dir, with_pip=True)
-        python_executable = options.test_dir / "bin" / "python"
-
-        # Run custom list command using the Python executable from the virtual environment
-        list_command_script = """
-import importlib.metadata
-import pkgutil
-import sys
-
-def list_installed_packages():
-    installed_packages = [dist.metadata["Name"] for dist in importlib.metadata.distributions()]
-    return installed_packages
-
-def list_available_modules():
-    available_modules = [module.name for module in pkgutil.iter_modules()]
-    return available_modules
-
-def list_builtin_modules():
-    builtin_modules = sys.builtin_module_names
-    return builtin_modules
-
-installed_packages = list_installed_packages()
-available_modules = list_available_modules()
-builtin_modules = list_builtin_modules()
-
-print("\\n".join(installed_packages + available_modules + list(builtin_modules)))
-"""
-
-        list_command = [os.fspath(python_executable), "-c", list_command_script]
-
-        try:
-            result = subprocess.run(
-                list_command, check=True, capture_output=True, text=True
-            )
-            if logging.getLogger().isEnabledFor(logging.DEBUG):
-                logging.debug("Output:\n%s", result.stdout)
-        except subprocess.CalledProcessError as e:
-            logging.exception("%s\nException type: %s", e, type(e).__name__)
-
-        # Use regular expressions to find all package names
-        options.pip_list = re.findall(r"^[^\s]+", result.stdout, re.MULTILINE)
-        options.pip_list = [
-            pkg
-            for pkg in options.pip_list
-            if pkg != "Package" and not all(c == "-" for c in pkg)
-        ]
-        if logging.getLogger().isEnabledFor(logging.DEBUG):
-            logging.debug("\noptions.pip_list = %s", options.pip_list)
-
-        pip_list_filename = options.my_dir / f"pip_list_{options.timestamp}.txt"
-        pip_list_filename.write_text(
-            "\n".join(options.pip_list), encoding=ek.DEFAULT_ENCODING
-        )
-
-    # options.pip_list holds distribution names, module names and builtin module
-    # names all mixed together, so it is matched against the import name -- which
-    # is exactly what the pre-record code compared, since installed_imports used
-    # to hold import names.
-    known_names = set(options.pip_list)
-    stale_records = {
-        record
-        for record in options.installed_imports
-        if record.import_name not in known_names
-    }
-    # These records are about to be handed to pip, and split_imports() leaves an
-    # installed record's pip_name as its import name because nothing needed it
-    # until now. This is the moment it does, so resolve it here -- otherwise pip
-    # is asked to install "cv2".
-    new_uninstalled_imports = resolve_records(
-        options, {record.import_name for record in stale_records}
-    )
-    options.uninstalled_imports = options.uninstalled_imports.union(
-        new_uninstalled_imports
-    )
-    if options.uninstalled_imports:
-        if logging.getLogger().isEnabledFor(logging.DEBUG):
-            logging.debug(
-                "new_uninstalled_imports = %s",
-                sorted(record.import_name for record in new_uninstalled_imports),
-            )
-    # Remove the records as they were, not as they were re-resolved: resolution
-    # may have changed the pip_name, and a set difference on the new records
-    # would then leave the old ones behind in installed_imports.
-    options.installed_imports = options.installed_imports - stale_records
-    # Once again, add packages from the options.extra_requirements dictionary if "--reqs" is specified as a runtime argument. (Do this again, just in case they got removed from the uninstalled_imports set above.)
-    if getattr(options.args, "reqs", False):
-        options.uninstalled_imports = options.uninstalled_imports.union(
-            requirement_records(options.extra_requirements.keys())
-        )
 
 
 def parse_extra_requirements(options: Options) -> None:
@@ -3147,30 +2910,36 @@ def write_requirements_file_with_extras(options: Options) -> None:
                 f.write(f"{package}\n")
 
 
-def run_pip_in_venv(
-    options: Options, *args: str
-) -> subprocess.CompletedProcess[str] | None:
-    """Run one pip command inside the venv without ever raising.
+def run_uv_pip(options: Options, *args: str) -> subprocess.CompletedProcess[str] | None:
+    """Run one uv pip command against the venv without ever raising.
 
-    Every caller here is on a verification path, where the whole point is to
-    report what happened rather than to end the run, so a missing interpreter or
-    an unrunnable pip is reported as "no result" instead of an exception.
+    Every caller is on a verification path, where the point is to report what
+    happened rather than to end the run, so a missing interpreter or an
+    unrunnable uv is reported as "no result" instead of an exception.
 
     Args:
         options: Options object; reads options.venv_python.
-        *args:   The pip arguments, e.g. "install", "cv2".
+        *args:   The uv pip arguments, e.g. "install", "cv2".
 
     Returns:
-        The completed process, or None if pip could not be run at all.
+        The completed process, or None if uv could not be run at all.
     """
     if options.venv_python is None:
         logging.error(
-            "Cannot run pip %s: no virtual environment interpreter is set.", args[0]
+            "Cannot run uv pip %s: no virtual environment interpreter is set.",
+            args[0],
         )
         return None
-    the_command = [os.fspath(options.venv_python), "-m", "pip", *args]
+    the_command = [
+        uv_binary(),
+        "pip",
+        args[0],
+        "--python",
+        os.fspath(options.venv_python),
+        *args[1:],
+    ]
     logging.info(
-        "Running pip: %s", " ".join(shlex.quote(str(arg)) for arg in the_command)
+        "Running uv: %s", " ".join(shlex.quote(str(arg)) for arg in the_command)
     )
     try:
         return subprocess.run(
@@ -3180,33 +2949,26 @@ def run_pip_in_venv(
             check=False,
         )
     except OSError:
-        logging.exception("Could not run pip %s.", args[0])
+        logging.exception("Could not run uv pip %s.", args[0])
         return None
 
 
 def install_into_venv(options: Options, pip_name: str) -> bool:
     """Install one package into the venv, reporting failure instead of ending the run.
 
-    install_package(), the batch path's installer, calls ek.my_critical_error()
-    -- which exits -- when a download fails. Verifying one import must never be
-    able to kill the whole run, so this installer reports False for every
-    failure instead. It offers the wheels already downloaded to packages_dir but,
-    unlike the batch install, does not pass --no-index: a candidate reached by
-    the verification loop is by definition one that was never downloaded.
+    The batch install is a single uv invocation that either succeeds or leaves
+    the venv marked failed; this installer serves the verification loop instead,
+    where one candidate failing must never end the run, so every failure is
+    reported as False.
 
     Args:
-        options:  Options object; reads options.venv_python and options.packages_dir.
+        options:  Options object; reads options.venv_python.
         pip_name: The package to install.
 
     Returns:
-        True if pip reported success.
+        True if uv reported success.
     """
-    local_wheels = (
-        ["--find-links", os.fspath(options.packages_dir)]
-        if options.packages_dir
-        else []
-    )
-    result = run_pip_in_venv(options, "install", pip_name, *local_wheels)
+    result = run_uv_pip(options, "install", pip_name)
     if result is None:
         return False
     if result.returncode != 0:
@@ -3227,7 +2989,7 @@ def uninstall_from_venv(options: Options, pip_name: str) -> None:
         options:  Options object; reads options.venv_python.
         pip_name: The package to remove.
     """
-    result = run_pip_in_venv(options, "uninstall", "-y", pip_name)
+    result = run_uv_pip(options, "uninstall", pip_name)
     if result is not None and result.returncode != 0:
         logging.warning(
             "Could not uninstall %s. Error: %s", pip_name, result.stderr.strip()
@@ -3414,19 +3176,22 @@ def verify_and_repair_imports(options: Options) -> None:
 
 
 _VERSION_PROBE_CODE = (
-    "import json\n"
+    "import json, sys\n"
     "from importlib.metadata import distributions\n"
-    "print(json.dumps({d.metadata['Name']: d.version for d in distributions()"
-    " if d.metadata['Name']}))\n"
+    "print(json.dumps({"
+    "'python': list(sys.version_info[:2]),"
+    " 'versions': {d.metadata['Name']: d.version for d in distributions()"
+    " if d.metadata['Name']}}))\n"
 )
 
 
-def installed_versions_in_venv(options: Options) -> dict[str, str]:
-    """Ask a virtual environment which versions it actually has.
+def installed_state_in_venv(options: Options) -> tuple[dict[str, str], str]:
+    """Ask a virtual environment which versions and interpreter it actually has.
 
     This is what the manifest records, rather than what was requested or what
     pip printed: only the venv itself knows what ended up installed, including
-    versions pip chose for unpinned packages.
+    versions pip chose for unpinned packages, and which interpreter it was
+    actually built with.
 
     Args:
         options: Options object; reads options.venv_python, which callers must
@@ -3434,10 +3199,11 @@ def installed_versions_in_venv(options: Options) -> dict[str, str]:
                  and asserts rather than returning empty.
 
     Returns:
-        A mapping of normalized pip name to version. Empty if the probe could
-        not be run or its output could not be read -- a version veny could not
-        read is recorded as unknown, which makes any later pin check on that
-        package fail closed.
+        A tuple of (versions, tag). versions maps normalized pip name to
+        version, empty if the probe could not be run or its output could not
+        be read -- a version veny could not read is recorded as unknown,
+        which makes any later pin check on that package fail closed. tag is
+        the venv's own "major.minor", or "" if the probe could not be run.
     """
     assert options.venv_python is not None, (
         "Virtual environment Python executable is not set."
@@ -3453,32 +3219,41 @@ def installed_versions_in_venv(options: Options) -> dict[str, str]:
         )
     except (OSError, subprocess.SubprocessError) as exc:
         logging.warning("Could not list installed versions in the venv (%s).", exc)
-        return {}
+        return {}, ""
     if result.returncode != 0:
         logging.warning(
             "Could not list installed versions in the venv: %s", result.stderr.strip()
         )
-        return {}
+        return {}, ""
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
         logging.warning(
             "Could not read the installed versions reported by the venv (%s).", exc
         )
-        return {}
-    return {
-        venv_cache.normalize_pip_name(name): str(version)
-        for name, version in payload.items()
-    }
+        return {}, ""
+    return (
+        {
+            venv_cache.normalize_pip_name(name): str(version)
+            for name, version in payload.get("versions", {}).items()
+        },
+        ".".join(str(part) for part in payload.get("python", [])),
+    )
 
 
-def manifest_for(options: Options, versions: dict[str, str]) -> venv_cache.Manifest:
+def manifest_for(
+    options: Options, versions: dict[str, str], venv_tag: str = ""
+) -> venv_cache.Manifest:
     """Build the manifest describing a finished virtual environment.
 
     Args:
         options:  Options object; reads options.uninstalled_imports (after any
                   repairs), options.extra_requirements, and the interpreter.
         versions: Installed versions, keyed by normalized pip name.
+        venv_tag: The "major.minor" the venv's own interpreter reported. Empty
+                  when the probe could not run, in which case the run's own
+                  tag serves -- the pre-existing behaviour, and the only case
+                  where the tag can still disagree with interpreter_path.
 
     Returns:
         The manifest to write into the venv.
@@ -3508,19 +3283,26 @@ def manifest_for(options: Options, versions: dict[str, str]) -> venv_cache.Manif
         schema_version=venv_cache.SCHEMA_VERSION,
         created=options.timestamp,
         veny_version=__version__,
-        interpreter_tag=interpreter_tag(options),
+        interpreter_tag=venv_tag or interpreter_tag(options),
         interpreter_path=venv_build_interpreter(options),
         packages=packages,
     )
 
 
 def record_venv_state(options: Options) -> None:
-    """Rename the venv if repairs changed its packages, then write its manifest.
+    """Rename the venv if its folder name has drifted, then write its manifest.
 
-    verify_and_repair_imports can replace a record whose pip_name was wrong, so
-    the folder name written before installing may list a package the venv does
-    not have. The name is only a prefilter, but a stale one rejects a venv the
-    manifest would accept -- so the name is brought back into agreement first.
+    Two things can make the folder name written before installing wrong by the
+    time this runs. verify_and_repair_imports can replace a record whose
+    pip_name was wrong, so the name may list a package the venv does not have.
+    And the folder name is built from the run's stdlib tag
+    (interpreter_tag(options)) before the venv exists, while the manifest uses
+    the venv's own probed tag -- if the probe interpreter degrades (or uv's
+    resolution disagreed with what veny classified against), those two tags
+    can differ. Either way the name is only a prefilter, but a stale one
+    rejects a venv the manifest would accept -- so the name is brought back
+    into agreement with the manifest here, using the same tag the manifest is
+    about to record.
 
     Args:
         options: Options object; reads the final records and updates
@@ -3530,9 +3312,14 @@ def record_venv_state(options: Options) -> None:
         None.
     """
     assert options.venv_dir is not None, "options.venv_dir must be set"
+    # Probed here, before build_folder_name, so the folder name and the
+    # manifest can never disagree on which interpreter tag they record: both
+    # come from this one call. Falls back to the run's own tag when the probe
+    # could not run (empty venv_tag), matching manifest_for's fallback below.
+    versions, venv_tag = installed_state_in_venv(options)
     wanted_name = venv_cache.build_folder_name(
         venv_name=options.venv_name,
-        interpreter_tag=interpreter_tag(options),
+        interpreter_tag=venv_tag or interpreter_tag(options),
         timestamp=options.timestamp,
         pip_names=[record.pip_name for record in options.uninstalled_imports],
     )
@@ -3540,18 +3327,18 @@ def record_venv_state(options: Options) -> None:
     if options.venv_dir.name != prefix + wanted_name:
         if not options.rawlog:
             logging.info(
-                "Repairs changed this venv's packages; renaming it to %s.",
+                "This venv's packages or interpreter tag no longer match its "
+                "folder name; renaming it to %s.",
                 prefix + wanted_name,
             )
         rename_venv(options, prefix + wanted_name)
     venv_cache.write_manifest(
-        options.venv_dir, manifest_for(options, installed_versions_in_venv(options))
+        options.venv_dir, manifest_for(options, versions, venv_tag)
     )
 
 
 def setup_virtualenv(options: Options) -> bool:
     """Setup a virtual environment and install packages."""
-    use_pip_list(options)
     # The folder name is a cheap prefilter for the cache search; veny_manifest.json
     # inside the venv is the authority. venv_cache owns the encoding so a
     # hyphenated pip name cannot be mistaken for a field separator.
@@ -3564,38 +3351,34 @@ def setup_virtualenv(options: Options) -> bool:
     # Create a virtual environment directory that starts with "failed" in case the process fails. Only remove the "failed" part if this process completes successfully.
     options.set_venv_dir(options.my_dir / f"failed-{folder_name}")
 
-    write_requirements_file_with_extras(options)
-
     if not options.rawlog:
         logging.info("Creating virtual environment...")
     assert options.venv_dir is not None, "options.venv_dir must be set"
-    subprocess.check_call(
-        [venv_build_interpreter(options), "-m", "venv", os.fspath(options.venv_dir)]
-    )
+    create_venv(options.venv_dir, venv_build_interpreter(options))
     if not options.rawlog:
         logging.info("Virtual environment created.")
 
-    # Activate virtual environment and install wheel
-    assert options.venv_pip is not None, "options.venv_pip must be set"
-    install_command = [os.fspath(options.venv_pip), "install", "wheel"]
-    logging.info(
-        "Running pip install: %s",
-        " ".join(shlex.quote(str(arg)) for arg in install_command),
-    )
-    subprocess.run(install_command, check=True)
-    if not options.rawlog:
-        logging.info("Wheel installed in the virtual environment.")
+    # `uv venv` refuses to build into a directory that already exists AND is
+    # non-empty. set_venv_dir above already created options.venv_dir (mkdir),
+    # so the requirements file must not land inside it until create_venv has
+    # already succeeded against that (empty) directory -- writing it earlier
+    # made every fresh build crash with CalledProcessError.
+    write_requirements_file_with_extras(options)
 
-    download_packages(options)
-    if install_packages_simultaneously(options):
-        options.simultaneous_success = True
-    else:
-        options.simultaneous_success = False  # This is redundant, but it's here for clarity. The 'failed' part of the venv_dir will not be removed if this is False.
+    assert options.requirements_file is not None, (
+        "options.requirements_file must be set"
+    )
+    result = run_uv_pip(options, "install", "-r", os.fspath(options.requirements_file))
+    options.install_succeeded = result is not None and result.returncode == 0
+    if not options.install_succeeded:
+        # uv names the package it could not satisfy, so there is nothing an
+        # individual sweep would add. The venv keeps its "failed-" prefix, and
+        # verify_and_repair_imports below gets its turn on what did install.
         logging.error(
-            "Failed to install packages simultaneously. Trying to install packages individually to see which fail, but this venv folder will still have 'failed-' in its name..."
+            "uv could not install every requirement; this venv folder keeps its "
+            "'failed-' prefix.%s",
+            f" uv reported:\n{result.stderr.strip()}" if result is not None else "",
         )
-        if not install_packages_individually(options):
-            logging.error("Failed to install packages individually.")
 
     # Verify each import the user wrote, repairing the ones the install did not
     # satisfy, before the check that decides whether this venv gets to drop its
@@ -3613,11 +3396,12 @@ def setup_virtualenv(options: Options) -> bool:
 def rename_venv(options: Options, new_name: str) -> None:
     """Rename a virtual environment directory and fix the paths recorded inside it.
 
-    A venv records its own location in pyvenv.cfg and in the download script, so
-    a rename that touches only the directory leaves a venv that points at a path
-    that no longer exists. Two callers need this: dropping the "failed-" prefix
-    once a run succeeds, and re-naming a venv whose package list changed when
-    verify_and_repair_imports repaired a wrongly resolved pip name.
+    A stdlib-built venv records its own location in pyvenv.cfg (uv-built venvs
+    do not), so a rename that touches only the directory can leave a venv that
+    points at a path that no longer exists. Two callers need this: dropping the
+    "failed-" prefix once a run succeeds, and re-naming a venv whose package
+    list changed when verify_and_repair_imports repaired a wrongly resolved pip
+    name.
 
     Args:
         options:  Options object; reads and updates options.venv_dir.
@@ -3634,10 +3418,7 @@ def rename_venv(options: Options, new_name: str) -> None:
         return
     old_dir.rename(new_dir)
     options.set_venv_dir(new_dir)
-    assert options.download_script_path is not None, (
-        "options.download_script_path must be set"
-    )
-    for path in (options.venv_dir / "pyvenv.cfg", options.download_script_path):
+    for path in (options.venv_dir / "pyvenv.cfg",):
         try:
             contents = path.read_text()
         except OSError as exc:
