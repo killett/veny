@@ -348,9 +348,10 @@ wiring rationale and for two Minors deliberately left unfixed.
   formatter will simply undo it, producing noise in the next diff.
 - **`pixi run typecheck` still cannot pass.** The pre-commit `mypy` hook is
   literally `mypy .` with `pass_filenames: false`, so it always checks the
-  whole repo, and 47 pre-existing errors remain across `src/veny/cli.py` and
-  `tests/test_split_imports.py` (down from 49 — the `pipreqs` lazy import fixed
-  two). It is not a gate a change can satisfy, only a check to scope manually:
+  whole repo, and 46 pre-existing errors remain across `src/veny/cli.py` and
+  `tests/test_split_imports.py` (down from 49 over the course of 2026-08-15's
+  ruff cleanup and the pipreqs deletion). It is not a gate a change can
+  satisfy, only a check to scope manually:
   use `mypy <files>` on what you touched, and confirm the whole-repo count has
   not risen.
 - **`ruff format` also formats Python code blocks inside Markdown** in this
@@ -589,20 +590,23 @@ wiring rationale and for two Minors deliberately left unfixed.
 - Garbage collection of stale venvs in `~/veny`, including the pre-manifest
   ones this plan's Task 10 orphans (no manifest means no match, so they are
   never selected again but are also never deleted).
-- **`generate_requirements()` calls a pipreqs API that probably does not
-  exist.** Making the repo ruff-clean on 2026-08-15 surfaced (via `F821`) that
-  the function referenced `pipreqs` with no import in its scope, so every call
-  raised `NameError` — on any machine where the probe at the top of
-  `list_packages()` had set `options.pipreqs_available`, which is the only
-  condition under which it is called. A lazy `import pipreqs` was added so the
-  name resolves, but that is the smaller half: it calls
-  `pipreqs.generate_requirements(...)` and catches `pipreqs.PipreqsError` /
-  `pipreqs.PipreqsWarning`, and pipreqs' actual public surface is
-  `pipreqs.pipreqs.init(args)` — none of those three names appear to exist.
-  The function has therefore probably never run successfully. Decide whether
-  to fix the call against the real API or delete the pipreqs path entirely
-  (veny has had its own resolver since the module-alias-resolver plan, so it
-  may be vestigial).
+- **`--full` mode does not work, and its whole directory branch is
+  unreachable.** Found 2026-08-15 while deleting the pipreqs path. Two separate
+  walls, either of which is fatal on its own:
+  1. `--full` sets `options.python_script = options.cwd`, but never sets
+     `options.script_dir`, and `list_packages()` opens with
+     `assert options.script_dir is not None`. Reproduced on `main` before the
+     pipreqs deletion via a side worktree, so it is not caused by that change.
+  2. Passing a directory as the positional argument instead raises
+     `IsADirectoryError` from emmykit's `ensure_file`, so that route never
+     reaches the directory branch either.
+
+  Consequently `list_packages()`'s `elif ek.safe_is_dir(options.python_script):`
+  branch — now just `get_all_imports(options, options.python_script)` — has no
+  reachable caller. Fixing `--full` means setting `script_dir` (and deciding
+  what it should be when the target *is* a directory), then actually exercising
+  that branch, which no test covers. Note the `--full` flag is advertised in
+  `--help` and in README.md's flag list.
 - **Two pre-existing `AssertionError` crashes, both found by the packaged
   entry-point branch's final review (2026-08-15) and both left unfixed as out
   of scope.** Neither is a regression — the reviewer confirmed both are
