@@ -229,8 +229,8 @@ git commit -m "feat: declare uv as a runtime dependency and locate its binary"
 - Modify: `src/veny/cli.py` — add `create_venv`; `split_imports` (~2581), `setup_virtualenv` (~3552-3585)
 
 **Acceptance Criteria:**
-- [ ] `rg -n 'venv\.create|"-m", "venv"' src/veny/cli.py` returns nothing
-- [ ] `import venv` is gone from `cli.py` (ruff will flag it as unused)
+- [ ] `rg -n '"-m", "venv"' src/veny/cli.py` returns nothing
+- [ ] The only remaining `venv.create` is the one inside `use_pip_list`. **Leave it.** *(Corrected 2026-08-16: an earlier revision of this task required `import venv` to be gone, which is impossible here — `use_pip_list` is not deleted until Task 4, so the import is still live. Removing it moved to Task 4.)*
 - [ ] The `pip install wheel` step in `setup_virtualenv` is deleted
 - [ ] `setup_virtualenv` builds with the interpreter `venv_build_interpreter()` returns, not a default
 - [ ] All tests pass
@@ -320,13 +320,14 @@ with:
 
 - [ ] **Step 4: Remove the orphaned import and verify**
 
-Run: `pixi run lint` — it will flag `venv` as unused (`F401`). Delete that import line only; delete nothing ruff did not name.
+Run: `pixi run lint`
+Expected: zero. `import venv` is **not** orphaned by this task — `use_pip_list` still calls `venv.create`, and it survives until Task 4. Do not remove the import here.
 
 Run: `pixi run test`
 Expected: `263 passed`
 
 Run: `rg -n 'venv\.create|"-m", "venv"' src/veny/cli.py`
-Expected: no output.
+Expected: exactly one hit, the `venv.create` inside `use_pip_list`.
 
 - [ ] **Step 5: Commit**
 
@@ -533,6 +534,7 @@ git commit -m "refactor: install packages with uv and delete the download layer"
 
 **Acceptance Criteria:**
 - [ ] `rg -n 'use_pip_list|pip_list' src/veny/cli.py` returns nothing
+- [ ] `import venv` is gone from `cli.py` — deleting `use_pip_list` takes the last `venv.create` with it, and ruff will then flag the import as unused (`F401`). *(Moved here from Task 2, which could not do it: the import was still live until this deletion.)*
 - [ ] The `--reqs` union at the end of `split_imports` is **kept** — it is what now solely supplies extra requirements
 - [ ] `resolve_records` still has at least one caller (it was used by `use_pip_list`; confirm and report if it does not)
 - [ ] All tests pass
