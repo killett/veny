@@ -694,8 +694,9 @@ def get_evaluated_arg(expr_node: ast.AST, default: str = "") -> str:
 def _record_IO(
     options: Options, file_content: str, attr: str, target: str, node: ast.Call
 ) -> None:
-    """Record an IO operation by appending a target to an options attribute
-    and logging the operation.
+    """Record an IO operation.
+
+    Appends a target to an options attribute and logs the operation.
 
     Args:
         options:      Options object containing attributes for file operations.
@@ -725,8 +726,9 @@ def _record_IO(
 
 
 def _get_full_attr_name(node: ast.AST) -> str | None:
-    """Recursively walk an ast.Name/ast.Attribute chain
-    and return its full dotted name, e.g.:
+    """Recursively walk an ast.Name/ast.Attribute chain and return its dotted name.
+
+    For example:
     Name(id='ZipFile')         -> 'ZipFile'
     Attribute(Name('zipfile'), 'ZipFile')       -> 'zipfile.ZipFile'
     Attribute(Attribute(Name('pkg'), 'zipfile'), 'ZipFile')
@@ -752,8 +754,9 @@ def _get_full_attr_name(node: ast.AST) -> str | None:
 
 
 def unpack_method_call(node: ast.Call) -> tuple[ast.Call, str] | None:
-    """If 'node' is a call of the form (<something>()).<method>(...),
-    return (inner_call, method_name).  Otherwise return None.
+    """Match a call of the form (<something>()).<method>(...).
+
+    Returns (inner_call, method_name), or None if 'node' is not such a call.
     """
     func = node.func
     if not isinstance(func, ast.Attribute):
@@ -965,9 +968,11 @@ class FileOperationsVisitor(ast.NodeVisitor):
         return False
 
     def _process_subprocess(self, node: ast.Call) -> bool:
-        """Detect calls that invoke an external shell to read/write files via redirection:
+        """Detect calls that invoke an external shell to read or write files.
+
+        Redirection through:
         - subprocess.run()/Popen()/call()/check_output()/etc. with shell=True
-        - os.system(), os.popen().
+        - os.system(), os.popen()
 
         Parses any ">", ">>" or "<" in the literal command string to pull out filenames.
         """
@@ -1057,8 +1062,9 @@ class FileOperationsVisitor(ast.NodeVisitor):
         return False
 
     def _process_ctypes_api(self, node: ast.Call) -> bool:
-        """Detect direct libc open calls via ctypes (CDLL/pydll/...)
-        and record the path literals passed to open/fopen as writes.
+        """Detect direct libc open calls via ctypes (CDLL/pydll/...).
+
+        Records the path literals passed to open/fopen as writes.
         """
         # 1) Must be an attribute call, e.g. (<something>).open(...)
         if not isinstance(node.func, ast.Attribute):
@@ -1473,8 +1479,9 @@ class FileOperationsVisitor(ast.NodeVisitor):
     }
 
     def _process_unknown_open(self, node: ast.Call) -> bool:
-        """Heuristic catch-all for any MODULE.open(path, mode) calls
-        on unknown modules that we haven't explicitly handled.
+        """Catch any MODULE.open(path, mode) call on an unhandled module.
+
+        Heuristic: covers modules not explicitly handled elsewhere.
         """
         # 1) Must look like MODULE.open(...)
         if not (
@@ -1516,9 +1523,10 @@ class FileOperationsVisitor(ast.NodeVisitor):
         return False
 
     def _process_generic_file(self, node: ast.Call) -> bool:
-        """Heuristic fallback: if a function call takes a string literal
-        that *looks* like a path, and the function name contains
-        typical I/O verbs, record it.
+        """Record calls that look like I/O on a path-like string literal.
+
+        Heuristic fallback: the argument must look like a path and the function
+        name must contain a typical I/O verb.
         """
         # Must have at least one literal-string arg:
         if not node.args:
@@ -1553,25 +1561,31 @@ class FileOperationsVisitor(ast.NodeVisitor):
 
 class TopLevelFileOperationsVisitor(FileOperationsVisitor):
     """Only look at calls at module scope — never descend into function defs.
-    For classes, only inspect statements in the class body that are not defs or sub-classes.
-    This is to avoid collecting file operations from within function bodies or class methods.
+
+    For classes, only inspect statements in the class body that are not defs or
+    sub-classes. This avoids collecting file operations from within function
+    bodies or class methods.
     """
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        """Visit FunctionDef nodes to find file operations. In practice,
-        drop into nothing: stops recursion into function bodies.
+        """Visit FunctionDef nodes to find file operations.
+
+        In practice, drop into nothing: stops recursion into function bodies.
         """
         return
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        """Visit AsyncFunctionDef nodes to find file operations. In practice,
-        drop into nothing: stops recursion into function bodies.
+        """Visit AsyncFunctionDef nodes to find file operations.
+
+        In practice, drop into nothing: stops recursion into function bodies.
         """
         return
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
-        """Visit ClassDef nodes to find file operations. In practice,
-        only inspect statements in the class body that are not defs or sub-classes.
+        """Visit ClassDef nodes to find file operations.
+
+        In practice, only inspect statements in the class body that are not defs
+        or sub-classes.
         """
         for stmt in node.body:
             if not isinstance(
@@ -2128,8 +2142,9 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
         return False
 
     def _process_generic_network(self, node: ast.Call) -> bool:
-        """Heuristic fallback: if a call's first argument is a string literal
-        that looks like a URL (http:// or https://), record it.
+        """Record calls whose first argument is a URL-like string literal.
+
+        Heuristic fallback: the literal must start with http:// or https://.
         """
         if not node.args:
             return False
@@ -2153,25 +2168,31 @@ class NetworkOperationsVisitor(ast.NodeVisitor):
 
 class TopLevelNetworkOperationsVisitor(NetworkOperationsVisitor):
     """Only look at calls at module scope — never descend into function defs.
-    For classes, only inspect statements in the class body that are not defs or sub-classes.
-    This is to avoid collecting network operations from within function bodies or class methods.
+
+    For classes, only inspect statements in the class body that are not defs or
+    sub-classes. This avoids collecting network operations from within function
+    bodies or class methods.
     """
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        """Visit FunctionDef nodes to find file operations. In practice,
-        drop into nothing: stops recursion into function bodies.
+        """Visit FunctionDef nodes to find file operations.
+
+        In practice, drop into nothing: stops recursion into function bodies.
         """
         return
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        """Visit AsyncFunctionDef nodes to find file operations. In practice,
-        drop into nothing: stops recursion into function bodies.
+        """Visit AsyncFunctionDef nodes to find file operations.
+
+        In practice, drop into nothing: stops recursion into function bodies.
         """
         return
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
-        """Visit ClassDef nodes to find file operations. In practice,
-        only inspect statements in the class body that are not defs or sub-classes.
+        """Visit ClassDef nodes to find file operations.
+
+        In practice, only inspect statements in the class body that are not defs
+        or sub-classes.
         """
         for stmt in node.body:
             if not isinstance(
@@ -2187,9 +2208,10 @@ PATHLIB_ALL = PATHLIB_CONCRETE | PATHLIB_PURE
 
 
 def collect_pathlib_aliases(module: ast.Module) -> set[str]:
-    """Return the set of local names that refer to pathlib classes (Path/PosixPath/WindowsPath and Pure*).
-    Handles aliasing via 'as'.
-    Works even if imports are nested; we just scan the whole tree.
+    """Return the local names that refer to pathlib classes.
+
+    Covers Path/PosixPath/WindowsPath and the Pure* variants, handles aliasing
+    via 'as', and works even if imports are nested: the whole tree is scanned.
     """
     aliases: set[str] = set()
     for node in ast.walk(module):
@@ -2202,6 +2224,7 @@ def collect_pathlib_aliases(module: ast.Module) -> set[str]:
 
 def is_pathlib_ctor(fn: ast.AST, pathlib_aliases: set[str], allow_pure: bool) -> bool:
     """True if 'fn' is a constructor for a pathlib *Path* type.
+
     - When allow_pure=False, only concrete (filesystem) paths are allowed.
     - When allow_pure=True, accept both concrete and pure paths.
     """
@@ -2225,8 +2248,9 @@ def is_pathlib_ctor(fn: ast.AST, pathlib_aliases: set[str], allow_pure: bool) ->
 
 
 def transform_call(node: ast.Call, pathlib_aliases: set[str]) -> str | None:
-    """Return a replacement string if this call matches one of our handled patterns,
-    or None to leave it unchanged.
+    """Return a replacement string for a call matching a handled pattern.
+
+    Returns None to leave the call unchanged.
     """
     # Handle: pathlib.Path(...).resolve()/absolute()
     if isinstance(node.func, ast.Attribute) and node.func.attr in {
@@ -2266,7 +2290,9 @@ def transform_call(node: ast.Call, pathlib_aliases: set[str]) -> str | None:
 
 
 def _safe_eval_node(node: ast.AST, pathlib_aliases: set[str] | None = None) -> Any:  # noqa: ANN401  # Evaluates arbitrary literals: str, int, list, dict, Path. Any is the honest type.
-    """Recursively evaluate a restricted subset of AST nodes:
+    """Recursively evaluate a restricted subset of AST nodes.
+
+    Supported:
     - Constants (strings, numbers, booleans, None)
     - Lists, tuples, dicts
     - os.getcwd()
@@ -2388,7 +2414,9 @@ def _safe_eval_node(node: ast.AST, pathlib_aliases: set[str] | None = None) -> A
 
 
 def safe_eval(expr: str, pathlib_aliases: set[str] | None = None) -> Any | None:  # noqa: ANN401  # Same as _safe_eval_node: the value is whatever literal the expression held.
-    """Safely evaluate a Python expression string containing only:
+    """Safely evaluate a restricted Python expression string.
+
+    Only these are allowed:
         - literals (str, int, float, bool, None)
         - lists, tuples, dicts of the above
         - os.getcwd()
@@ -2913,6 +2941,7 @@ class ImportFunctionCollector(ast.NodeVisitor):
 
     def _type_name(self, node: ast.AST) -> str | None:
         """Extract a string type name from an annotation or qualified name.
+
         Handles Name or Attribute, using aliases when needed.
         """
         if isinstance(node, ast.Name):
@@ -2924,6 +2953,7 @@ class ImportFunctionCollector(ast.NodeVisitor):
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         """Visit an annotated assignment and record attribute types.
+
         e.g. self.options: Options = options.
         """
         if (
@@ -2939,6 +2969,7 @@ class ImportFunctionCollector(ast.NodeVisitor):
 
     def visit_Assign(self, node: ast.Assign) -> None:
         """Visit an assignment and try to infer attribute types from RHS.
+
         e.g. self.options = options   (infer type from param annotation if possible).
         """
         for tgt in node.targets:
@@ -2966,6 +2997,7 @@ class ImportFunctionCollector(ast.NodeVisitor):
 
     def _resolve_relative_module(self, name: str, package: str | None) -> str | None:
         """Resolve 'name' that may start with dots against an absolute 'package'.
+
         Mirrors importlib semantics roughly; for our purposes we only need to
         resolve to a package string to feed the rest of the pipeline.
         """
@@ -2988,8 +3020,9 @@ class ImportFunctionCollector(ast.NodeVisitor):
         return f"{base}.{tail}" if tail else base
 
     def _register_import_name(self, module_name: str) -> None:
-        """Record an import for the current function (or top-level) using the
-        top-level package (to match your existing pipeline).
+        """Record an import for the current function, or for top level.
+
+        Uses the top-level package, to match the existing pipeline.
         """
         top_level = module_name.split(".")[0] if module_name else None
         if not top_level:
@@ -3004,8 +3037,10 @@ class ImportFunctionCollector(ast.NodeVisitor):
     def _register_constant_path_for_module(
         self, module_name: str, path_str: str
     ) -> None:
-        """Best-effort: if we get a constant file path for a dynamically loaded module,
-        map it immediately so later phases can resolve it as a local module.
+        """Map a dynamically loaded module to its constant file path.
+
+        Best effort: mapping it immediately lets later phases resolve it as a
+        local module.
         """
         try:
             # Resolve relative to the file we're analyzing
@@ -3034,6 +3069,7 @@ class ImportFunctionCollector(ast.NodeVisitor):
         self, node: ast.Call
     ) -> str | None:
         """Handle importlib.import_module(name, package=None) and aliased import_module().
+
         Only constant strings are supported.
         """
         if not node.args:
@@ -3065,6 +3101,7 @@ class ImportFunctionCollector(ast.NodeVisitor):
         self, node: ast.Call
     ) -> tuple[str, str] | None:
         """Handle importlib.util.spec_from_file_location(name, location, ...).
+
         Returns (module_name, location_path) if both are constant strings.
         """
         if len(node.args) < 2:
@@ -3085,6 +3122,7 @@ class ImportFunctionCollector(ast.NodeVisitor):
         self, node: ast.Call
     ) -> tuple[str, str] | None:
         """Handle importlib.machinery.SourceFileLoader(name, path).
+
         Returns (module_name, path) if both are constant strings.
         """
         if len(node.args) < 2:
@@ -3251,6 +3289,7 @@ def _analyze_module(
     do_sys_path_scan: bool,
 ) -> tuple[str, ModuleInfo] | None:
     """Read, parse, and analyze one module file.
+
     - Optionally scans for sys.path mutations (current behavior: only for the first loop).
     - Updates modules_info / module_contents / module_trees.
 
@@ -3319,8 +3358,9 @@ def _enqueue_top_level_imports(
     processed_paths: set[Path],
     modules_to_process: collections.deque[Path],
 ) -> None:
-    """Given top-level imports for a module, run your existing resolution logic and
-    enqueue any newly found local modules/packages for the first pass queue.
+    """Resolve a module's top-level imports and enqueue any new local modules.
+
+    Newly found local modules and packages go onto the first-pass queue.
     """
     for import_name in import_names:
         if import_name in options.stdlib:
@@ -3345,8 +3385,9 @@ def _enqueue_top_level_imports(
 def find_imports_and_IO_in_script(
     options: Options, first_path: str | os.PathLike[str]
 ) -> None:
-    """Find all imports and I/O in the script (including functions and classes
-    that it imports from its dependencies.).
+    """Find all imports and I/O in the script.
+
+    Includes functions and classes that it imports from its dependencies.
 
     Args:
         options:    Options object containing paths to the python script and custom modules.
@@ -4752,8 +4793,10 @@ print("\\n".join(installed_packages + available_modules + list(builtin_modules))
 
 
 def parse_extra_requirements(options: Options) -> None:
-    """Parse an extra requirements file and return a dictionary of package names (and version specifiers, if present).
-    The file should have one package per line, optionally with version specifiers (e.g., 'package>=1.0').
+    """Parse an extra requirements file into a dict of package names.
+
+    Values are the version specifiers where present. The file should have one
+    package per line, optionally with a specifier (e.g., 'package>=1.0').
     Lines starting with '#' are treated as comments and ignored.
 
     Args:
