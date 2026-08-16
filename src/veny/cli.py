@@ -2799,13 +2799,37 @@ def venv_build_interpreter(options: Options) -> str:
     for another. find_preferred_python_version() returns "" when the preferred
     Python is absent from PATH, and only then does the running interpreter serve.
 
+    The result is resolved to an absolute path with shutil.which() before it is
+    returned. A bare command name like "python3" is not safe to hand to `uv
+    venv --python`: uv treats a bare name as a request and resolves it through
+    its own interpreter discovery order, which is not guaranteed to agree with
+    (and was measured to disagree with) whichever "python3" PATH resolves to --
+    silently building the venv against a different interpreter than the one
+    imports were classified against. Resolving here, rather than only in
+    create_venv, also fixes the manifest's interpreter_path field (see
+    manifest_for), where an absolute path is strictly more useful than a bare
+    name.
+
     Args:
         options: Options object; reads options.python_command.
 
     Returns:
-        A path or command name for the interpreter to build with.
+        An absolute path to the interpreter to build with, when shutil.which()
+        can resolve one. Falls back to the unresolved command/path (today's
+        pre-fix behaviour) if it cannot -- logged, because the invariant above
+        is no longer guaranteed to hold for that run.
     """
-    return options.python_command or sys.executable
+    command = options.python_command or sys.executable
+    resolved = shutil.which(command)
+    if resolved is None:
+        logging.warning(
+            "Could not resolve interpreter %r to an absolute path; passing it "
+            "to uv unresolved. uv's own interpreter discovery may then choose "
+            "a different Python than the one imports were classified against.",
+            command,
+        )
+        return command
+    return resolved
 
 
 def interpreter_tag(options: Options) -> str:

@@ -79,3 +79,47 @@ def test_setup_virtualenv_builds_the_venv_before_writing_requirements_txt(
     assert options.venv_dir is not None
     assert (options.venv_dir / "requirements.txt").read_text() == "thing-pkg\n"
     assert (options.venv_dir / "bin" / "python").exists()
+
+
+def test_create_venv_is_given_a_resolved_interpreter_path_not_a_bare_command(
+    monkeypatch, tmp_path
+):
+    """venv_build_interpreter's result, as create_venv passes it to uv, must be
+    an absolute path -- never a bare command name like "python3".
+
+    `uv venv --python python3` does not mean "the python3 on PATH": uv treats a
+    bare name as a request and resolves it through its own interpreter
+    discovery order, which was measured (with no veny involved) to pick a
+    different Python (3.12) than the one `python3 -m venv` -- what veny did
+    before the uv migration -- used to build with (3.13). That silently builds
+    the venv against a different interpreter than the one imports were
+    classified against. If venv_build_interpreter regressed to returning
+    options.python_command unresolved, this test would see the bare "python3"
+    in the captured uv command instead of the absolute path shutil.which
+    resolves it to.
+    """
+    options = cli.Options()
+    options.python_command = "python3"
+    monkeypatch.setattr(
+        shutil,
+        "which",
+        lambda name: "/resolved/bin/python3" if name == "python3" else None,
+    )
+    monkeypatch.setattr(cli, "uv_binary", lambda: "/packaged/uv")
+    captured: list[list[str]] = []
+    monkeypatch.setattr(
+        subprocess, "check_call", lambda command: captured.append(command)
+    )
+
+    python = cli.venv_build_interpreter(options)
+    cli.create_venv(tmp_path / "target", python)
+
+    assert captured == [
+        [
+            "/packaged/uv",
+            "venv",
+            str(tmp_path / "target"),
+            "--python",
+            "/resolved/bin/python3",
+        ]
+    ]
