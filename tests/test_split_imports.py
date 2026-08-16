@@ -985,10 +985,12 @@ def test_setup_virtualenv_verifies_every_import_before_reporting_success(
     calls = []
     monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     monkeypatch.setattr(veny, "write_requirements_file_with_extras", lambda opts: None)
-    monkeypatch.setattr(veny, "download_packages", lambda opts: True)
-    monkeypatch.setattr(veny, "install_packages_simultaneously", lambda opts: True)
     monkeypatch.setattr(subprocess, "check_call", lambda *a, **k: 0)
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(a[0] if a else [], 0),
+    )
 
     def fake_verify(opts):
         calls.append("verify")

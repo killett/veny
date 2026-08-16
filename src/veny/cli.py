@@ -165,7 +165,7 @@ class Options(ek.Options):
         self.extra_requirements: dict[str, str | None] = {}
         self.extra_requirements_file: str = "extra_requirements.txt"
         self.download_script_path: Path | None = None
-        self.simultaneous_success: bool = False
+        self.install_succeeded: bool = False
         self.max_checks: int = (
             10  # Maximum number of times to check any repeated process.
         )
@@ -681,7 +681,7 @@ def main() -> int:
                 script_exit_code = result.returncode
             if (
                 options.venv_dir.name.startswith("failed-")
-                and options.simultaneous_success
+                and options.install_succeeded
             ):
                 # If the program has made it to this point, it has run successfully, so the venv directory can be renamed because it DIDN'T fail.
                 rename_venv(options, options.venv_dir.name.removeprefix("failed-"))
@@ -2825,192 +2825,6 @@ def get_all_imports(options: Options, directory: str | os.PathLike[str]) -> None
         logging.info("Finished processing files in %s", os.fspath(directory))
 
 
-def download_packages(options: Options) -> bool:
-    """Install packages in a virtual environment."""
-    download_script = f"""#!/bin/bash
-    source {options.venv_dir}/bin/activate
-
-    # Upgrade pip
-    echo "Upgrading pip..."
-    pip install --upgrade pip
-
-    # Ensure setuptools and wheel are available locally
-    if ls {options.packages_dir}/setuptools-*.whl 1> /dev/null 2>&1; then
-        echo "Local setuptools files found."
-    else
-        echo "Downloading setuptools..."
-        {options.venv_pip} download --only-binary=:all: setuptools -d {options.packages_dir}
-    fi
-
-    if ls {options.packages_dir}/wheel-*.whl 1> /dev/null 2>&1; then
-        echo "Local wheel files found."
-    else
-        echo "Downloading wheel..."
-        {options.venv_pip} download --only-binary=:all: wheel -d {options.packages_dir}
-    fi
-
-    # Download required packages
-    echo "Downloading packages..."
-    {options.venv_pip} download -r {options.requirements_file} -d {options.packages_dir}"""
-
-    try:
-        assert options.download_script_path is not None, (
-            "Download script path is not set."
-        )
-        if not options.rawlog:
-            logging.info("Writing download script to %s", options.download_script_path)
-        options.download_script_path.write_text(
-            download_script, encoding=ek.DEFAULT_ENCODING
-        )
-        options.download_script_path.chmod(0o755)
-        # Run the initial download script and capture the output
-        result = ek.my_popen([options.download_script_path])
-        return result.returncode == 0
-    except OSError:
-        logging.exception("Error writing or executing download script.")
-        return False
-
-
-def install_packages_simultaneously(options: Options) -> bool:
-    """Install all packages simultaneously in the virtual environment."""
-    # Construct the install command
-    install_command = [
-        options.venv_python,
-        "-m",
-        "pip",
-        "install",
-        "--no-index",
-        "--find-links",
-        options.packages_dir,
-        "-r",
-        options.requirements_file,
-    ]
-    if not options.rawlog:
-        logging.info("Installing all packages simultaneously...")
-    # Run the command and capture the output line by line using ek.my_popen
-    result = ek.my_popen(install_command)
-    if result.returncode == 0:
-        if not options.rawlog:
-            logging.info("All packages installed successfully.")
-        return True
-    else:
-        logging.error("Failed to install some packages.")
-        return False
-
-
-def install_packages_individually(options: Options) -> bool:
-    """Install packages individually in the virtual environment."""
-    failed_packages = []
-    # pip is being invoked, so this is the one place that wants the pip name.
-    for record in options.uninstalled_imports:
-        if not install_package(record.pip_name, options):
-            failed_packages.append(record.pip_name)
-
-    if failed_packages:
-        logging.error(
-            "Failed to install the following packages: %s",
-            ", ".join(sorted(failed_packages)),
-        )
-        return False
-    else:
-        if not options.rawlog:
-            logging.info("All packages installed successfully.")
-        return True
-
-
-def install_package(package_name: str, options: Options) -> bool:
-    """Install a single package and return the success status (True if successful, False otherwise)."""
-    assert options.venv_python is not None, (
-        "Virtual environment Python executable is not set."
-    )
-    assert options.packages_dir is not None, "Packages directory is not set."
-    the_command = [
-        os.fspath(options.venv_python),
-        "-m",
-        "pip",
-        "install",
-        package_name,
-        "--no-index",
-        "--find-links",
-        os.fspath(options.packages_dir),
-    ]
-    logging.info(
-        "Running pip install: %s",
-        " ".join(shlex.quote(str(arg)) for arg in the_command),
-    )
-    result = subprocess.run(the_command, capture_output=True, text=True)
-    if not options.rawlog:
-        logging.info(result.stdout)
-    if result.stderr:
-        logging.error(result.stderr)
-    if result.returncode != 0:
-        # Use pip to download files for package_name to options.packages_dir
-        download_command = [
-            os.fspath(options.venv_python),
-            "-m",
-            "pip",
-            "download",
-            "--dest",
-            os.fspath(options.packages_dir),
-            package_name,
-        ]
-        download_result = subprocess.run(
-            download_command, capture_output=True, text=True
-        )
-        if download_result.returncode != 0:
-            ek.my_critical_error(
-                f"Failed to download {package_name}. Error: {download_result.stderr}"
-            )
-        # Use pip to install package_name from the file that was just downloaded to options.packages_dir
-        install_command = [
-            os.fspath(options.venv_python),
-            "-m",
-            "pip",
-            "install",
-            "--no-index",
-            "--find-links",
-            os.fspath(options.packages_dir),
-            package_name,
-        ]
-        install_result = subprocess.run(install_command, capture_output=True, text=True)
-        if install_result.returncode != 0:
-            logging.error(
-                "Failed to install %s. Error: %s", package_name, install_result.stderr
-            )
-        else:
-            if not options.rawlog:
-                logging.info("Successfully installed %s", package_name)
-        return result.returncode == 0
-    return result.returncode == 0
-
-
-def recover_pip_versions(output: str, options: Options) -> None:
-    """Parse the output to recover the current and new pip versions."""
-    if hasattr(output, "read"):
-        output = output.read()
-    current_version_pattern = re.compile(r"Current pip version: (.+)")
-    new_version_pattern = re.compile(r"New     pip version: (.+)")
-
-    current_version_match = current_version_pattern.search(output)
-    new_version_match = new_version_pattern.search(output)
-
-    if current_version_match:
-        options.current_pip_version = current_version_match.group(1)
-        if not options.rawlog:
-            logging.info(
-                "Recovered current pip version: %s", options.current_pip_version
-            )
-    else:
-        logging.warning("Failed to recover current pip version from output.")
-
-    if new_version_match:
-        options.new_pip_version = new_version_match.group(1)
-        if not options.rawlog:
-            logging.info("Recovered new pip version: %s", options.new_pip_version)
-    else:
-        logging.warning("Failed to recover new pip version from output.")
-
-
 def venv_build_interpreter(options: Options) -> str:
     """Return the interpreter that should create the virtual environment.
 
@@ -3207,30 +3021,36 @@ def write_requirements_file_with_extras(options: Options) -> None:
                 f.write(f"{package}\n")
 
 
-def run_pip_in_venv(
-    options: Options, *args: str
-) -> subprocess.CompletedProcess[str] | None:
-    """Run one pip command inside the venv without ever raising.
+def run_uv_pip(options: Options, *args: str) -> subprocess.CompletedProcess[str] | None:
+    """Run one uv pip command against the venv without ever raising.
 
-    Every caller here is on a verification path, where the whole point is to
-    report what happened rather than to end the run, so a missing interpreter or
-    an unrunnable pip is reported as "no result" instead of an exception.
+    Every caller is on a verification path, where the point is to report what
+    happened rather than to end the run, so a missing interpreter or an
+    unrunnable uv is reported as "no result" instead of an exception.
 
     Args:
         options: Options object; reads options.venv_python.
-        *args:   The pip arguments, e.g. "install", "cv2".
+        *args:   The uv pip arguments, e.g. "install", "cv2".
 
     Returns:
-        The completed process, or None if pip could not be run at all.
+        The completed process, or None if uv could not be run at all.
     """
     if options.venv_python is None:
         logging.error(
-            "Cannot run pip %s: no virtual environment interpreter is set.", args[0]
+            "Cannot run uv pip %s: no virtual environment interpreter is set.",
+            args[0],
         )
         return None
-    the_command = [os.fspath(options.venv_python), "-m", "pip", *args]
+    the_command = [
+        uv_binary(),
+        "pip",
+        args[0],
+        "--python",
+        os.fspath(options.venv_python),
+        *args[1:],
+    ]
     logging.info(
-        "Running pip: %s", " ".join(shlex.quote(str(arg)) for arg in the_command)
+        "Running uv: %s", " ".join(shlex.quote(str(arg)) for arg in the_command)
     )
     try:
         return subprocess.run(
@@ -3240,33 +3060,26 @@ def run_pip_in_venv(
             check=False,
         )
     except OSError:
-        logging.exception("Could not run pip %s.", args[0])
+        logging.exception("Could not run uv pip %s.", args[0])
         return None
 
 
 def install_into_venv(options: Options, pip_name: str) -> bool:
     """Install one package into the venv, reporting failure instead of ending the run.
 
-    install_package(), the batch path's installer, calls ek.my_critical_error()
-    -- which exits -- when a download fails. Verifying one import must never be
-    able to kill the whole run, so this installer reports False for every
-    failure instead. It offers the wheels already downloaded to packages_dir but,
-    unlike the batch install, does not pass --no-index: a candidate reached by
-    the verification loop is by definition one that was never downloaded.
+    The batch install is a single uv invocation that either succeeds or leaves
+    the venv marked failed; this installer serves the verification loop instead,
+    where one candidate failing must never end the run, so every failure is
+    reported as False.
 
     Args:
-        options:  Options object; reads options.venv_python and options.packages_dir.
+        options:  Options object; reads options.venv_python.
         pip_name: The package to install.
 
     Returns:
-        True if pip reported success.
+        True if uv reported success.
     """
-    local_wheels = (
-        ["--find-links", os.fspath(options.packages_dir)]
-        if options.packages_dir
-        else []
-    )
-    result = run_pip_in_venv(options, "install", pip_name, *local_wheels)
+    result = run_uv_pip(options, "install", pip_name)
     if result is None:
         return False
     if result.returncode != 0:
@@ -3287,7 +3100,7 @@ def uninstall_from_venv(options: Options, pip_name: str) -> None:
         options:  Options object; reads options.venv_python.
         pip_name: The package to remove.
     """
-    result = run_pip_in_venv(options, "uninstall", "-y", pip_name)
+    result = run_uv_pip(options, "uninstall", pip_name)
     if result is not None and result.returncode != 0:
         logging.warning(
             "Could not uninstall %s. Error: %s", pip_name, result.stderr.strip()
@@ -3633,16 +3446,20 @@ def setup_virtualenv(options: Options) -> bool:
     if not options.rawlog:
         logging.info("Virtual environment created.")
 
-    download_packages(options)
-    if install_packages_simultaneously(options):
-        options.simultaneous_success = True
-    else:
-        options.simultaneous_success = False  # This is redundant, but it's here for clarity. The 'failed' part of the venv_dir will not be removed if this is False.
+    assert options.requirements_file is not None, (
+        "options.requirements_file must be set"
+    )
+    result = run_uv_pip(options, "install", "-r", os.fspath(options.requirements_file))
+    options.install_succeeded = result is not None and result.returncode == 0
+    if not options.install_succeeded:
+        # uv names the package it could not satisfy, so there is nothing an
+        # individual sweep would add. The venv keeps its "failed-" prefix, and
+        # verify_and_repair_imports below gets its turn on what did install.
         logging.error(
-            "Failed to install packages simultaneously. Trying to install packages individually to see which fail, but this venv folder will still have 'failed-' in its name..."
+            "uv could not install every requirement; this venv folder keeps its "
+            "'failed-' prefix.%s",
+            f" uv reported:\n{result.stderr.strip()}" if result is not None else "",
         )
-        if not install_packages_individually(options):
-            logging.error("Failed to install packages individually.")
 
     # Verify each import the user wrote, repairing the ones the install did not
     # satisfy, before the check that decides whether this venv gets to drop its
