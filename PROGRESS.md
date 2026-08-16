@@ -546,6 +546,15 @@ wiring rationale and for two Minors deliberately left unfixed.
   before `ruff format` rewrote ~3,200 lines of it and unwound the
   hand-aligned column style — the formatting reversal, not new code,
   accounted for that earlier difference.
+- `FunctionInfo.ast_node` (`src/veny/cli.py:1005`) is write-only as of phase 1.
+  Its only reader was the per-function loop that ran `FileOperationsVisitor`
+  over each reachable `FunctionDef`, deleted with the visitor block. Every
+  function of every analyzed module now retains a live `ast.FunctionDef`
+  reference that nothing consumes. Parked deliberately rather than removed:
+  it is harmless, and phase 3 splits `FunctionInfo` and the call graph into
+  `analysis/call_graph.py`, which is the right moment to decide whether the
+  field has a consumer in the new shape. Raised by phase 1's whole-branch
+  review, 2026-08-16.
 - `alias_index.py` is 732 lines, accepted over the plan's ~600-line split
   target by controller ruling (no further split this plan; see the ledger's
   Task 5b entry — the byte-identical move was verified symbol-by-symbol).
