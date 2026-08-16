@@ -2,7 +2,34 @@
 
 ## Current work
 
-**Topic:** Replacing veny's rc-file shell alias with a packaged console-script
+**Topic:** Re-architecting veny. Four requested changes — split the 6,020-line
+`src/veny/cli.py`, retire the 48-attribute `Options` god object, move from
+`pip` to `uv`, and add unit tests wherever they can be meaningful — are
+sequenced as one program of four phases, because extracting a module requires
+deciding what it receives instead of `options`, and the `uv` migration deletes
+code that would otherwise be organized and tested for nothing. A rewrite was
+considered and rejected: five modules are already cleanly extracted and tested
+(~1,975 lines), and a restart loses the undocumented half of this file's
+gotchas ledger.
+
+- Design doc: `docs/superpowers/specs/2026-08-15-veny-rearchitecture-design.md`
+  (approved 2026-08-15). Fixes module boundaries and ownership only; internals
+  and task breakdown belong to the per-phase plans.
+- Implementation plans: one per phase, not yet written.
+
+**Next action:** write the phase 1 implementation plan (delete the
+file/network visitor block — `cli.py:756-2195` plus its helpers and its
+four-`logging.info` consumer, ~1,600 lines, referenced by no test).
+
+Phase order and expected size: (1) delete the visitor block, ~1,600 lines;
+(2) migrate to `uv` with veny keeping its own venv cache, ~550 lines;
+(3) extract the survivors into the module layout in the design doc;
+(4) drain `Options` into frozen per-subsystem dataclasses, carried by the
+phase 3 extractions rather than done separately. Phases 1 and 2 are
+independent of the architecture and land first, taking `cli.py` from 6,020 to
+roughly 3,870 lines before any extraction begins.
+
+**Previous topic (complete):** Replacing veny's rc-file shell alias with a packaged console-script
 entry point. veny installs itself today by appending `alias veny="python3
 ~/veny.py"` to a shell configuration file, which costs four shell dialects plus
 rc-file discovery, is invisible to scripts and cron, and cannot guarantee the
@@ -40,7 +67,7 @@ wrapped script exited; `main()` is now `-> int`, captures `result.returncode`
 on all three paths and returns it after existing cleanup, and
 `src/veny/__main__.py` is `sys.exit(main())`.
 
-**Previous topic (complete):** Replaced `univ_defs.py` with the published `emmykit` package —
+**Earlier topic (complete):** Replaced `univ_defs.py` with the published `emmykit` package —
 design approved 2026-08-14, implementation plan executed on branch
 `emmykit-migration`. `veny.py` imported `univ_defs as ud` at 93 call sites
 (7 more in tests); all 41 symbols it used existed in emmykit 0.3.4 with
@@ -481,32 +508,17 @@ wiring rationale and for two Minors deliberately left unfixed.
   extracted from **emmykit 0.3.4**, not the current 0.4.0 — 0.4.0 removed
   the embedded script constants these scripts were generated from, so 0.4.0
   no longer carries the source text to extract them from.
-- **A manifest can record an `interpreter_tag` and an `interpreter_path`
-  that disagree.** `interpreter_tag()` in `src/veny/cli.py` reads
-  `options.stdlib.python_version`, while `venv_build_interpreter()` returns
-  `options.python_command or sys.executable`. Those agree unless the stdlib
-  probe degrades: `stdlib_index.for_interpreter` falls back to the *running*
-  interpreter's index on a timeout or a non-zero exit, so a run whose target
-  is 3.13 can write `interpreter_tag: "3.11"` next to
-  `interpreter_path: "python3.13"`, and a second degraded run then matches
-  that tag and reuses a 3.13 venv labelled 3.11. Nothing validates the pair.
-  The design doc's creation flow says the tag comes from the build
-  interpreter, so the code and the doc currently disagree about which
-  interpreter the tag describes. Fix shape: `installed_versions_in_venv`
-  already spawns the venv's own Python — have it also return
-  `sys.version_info[:2]` and record *that* as the tag, making every manifest
-  field a fact about the venv rather than about the run that built it.
-  Raised by the whole-branch review 2026-08-14, parked because it changes
-  what the approved design says.
-- `satisfies()` runs twice on the winning cached venv: once inside
-  `cache_candidates()` and again inside `check_venv_dir()` (both in
-  `src/veny/cli.py`), which re-reads the manifest from disk to do it. Correct
-  but redundant, and it reintroduces the "the folder changed underneath the
-  run" re-read that `CacheCandidate` removed from the ranking loop. Fix
-  shape: have `find_match_dir_in_cache` pass the manifest it already holds
-  through to `check_venv_dir`, leaving that function to do only the
-  import-level confirmation. Same shape as the Task 8 ruling, and best done
-  together with the interpreter-tag item above.
+- **Migrated 2026-08-15 into the re-architecture design doc** (see Current
+  work), which is now the single place these are tracked: the
+  `interpreter_tag`/`interpreter_path` disagreement in manifests (a degraded
+  stdlib probe can label a 3.13 venv 3.11, and a later degraded run then
+  matches that tag); the duplicate `satisfies()` call between
+  `cache_candidates()` and `check_venv_dir()`; the unreachable, never-working
+  `--full` mode, resolved there as *delete*; veny's exit statuses never having
+  been designed as a set; and `check_venv_dir`'s `issubset()` self-heal
+  against options files predating `options.aliases`. Every one of them was
+  parked on "it changes what the approved design says" — and that design doc
+  is the new design.
 - Smaller items carried from the venv-cache branch's review ledger, none
   blocking: `venv_cache` logs through the root logger rather than
   `logging.getLogger(__name__)` (consistent with the rest of the codebase);
@@ -522,8 +534,10 @@ wiring rationale and for two Minors deliberately left unfixed.
   `safe_is_dir` guard, since `read_manifest` also degrades on a missing
   directory.
 - `univ_defs.py` is gone, deleted in the emmykit migration. `src/veny/cli.py`
-  is 4,959 lines (`wc -l src/veny/cli.py`, 2026-08-15, after the
-  packaged-entry-point move dropped the alias-installer code).
+  is **6,020 lines** (`wc -l src/veny/cli.py`, 2026-08-15). An earlier note
+  here said 4,959, measured before `ruff format` rewrote ~3,200 lines of it
+  and unwound the hand-aligned column style; the formatting reversal, not new
+  code, accounts for the difference.
 - `alias_index.py` is 732 lines, accepted over the plan's ~600-line split
   target by controller ruling (no further split this plan; see the ledger's
   Task 5b entry — the byte-identical move was verified symbol-by-symbol).
@@ -541,10 +555,10 @@ wiring rationale and for two Minors deliberately left unfixed.
   now done — see the completed alias-resolver plan under Current work.
   `also_needs` itself was never part of that plan and stays open.)
 - The repository had no `tests/` directory before the stdlib work. Coverage
-  now stands at 250 tests (`tests/test_alias_index.py`,
-  `tests/test_pypi_client.py`, `tests/test_split_imports.py`,
-  `tests/test_stdlib_index.py`); broader coverage of `src/veny/cli.py` beyond
-  what these plans touched remains open.
+  now stands at 257 passing tests across 13 files in `tests/`; broader
+  coverage of `src/veny/cli.py` beyond what these plans touched remains open,
+  and is what the re-architecture's phase 3 and 4 extractions exist to make
+  possible.
 - Smaller items carried from the alias-resolver ledger, not worth their own
   paragraph: unused `_CONNECT_TIMEOUT`; a `.`-prefixed zip member yields
   `"."` as a top-level name; single-file extension modules (`.so`/`.pyd`)
@@ -590,23 +604,6 @@ wiring rationale and for two Minors deliberately left unfixed.
 - Garbage collection of stale venvs in `~/veny`, including the pre-manifest
   ones this plan's Task 10 orphans (no manifest means no match, so they are
   never selected again but are also never deleted).
-- **`--full` mode does not work, and its whole directory branch is
-  unreachable.** Found 2026-08-15 while deleting the pipreqs path. Two separate
-  walls, either of which is fatal on its own:
-  1. `--full` sets `options.python_script = options.cwd`, but never sets
-     `options.script_dir`, and `list_packages()` opens with
-     `assert options.script_dir is not None`. Reproduced on `main` before the
-     pipreqs deletion via a side worktree, so it is not caused by that change.
-  2. Passing a directory as the positional argument instead raises
-     `IsADirectoryError` from emmykit's `ensure_file`, so that route never
-     reaches the directory branch either.
-
-  Consequently `list_packages()`'s `elif ek.safe_is_dir(options.python_script):`
-  branch — now just `get_all_imports(options, options.python_script)` — has no
-  reachable caller. Fixing `--full` means setting `script_dir` (and deciding
-  what it should be when the target *is* a directory), then actually exercising
-  that branch, which no test covers. Note the `--full` flag is advertised in
-  `--help` and in README.md's flag list.
 - **Two pre-existing `AssertionError` crashes, both found by the packaged
   entry-point branch's final review (2026-08-15) and both left unfixed as out
   of scope.** Neither is a regression — the reviewer confirmed both are
@@ -628,13 +625,6 @@ wiring rationale and for two Minors deliberately left unfixed.
   because none of the three script-running `subprocess.run` calls capture
   output. If those calls ever gain `capture_output=True`, the child's output
   stops reaching the terminal live — check both sites before changing them.
-- veny's own exit statuses beyond the two paths fixed on 2026-08-15
-  (`script_exit_code = 1` when it cannot run the script) have never been
-  designed as a set: `--justprint`, `--full`, the `ek.my_critical_error`
-  sites and the `sys.exit(1)` / `sys.exit(2)` sites each chose a value
-  independently. The design doc
-  `docs/superpowers/specs/2026-08-15-packaged-entry-point-design.md` records
-  this as its open question.
 - emmykit's shell/alias helpers (`detect_shell`, `find_shell_rc_file`, `find_additional_alias_files`, and the `Options` fields `shell`, `rc_file`, `alias`, `alias_command`, `additional_alias_files`) have no caller in veny as of 2026-08-15. The usage audit is written up as a cross-repo prompt in `docs/prompts/2026-08-15-emmykit-shell-alias-helpers-audit.md` and has not been run yet. They are public API on a published 0.4.0, so removal is a breaking change and the prompt asks for a recommendation rather than a deletion.
 
 ## Open questions
