@@ -9,6 +9,7 @@ import argparse
 import ast
 import collections  # For the collections.deque annotation on the first-pass queue.
 import datetime as dt
+import functools
 import json
 import logging
 import os
@@ -43,6 +44,42 @@ if not hasattr(ek, "register_json_type"):
         f"Upgrade it with:  pip install -U 'emmykit>=0.4.0'"
     )
 from . import json_types, venv_cache
+
+
+@functools.cache
+def uv_binary() -> str:
+    """Return the uv executable veny drives its environment layer with.
+
+    Prefers the binary shipped by the ``uv`` PyPI package, which is installed
+    alongside veny and so carries a version pinned with veny's own. Falls back
+    to whatever is on PATH, which resolves by luck -- the weakness that retired
+    the shell-alias install -- and is only preferable to failing outright.
+
+    Returns:
+        A path or command name to invoke uv with.
+
+    Raises:
+        SystemExit: If neither the packaged binary nor PATH yields a uv.
+    """
+    try:
+        import uv
+    except ImportError:
+        pass
+    else:
+        return os.fspath(uv.find_uv_bin())
+    on_path = shutil.which("uv")
+    if on_path:
+        logging.warning(
+            "Using the uv found on PATH (%s). The uv package is not installed "
+            "alongside veny, so its version is not pinned to veny's.",
+            on_path,
+        )
+        return on_path
+    raise SystemExit(
+        "veny requires uv, which is not installed and is not on PATH.\n"
+        "Reinstall veny with:  uv tool install veny"
+    )
+
 
 # An import name paired with the pip package that provides it. Defined in
 # alias_index, which imports nothing of veny's, and re-exported here because
