@@ -229,7 +229,6 @@ def test_check_venv_dir_accepts_a_manifest_match_whose_import_actually_imports(
     )
     options = an_options({ResolvedImport("thing", "thing-pkg")})
     options.all_imports = {"thing"}
-    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     monkeypatch.setattr(
         alias_index,
         "probe_interpreter",
@@ -262,7 +261,6 @@ def test_find_match_dir_in_cache_returns_a_manifest_match(
     options.args = argparse.Namespace(
         latest=True, oldest=False, last_used=False, smallest=False
     )
-    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     monkeypatch.setattr(
         alias_index,
         "probe_interpreter",

@@ -472,24 +472,6 @@ def test_only_genuinely_uninstalled_imports_are_resolved(monkeypatch):
     }
 
 
-def test_an_import_reclassified_by_pip_list_gets_its_pip_name_resolved(monkeypatch):
-    # use_pip_list() moves an import back to uninstalled when pip's list does
-    # not know it, and those records go straight to pip. Now that split_imports
-    # no longer resolves installed imports, resolution has to happen here or
-    # pip is asked to install "cv2".
-    options = veny.Options()
-    options.aliases = _index_with({"cv2": "opencv-python"})
-    options.installed_imports = {veny.ResolvedImport(import_name="cv2", pip_name="cv2")}
-    options.pip_list = ["numpy"]  # Non-empty, so no probe venv is built.
-
-    veny.use_pip_list(options)
-
-    assert options.uninstalled_imports == {
-        veny.ResolvedImport(import_name="cv2", pip_name="opencv-python")
-    }
-    assert options.installed_imports == set()
-
-
 def _captured_venv_check_code(monkeypatch):
     """Capture the source that check_packages_in_venv runs inside the venv.
 
@@ -545,7 +527,6 @@ def test_check_packages_in_venv_without_a_record_checks_every_import_name(
         veny.ResolvedImport(import_name="cv2", pip_name="opencv-python"),
         veny.ResolvedImport(import_name="yaml", pip_name="PyYAML"),
     }
-    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     monkeypatch.setattr(
         alias_index, "probe_interpreter", lambda python, timeout=30.0: ("3.12", {})
     )
@@ -571,7 +552,6 @@ def test_check_packages_in_venv_bulk_branch_resolves_requirement_via_venv_metada
     options.uninstalled_imports = {
         veny.ResolvedImport(import_name="opencv-python", pip_name="opencv-python"),
     }
-    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     monkeypatch.setattr(
         alias_index,
         "probe_interpreter",
@@ -596,7 +576,6 @@ def test_check_packages_in_venv_bulk_branch_matches_pep503_spelling(
     options.uninstalled_imports = {
         veny.ResolvedImport(import_name="opencv_python", pip_name="opencv_python"),
     }
-    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     monkeypatch.setattr(
         alias_index,
         "probe_interpreter",
@@ -620,7 +599,6 @@ def test_check_packages_in_venv_bulk_branch_falls_back_when_distribution_unknown
     options.uninstalled_imports = {
         veny.ResolvedImport(import_name="numpy", pip_name="numpy"),
     }
-    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     monkeypatch.setattr(
         alias_index,
         "probe_interpreter",
@@ -642,7 +620,6 @@ def test_check_packages_in_venv_probes_the_venv_once_per_call(monkeypatch, tmp_p
         veny.ResolvedImport(import_name="yaml", pip_name="PyYAML"),
         veny.ResolvedImport(import_name="numpy", pip_name="numpy"),
     }
-    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     probe_calls = []
 
     def fake_probe(python, timeout=30.0):
@@ -708,7 +685,6 @@ def test_check_packages_in_venv_passes_when_any_top_level_name_imports(
     options.uninstalled_imports = {
         veny.ResolvedImport(import_name="opencv-python", pip_name="opencv-python"),
     }
-    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     monkeypatch.setattr(
         alias_index,
         "probe_interpreter",
@@ -739,7 +715,6 @@ def test_check_packages_in_venv_bulk_branch_checks_the_records_own_import_name(
     options.uninstalled_imports = {
         veny.ResolvedImport(import_name="setuptools", pip_name="setuptools"),
     }
-    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     monkeypatch.setattr(
         alias_index,
         "probe_interpreter",
@@ -775,7 +750,6 @@ def test_check_packages_in_venv_bulk_branch_fails_an_unprovided_source_import(
     options.uninstalled_imports = {
         veny.ResolvedImport(import_name="thing", pip_name="wrong-pkg"),
     }
-    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     monkeypatch.setattr(
         alias_index,
         "probe_interpreter",
@@ -811,7 +785,6 @@ def test_check_venv_dir_rejects_a_manifest_match_whose_import_does_not_actually_
             packages=(venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None),),
         ),
     )
-    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     monkeypatch.setattr(
         alias_index,
         "probe_interpreter",
@@ -834,7 +807,6 @@ def test_check_packages_in_venv_still_fails_a_genuinely_missing_package(
     options.uninstalled_imports = {
         veny.ResolvedImport(import_name="cv2", pip_name="opencv-python"),
     }
-    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     monkeypatch.setattr(
         alias_index,
         "probe_interpreter",
@@ -983,7 +955,6 @@ def test_setup_virtualenv_verifies_every_import_before_reporting_success(
         veny.ResolvedImport(import_name="thing", pip_name="thing-pkg")
     }
     calls = []
-    monkeypatch.setattr(veny, "use_pip_list", lambda opts: None)
     monkeypatch.setattr(veny, "write_requirements_file_with_extras", lambda opts: None)
     monkeypatch.setattr(subprocess, "check_call", lambda *a, **k: 0)
     monkeypatch.setattr(

@@ -20,7 +20,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import venv
 from collections import defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -145,7 +144,6 @@ class Options(ek.Options):
         ] = {}  # Maps custom module names to their file Paths
         self.subfolders: list[str] = []
         self.samedir_files: list[Path] = []
-        self.pip_list: list[str] = []
         self.loaded_custom_modules: set[str] = set()
         self.timestamp: str = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
         self.sys_path_hints: set[Path] = set()  # Filled by SysPathVisitor
@@ -295,7 +293,7 @@ def parse_arguments(options: Options) -> None:
     parser.add_argument(
         "--no-cache",
         action="store_true",
-        help="Don't search the cache. Instead, create a new virtual environment. Also, refresh the custom modules cache and the pip list.",
+        help="Don't search the cache. Instead, create a new virtual environment. Also, refresh the custom modules cache.",
     )
     parser.add_argument(
         "--latest",
@@ -320,7 +318,7 @@ def parse_arguments(options: Options) -> None:
     parser.add_argument(
         "--rc",
         action="store_true",
-        help="Refresh the custom modules cache and the pip list.",
+        help="Refresh the custom modules cache.",
     )
     parser.add_argument(
         "--reqs",
@@ -549,25 +547,6 @@ def main() -> int:
     elapsed_time = time2 - time1
     if not options.rawlog:
         logging.info("dict_of_custom_modules() took %s", elapsed_time)
-
-    # Look for files in options.my_dir that start with pip_list and load the most recent one.
-    options.pip_list = []
-    pip_list_files = sorted(
-        [f for f in options.my_dir.iterdir() if f.name.startswith("pip_list")],
-        reverse=True,
-    )
-    if logging.getLogger().isEnabledFor(logging.DEBUG):
-        logging.debug(
-            "pip_list_files = %s", " ".join(os.fspath(f) for f in pip_list_files)
-        )
-    # If --rc was not specified, look for a text file with the pip list the last time this script was run.
-    if not getattr(options.args, "rc", False) and pip_list_files:
-        try:
-            with open(options.my_dir / pip_list_files[0]) as file:
-                for line in file:
-                    options.pip_list.append(line.strip())
-        except BaseException:
-            logging.error(f"Error reading {pip_list_files[0]}")
 
     start_list_packages_time = dt.datetime.now()
     elapsed_time = start_list_packages_time - start_time
@@ -2529,7 +2508,6 @@ def check_packages_in_venv(
         # alternatives: one name per entry to try; passes if any one imports.
         alternatives = [[record.import_name]]
     else:
-        use_pip_list(options)
         # Ask the venv what it actually has, instead of import-checking every
         # record under its pip spelling: requirement_records() sets
         # import_name == pip_name for --reqs entries (a requirements line is
@@ -2658,8 +2636,8 @@ def split_imports(options: Options) -> None:
                     logging.debug("Module %s can be imported in venv", imp)
                 status_str = f"{ek.ANSI_GREEN}YES -     installed{ek.ANSI_RESET}"
                 # The pip name is left as the import name here because nothing
-                # needs it: an installed import is never handed to pip. If
-                # use_pip_list() later reclassifies this record, it resolves it.
+                # needs it: an installed import is never handed to pip, and
+                # nothing downstream re-resolves it.
                 options.installed_imports.add(record)
             else:
                 # Only a genuinely uninstalled import needs a pip name, so this
@@ -2858,106 +2836,6 @@ def interpreter_tag(options: Options) -> str:
     """
     major, minor = options.stdlib.python_version
     return f"{major}.{minor}"
-
-
-def use_pip_list(options: Options) -> None:
-    """Use the pip list command to find all installed packages and use that pip list to modify the uninstalled and installed imports. Add packages from the options.extra_requirements dictionary if "--reqs" is specified as a runtime argument."""
-    # Add packages from the options.extra_requirements dictionary if "--reqs" is specified as a runtime argument.
-    if getattr(options.args, "reqs", False):
-        options.uninstalled_imports = options.uninstalled_imports.union(
-            requirement_records(options.extra_requirements.keys())
-        )
-    if len(options.pip_list) == 0:
-        # Create virtual environment
-        venv.create(options.test_dir, with_pip=True)
-        python_executable = options.test_dir / "bin" / "python"
-
-        # Run custom list command using the Python executable from the virtual environment
-        list_command_script = """
-import importlib.metadata
-import pkgutil
-import sys
-
-def list_installed_packages():
-    installed_packages = [dist.metadata["Name"] for dist in importlib.metadata.distributions()]
-    return installed_packages
-
-def list_available_modules():
-    available_modules = [module.name for module in pkgutil.iter_modules()]
-    return available_modules
-
-def list_builtin_modules():
-    builtin_modules = sys.builtin_module_names
-    return builtin_modules
-
-installed_packages = list_installed_packages()
-available_modules = list_available_modules()
-builtin_modules = list_builtin_modules()
-
-print("\\n".join(installed_packages + available_modules + list(builtin_modules)))
-"""
-
-        list_command = [os.fspath(python_executable), "-c", list_command_script]
-
-        try:
-            result = subprocess.run(
-                list_command, check=True, capture_output=True, text=True
-            )
-            if logging.getLogger().isEnabledFor(logging.DEBUG):
-                logging.debug("Output:\n%s", result.stdout)
-        except subprocess.CalledProcessError as e:
-            logging.exception("%s\nException type: %s", e, type(e).__name__)
-
-        # Use regular expressions to find all package names
-        options.pip_list = re.findall(r"^[^\s]+", result.stdout, re.MULTILINE)
-        options.pip_list = [
-            pkg
-            for pkg in options.pip_list
-            if pkg != "Package" and not all(c == "-" for c in pkg)
-        ]
-        if logging.getLogger().isEnabledFor(logging.DEBUG):
-            logging.debug("\noptions.pip_list = %s", options.pip_list)
-
-        pip_list_filename = options.my_dir / f"pip_list_{options.timestamp}.txt"
-        pip_list_filename.write_text(
-            "\n".join(options.pip_list), encoding=ek.DEFAULT_ENCODING
-        )
-
-    # options.pip_list holds distribution names, module names and builtin module
-    # names all mixed together, so it is matched against the import name -- which
-    # is exactly what the pre-record code compared, since installed_imports used
-    # to hold import names.
-    known_names = set(options.pip_list)
-    stale_records = {
-        record
-        for record in options.installed_imports
-        if record.import_name not in known_names
-    }
-    # These records are about to be handed to pip, and split_imports() leaves an
-    # installed record's pip_name as its import name because nothing needed it
-    # until now. This is the moment it does, so resolve it here -- otherwise pip
-    # is asked to install "cv2".
-    new_uninstalled_imports = resolve_records(
-        options, {record.import_name for record in stale_records}
-    )
-    options.uninstalled_imports = options.uninstalled_imports.union(
-        new_uninstalled_imports
-    )
-    if options.uninstalled_imports:
-        if logging.getLogger().isEnabledFor(logging.DEBUG):
-            logging.debug(
-                "new_uninstalled_imports = %s",
-                sorted(record.import_name for record in new_uninstalled_imports),
-            )
-    # Remove the records as they were, not as they were re-resolved: resolution
-    # may have changed the pip_name, and a set difference on the new records
-    # would then leave the old ones behind in installed_imports.
-    options.installed_imports = options.installed_imports - stale_records
-    # Once again, add packages from the options.extra_requirements dictionary if "--reqs" is specified as a runtime argument. (Do this again, just in case they got removed from the uninstalled_imports set above.)
-    if getattr(options.args, "reqs", False):
-        options.uninstalled_imports = options.uninstalled_imports.union(
-            requirement_records(options.extra_requirements.keys())
-        )
 
 
 def parse_extra_requirements(options: Options) -> None:
@@ -3424,7 +3302,6 @@ def record_venv_state(options: Options) -> None:
 
 def setup_virtualenv(options: Options) -> bool:
     """Setup a virtual environment and install packages."""
-    use_pip_list(options)
     # The folder name is a cheap prefilter for the cache search; veny_manifest.json
     # inside the venv is the authority. venv_cache owns the encoding so a
     # hyphenated pip name cannot be mistaken for a field separator.
