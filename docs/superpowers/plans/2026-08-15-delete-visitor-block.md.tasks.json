@@ -1,0 +1,48 @@
+{
+  "planPath": "docs/superpowers/plans/2026-08-15-delete-visitor-block.md",
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 1: Pin import discovery with a test",
+      "status": "pending",
+      "description": "**Goal:** A test that fails if the deletion disturbs which imports veny finds \u2014 written and passing *before* any code is removed.\n\n**Files:**\n- Create: `tests/test_import_discovery.py`\n\n**Acceptance Criteria:**\n- [ ] Three tests pass against the current, undeleted `cli.py`\n- [ ] Each test asserts an exact set, never `assertTrue` or \"no exception raised\"\n- [ ] The mutation check (replace `collect_imports_from_module(first_module_key)` at `cli.py:3514` with `pass`) makes `test_function_body_import_in_a_custom_module_is_discovered` fail with `assert {'numpy', 'requests'} == {'numpy', 'pandas', 'requests'}`, then is reverted\n- [ ] `git status --short` shows only the new test file before committing\n\n**Verify:** `pixi run python -m pytest tests/test_import_discovery.py -v` \u2192 3 passed\n\nFull test source and per-test bug justification are in the plan, Task 1. Mutate `src/veny/cli.py` in place \u2014 `pixi.toml` sets `PYTHONPATH = \"src\"` in `[activation.env]` and that overwrites an inherited value, so mutating a side copy silently tests the real source and reports a false pass.\n\n```json:metadata\n{\"files\": [\"tests/test_import_discovery.py\"], \"verifyCommand\": \"pixi run python -m pytest tests/test_import_discovery.py -v\", \"acceptanceCriteria\": [\"3 tests pass against undeleted cli.py\", \"each test asserts an exact set\", \"mutating cli.py:3514 to pass makes test_function_body_import_in_a_custom_module_is_discovered fail, then is reverted\", \"git status shows only the new test file\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 2: Delete the visitor classes and consumer",
+      "status": "pending",
+      "description": "**Goal:** Remove the visitor subsystem and every reference to it, with the import set unchanged.\n\n**Files:**\n- Modify: `src/veny/cli.py` \u2014 `Options.__init__` (114-126), `_literal_str` through `TopLevelNetworkOperationsVisitor` (665-2195), `transform_call` (2236-2277), the four resets (3394-3397), the first-module visitor calls (3515-3519), the per-module visitor loop (3585-3606), the reporting block (3607-3640)\n\n**Acceptance Criteria:**\n- [ ] `rg 'OperationsVisitor|_record_IO|read_files|write_files|download_urls|upload_urls|current_method_name|transform_call' src/veny/cli.py` returns nothing\n- [ ] `collect_pathlib_aliases`, `is_pathlib_ctor`, `_safe_eval_node` and `safe_eval` still exist \u2014 `SysPathVisitor` and `_analyze_module` need them\n- [ ] `collect_imports_from_module(first_module_key)` at `cli.py:3514` is NOT deleted; it is adjacent to the visitor calls by accident and seeds the call-graph traversal\n- [ ] All tests pass, including Task 1's three\n- [ ] `ruff check .` reports zero\n\n**Verify:** `pixi run test` \u2192 260 passed\n\nRecord the mypy baseline first: `pixi run typecheck 2>&1 | tail -1` \u2192 `Found 46 errors in 2 files (checked 22 source files)`. Delete in descending line order; exact ranges and the seven deletion sites are in the plan, Task 2 Step 2.\n\n```json:metadata\n{\"files\": [\"src/veny/cli.py\"], \"verifyCommand\": \"pixi run test\", \"acceptanceCriteria\": [\"no visitor or IO-field references remain in cli.py\", \"safe_eval chain and collect_pathlib_aliases survive\", \"collect_imports_from_module(first_module_key) is not deleted\", \"260 tests pass\", \"ruff check . reports zero\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        0
+      ]
+    },
+    {
+      "id": 2,
+      "subject": "Task 3: Remove the now write-only module caches",
+      "status": "pending",
+      "description": "**Goal:** Delete `module_contents` and `module_trees`, which after Task 2 are written and never read.\n\n**Files:**\n- Modify: `src/veny/cli.py` \u2014 `_analyze_module` signature (3269-3270), docstring (3276, 3286-3287) and body (3307-3308); `find_imports_and_IO_in_script` locals (3401-3402) and both `_analyze_module` call sites (3437-3438, 3562-3563)\n\n**Acceptance Criteria:**\n- [ ] Before editing, `rg 'module_contents|module_trees' src/veny/cli.py` shows only declarations, docstring lines, assignments and call-site arguments \u2014 no reads. If a read appears, Task 2 was incomplete; stop.\n- [ ] After editing, `rg 'module_contents|module_trees' src/veny/cli.py` returns nothing\n- [ ] `_analyze_module` still returns `tuple[str, ModuleInfo] | None`\n- [ ] `visited_funcs` is left alone \u2014 it is still `collect_used_imports`'s recursion-guard argument\n- [ ] All tests pass\n\n**Verify:** `pixi run test` \u2192 260 passed\n\n`file_content` and `tree` are still used locally inside `_analyze_module` for `ast.parse` and `collector.visit`; only the dictionary writes go.\n\n```json:metadata\n{\"files\": [\"src/veny/cli.py\"], \"verifyCommand\": \"pixi run test\", \"acceptanceCriteria\": [\"module_contents and module_trees confirmed write-only before deletion\", \"no references remain after deletion\", \"_analyze_module return type unchanged\", \"visited_funcs untouched\", \"260 tests pass\"], \"modelTier\": \"mechanical\"}\n```",
+      "blockedBy": [
+        1
+      ]
+    },
+    {
+      "id": 3,
+      "subject": "Task 4: Rename the scan to find_imports_in_script",
+      "status": "pending",
+      "description": "**Goal:** `find_imports_and_IO_in_script` no longer finds I/O. Rename it and correct its docstring.\n\n**Files:**\n- Modify: `src/veny/cli.py` \u2014 the definition (3367) and both call sites (4353, 4411)\n- Modify: `tests/test_import_discovery.py` \u2014 the `_scan` helper's call\n\n**Acceptance Criteria:**\n- [ ] `rg 'find_imports_and_IO_in_script' src/veny/ tests/ --glob '!*.pyc'` returns nothing\n- [ ] The function is named `find_imports_in_script`, matching the name the design doc assigns to `analysis/scan.py`\n- [ ] The docstring summary, the `first_path` Args line and the Returns line no longer claim to find or return I/O\n- [ ] All tests pass\n\n**Verify:** `pixi run test` \u2192 260 passed\n\nExact before/after docstring text is in the plan, Task 4 Step 1.\n\n```json:metadata\n{\"files\": [\"src/veny/cli.py\", \"tests/test_import_discovery.py\"], \"verifyCommand\": \"pixi run test\", \"acceptanceCriteria\": [\"no references to the old name remain\", \"function renamed to find_imports_in_script\", \"docstring no longer mentions I/O\", \"260 tests pass\"], \"modelTier\": \"mechanical\"}\n```",
+      "blockedBy": [
+        2
+      ]
+    },
+    {
+      "id": 4,
+      "subject": "Task 5: Run the gates and record the outcome",
+      "status": "pending",
+      "description": "**Goal:** Confirm the phase held every gate, and leave `PROGRESS.md` accurate for the next session.\n\n**Files:**\n- Modify: `PROGRESS.md`\n\n**Acceptance Criteria:**\n- [ ] `pixi run test` passes with 260 tests\n- [ ] `ruff check .` reports zero and `pixi run python -m ruff format --check .` reports every file formatted\n- [ ] `pixi run typecheck 2>&1 | tail -1` is at or below `Found 46 errors in 2 files (checked 22 source files)`\n- [ ] `pixi run smoke` is green, or the completion note says it was skipped for lack of network\n- [ ] `PROGRESS.md`'s **Current work** names phase 2 as the next action with the measured `wc -l src/veny/cli.py`, and the Deferred-items line recording cli.py's length is updated to the same number\n\n**Verify:** `pixi run test && pixi run lint && pixi run smoke` \u2192 all green\n\n`pixi run format` rewrites files; use `--check` for the gate. `pixi run smoke` builds a wheel and installs it into a throwaway venv, so it needs the network. If mypy rose, find the new errors with `pixi run python -m mypy src/veny/cli.py` and fix only those.\n\n```json:metadata\n{\"files\": [\"PROGRESS.md\"], \"verifyCommand\": \"pixi run test && pixi run lint\", \"acceptanceCriteria\": [\"260 tests pass\", \"ruff check zero and format --check clean\", \"mypy count at or below 46\", \"smoke green or explicitly noted as skipped\", \"PROGRESS.md Current work and Deferred-items line updated with the measured line count\"], \"modelTier\": \"standard\"}\n```",
+      "blockedBy": [
+        3
+      ]
+    }
+  ],
+  "lastUpdated": "2026-08-15T23:13:31"
+}
