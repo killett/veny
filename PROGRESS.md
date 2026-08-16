@@ -16,10 +16,30 @@ gotchas ledger.
 - Design doc: `docs/superpowers/specs/2026-08-15-veny-rearchitecture-design.md`
   (approved 2026-08-15). Fixes module boundaries and ownership only; internals
   and task breakdown belong to the per-phase plans.
-- Implementation plans: one per phase, not yet written.
+- Implementation plans, one per phase — **except phase 3, which is a sequence
+  of five.** Thirteen modules out of a 4,143-line `cli.py`, each extraction
+  carrying its own state decomposition and tests, is past what one plan can
+  specify without placeholders; the design doc already says phases 3 and 4 are
+  "sequenced module by module in their plans". Ordered leaf-first so each lands
+  on already-extracted foundations:
 
-**Next action:** write the phase 3 implementation plan (extract the survivors
-into the module layout the design doc specifies). The BLOCKING live-run
+  | Plan | Modules | ~Lines |
+  |---|---|---|
+  | **3a** `docs/superpowers/plans/2026-08-16-analysis-foundation.md` (written, not executed) | `analysis/literals.py`, `analysis/custom_modules.py`, `settings.py` | 430 |
+  | 3b (not written) | `analysis/imports.py`, `call_graph.py`, `scan.py` | 1,090 |
+  | 3c (not written) | `classify.py`, `environment.py` | 600 |
+  | 3d (not written) | `verify.py`, `cache_search.py`, `last_used.py` | 1,100 |
+  | 3e (not written) | `pipeline.py`, `cli.py` slimming, `--full` deletion, final `Options` drain | 450 |
+
+  Phases 1 and 2 are complete and merged to `main`.
+
+**Next action:** execute plan 3a on branch `analysis-foundation` (already
+created, off `main` @ `8f247ed`; the plan is committed there as `99e942e` and
+is the only commit on the branch). Its five tasks and `.tasks.json` are ready.
+Nothing in 3a has been implemented yet.
+
+The rest of this block is phase 2's closing state, kept because it records
+what "green" currently means. The BLOCKING live-run
 defect that used to be listed here is fixed — see Deferred items below for
 the fix commit and verification. Task 9 (2026-08-16) closed a second
 live-run-only defect the 265-test suite could not see: `venv_build_interpreter()`
@@ -286,6 +306,44 @@ wiring rationale and for two Minors deliberately left unfixed.
 
 ## Gotchas
 
+- **`safe_eval` silently drops every `sys.path` entry built with pathlib's `/`
+  operator.** Open as of 2026-08-16; plan 3a's Task 2 fixes it. `safe_eval`'s
+  docstring lists "the `/` operator for joining pathlib Paths" as supported and
+  `_safe_eval_node` opens with a dedicated `ast.BinOp`/`ast.Div` branch for it —
+  but there is **no branch for a bare `Path(...)` constructor**, only for
+  `Path(...).resolve()`, `.absolute()` and `.joinpath(...)`. So evaluating the
+  left operand falls through to `raise ValueError(f"Unsupported call: ...")`,
+  which propagates out of the `Div` branch and is swallowed by `safe_eval`'s
+  `except`, yielding `None`. Measured: `Path("a").joinpath("b", "c")` → `"a/b/c"`
+  but `Path("a") / "b"` → `None` and `Path("a")` → `None`. Reproduced through
+  `SysPathVisitor`: given three `sys.path` lines, it finds `{'/opt/plain',
+  '/opt/libs/other'}` and drops the `/`-built one entirely. The symptom is
+  invisible — veny simply never scans that directory for custom modules, so an
+  import satisfied there is reported as a bad import or sent to PyPI to be
+  installed. `/` is the more idiomatic pathlib form than `.joinpath()`. The fix
+  is one branch, specified in plan 3a. Found by probing the evaluator while
+  planning its extraction, not by any test.
+- **A test that stubs a subprocess proves your code calls the stub.** Phase 2
+  shipped three separate regressions past a green 264-test suite, all of the
+  same shape: every test stubs the `uv` subprocess, so nothing exercised the
+  command lines veny actually builds. Each was caught by a live run instead —
+  (1) `uv venv` refusing a non-empty directory broke *every* fresh build;
+  (2) `uv venv --python python3` resolving to 3.12 where PATH's `python3` is
+  3.13; (3) the same defect again in `split_imports`' probe venv, where a script
+  importing `cgi` (stdlib in 3.12, removed in 3.13) was classified "installed"
+  and then died at runtime. Make a live end-to-end run an acceptance criterion
+  of any plan that touches subprocess invocation, and when phase 3c extracts
+  `environment.py` as the sole owner of uv invocation, give it a live
+  integration test rather than only argument-list assertions.
+- **`pixi.toml`'s `[activation.env]` sets `PYTHONPATH = "src"`, which
+  *overwrites* an inherited `PYTHONPATH`.** So copying `src/` elsewhere,
+  mutating the copy and running `PYTHONPATH=/tmp/mut/src pixi run python -m
+  pytest` silently tests `/workspace/src` and reports a false pass. This
+  matters because mutation testing is this project's gate for whether a test
+  can fail at all. Mutate the working tree in place and restore with
+  `git checkout -- src/veny/cli.py` (never `git stash`), or inject the copy
+  with `sys.path.insert(0, ...)` inside the process. Confirm which file was
+  loaded with `pixi run python -c "import veny.cli as c; print(c.__file__)"`.
 - veny's own types are serialized by `json_types.register_types()`, called
   at `src/veny/cli.py` module scope, not inside `main()`. Anything that imports veny --
   including every test -- gets production's serialization behaviour. If you move
@@ -574,6 +632,24 @@ wiring rationale and for two Minors deliberately left unfixed.
 
 ## Deferred items
 
+- **Two inaccuracies in the approved re-architecture design doc**, found while
+  planning phase 3a on 2026-08-16. Neither invalidates the design; both mislead
+  anyone implementing from it verbatim.
+  1. The phase 3 section says the one-way import direction "can be enforced by
+     a test — you already have `tests/test_import_guard.py`". It cannot. That
+     file guards *emmykit availability* (missing, present, too old) and says
+     nothing about import direction. Plan 3a's Task 4 creates the layering
+     guard as a new `tests/test_layering.py`; its rule table was validated
+     against the tree (zero violations, zero unguarded modules, correctly
+     permitting `alias_index → pypi_client` and `json_types → alias_index`).
+  2. The phase 4 section lists `pathlibcutoff` among fields that die with the
+     persistence change. It has a second consumer the design did not account
+     for: `dict_of_custom_modules` uses it to decide whether an old **pickle**
+     holds string paths needing conversion to `Path`. That is unrelated to the
+     options-JSON persistence, so the value outlives phase 4. Plan 3a rehomes
+     it as the module constant `PATHLIB_CUTOFF` in `analysis/custom_modules.py`,
+     where it is honestly a historical fact about veny's on-disk format rather
+     than a setting.
 - **Parked by phase 2's reviews, 2026-08-16.** None blocking; each was ruled
   real but out of scope, and the phase they belong to is named.
   - `options.installed_imports` is **write-only** — written in `split_imports`,
