@@ -18,22 +18,29 @@ gotchas ledger.
   and task breakdown belong to the per-phase plans.
 - Implementation plans: one per phase, not yet written.
 
-**Next action:** write the phase 2 implementation plan (migrate to `uv`, with
-veny keeping its own venv cache). Phase 1 is complete: the file/network visitor
-block is deleted, `src/veny/cli.py` is 4,362 lines (was 6,020), and
-`tests/test_import_discovery.py` pins the import set that deletion had to
-preserve.
+**Next action:** write the phase 3 implementation plan (extract the survivors
+into the module layout the design doc specifies) — but first close the
+BLOCKING live-run defect recorded under Deferred items, found during phase
+2's Task 7 verification: `setup_virtualenv` crashes on every fresh venv
+build because `uv venv` refuses the non-empty target directory
+`setup_virtualenv` hands it. Phase 2's gates (`pixi run test` 264 passed,
+`ruff check .` zero, `ruff format --check .` all formatted,
+`pixi run typecheck` 37 errors, `pixi run smoke` green) are otherwise all
+green, and `src/veny/cli.py` is 4,102 lines (was 4,362 after phase 1, 6,020
+before phase 1) — but the live run is the part that matters most for a
+migration like this, and it did not pass.
 
 Phase order and expected size: (1) delete the visitor block, ~1,600 lines,
 complete on branch `delete-visitor-block`; (2) migrate to `uv` with veny
-keeping its own venv cache, ~550 lines; (3) extract the survivors into the
-module layout in the design doc; (4) drain `Options` into frozen
-per-subsystem dataclasses, carried by the phase 3 extractions rather than
-done separately. Phases 1 and 2 are independent of the architecture and land
-first; the original combined estimate for both was 6,020 down to roughly
-3,870 lines before any extraction begins. Phase 1 alone landed at 4,362
-lines — phase 2's contribution is still to be measured once its plan is
-written.
+keeping its own venv cache, complete on branch `uv-migration`; (3) extract the
+survivors into the module layout in the design doc; (4) drain `Options` into
+frozen per-subsystem dataclasses, carried by the phase 3 extractions rather
+than done separately. Phases 1 and 2 are independent of the architecture and
+land first; the original combined estimate for both was 6,020 down to
+roughly 3,870 lines before any extraction begins. Phase 1 landed at 4,362
+lines and phase 2 landed at 4,102 — 260 lines lighter, short of the original
+combined estimate, so phase 3's extraction has more to move than that
+estimate assumed.
 
 **Previous topic (complete):** Replacing veny's rc-file shell alias with a packaged console-script
 entry point. veny installs itself today by appending `alias veny="python3
@@ -504,9 +511,73 @@ wiring rationale and for two Minors deliberately left unfixed.
   project name might meet at a dict boundary, that boundary needs
   `normalize_pip_name` on both the write side and the read side, not just
   one.
+- **`uv venv` seeds no pip, so `options.venv_python` is the only interpreter
+  in a veny environment.** There is no `bin/pip` to shell out to, by design
+  (see README's "Cached environments have no pip"). A related, easy-to-miss
+  fact: `uv venv`'s `pyvenv.cfg` carries only `home`, `implementation`, `uv`,
+  `version_info` and `include-system-site-packages` — unlike stdlib `venv`,
+  it records no path to the venv's own directory (stdlib `venv` writes a
+  `command = ... -m venv <dir>` line). That absence is *why*
+  `rename_venv`'s `pyvenv.cfg` rewrite still exists in `src/veny/cli.py`
+  despite `uv venv` needing no such fix-up itself: the rewrite still matters
+  for stdlib-built venvs already sitting in users' `~/veny` caches from
+  before this migration, which do record their own path and would break on
+  rename without it.
+- **`uv venv` refuses to build into a directory that already exists and is
+  non-empty, and `setup_virtualenv` hands it exactly that — every real
+  "build a new venv" run crashes.** Found live during this task's Step 3
+  (`pixi run veny --no-cache /tmp/veny-live.py`, 2026-08-16); see the
+  Deferred-items entry below for the full defect writeup and reproduction.
+  This is not a stale-directory artifact — it reproduces from a clean
+  `~/veny` on every fresh build, because `setup_virtualenv` always creates
+  the target directory (`Options.set_venv_dir`'s `mkdir`) and writes
+  `requirements.txt` into it (`write_requirements_file_with_extras`) before
+  calling `create_venv`, and stdlib `venv.create` tolerated that ordering
+  where `uv venv` does not.
 
 ## Deferred items
 
+- **BLOCKING, found live 2026-08-16: `setup_virtualenv` crashes with an
+  unhandled `subprocess.CalledProcessError` on every fresh venv build,
+  because `uv venv` refuses a non-empty target directory and
+  `setup_virtualenv` always hands it one.** This is a phase 2 (uv migration)
+  regression, not touched by this documentation task per its own
+  instructions, so it is reported here rather than fixed.
+  - Reproduction: `pixi run veny --no-cache /tmp/veny-live.py` against a
+    clean throwaway script importing `yaml`. Crashes every time; confirmed
+    by also running `uv venv` by hand against an empty vs. a non-empty
+    directory (empty succeeds, non-empty fails with `error: Failed to
+    create virtual environment / Caused by: A directory already exists
+    at: <path> / hint: Use the --clear flag or set UV_VENV_CLEAR=1`).
+  - Mechanism: `setup_virtualenv` (`src/veny/cli.py:3304`) calls
+    `options.set_venv_dir(options.my_dir / f"failed-{folder_name}")`, whose
+    `set_venv_dir` (`cli.py:229`) does `p.mkdir(parents=True,
+    exist_ok=True)` — creating the target directory. It then calls
+    `write_requirements_file_with_extras(options)` (`cli.py:2860`), which
+    opens `options.requirements_file` (`venv_dir / "requirements.txt"`) for
+    writing — putting a file inside the now-existing directory. Only then
+    does it call `create_venv(options.venv_dir, ...)` (`cli.py:3323`),
+    which runs `uv venv <target>`. Stdlib `venv.create()` (what this code
+    path was written against, pre-migration) tolerates a pre-existing,
+    non-empty target directory; `uv venv` does not, and raises. Nothing
+    catches the resulting `CalledProcessError`, so the whole run dies with
+    a Python traceback instead of veny's normal error handling.
+  - Why the unit suite (264 passing) never caught it: every test stubs the
+    `uv venv` subprocess call, so none of them exercise the real ordering
+    constraint uv enforces on its target directory.
+  - Scope: hits every "build a new venv" path through `setup_virtualenv` —
+    i.e. any run where no cache match is found, which includes a new
+    user's very first invocation with an empty `~/veny`. The
+    `tempfile.TemporaryDirectory()`-based `create_venv` call at
+    `cli.py:2606` (inside the alias-resolution probe path) is unaffected,
+    because nothing writes into that directory before `create_venv` runs.
+  - Not a workaround target for this task: global instructions for this
+    task forbid touching `src/veny/` or `tests/` and direct reporting a
+    live-run failure rather than fixing it. A real fix belongs to a follow-up
+    task — either write `requirements.txt` after `create_venv` succeeds
+    (reorder), or build with `--clear`/`UV_VENV_CLEAR=1`, or use a
+    dedicated empty subdirectory for the requirements file so `venv_dir`
+    itself stays empty until uv creates it.
 - The five helper scripts (`mydiff`, `myaudit`, `multireplace`, `treeview`,
   `printall`) that veny used to write into `~/veny` still need adopting as
   real, standalone files in the `killett/utilities` repository, per
@@ -518,13 +589,16 @@ wiring rationale and for two Minors deliberately left unfixed.
   work), which is now the single place these are tracked: the
   `interpreter_tag`/`interpreter_path` disagreement in manifests (a degraded
   stdlib probe can label a 3.13 venv 3.11, and a later degraded run then
-  matches that tag); the duplicate `satisfies()` call between
-  `cache_candidates()` and `check_venv_dir()`; the unreachable, never-working
-  `--full` mode, resolved there as *delete*; veny's exit statuses never having
-  been designed as a set; and `check_venv_dir`'s `issubset()` self-heal
-  against options files predating `options.aliases`. Every one of them was
-  parked on "it changes what the approved design says" — and that design doc
-  is the new design.
+  matches that tag) — **closed by phase 2's Task 6** (2026-08-16), which now
+  tags the manifest from the venv's own reported `sys.version_info` rather
+  than from the run's classified interpreter, so the two no longer have
+  independent sources to disagree from; the duplicate `satisfies()` call
+  between `cache_candidates()` and `check_venv_dir()`; the unreachable,
+  never-working `--full` mode, resolved there as *delete*; veny's exit
+  statuses never having been designed as a set; and `check_venv_dir`'s
+  `issubset()` self-heal against options files predating `options.aliases`.
+  The remaining four were parked on "it changes what the approved design
+  says" — and that design doc is the new design.
 - Smaller items carried from the venv-cache branch's review ledger, none
   blocking: `venv_cache` logs through the root logger rather than
   `logging.getLogger(__name__)` (consistent with the rest of the codebase);
@@ -540,10 +614,11 @@ wiring rationale and for two Minors deliberately left unfixed.
   `safe_is_dir` guard, since `read_manifest` also degrades on a missing
   directory.
 - `univ_defs.py` is gone, deleted in the emmykit migration. `src/veny/cli.py`
-  is **4,362 lines** (`wc -l src/veny/cli.py`, 2026-08-16, after phase 1 of
-  the re-architecture deleted the file/network visitor block). Before that
-  deletion it was 6,020 lines; an earlier note here said 4,959, measured
-  before `ruff format` rewrote ~3,200 lines of it and unwound the
+  is **4,102 lines** (`wc -l src/veny/cli.py`, 2026-08-16, after phase 2 of
+  the re-architecture migrated the environment layer to `uv`). Before that it
+  was 4,362 lines, measured after phase 1 deleted the file/network visitor
+  block; before phase 1 it was 6,020 lines; an earlier note here said 4,959,
+  measured before `ruff format` rewrote ~3,200 lines of it and unwound the
   hand-aligned column style — the formatting reversal, not new code,
   accounted for that earlier difference.
 - `FunctionInfo.ast_node` (`src/veny/cli.py:1005`) is write-only as of phase 1.
