@@ -5,8 +5,7 @@ import json
 import emmykit as ek
 import pytest
 
-from veny import alias_index
-from veny import stdlib_index
+from veny import alias_index, stdlib_index
 from veny import json_types as veny_json_types
 
 

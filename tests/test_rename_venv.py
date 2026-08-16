@@ -11,8 +11,7 @@ def a_venv(root: Path, name: str) -> veny.Options:
     venv_dir = root / name
     venv_dir.mkdir(parents=True, exist_ok=True)
     (venv_dir / "pyvenv.cfg").write_text(
-        "home = /usr/bin\n"
-        f"command = /usr/bin/python3.12 -m venv {venv_dir}\n"
+        f"home = /usr/bin\ncommand = /usr/bin/python3.12 -m venv {venv_dir}\n"
     )
     (venv_dir / "download_packages.sh").write_text(
         f"#!/bin/sh\n{venv_dir}/bin/pip download -r {venv_dir}/requirements.txt\n"

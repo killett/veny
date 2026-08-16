@@ -2,8 +2,8 @@
 
 import sys
 
-from veny import stdlib_index
 from veny import cli as veny
+from veny import stdlib_index
 
 
 def an_options(python_command: str) -> veny.Options:
