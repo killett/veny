@@ -3152,19 +3152,22 @@ def verify_and_repair_imports(options: Options) -> None:
 
 
 _VERSION_PROBE_CODE = (
-    "import json\n"
+    "import json, sys\n"
     "from importlib.metadata import distributions\n"
-    "print(json.dumps({d.metadata['Name']: d.version for d in distributions()"
-    " if d.metadata['Name']}))\n"
+    "print(json.dumps({"
+    "'python': list(sys.version_info[:2]),"
+    " 'versions': {d.metadata['Name']: d.version for d in distributions()"
+    " if d.metadata['Name']}}))\n"
 )
 
 
-def installed_versions_in_venv(options: Options) -> dict[str, str]:
-    """Ask a virtual environment which versions it actually has.
+def installed_state_in_venv(options: Options) -> tuple[dict[str, str], str]:
+    """Ask a virtual environment which versions and interpreter it actually has.
 
     This is what the manifest records, rather than what was requested or what
     pip printed: only the venv itself knows what ended up installed, including
-    versions pip chose for unpinned packages.
+    versions pip chose for unpinned packages, and which interpreter it was
+    actually built with.
 
     Args:
         options: Options object; reads options.venv_python, which callers must
@@ -3172,10 +3175,11 @@ def installed_versions_in_venv(options: Options) -> dict[str, str]:
                  and asserts rather than returning empty.
 
     Returns:
-        A mapping of normalized pip name to version. Empty if the probe could
-        not be run or its output could not be read -- a version veny could not
-        read is recorded as unknown, which makes any later pin check on that
-        package fail closed.
+        A tuple of (versions, tag). versions maps normalized pip name to
+        version, empty if the probe could not be run or its output could not
+        be read -- a version veny could not read is recorded as unknown,
+        which makes any later pin check on that package fail closed. tag is
+        the venv's own "major.minor", or "" if the probe could not be run.
     """
     assert options.venv_python is not None, (
         "Virtual environment Python executable is not set."
@@ -3191,32 +3195,41 @@ def installed_versions_in_venv(options: Options) -> dict[str, str]:
         )
     except (OSError, subprocess.SubprocessError) as exc:
         logging.warning("Could not list installed versions in the venv (%s).", exc)
-        return {}
+        return {}, ""
     if result.returncode != 0:
         logging.warning(
             "Could not list installed versions in the venv: %s", result.stderr.strip()
         )
-        return {}
+        return {}, ""
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
         logging.warning(
             "Could not read the installed versions reported by the venv (%s).", exc
         )
-        return {}
-    return {
-        venv_cache.normalize_pip_name(name): str(version)
-        for name, version in payload.items()
-    }
+        return {}, ""
+    return (
+        {
+            venv_cache.normalize_pip_name(name): str(version)
+            for name, version in payload.get("versions", {}).items()
+        },
+        ".".join(str(part) for part in payload.get("python", [])),
+    )
 
 
-def manifest_for(options: Options, versions: dict[str, str]) -> venv_cache.Manifest:
+def manifest_for(
+    options: Options, versions: dict[str, str], venv_tag: str = ""
+) -> venv_cache.Manifest:
     """Build the manifest describing a finished virtual environment.
 
     Args:
         options:  Options object; reads options.uninstalled_imports (after any
                   repairs), options.extra_requirements, and the interpreter.
         versions: Installed versions, keyed by normalized pip name.
+        venv_tag: The "major.minor" the venv's own interpreter reported. Empty
+                  when the probe could not run, in which case the run's own
+                  tag serves -- the pre-existing behaviour, and the only case
+                  where the tag can still disagree with interpreter_path.
 
     Returns:
         The manifest to write into the venv.
@@ -3246,7 +3259,7 @@ def manifest_for(options: Options, versions: dict[str, str]) -> venv_cache.Manif
         schema_version=venv_cache.SCHEMA_VERSION,
         created=options.timestamp,
         veny_version=__version__,
-        interpreter_tag=interpreter_tag(options),
+        interpreter_tag=venv_tag or interpreter_tag(options),
         interpreter_path=venv_build_interpreter(options),
         packages=packages,
     )
@@ -3282,8 +3295,9 @@ def record_venv_state(options: Options) -> None:
                 prefix + wanted_name,
             )
         rename_venv(options, prefix + wanted_name)
+    versions, venv_tag = installed_state_in_venv(options)
     venv_cache.write_manifest(
-        options.venv_dir, manifest_for(options, installed_versions_in_venv(options))
+        options.venv_dir, manifest_for(options, versions, venv_tag)
     )
 
 

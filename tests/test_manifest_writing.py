@@ -96,8 +96,8 @@ def test_record_venv_state_renames_before_writing_the_manifest(monkeypatch, tmp_
     # a real Python.
     monkeypatch.setattr(
         veny,
-        "installed_versions_in_venv",
-        lambda opts: {"pyyaml": "6.0.2", "numpy": "2.1.3"},
+        "installed_state_in_venv",
+        lambda opts: ({"pyyaml": "6.0.2", "numpy": "2.1.3"}, "3.12"),
     )
 
     real_write_manifest = venv_cache.write_manifest
@@ -134,7 +134,7 @@ def test_record_venv_state_renames_before_writing_the_manifest(monkeypatch, tmp_
     assert by_pip["numpy"].installed_version == "2.1.3"
 
 
-def test_installed_versions_in_venv_returns_empty_on_oserror(monkeypatch):
+def test_installed_state_in_venv_returns_empty_on_oserror(monkeypatch):
     """A probe that cannot even launch must cost a rebuild, not raise out of record_venv_state."""
     options = veny.Options()
     options.venv_python = Path("/usr/bin/python3.12")
@@ -143,10 +143,10 @@ def test_installed_versions_in_venv_returns_empty_on_oserror(monkeypatch):
         "run",
         lambda *args, **kwargs: (_ for _ in ()).throw(OSError("no such file")),
     )
-    assert veny.installed_versions_in_venv(options) == {}
+    assert veny.installed_state_in_venv(options) == ({}, "")
 
 
-def test_installed_versions_in_venv_returns_empty_on_subprocess_error(monkeypatch):
+def test_installed_state_in_venv_returns_empty_on_subprocess_error(monkeypatch):
     """A timed-out probe is a SubprocessError, not an OSError; both must degrade the same way."""
     options = veny.Options()
     options.venv_python = Path("/usr/bin/python3.12")
@@ -155,10 +155,10 @@ def test_installed_versions_in_venv_returns_empty_on_subprocess_error(monkeypatc
         raise subprocess.TimeoutExpired(cmd="probe", timeout=60)
 
     monkeypatch.setattr(subprocess, "run", raise_timeout)
-    assert veny.installed_versions_in_venv(options) == {}
+    assert veny.installed_state_in_venv(options) == ({}, "")
 
 
-def test_installed_versions_in_venv_returns_empty_on_nonzero_returncode(monkeypatch):
+def test_installed_state_in_venv_returns_empty_on_nonzero_returncode(monkeypatch):
     """A probe that ran but failed inside the venv must not be read as an empty-but-successful venv."""
     options = veny.Options()
     options.venv_python = Path("/usr/bin/python3.12")
@@ -169,10 +169,10 @@ def test_installed_versions_in_venv_returns_empty_on_nonzero_returncode(monkeypa
             args=[], returncode=1, stdout="", stderr="boom"
         ),
     )
-    assert veny.installed_versions_in_venv(options) == {}
+    assert veny.installed_state_in_venv(options) == ({}, "")
 
 
-def test_installed_versions_in_venv_returns_empty_on_malformed_json(monkeypatch):
+def test_installed_state_in_venv_returns_empty_on_malformed_json(monkeypatch):
     """A truncated or corrupted probe response must not raise out of a never-raise cache path."""
     options = veny.Options()
     options.venv_python = Path("/usr/bin/python3.12")
@@ -183,10 +183,10 @@ def test_installed_versions_in_venv_returns_empty_on_malformed_json(monkeypatch)
             args=[], returncode=0, stdout="not json", stderr=""
         ),
     )
-    assert veny.installed_versions_in_venv(options) == {}
+    assert veny.installed_state_in_venv(options) == ({}, "")
 
 
-def test_installed_versions_in_venv_keys_by_normalized_pip_name(monkeypatch):
+def test_installed_state_in_venv_keys_by_normalized_pip_name(monkeypatch):
     """manifest_for looks this mapping up by normalize_pip_name(record.pip_name); a raw-keyed dict would never match."""
     options = veny.Options()
     options.venv_python = Path("/usr/bin/python3.12")
@@ -196,11 +196,39 @@ def test_installed_versions_in_venv_keys_by_normalized_pip_name(monkeypatch):
         lambda *args, **kwargs: subprocess.CompletedProcess(
             args=[],
             returncode=0,
-            stdout=json.dumps({"PyYAML": "6.0.2", "types_requests": "2.31.0.6"}),
+            stdout=json.dumps(
+                {
+                    "python": [3, 12],
+                    "versions": {
+                        "PyYAML": "6.0.2",
+                        "types_requests": "2.31.0.6",
+                    },
+                }
+            ),
             stderr="",
         ),
     )
-    assert veny.installed_versions_in_venv(options) == {
-        "pyyaml": "6.0.2",
-        "types-requests": "2.31.0.6",
-    }
+    assert veny.installed_state_in_venv(options) == (
+        {
+            "pyyaml": "6.0.2",
+            "types-requests": "2.31.0.6",
+        },
+        "3.12",
+    )
+
+
+def test_the_manifest_tag_comes_from_the_venv_not_the_run() -> None:
+    """A degraded stdlib probe must not mislabel the venv's interpreter.
+
+    an_options() classifies against 3.12. A venv reporting 3.13 must be recorded
+    as 3.13, or a later degraded run matches the wrong tag and reuses it.
+    """
+    manifest = veny.manifest_for(an_options(), {}, "3.13")
+    assert manifest.interpreter_tag == "3.13"
+    assert manifest.interpreter_path == "/usr/bin/python3.12"
+
+
+def test_an_unreadable_venv_falls_back_to_the_runs_own_tag() -> None:
+    """An empty tag means the probe failed, not that the venv has no version."""
+    manifest = veny.manifest_for(an_options(), {}, "")
+    assert manifest.interpreter_tag == "3.12"
