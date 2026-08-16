@@ -539,7 +539,7 @@ wiring rationale and for two Minors deliberately left unfixed.
 
 ## Deferred items
 
-- **FIXED 2026-08-16 (Task 8, commit `<TASK8_SHA>`).** `setup_virtualenv`
+- **FIXED 2026-08-16 (Task 8, commit `10400f7`).** `setup_virtualenv`
   used to crash with an unhandled `subprocess.CalledProcessError` on every
   fresh venv build, because `uv venv` refuses a non-empty target directory
   and `setup_virtualenv` always handed it one. Original writeup, kept for
