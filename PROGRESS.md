@@ -19,16 +19,16 @@ gotchas ledger.
 - Implementation plans: one per phase, not yet written.
 
 **Next action:** write the phase 3 implementation plan (extract the survivors
-into the module layout the design doc specifies) — but first close the
-BLOCKING live-run defect recorded under Deferred items, found during phase
-2's Task 7 verification: `setup_virtualenv` crashes on every fresh venv
-build because `uv venv` refuses the non-empty target directory
-`setup_virtualenv` hands it. Phase 2's gates (`pixi run test` 264 passed,
-`ruff check .` zero, `ruff format --check .` all formatted,
-`pixi run typecheck` 37 errors, `pixi run smoke` green) are otherwise all
-green, and `src/veny/cli.py` is 4,102 lines (was 4,362 after phase 1, 6,020
-before phase 1) — but the live run is the part that matters most for a
-migration like this, and it did not pass.
+into the module layout the design doc specifies). The BLOCKING live-run
+defect that used to be listed here is fixed — see Deferred items below for
+the fix commit and verification. Phase 2's gates (`pixi run test` 265
+passed, `ruff check .` zero, `ruff format --check .` all formatted,
+`pixi run typecheck` 37 errors, `pixi run smoke` green) are all green, and
+`src/veny/cli.py` is 4,102 lines (was 4,362 after phase 1, 6,020 before
+phase 1). A live run (`pixi run veny --no-cache`, importing `yaml`) now
+succeeds end to end: it resolves `yaml` to `PyYAML`, builds a fresh venv
+under `~/veny/`, installs with uv, prints `{'a': 1}`, and drops the
+venv folder's `failed-` prefix.
 
 Phase order and expected size: (1) delete the visitor block, ~1,600 lines,
 complete on branch `delete-visitor-block`; (2) migrate to `uv` with veny
@@ -524,27 +524,28 @@ wiring rationale and for two Minors deliberately left unfixed.
   before this migration, which do record their own path and would break on
   rename without it.
 - **`uv venv` refuses to build into a directory that already exists and is
-  non-empty, and `setup_virtualenv` hands it exactly that — every real
-  "build a new venv" run crashes.** Found live during this task's Step 3
-  (`pixi run veny --no-cache /tmp/veny-live.py`, 2026-08-16); see the
-  Deferred-items entry below for the full defect writeup and reproduction.
-  This is not a stale-directory artifact — it reproduces from a clean
-  `~/veny` on every fresh build, because `setup_virtualenv` always creates
-  the target directory (`Options.set_venv_dir`'s `mkdir`) and writes
-  `requirements.txt` into it (`write_requirements_file_with_extras`) before
-  calling `create_venv`, and stdlib `venv.create` tolerated that ordering
-  where `uv venv` does not.
+  non-empty.** Found live during phase 2 Task 7's Step 3
+  (`pixi run veny --no-cache /tmp/veny-live.py`, 2026-08-16), because
+  `setup_virtualenv` always creates the target directory
+  (`Options.set_venv_dir`'s `mkdir`) and used to write `requirements.txt`
+  into it (`write_requirements_file_with_extras`) before calling
+  `create_venv` — stdlib `venv.create` tolerated that ordering, `uv venv`
+  does not. **Fixed in Task 8** (2026-08-16): `create_venv` now runs before
+  `write_requirements_file_with_extras`; see the Deferred-items entry above
+  for the fix, its regression test, and mutation evidence. `--clear` /
+  `UV_VENV_CLEAR=1` is not the fix — it deletes the directory's existing
+  contents, which would erase `requirements.txt` before the install that
+  reads it.
 
 ## Deferred items
 
-- **BLOCKING, found live 2026-08-16: `setup_virtualenv` crashes with an
-  unhandled `subprocess.CalledProcessError` on every fresh venv build,
-  because `uv venv` refuses a non-empty target directory and
-  `setup_virtualenv` always hands it one.** This is a phase 2 (uv migration)
-  regression, not touched by this documentation task per its own
-  instructions, so it is reported here rather than fixed.
+- **FIXED 2026-08-16 (Task 8, commit `<TASK8_SHA>`).** `setup_virtualenv`
+  used to crash with an unhandled `subprocess.CalledProcessError` on every
+  fresh venv build, because `uv venv` refuses a non-empty target directory
+  and `setup_virtualenv` always handed it one. Original writeup, kept for
+  the historical mechanism:
   - Reproduction: `pixi run veny --no-cache /tmp/veny-live.py` against a
-    clean throwaway script importing `yaml`. Crashes every time; confirmed
+    clean throwaway script importing `yaml`. Crashed every time; confirmed
     by also running `uv venv` by hand against an empty vs. a non-empty
     directory (empty succeeds, non-empty fails with `error: Failed to
     create virtual environment / Caused by: A directory already exists
@@ -552,32 +553,48 @@ wiring rationale and for two Minors deliberately left unfixed.
   - Mechanism: `setup_virtualenv` (`src/veny/cli.py:3304`) calls
     `options.set_venv_dir(options.my_dir / f"failed-{folder_name}")`, whose
     `set_venv_dir` (`cli.py:229`) does `p.mkdir(parents=True,
-    exist_ok=True)` — creating the target directory. It then calls
+    exist_ok=True)` — creating the target directory. It used to then call
     `write_requirements_file_with_extras(options)` (`cli.py:2860`), which
     opens `options.requirements_file` (`venv_dir / "requirements.txt"`) for
-    writing — putting a file inside the now-existing directory. Only then
-    does it call `create_venv(options.venv_dir, ...)` (`cli.py:3323`),
-    which runs `uv venv <target>`. Stdlib `venv.create()` (what this code
-    path was written against, pre-migration) tolerates a pre-existing,
-    non-empty target directory; `uv venv` does not, and raises. Nothing
-    catches the resulting `CalledProcessError`, so the whole run dies with
-    a Python traceback instead of veny's normal error handling.
-  - Why the unit suite (264 passing) never caught it: every test stubs the
-    `uv venv` subprocess call, so none of them exercise the real ordering
-    constraint uv enforces on its target directory.
-  - Scope: hits every "build a new venv" path through `setup_virtualenv` —
+    writing — putting a file inside the now-existing directory — before
+    calling `create_venv(options.venv_dir, ...)` (`cli.py:3323`), which runs
+    `uv venv <target>`. Stdlib `venv.create()` (what this code path was
+    written against, pre-migration) tolerates a pre-existing, non-empty
+    target directory; `uv venv` does not, and raised. Nothing caught the
+    resulting `CalledProcessError`, so the whole run died with a Python
+    traceback instead of veny's normal error handling.
+  - Why the unit suite (264 passing) never caught it: every test stubbed
+    the `uv venv` subprocess call, so none of them exercised the real
+    ordering constraint uv enforces on its target directory.
+  - Scope: hit every "build a new venv" path through `setup_virtualenv` —
     i.e. any run where no cache match is found, which includes a new
     user's very first invocation with an empty `~/veny`. The
     `tempfile.TemporaryDirectory()`-based `create_venv` call at
-    `cli.py:2606` (inside the alias-resolution probe path) is unaffected,
+    `cli.py:2606` (inside the alias-resolution probe path) was unaffected,
     because nothing writes into that directory before `create_venv` runs.
-  - Not a workaround target for this task: global instructions for this
-    task forbid touching `src/veny/` or `tests/` and direct reporting a
-    live-run failure rather than fixing it. A real fix belongs to a follow-up
-    task — either write `requirements.txt` after `create_venv` succeeds
-    (reorder), or build with `--clear`/`UV_VENV_CLEAR=1`, or use a
-    dedicated empty subdirectory for the requirements file so `venv_dir`
-    itself stays empty until uv creates it.
+  - **The fix:** `setup_virtualenv` now calls `create_venv` first and only
+    calls `write_requirements_file_with_extras` after it returns
+    successfully — `--clear`/`UV_VENV_CLEAR=1` was considered and rejected,
+    because it deletes the target directory's contents and would wipe
+    `requirements.txt` out from under the `uv pip install -r` that reads it
+    right after. Everything else in `setup_virtualenv` kept its order.
+  - **Regression test:**
+    `tests/test_uv_backend.py::test_setup_virtualenv_builds_the_venv_before_writing_requirements_txt`
+    calls the real `create_venv` (real `uv venv` subprocess, not stubbed)
+    against a directory `Options.set_venv_dir` prepared exactly the way
+    `setup_virtualenv` prepares it, with only the network/interpreter-probe
+    calls (`run_uv_pip`, `verify_and_repair_imports`,
+    `check_packages_in_venv`, `record_venv_state`) stubbed. Mutation-checked:
+    restoring the old (write-requirements-before-create_venv) ordering made
+    this test fail with the exact `CalledProcessError` /
+    "A directory already exists at" error the live run hit; restoring the
+    fix made it pass again, alongside the rest of the 265-test suite.
+  - Live end-to-end re-verification (`pixi run veny --no-cache`, a script
+    importing `yaml`): resolved `yaml` → `PyYAML`, built
+    `~/veny/myenv-py3.13-20260816-141521-pyyaml`, installed with uv, printed
+    `{'a': 1}`, and dropped the venv folder's `failed-` prefix on success.
+    `ls ~/veny/myenv-py3.13-20260816-141521-pyyaml/bin/` confirms no `pip`
+    binary — the venv uv built has none, by design.
 - The five helper scripts (`mydiff`, `myaudit`, `multireplace`, `treeview`,
   `printall`) that veny used to write into `~/veny` still need adopting as
   real, standalone files in the `killett/utilities` repository, per

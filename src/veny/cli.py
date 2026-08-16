@@ -3315,14 +3315,19 @@ def setup_virtualenv(options: Options) -> bool:
     # Create a virtual environment directory that starts with "failed" in case the process fails. Only remove the "failed" part if this process completes successfully.
     options.set_venv_dir(options.my_dir / f"failed-{folder_name}")
 
-    write_requirements_file_with_extras(options)
-
     if not options.rawlog:
         logging.info("Creating virtual environment...")
     assert options.venv_dir is not None, "options.venv_dir must be set"
     create_venv(options.venv_dir, venv_build_interpreter(options))
     if not options.rawlog:
         logging.info("Virtual environment created.")
+
+    # `uv venv` refuses to build into a directory that already exists AND is
+    # non-empty. set_venv_dir above already created options.venv_dir (mkdir),
+    # so the requirements file must not land inside it until create_venv has
+    # already succeeded against that (empty) directory -- writing it earlier
+    # made every fresh build crash with CalledProcessError.
+    write_requirements_file_with_extras(options)
 
     assert options.requirements_file is not None, (
         "options.requirements_file must be set"
