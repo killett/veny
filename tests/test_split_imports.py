@@ -919,7 +919,6 @@ def _options_with_venv(tmp_path, index, records):
     """Build an Options far enough along to run the post-install verification."""
     options = veny.Options()
     options.my_dir = tmp_path
-    options.packages_dir = tmp_path / "packages"
     options.aliases = index
     options.all_imports = {record.import_name for record in records}
     options.uninstalled_imports = set(records)
@@ -1386,7 +1385,6 @@ def test_the_repair_installer_reports_failure_instead_of_exiting(monkeypatch, tm
     # a reason to kill everything.
     options = veny.Options()
     options.my_dir = tmp_path
-    options.packages_dir = tmp_path / "packages"
     options.set_venv_dir(tmp_path / "venv")
 
     def fake_run(command, *args, **kwargs):

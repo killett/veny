@@ -130,8 +130,6 @@ class Options(ek.Options):
         self.python_command: str = ""
         self.cwd: Path = Path.cwd().expanduser().resolve(strict=True)
         self.venv_name: str = "myenv"  # Can NOT include dashes ("-")
-        self.packages_dir: Path = self.my_dir / "packages"
-        self.test_dir: Path = self.my_dir / "test"
         # Both sets hold ResolvedImport records, so every consumer can pick the
         # right name instead of guessing which kind of string it was handed.
         self.uninstalled_imports: set[alias_index.ResolvedImport] = set()
@@ -158,11 +156,9 @@ class Options(ek.Options):
         self.new_pip_version: str = ""
         self.venv_dir: Path | None = None
         self.venv_python: Path | None = None
-        self.venv_pip: Path | None = None
         self.requirements_file: Path | None = None
         self.extra_requirements: dict[str, str | None] = {}
         self.extra_requirements_file: str = "extra_requirements.txt"
-        self.download_script_path: Path | None = None
         self.install_succeeded: bool = False
         self.max_checks: int = (
             10  # Maximum number of times to check any repeated process.
@@ -235,9 +231,7 @@ class Options(ek.Options):
         p = ek.ensure_path(venv_dir)
         self.venv_dir = p
         self.venv_python = p / "bin" / "python"  # Do NOT resolve() this symlink path
-        self.venv_pip = p / "bin" / "pip"  # Do NOT resolve() this symlink path
         self.requirements_file = p / "requirements.txt"
-        self.download_script_path = p / "download_packages.sh"
         p.mkdir(parents=True, exist_ok=True)  # Create the directory if it doesn't exist
 
 
@@ -468,13 +462,6 @@ def main() -> int:
                 options.my_dir,
             )
         options.my_dir.mkdir(parents=True, exist_ok=True)
-    if not ek.safe_is_dir(options.packages_dir):
-        if not options.rawlog:
-            logging.info(
-                "Directory %s does not exist yet, so it is being created.",
-                options.packages_dir,
-            )
-        options.packages_dir.mkdir(parents=True, exist_ok=True)
 
     if getattr(options.args, "full", False) and options.python_script:
         ek.my_critical_error("Full mode is not supported with a script argument.")
@@ -3354,11 +3341,12 @@ def setup_virtualenv(options: Options) -> bool:
 def rename_venv(options: Options, new_name: str) -> None:
     """Rename a virtual environment directory and fix the paths recorded inside it.
 
-    A venv records its own location in pyvenv.cfg and in the download script, so
-    a rename that touches only the directory leaves a venv that points at a path
-    that no longer exists. Two callers need this: dropping the "failed-" prefix
-    once a run succeeds, and re-naming a venv whose package list changed when
-    verify_and_repair_imports repaired a wrongly resolved pip name.
+    A stdlib-built venv records its own location in pyvenv.cfg (uv-built venvs
+    do not), so a rename that touches only the directory can leave a venv that
+    points at a path that no longer exists. Two callers need this: dropping the
+    "failed-" prefix once a run succeeds, and re-naming a venv whose package
+    list changed when verify_and_repair_imports repaired a wrongly resolved pip
+    name.
 
     Args:
         options:  Options object; reads and updates options.venv_dir.
@@ -3375,10 +3363,7 @@ def rename_venv(options: Options, new_name: str) -> None:
         return
     old_dir.rename(new_dir)
     options.set_venv_dir(new_dir)
-    assert options.download_script_path is not None, (
-        "options.download_script_path must be set"
-    )
-    for path in (options.venv_dir / "pyvenv.cfg", options.download_script_path):
+    for path in (options.venv_dir / "pyvenv.cfg",):
         try:
             contents = path.read_text()
         except OSError as exc:

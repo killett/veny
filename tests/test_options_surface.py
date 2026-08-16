@@ -17,6 +17,12 @@ RETIRED_FIELDS = {
     "download_urls",
     "upload_urls",
     "current_method_name",
+    "packages_dir",
+    "test_dir",
+    "venv_pip",
+    "download_script_path",
+    "pip_list",
+    "simultaneous_success",
 }
 
 
@@ -29,7 +35,6 @@ def test_options_no_longer_carries_helper_script_paths():
 def test_options_still_carries_the_directories_veny_uses():
     options = veny.Options()
     assert options.my_dir == options.home / options.my_name
-    assert options.packages_dir == options.my_dir / "packages"
 
 
 def test_options_args_defaults_to_the_empty_namespace_emmykit_supplies():
