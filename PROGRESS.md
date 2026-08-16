@@ -2,8 +2,9 @@
 
 ## Current work
 
-**Topic:** Re-architecting veny. Four requested changes — split the 6,020-line
-`src/veny/cli.py`, retire the 48-attribute `Options` god object, move from
+**Topic:** Re-architecting veny. Four requested changes — split what was, at
+the time this program was scoped, the 6,020-line `src/veny/cli.py`, retire
+the 48-attribute `Options` god object, move from
 `pip` to `uv`, and add unit tests wherever they can be meaningful — are
 sequenced as one program of four phases, because extracting a module requires
 deciding what it receives instead of `options`, and the `uv` migration deletes
@@ -435,7 +436,7 @@ wiring rationale and for two Minors deliberately left unfixed.
 - veny's standard-library skips are silent for top-level imports: the
   `Skipping standard library import` debug line only fires inside
   `process_import`, which top-level imports bypass (`_enqueue_top_level_imports`
-  and the used-imports loop in `find_imports_and_IO_in_script` both `continue`
+  and the used-imports loop in `find_imports_in_script` both `continue`
   past stdlib names before `process_import` is ever called). Verify stdlib
   classification by a name's *absence* from the bad and uninstalled sets, not
   by that log line. Predates the stdlib_index plan.

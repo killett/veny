@@ -279,7 +279,7 @@ themselves; they belong to no bundle.
 `test_dir`, `packages_dir`. With the persistence change: `pathlibcutoff` and
 `options_json_filepath`. And `total_imports` is a `len()`.
 
-**Mutation direction.** Today `find_imports_and_IO_in_script(options)` returns
+**Mutation direction.** Today `find_imports_in_script(options)` returns
 `None` and writes eleven fields onto `options`; `split_imports(options)`
 returns `None` and writes four more. Under this design each stage returns its
 product and mutates nothing it was handed. `ImportScan` and `Requirements` are

@@ -12,6 +12,11 @@ RETIRED_FIELDS = {
     "multireplace_path",
     "treeview_path",
     "printall_path",
+    "read_files",
+    "write_files",
+    "download_urls",
+    "upload_urls",
+    "current_method_name",
 }
 
 
