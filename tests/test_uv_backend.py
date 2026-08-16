@@ -11,7 +11,7 @@ from veny import cli
 def test_the_packaged_uv_is_preferred_over_the_one_on_path(monkeypatch):
     """The uv installed alongside veny wins; PATH is never consulted."""
     fake = type(sys)("uv")
-    fake.find_uv_bin = lambda: "/packaged/uv"
+    fake.find_uv_bin = lambda: "/packaged/uv"  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "uv", fake)
     monkeypatch.setattr(shutil, "which", lambda _name: "/on/path/uv")
     cli.uv_binary.cache_clear()
