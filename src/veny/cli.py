@@ -111,7 +111,6 @@ class Options(ek.Options):
         )
         self.check_interval: int = 5  # Number of seconds to wait between checks.
         self.rawlog: bool = False
-        self.pipreqs_available: bool = False
         self.read_files: list[
             Path
         ] = []  # List of files read       by the Python script.
@@ -527,19 +526,6 @@ def main() -> int:
     elapsed_time = start_list_packages_time - start_time
     if not options.rawlog:
         logging.info("Elapsed time: %s", elapsed_time)
-
-    try:
-        import pipreqs  # noqa: F401  # Imported only to probe availability; generate_requirements() imports it for use.
-
-        if logging.getLogger().isEnabledFor(logging.DEBUG):
-            logging.debug("pipreqs is available, so it will be used.")
-        options.pipreqs_available = True
-    except ImportError:
-        if logging.getLogger().isEnabledFor(logging.DEBUG):
-            logging.debug(
-                "pipreqs is not available. Try installing it with 'pip install pipreqs'."
-            )
-        options.pipreqs_available = False
 
     list_packages(options)
 
@@ -2514,10 +2500,6 @@ def process_import(
         if logging.getLogger().isEnabledFor(logging.DEBUG):
             logging.debug("Avoiding loopback to the same file: %s", module_name)
         return False
-    if module_name == "pipreqs" and f"{options.my_name}.py" in str(file_path):
-        if logging.getLogger().isEnabledFor(logging.DEBUG):
-            logging.debug("Avoiding loopback to pipreqs in %s.py", options.my_name)
-        return False
     if logging.getLogger().isEnabledFor(logging.DEBUG):
         logging.debug("Constructed module path: %s", module_path_str)
 
@@ -4329,8 +4311,6 @@ def list_packages(options: Options) -> None:
         options: Options object containing command line arguments and settings. Contains:
             - python_script:           Path to the Python script or directory to analyze.
             - rawlog:                  Boolean indicating if raw logging is enabled.
-            - pipreqs_available:       Boolean indicating if pipreqs is available for
-                                       generating requirements.
             - script_dir:              Directory containing the script, used for logging.
             - all_imports:             Set to be populated with all imports found.
             - installed_imports:       Set to be populated with ResolvedImport records.
@@ -4381,17 +4361,7 @@ def list_packages(options: Options) -> None:
                     "Processing an entire folder of Python scripts: %s",
                     os.fspath(options.python_script),
                 )
-            python_dir = options.python_script
-            if options.pipreqs_available:
-                if not options.rawlog:
-                    logging.info("Using pipreqs to generate requirements.")
-                generate_requirements(options.python_script)
-                with open(python_dir / "requirements.txt") as f:
-                    options.all_imports = set(line.strip() for line in f)
-            else:
-                if not options.rawlog:
-                    logging.info("Using custom script to find imports.")
-                get_all_imports(options, options.python_script)
+            get_all_imports(options, options.python_script)
         else:
             raise FileNotFoundError(
                 f"The file or directory {os.fspath(options.python_script)} does not exist."
@@ -4451,24 +4421,6 @@ def get_all_imports(options: Options, directory: str | os.PathLike[str]) -> None
                 )
     if not options.rawlog:
         logging.info("Finished processing files in %s", os.fspath(directory))
-
-
-def generate_requirements(directory: str | os.PathLike[str]) -> None:
-    """Generate a requirements file using pipreqs.
-
-    pipreqs is imported here rather than at module scope because veny must run
-    on a bare interpreter. Until 2026-08-15 there was no import in this scope at
-    all, so every call raised NameError; see PROGRESS.md for the separate,
-    unresolved question of whether the pipreqs API used below still exists.
-    """
-    import pipreqs
-
-    try:
-        pipreqs.generate_requirements(directory)
-    except (pipreqs.PipreqsError, pipreqs.PipreqsWarning) as e:
-        raise ValueError(
-            f"Error generating requirements file in {directory}: {e}"
-        ) from e
 
 
 def download_packages(options: Options) -> bool:
