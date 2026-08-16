@@ -81,6 +81,29 @@ def uv_binary() -> str:
     )
 
 
+def create_venv(target: str | os.PathLike[str], python: str = "") -> None:
+    """Create a virtual environment at target using uv.
+
+    No pip is seeded: veny drives installs through uv, and a script that
+    installs into the environment veny built for it is working against veny.
+
+    Args:
+        target: Directory to create the environment in.
+        python: Interpreter for uv to build against. Empty means uv chooses.
+
+    Raises:
+        subprocess.CalledProcessError: If uv could not create the environment.
+    """
+    command = [uv_binary(), "venv", os.fspath(target)]
+    if python:
+        command += ["--python", python]
+    if logging.getLogger().isEnabledFor(logging.DEBUG):
+        logging.debug(
+            "Creating venv: %s", " ".join(shlex.quote(str(arg)) for arg in command)
+        )
+    subprocess.check_call(command)
+
+
 # An import name paired with the pip package that provides it. Defined in
 # alias_index, which imports nothing of veny's, and re-exported here because
 # veny is where it is used. Its JSON handlers live in json_types.
@@ -2615,7 +2638,7 @@ def split_imports(options: Options) -> None:
     )  # Maximum number of digits in import count, also used for formatting
 
     with tempfile.TemporaryDirectory() as venv_dir:
-        venv.create(venv_dir, with_pip=True)
+        create_venv(venv_dir)
         for i, imp in enumerate(options.all_imports, 1):
             # The import name is all either check below needs, and resolution is
             # deliberately not done yet: see the else branch.
@@ -3606,22 +3629,9 @@ def setup_virtualenv(options: Options) -> bool:
     if not options.rawlog:
         logging.info("Creating virtual environment...")
     assert options.venv_dir is not None, "options.venv_dir must be set"
-    subprocess.check_call(
-        [venv_build_interpreter(options), "-m", "venv", os.fspath(options.venv_dir)]
-    )
+    create_venv(options.venv_dir, venv_build_interpreter(options))
     if not options.rawlog:
         logging.info("Virtual environment created.")
-
-    # Activate virtual environment and install wheel
-    assert options.venv_pip is not None, "options.venv_pip must be set"
-    install_command = [os.fspath(options.venv_pip), "install", "wheel"]
-    logging.info(
-        "Running pip install: %s",
-        " ".join(shlex.quote(str(arg)) for arg in install_command),
-    )
-    subprocess.run(install_command, check=True)
-    if not options.rawlog:
-        logging.info("Wheel installed in the virtual environment.")
 
     download_packages(options)
     if install_packages_simultaneously(options):
