@@ -17,17 +17,22 @@ gotchas ledger.
   and task breakdown belong to the per-phase plans.
 - Implementation plans: one per phase, not yet written.
 
-**Next action:** write the phase 1 implementation plan (delete the
-file/network visitor block — `cli.py:756-2195` plus its helpers and its
-four-`logging.info` consumer, ~1,600 lines, referenced by no test).
+**Next action:** write the phase 2 implementation plan (migrate to `uv`, with
+veny keeping its own venv cache). Phase 1 is complete: the file/network visitor
+block is deleted, `src/veny/cli.py` is 4,362 lines (was 6,020), and
+`tests/test_import_discovery.py` pins the import set that deletion had to
+preserve.
 
-Phase order and expected size: (1) delete the visitor block, ~1,600 lines;
-(2) migrate to `uv` with veny keeping its own venv cache, ~550 lines;
-(3) extract the survivors into the module layout in the design doc;
-(4) drain `Options` into frozen per-subsystem dataclasses, carried by the
-phase 3 extractions rather than done separately. Phases 1 and 2 are
-independent of the architecture and land first, taking `cli.py` from 6,020 to
-roughly 3,870 lines before any extraction begins.
+Phase order and expected size: (1) delete the visitor block, ~1,600 lines,
+complete on branch `delete-visitor-block`; (2) migrate to `uv` with veny
+keeping its own venv cache, ~550 lines; (3) extract the survivors into the
+module layout in the design doc; (4) drain `Options` into frozen
+per-subsystem dataclasses, carried by the phase 3 extractions rather than
+done separately. Phases 1 and 2 are independent of the architecture and land
+first; the original combined estimate for both was 6,020 down to roughly
+3,870 lines before any extraction begins. Phase 1 alone landed at 4,362
+lines — phase 2's contribution is still to be measured once its plan is
+written.
 
 **Previous topic (complete):** Replacing veny's rc-file shell alias with a packaged console-script
 entry point. veny installs itself today by appending `alias veny="python3
@@ -534,10 +539,12 @@ wiring rationale and for two Minors deliberately left unfixed.
   `safe_is_dir` guard, since `read_manifest` also degrades on a missing
   directory.
 - `univ_defs.py` is gone, deleted in the emmykit migration. `src/veny/cli.py`
-  is **6,020 lines** (`wc -l src/veny/cli.py`, 2026-08-15). An earlier note
-  here said 4,959, measured before `ruff format` rewrote ~3,200 lines of it
-  and unwound the hand-aligned column style; the formatting reversal, not new
-  code, accounts for the difference.
+  is **4,362 lines** (`wc -l src/veny/cli.py`, 2026-08-16, after phase 1 of
+  the re-architecture deleted the file/network visitor block). Before that
+  deletion it was 6,020 lines; an earlier note here said 4,959, measured
+  before `ruff format` rewrote ~3,200 lines of it and unwound the
+  hand-aligned column style — the formatting reversal, not new code,
+  accounted for that earlier difference.
 - `alias_index.py` is 732 lines, accepted over the plan's ~600-line split
   target by controller ruling (no further split this plan; see the ledger's
   Task 5b entry — the byte-identical move was verified symbol-by-symbol).
