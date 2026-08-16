@@ -21,14 +21,21 @@ gotchas ledger.
 **Next action:** write the phase 3 implementation plan (extract the survivors
 into the module layout the design doc specifies). The BLOCKING live-run
 defect that used to be listed here is fixed — see Deferred items below for
-the fix commit and verification. Phase 2's gates (`pixi run test` 265
-passed, `ruff check .` zero, `ruff format --check .` all formatted,
-`pixi run typecheck` 37 errors, `pixi run smoke` green) are all green, and
+the fix commit and verification. Task 9 (2026-08-16) closed a second
+live-run-only defect the 265-test suite could not see: `venv_build_interpreter()`
+handed uv a bare `"python3"`, which `uv venv --python` resolves through its
+own interpreter discovery order rather than PATH, silently building against a
+different Python than the one imports were classified against — see the
+Gotchas entry (`uv venv --python <bare name> does not mean...`) for the fix
+and live verification. Phase 2's gates (`pixi run test` 266 passed,
+`ruff check .` zero, `ruff format --check .` all formatted, `pixi run
+typecheck` 37 errors, `pixi run smoke` green) are all green, and
 `src/veny/cli.py` is 4,102 lines (was 4,362 after phase 1, 6,020 before
 phase 1). A live run (`pixi run veny --no-cache`, importing `yaml`) now
 succeeds end to end: it resolves `yaml` to `PyYAML`, builds a fresh venv
-under `~/veny/`, installs with uv, prints `{'a': 1}`, and drops the
-venv folder's `failed-` prefix.
+under `~/veny/` with a resolved absolute-path interpreter, installs with uv,
+prints the parsed result, and drops the venv folder's `failed-` prefix, with
+the manifest's `interpreter_tag` agreeing with the folder name's `pyX.Y`.
 
 Phase order and expected size: (1) delete the visitor block, ~1,600 lines,
 complete on branch `delete-visitor-block`; (2) migrate to `uv` with veny
@@ -536,6 +543,34 @@ wiring rationale and for two Minors deliberately left unfixed.
   `UV_VENV_CLEAR=1` is not the fix — it deletes the directory's existing
   contents, which would erase `requirements.txt` before the install that
   reads it.
+- **`uv venv --python <bare name>` does not mean "the `<bare name>` found on
+  PATH."** Found live in Task 9, fixed 2026-08-16, commit `cc64b8b`.
+  `venv_build_interpreter()`
+  returned `options.python_command or sys.executable`, and `python_command`
+  is the bare string `"python3"` from `ek.find_preferred_python_version()`.
+  `python3 --version` on PATH and `python3 -m venv` (what veny built with
+  before the uv migration) agreed with each other; `uv venv --python python3`
+  resolved to a *different* interpreter on the same machine, through uv's own
+  interpreter discovery order rather than a PATH lookup. Since
+  `options.python_command` is also what stdlib and alias resolution were
+  probed against, this silently built an environment for the wrong Python
+  after classifying imports against a different one. Fixed by resolving the
+  interpreter with `shutil.which()` inside `venv_build_interpreter()` before
+  it reaches `create_venv` — chosen over resolving only inside `create_venv`
+  because `venv_build_interpreter()`'s return value is also recorded as the
+  manifest's `interpreter_path` field, where an absolute path is strictly
+  more useful than a bare name. When `shutil.which()` finds nothing, the bare
+  name is returned unchanged (today's pre-fix behaviour) and a warning is
+  logged, since the invariant can no longer be guaranteed for that run. Test:
+  `tests/test_uv_backend.py::test_create_venv_is_given_a_resolved_interpreter_path_not_a_bare_command`.
+  Verified live: `pixi run veny --no-cache` against a script importing
+  `yaml` built a venv whose `bin/python --version` matched `python3` on PATH
+  (both 3.13.14, resolved through the pixi env's PATH order to
+  `.pixi/envs/default/bin/python3`), and whose manifest `interpreter_tag`
+  (`"3.13"`) agreed with the folder name's `py3.13` — before the fix, a
+  reproduction with no veny involved showed `uv venv --python python3`
+  picking 3.12 against the same PATH where `python3 --version` reports
+  3.13.14.
 
 ## Deferred items
 
