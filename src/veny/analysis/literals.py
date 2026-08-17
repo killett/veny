@@ -175,6 +175,14 @@ def _safe_eval_node(node: ast.AST, pathlib_aliases: set[str] | None = None) -> A
                     if isinstance(base, str) and all(isinstance(p, str) for p in parts):
                         return os.fspath(Path(base).joinpath(*parts))
 
+        # pathlib.Path(<literal>) with no method call on it. This is what the
+        # "/" operator's operands are, and its absence is why "/" joining
+        # silently returned None despite the docstring promising it.
+        if is_pathlib_ctor(node.func, aliases, allow_pure=True) and len(node.args) == 1:
+            arg = _safe_eval_node(node.args[0], pathlib_aliases=aliases)
+            if isinstance(arg, str):
+                return os.fspath(Path(arg))
+
         # unsupported call
         raise ValueError(f"Unsupported call: {ast.unparse(node)}")
 

@@ -41,3 +41,28 @@ def test_collect_pathlib_aliases_finds_a_renamed_import() -> None:
     """Matching the literal name 'Path' would lose every renamed import."""
     tree = ast.parse("from pathlib import Path as P\n")
     assert collect_pathlib_aliases(tree) == {"P"}
+
+
+def test_the_slash_operator_joins_a_pathlib_path() -> None:
+    """safe_eval's docstring promises '/' joining; it must actually work."""
+    assert safe_eval('Path("a") / "b"', pathlib_aliases={"Path"}) == "a/b"
+
+
+def test_a_bare_pathlib_constructor_evaluates_to_its_argument() -> None:
+    """Path("a") alone is the left operand of every '/' join."""
+    assert safe_eval('Path("a")', pathlib_aliases={"Path"}) == "a"
+
+
+def test_sys_path_built_with_the_slash_operator_is_discovered() -> None:
+    """The '/' gap silently hid whole sys.path directories from veny."""
+    from veny.cli import SysPathVisitor
+
+    tree = ast.parse(
+        "import sys\n"
+        "from pathlib import Path\n"
+        'sys.path.insert(0, Path("/opt/libs") / "extra")\n'
+    )
+    visitor = SysPathVisitor(collect_pathlib_aliases(tree))
+    visitor.visit(tree)
+
+    assert visitor.paths == {"/opt/libs/extra"}
