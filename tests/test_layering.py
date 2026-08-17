@@ -65,6 +65,8 @@ def veny_imports(path: Path) -> set[str]:
                 found.add(node.module.split(".")[0])
             elif node.level:
                 found.update(alias.name for alias in node.names)
+            elif node.module == "veny":
+                found.update(alias.name for alias in node.names)
             elif node.module and node.module.startswith("veny."):
                 found.add(node.module.split(".")[1])
         elif isinstance(node, ast.Import):
@@ -82,7 +84,7 @@ def test_no_module_imports_above_its_layer() -> None:
         assert path.is_file(), f"{module}.py is missing; update FORBIDDEN"
         for imported in sorted(veny_imports(path) & forbidden):
             violations.append(f"{module} imports {imported}")
-    assert violations == []
+    assert violations == [], violations
 
 
 def test_the_guard_covers_every_module_it_should() -> None:
@@ -94,3 +96,32 @@ def test_the_guard_covers_every_module_it_should() -> None:
     }
     unguarded = on_disk - set(FORBIDDEN) - {"cli"}
     assert unguarded == set(), f"add these to FORBIDDEN: {sorted(unguarded)}"
+
+
+def test_veny_imports_recognizes_every_spelling_of_a_veny_import(
+    tmp_path: Path,
+) -> None:
+    """The guard is only as good as the import forms this helper can see.
+
+    Args:
+        tmp_path: Pytest's per-test temporary directory fixture.
+    """
+    # Each spelling targets a distinct top-level name (alias_index / cli /
+    # analysis / settings) so no two lines could contribute the same result
+    # and mask one another -- "cli" comes only from `from veny import cli`,
+    # so if that spelling were unrecognized this test would fail on "cli"
+    # going missing rather than merely being redundantly present.
+    source = (
+        "import os\n"
+        "import veny.alias_index\n"
+        "from veny import cli\n"
+        "from veny.analysis.literals import safe_eval\n"
+        "from . import settings\n"
+        "from ..settings import Settings\n"
+    )
+    path = tmp_path / "sample.py"
+    path.write_text(source)
+    # `from . import settings` and `from ..settings import Settings` both
+    # contribute "settings" to the result; the set collapsing the two
+    # spellings to one member is correct, not a missing case.
+    assert veny_imports(path) == {"alias_index", "cli", "analysis", "settings"}
