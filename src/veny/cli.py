@@ -13,7 +13,6 @@ import functools
 import json
 import logging
 import os
-import pickle
 import re
 import shlex  # For safely quoting shell commands
 import shutil
@@ -23,11 +22,11 @@ import tempfile
 from collections import defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from functools import lru_cache  # For caching results of expensive function calls
 from pathlib import Path  # Preferred over os.path for path manipulations.
 
 from . import __version__ as __version__
 from . import alias_index, stdlib_index
+from .settings import Settings
 
 try:
     import emmykit as ek
@@ -42,6 +41,7 @@ if not hasattr(ek, "register_json_type"):
         f"Upgrade it with:  pip install -U 'emmykit>=0.4.0'"
     )
 from . import json_types, venv_cache
+from .analysis.custom_modules import dict_of_custom_modules
 from .analysis.literals import collect_pathlib_aliases, safe_eval
 
 
@@ -529,7 +529,18 @@ def main() -> int:
             )
 
     time1 = dt.datetime.now()
-    options.custom_modules = dict_of_custom_modules(options)
+    settings = Settings(
+        my_name=options.my_name,
+        cwd=options.cwd,
+        stay_out_list=tuple(options.stay_out_list),
+        search_above_this_dir=options.search_above_this_dir,
+        rawlog=options.rawlog,
+    )
+    options.custom_modules = dict_of_custom_modules(
+        settings,
+        use_cache=not getattr(options.args, "rc", False)
+        and not getattr(options.args, "no_cache", False),
+    )
     time2 = dt.datetime.now()
     elapsed_time = time2 - time1
     if not options.rawlog:
@@ -3694,244 +3705,3 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
                 f"{getattr(options.args, 'smallest',  False) = }"
             )
     return None
-
-
-STANDARD_LIB_PATHS: tuple[Path, ...] = (
-    Path("/") / "usr" / "lib",
-    Path("/") / "usr" / "local" / "lib",
-    Path("/") / "usr" / "lib64",
-    Path("/") / "usr" / "local" / "lib64",
-)
-
-STANDARD_LIB_NAMES: tuple[str, ...] = ("lib", "lib64")
-
-
-def is_standard_path(options: Options, path: str | os.PathLike[str]) -> bool:
-    """Check if the given path is a standard system path or part of a virtual environment."""
-    p = ek.ensure_path(path)
-    # Check if path is inside standard system paths
-    for std_path in STANDARD_LIB_PATHS:
-        if p.is_relative_to(std_path):  # Python 3.9+
-            return True
-    # Check if path contains anything in stay_out_list
-    p_str = os.fspath(p)
-    if any(s in p_str for s in options.stay_out_list):
-        return True
-    # Check for Virtualenv-style paths:
-    # .../lib/python*/site-packages or .../lib64/python*/site-packages
-    if "site-packages" in p_str:
-        parts = p.parts
-        for i in range(len(parts) - 1):
-            comp = parts[i]
-            if comp in STANDARD_LIB_NAMES:
-                nxt = parts[i + 1]
-                if nxt.startswith("python"):  # also matches "python"
-                    return True
-    return False
-
-
-def only_search_here_filename_boolean(
-    filename: str | os.PathLike[str], thestring: str
-) -> bool:
-    """Check if the given filename contains thestring, which is used to determine if the search is limited to the current directory."""
-    return thestring in os.fspath(filename)
-
-
-def search_anywhere_filename_boolean(
-    filename: str | os.PathLike[str], thestring: str
-) -> bool:
-    """Check if the given filename does NOT contain thestring. By default, those files are assumed to have been created by searching above the current directory."""
-    return thestring not in os.fspath(filename)
-
-
-def only_search_here_path_boolean(
-    options: Options, path: str | os.PathLike[str]
-) -> bool:
-    """Check if the given path is in the current directory."""
-    return Path(path).absolute().is_relative_to(options.cwd)
-
-
-def search_anywhere_path_boolean(
-    options: Options, path: str | os.PathLike[str]
-) -> bool:
-    """Return True regardless."""
-    return True
-
-
-def dict_of_custom_modules(options: Options) -> dict[str, Path]:
-    """Create (or load) a dictionary of all local custom modules in the non-standard sys.path directories and their associated filepaths."""
-    # If --rc and --no-cache were not specified, look for a pickle file with the custom modules dictionary the last time this script was run.
-
-    # I.f.f. options.search_above_this_dir is True, then search above the current directory for custom modules.
-    # Either way, only load custom module pickle files that searched in the same places as requested.
-    search_above_text_to_match = "only_search_here_"  # For legacy reasons, custom module pickle files are assumed to have searched above the current directory unless this text is present in the filename.
-    if options.search_above_this_dir:
-        search_above_text_to_write = (
-            "_"  # This will be added to the filename of the custom modules pickle file.
-        )
-        search_constraint_filename_boolean = search_anywhere_filename_boolean
-        search_constraint_path_boolean = search_anywhere_path_boolean
-    else:
-        search_above_text_to_write = search_above_text_to_match  # This will be added to the filename of the custom modules pickle file.
-        search_constraint_filename_boolean = only_search_here_filename_boolean
-        search_constraint_path_boolean = only_search_here_path_boolean
-
-    log = (
-        logging.getLogger()
-    )  # Prebind the logger to avoid repeated global lookups in hot loop
-    if log.isEnabledFor(logging.DEBUG):
-        logging.debug(
-            "Searching for custom modules pickle files with constraint: search_above_text_to_match = %s",
-            search_above_text_to_match,
-        )
-    if not getattr(options.args, "rc", False) and not getattr(
-        options.args, "no_cache", False
-    ):
-        try:
-            potential_files = [
-                file
-                for file in options.cwd.iterdir()
-                if file.name.startswith(f".{options.my_name}_custom_modules_")
-                and file.suffix.casefold() == ".pkl"
-                and ek.COMPUTER_NAME in file.name
-                and search_constraint_filename_boolean(
-                    file.name, search_above_text_to_match
-                )
-            ]
-            if not potential_files:
-                if not options.rawlog:
-                    logging.info(
-                        "No existing custom modules pickle files found in the current directory."
-                    )
-            else:
-                # If multiple files are found, pick the most recent one based on the timestamp in the filename.
-                potential_files_with_timestamps: list[tuple[Path, str]] = [
-                    (file, ts)
-                    for file in potential_files
-                    if (ts := ek.extract_timestamp(file.name)) is not None
-                ]
-                if not potential_files_with_timestamps:
-                    if not options.rawlog:
-                        logging.info(
-                            "No valid timestamps found in custom modules pickle filenames."
-                        )
-                else:
-                    # Sort by timestamp descending
-                    potential_files_with_timestamps.sort(
-                        key=lambda x: x[1], reverse=True
-                    )
-                    most_recent_file = potential_files_with_timestamps[0][0]
-                    most_recent_timestamp = potential_files_with_timestamps[0][1]
-                    if not options.rawlog:
-                        logging.info(
-                            "Loading custom modules from most recent pickle file: %s",
-                            most_recent_file,
-                        )
-                    with open(most_recent_file, "rb") as f:
-                        loaded_modules = pickle.load(f)
-                    if most_recent_timestamp < options.pathlibcutoff:
-                        if not options.rawlog:
-                            logging.info(
-                                "Custom modules file %s is from date %s "
-                                "which is older than the point when "
-                                "paths were stored as Paths (which happened on %s). "
-                                "Converting all paths to pathlib.Path objects.",
-                                most_recent_file,
-                                most_recent_timestamp,
-                                options.pathlibcutoff,
-                            )
-                        normalized: dict[str, Path] = {
-                            k: ek.ensure_path(v) for k, v in loaded_modules.items()
-                        }
-                    else:
-                        # If the pickle already contains Paths, narrow the type for mypy
-                        normalized = {
-                            k: (v if isinstance(v, Path) else ek.ensure_path(v))
-                            for k, v in loaded_modules.items()
-                        }
-                    return normalized
-        except Exception:
-            logging.exception("Error loading custom modules from pickle file.")
-            logging.error(
-                "Falling back to regenerating the custom modules dictionary from sys.path."
-            )
-
-    custom_modules: dict[str, Path] = {}
-    package_dirs: set[Path] = set()  # directories confirmed to be packages
-
-    # Use lru_cache to speed up repeated calls to is_standard_path()
-    @lru_cache(maxsize=8192)
-    def _is_std_path_cached(p: str | os.PathLike[str]) -> bool:
-        """Check if a path is a standard library path. Cached for speed."""
-        return is_standard_path(options, p)
-
-    # Prebind a few globals/attributes to locals before os.walk to cut repeated global lookups:
-    is_std = _is_std_path_cached
-    endswith_ext = ek.PYTHON_EXTENSIONS
-    safe_is_file = ek.safe_is_file
-    safe_is_dir = ek.safe_is_dir
-
-    if log.isEnabledFor(logging.DEBUG):
-        logging.debug("Generating custom modules dictionary from sys.path...")
-    for path in map(Path, sys.path):
-        if (
-            not is_std(path)
-            and safe_is_dir(path)
-            and search_constraint_path_boolean(options, path)
-        ):
-            if log.isEnabledFor(logging.DEBUG):
-                logging.debug("Checking path: %s", path)
-
-            # Prebind a few globals/attributes to locals before os.walk to cut repeated global lookups:
-            setdefault_mod = custom_modules.setdefault
-            package_dirs_add = package_dirs.add
-            # Suppress any remaining (permissions related?) walking errors with onerror = ... None
-            for root, dirs, files in os.walk(
-                path, topdown=True, onerror=(lambda e: None)
-            ):
-                root_path = Path(root)
-                # If the root itself is standard, skip the whole subtree immediately
-                if is_std(root_path):
-                    dirs[:] = []  # stop descending
-                    continue
-                # PRUNE: remove standard subdirs in-place to avoid descending into them
-                # Also collect package dirs (those with __init__.py) while we're here
-                kept_dirs = []
-                for d in dirs:
-                    if d == "__pycache__":
-                        continue
-                    pkg = root_path / d
-                    if is_std(pkg):
-                        continue  # prune
-                    kept_dirs.append(d)
-                    if safe_is_file(pkg / "__init__.py"):
-                        package_dirs_add(pkg)
-                        # prefer packages; first occurrence wins
-                        setdefault_mod(d, pkg)
-                dirs[:] = kept_dirs  # apply pruning
-                # Files: skip quickly by filename; only build Path when needed
-                for fname in files:
-                    fl = fname.casefold()
-                    # fast extension + __init__ checks (exactly final extension)
-                    if not fl.endswith(endswith_ext):
-                        continue
-                    if fl == "__init__.py":
-                        continue
-                    fpath = root_path / fname
-                    if is_std(fpath):
-                        continue
-                    # if file lives inside a known package dir, skip (package already recorded)
-                    if fpath.parent in package_dirs:
-                        continue
-                    setdefault_mod(fpath.stem, fpath)
-
-    # Now save to a pickle file:
-    current_time = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    custom_filename = f".{options.my_name}_custom_modules_{ek.COMPUTER_NAME}{search_above_text_to_write}{current_time}.pkl"
-    with open(custom_filename, "wb") as f_out:
-        if not options.rawlog:
-            logging.info("Saving custom modules to %s", custom_filename)
-        pickle.dump(
-            custom_modules, f_out, protocol=pickle.HIGHEST_PROTOCOL
-        )  # Use highest protocol for efficiency because we don't need backward compatibility for caching purposes
-    return custom_modules
