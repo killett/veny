@@ -336,6 +336,70 @@ git commit -m "fix: evaluate a bare pathlib constructor so '/' joining works"
 
 ---
 
+### Task 2b: Gate bare pathlib names on the alias set
+
+**Added during execution, 2026-08-16, by ruling of the human partner.** Not part
+of the plan as approved.
+
+Task 1's eighth test — `test_an_unaliased_pathlib_name_is_not_evaluated`,
+asserting `safe_eval('Path("a").joinpath("b")') is None` — turned out to assert
+behaviour the code does not have. This plan claims above that every expected
+value in Task 1 was measured against the current implementation; that one was
+not. `is_pathlib_ctor` reads `if fn.id in allowed or fn.id in pathlib_aliases`,
+and `allowed` always contains the literal names `Path`, `PosixPath` and
+`WindowsPath`, so the alias set only ever *adds* names and can never reject one.
+A script defining its own `class Path`, importing pathlib nowhere, has its
+`Path(...)` calls evaluated as though they were pathlib's.
+
+The implementer stopped rather than pick between "write the test as given" and
+"do not fix the moved code", both of which Task 1 mandates. The ruling: fix the
+bug now, in its own task, with the deferred test as its red test. Task 1
+therefore ships 7 tests, not 8.
+
+**Goal:** `pathlib_aliases` actually decides which bare names count as pathlib
+constructors.
+
+**Files:**
+- Modify: `src/veny/analysis/literals.py` — `is_pathlib_ctor`
+- Modify: `tests/test_literals.py` — one new test
+
+**Acceptance Criteria:**
+- [ ] `safe_eval('Path("a").joinpath("b")')` with no aliases returns `None`
+- [ ] The same expression with `pathlib_aliases={"Path"}` still returns `"a/b"`
+- [ ] `safe_eval('pathlib.Path("a").joinpath("b")')` still returns `"a/b"` — the attribute form does not consult the alias set
+- [ ] Task 2's three `/`-operator tests still pass
+- [ ] `tests/test_import_discovery.py` passes unchanged
+
+**Verify:** `pixi run test` → 279 passed
+
+**The fix** — require both halves for a bare `ast.Name`:
+
+```python
+    # Case: Name (possibly aliased import) e.g., Path(...), P(...), PurePath(...)
+    if isinstance(fn, ast.Name):
+        if fn.id in pathlib_aliases and fn.id in allowed:
+            return True
+```
+
+The `allowed` half still earns its place: it is what `allow_pure=False` uses to
+reject a `PurePath` where only a concrete path will do, even when `PurePath` is
+a genuine alias the script imported. The `ast.Attribute` branch below is left
+alone — `pathlib.Path(...)` names the module explicitly and needs no alias set.
+
+**This is the one *narrowing* of import discovery in plan 3a,** and it required
+relaxing the global constraint above, which names Task 2 as the single
+exception. It is safe because `_analyze_module` (`cli.py:1548`) is the only
+production path in, and it builds the alias set from the module's own tree
+immediately before constructing the visitor. Any script that genuinely writes
+`from pathlib import Path` is unaffected; the only expressions that stop
+evaluating are ones where a bare pathlib class name was never imported from
+pathlib.
+
+**Counts shift for the tasks around it,** with the plan's final total unchanged:
+Task 1 ends at 275, Task 2 at 278, Task 2b at 279, Task 3 at 279, Task 4 at 281.
+
+---
+
 ### Task 3: Introduce `settings.py` and extract `analysis/custom_modules.py`
 
 **Goal:** The first module to be handed a `Settings` object and explicit parameters rather than the god object.
