@@ -16,10 +16,46 @@ gotchas ledger.
 - Design doc: `docs/superpowers/specs/2026-08-15-veny-rearchitecture-design.md`
   (approved 2026-08-15). Fixes module boundaries and ownership only; internals
   and task breakdown belong to the per-phase plans.
-- Implementation plans: one per phase, not yet written.
+- Implementation plans, one per phase — **except phase 3, which is a sequence
+  of five.** Thirteen modules out of a 4,143-line `cli.py`, each extraction
+  carrying its own state decomposition and tests, is past what one plan can
+  specify without placeholders; the design doc already says phases 3 and 4 are
+  "sequenced module by module in their plans". Ordered leaf-first so each lands
+  on already-extracted foundations:
 
-**Next action:** write the phase 3 implementation plan (extract the survivors
-into the module layout the design doc specifies). The BLOCKING live-run
+  | Plan | Modules | ~Lines |
+  |---|---|---|
+  | **3a** `docs/superpowers/plans/2026-08-16-analysis-foundation.md` (executed, complete) | `analysis/literals.py`, `analysis/custom_modules.py`, `settings.py` | 430 |
+  | 3b (not written) | `analysis/imports.py`, `call_graph.py`, `scan.py` | 1,090 |
+  | 3c (not written) | `classify.py`, `environment.py` | 600 |
+  | 3d (not written) | `verify.py`, `cache_search.py`, `last_used.py` | 1,100 |
+  | 3e (not written) | `pipeline.py`, `cli.py` slimming, `--full` deletion, final `Options` drain | 450 |
+
+  Phases 1 and 2 are complete and merged to `main`.
+
+**Next action:** write and execute plan 3b on branch `analysis-foundation`.
+Plan 3a is complete on this branch: six tasks landed (a task gained mid-execution,
+numbered 2b, between the `/`-operator fix and the `settings.py`/`custom_modules.py`
+extraction), all committed —
+`a20224e` (extract `analysis/literals.py`, byte-identical move, 7 tests),
+`598e690` (fix the `/` operator: a bare `Path(...)` constructor branch in
+`_safe_eval_node`, 3 tests), `94c8a5d`/`d88e3fc` (Task 2b, added mid-execution:
+gate `is_pathlib_ctor`'s alias set correctly, 2 tests), `41f5ef1` (create
+`settings.py`, extract `analysis/custom_modules.py`), `728c62d`/`79cefc7`
+(`tests/test_layering.py`, 3 tests enforcing the one-way import direction),
+plus `dd811d1` recording Task 2b in the plan file. Gates on this branch: `pixi
+run test` 283 passed; `ruff check .` zero; `ruff format --check .` all 33
+files formatted; `pixi run typecheck` 37 errors (at the ceiling, not a
+regression — see Gotchas); `pixi run smoke` green (network was available, so
+nothing was skipped). `src/veny/cli.py` is now **3,707 lines** (was 4,143 at
+the start of 3a); the three new/grown files measure `analysis/literals.py`
+229, `analysis/custom_modules.py` 258, `settings.py` 23. A live run
+(`pixi run veny --no-cache`, a script calling `yaml.safe_load`) built a fresh
+venv and printed `{'i': 9}`, confirming custom-module discovery and the
+`/`-operator fix both work through `main()`, not just under the unit suite.
+
+The rest of this block is phase 2's closing state, kept because it records
+what "green" currently means. The BLOCKING live-run
 defect that used to be listed here is fixed — see Deferred items below for
 the fix commit and verification. Task 9 (2026-08-16) closed a second
 live-run-only defect the 265-test suite could not see: `venv_build_interpreter()`
@@ -286,6 +322,81 @@ wiring rationale and for two Minors deliberately left unfixed.
 
 ## Gotchas
 
+- **`safe_eval` used to silently drop every `sys.path` entry built with
+  pathlib's `/` operator.** Fixed 2026-08-16 by plan 3a's Task 2, commit
+  `598e690`; the code now lives in `src/veny/analysis/literals.py`, not
+  `cli.py`. `safe_eval`'s docstring listed "the `/` operator for joining
+  pathlib Paths" as supported and `_safe_eval_node` opened with a dedicated
+  `ast.BinOp`/`ast.Div` branch for it — but there was **no branch for a bare
+  `Path(...)` constructor**, only for `Path(...).resolve()`, `.absolute()` and
+  `.joinpath(...)`. So evaluating the left operand fell through to
+  `raise ValueError(f"Unsupported call: ...")`, which propagated out of the
+  `Div` branch and was swallowed by `safe_eval`'s `except`, yielding `None`.
+  Measured before the fix: `Path("a").joinpath("b", "c")` → `"a/b/c"` but
+  `Path("a") / "b"` → `None` and `Path("a")` → `None`. Reproduced through
+  `SysPathVisitor`: given three `sys.path` lines, it found `{'/opt/plain',
+  '/opt/libs/other'}` and dropped the `/`-built one entirely. The symptom was
+  invisible — veny simply never scanned that directory for custom modules, so
+  an import satisfied there was reported as a bad import or sent to PyPI to be
+  installed. `/` is the more idiomatic pathlib form than `.joinpath()`. Found
+  by probing the evaluator while planning its extraction, not by any test.
+  The fix is a bare `Path(...)` constructor branch added to
+  `_safe_eval_node`, covered by 3 tests.
+- **`is_pathlib_ctor` ignored its own alias set, so a locally-defined `class
+  Path` with no pathlib import anywhere had its constructor calls evaluated as
+  filesystem paths.** Found by Task 1's own characterization tests (Task 2b,
+  commits `94c8a5d`/`d88e3fc`, 2026-08-16), not by a review — one of the eight
+  expected values that Task 1 claimed were "measured against the current
+  implementation" was not:
+  `test_an_unaliased_pathlib_name_is_not_evaluated` asserted
+  `safe_eval('Path("a").joinpath("b")')` returns `None` with no alias set, but
+  it actually returned `"a/b"`. Cause: `is_pathlib_ctor` read `if fn.id in
+  allowed or fn.id in pathlib_aliases:`, and `allowed` always contains
+  pathlib's own class names, so `pathlib_aliases` could only ever *add* names
+  and never gate one — a script defining its own `Path` fed a bogus directory
+  into veny's custom-module search. The first fix attempt over-corrected to
+  `fn.id in pathlib_aliases and fn.id in allowed`, which broke every
+  **renamed** import instead: `from pathlib import Path as P` yields the alias
+  set `{"P"}`, and `P` can never be in `allowed`, because `allowed` holds
+  pathlib's own class names while `pathlib_aliases` holds this module's local
+  bindings — two different kinds of thing, and the regression from
+  intersecting them was caught in review, not by the 279-test suite at the
+  time. The landed fix is `if fn.id in pathlib_aliases:` alone: for a name
+  already in the alias set this reproduces the original `or` form exactly (it
+  short-circuited on alias membership before ever checking `allowed`); for a
+  name outside it, it now correctly rejects. Any future edit that intersects
+  `allowed` and `pathlib_aliases` will break renamed imports the same way.
+- **A plan's stated "measured against the current implementation" is not
+  evidence — re-measure before building on it.** Plan 3a made that claim for
+  eight characterization-test expected values in Task 1; one was wrong (see
+  the `is_pathlib_ctor` entry above), and the fix built to correct it was
+  itself wrong in the opposite direction. Both defects were caught by review
+  and by an implementer refusing to guess, not by the unit suite — the
+  279-test suite at the time was green through both the original bug and the
+  overcorrected regression. This cost two fix rounds in 3a and is expected to
+  recur in 3b–3e, since those plans will make the same kind of claim about
+  values they have not re-checked against the tree.
+- **A test that stubs a subprocess proves your code calls the stub.** Phase 2
+  shipped three separate regressions past a green 264-test suite, all of the
+  same shape: every test stubs the `uv` subprocess, so nothing exercised the
+  command lines veny actually builds. Each was caught by a live run instead —
+  (1) `uv venv` refusing a non-empty directory broke *every* fresh build;
+  (2) `uv venv --python python3` resolving to 3.12 where PATH's `python3` is
+  3.13; (3) the same defect again in `split_imports`' probe venv, where a script
+  importing `cgi` (stdlib in 3.12, removed in 3.13) was classified "installed"
+  and then died at runtime. Make a live end-to-end run an acceptance criterion
+  of any plan that touches subprocess invocation, and when phase 3c extracts
+  `environment.py` as the sole owner of uv invocation, give it a live
+  integration test rather than only argument-list assertions.
+- **`pixi.toml`'s `[activation.env]` sets `PYTHONPATH = "src"`, which
+  *overwrites* an inherited `PYTHONPATH`.** So copying `src/` elsewhere,
+  mutating the copy and running `PYTHONPATH=/tmp/mut/src pixi run python -m
+  pytest` silently tests `/workspace/src` and reports a false pass. This
+  matters because mutation testing is this project's gate for whether a test
+  can fail at all. Mutate the working tree in place and restore with
+  `git checkout -- src/veny/cli.py` (never `git stash`), or inject the copy
+  with `sys.path.insert(0, ...)` inside the process. Confirm which file was
+  loaded with `pixi run python -c "import veny.cli as c; print(c.__file__)"`.
 - veny's own types are serialized by `json_types.register_types()`, called
   at `src/veny/cli.py` module scope, not inside `main()`. Anything that imports veny --
   including every test -- gets production's serialization behaviour. If you move
@@ -574,6 +685,66 @@ wiring rationale and for two Minors deliberately left unfixed.
 
 ## Deferred items
 
+- **Two inaccuracies in the approved re-architecture design doc**, found while
+  planning phase 3a on 2026-08-16. Neither invalidates the design; both mislead
+  anyone implementing from it verbatim.
+  1. **Resolved.** The phase 3 section said the one-way import direction "can
+     be enforced by a test — you already have `tests/test_import_guard.py`".
+     It could not: that file guards *emmykit availability* (missing, present,
+     too old) and says nothing about import direction. Plan 3a's Task 4
+     created the real layering guard as `tests/test_layering.py`, landed
+     2026-08-16 (`728c62d`, `79cefc7`), with its rule table validated against
+     the tree (zero violations, zero unguarded modules, correctly permitting
+     `alias_index → pypi_client` and `json_types → alias_index`) and closing a
+     bare-`from veny import cli` gap the first version missed.
+  2. **Corrected, not just resolved.** The phase 4 section lists `pathlibcutoff`
+     among fields that die with the persistence change, naming
+     `dict_of_custom_modules`'s pickle check as its only other consumer. Plan
+     3a's execution found a **third** consumer the design missed entirely:
+     `cli.py`'s options-JSON loader, which ignores JSON files written before
+     that timestamp. So the value does not simply outlive phase 4 by one
+     consumer — it now lives in two places at once. `PATHLIB_CUTOFF` is a
+     module constant in `analysis/custom_modules.py` (the pickle consumer,
+     rehomed there as an honest historical fact about veny's on-disk format
+     rather than a setting), while `Options.pathlibcutoff` still survives in
+     `cli.py` for the JSON-loader consumer — the same timestamp literal
+     duplicated in two files. Whichever plan finally retires `pathlibcutoff`
+     needs to account for both readers, not just the pickle one.
+- **Parked by 3a's reviews, 2026-08-16.** None blocking.
+  - No test exercises either branch of `dict_of_custom_modules`'s `use_cache`
+    keyword — the polarity was preserved by inspection and a live run only.
+    The whole-branch review (2026-08-16) closed the verification gap, not
+    the test gap: it exercised both branches live (a cache hit, a cache
+    bypass, a legacy pre-`PATHLIB_CUTOFF` pickle whose `str` values convert to
+    `Path`, and both filename conventions) and confirmed all of it behaves
+    correctly. No *permanent* regression test exists for any of that yet;
+    plan 3b should add one alongside whatever else it does to
+    `analysis/custom_modules.py`.
+  - `is_pathlib_ctor`'s `ast.Name` branch no longer honours `allow_pure=False`
+    for an aliased `Pure*` name. This matches the pre-3a baseline (the old
+    `or` form had the same hole), so it is **not a regression** — but the
+    reason previously recorded here, that the gap is "unreachable in
+    practice, since `PurePath` has no `.resolve()`/`.absolute()`", is wrong:
+    `safe_eval` never executes the source it reads, so the `resolve`/
+    `absolute` branch happily recomputes with a canonical concrete `Path`
+    regardless of what the aliased name actually supports. Measured directly
+    against `analysis/literals.safe_eval` on this branch, 2026-08-16:
+    `safe_eval('PurePath("/a/b").resolve()', pathlib_aliases={"PurePath"})`,
+    `safe_eval('PurePosixPath("/a/b").absolute()',
+    pathlib_aliases={"PurePosixPath"})` and `safe_eval('Q("/a/b").resolve()',
+    pathlib_aliases={"Q"})` all return `'/a/b'` — the gap is reachable at the
+    AST level. The corrected reasoning: it is reachable, but only from source
+    that would itself raise `AttributeError` if actually run (`PurePath` has
+    no `.resolve`/`.absolute` method), and the pre-3a `or` form evaluated the
+    identical three expressions to the identical result, so this is not a
+    regression this plan introduced — it is baseline behaviour, mis-described
+    rather than mis-fixed.
+  - `src/veny/cli.py:124`, `search_above_this_dir` is hardcoded `True` and
+    never assigned from parsed args, so `Settings.search_above_this_dir`
+    (introduced this plan) now faithfully carries a value that is, in
+    practice, a constant. Pre-existing, not introduced by this plan. Plan
+    3e's final `Options` drain is the right place to decide whether this
+    becomes a real setting or is dropped.
 - **Parked by phase 2's reviews, 2026-08-16.** None blocking; each was ruled
   real but out of scope, and the phase they belong to is named.
   - `options.installed_imports` is **write-only** — written in `split_imports`,

@@ -13,7 +13,6 @@ import functools
 import json
 import logging
 import os
-import pickle
 import re
 import shlex  # For safely quoting shell commands
 import shutil
@@ -23,12 +22,11 @@ import tempfile
 from collections import defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from functools import lru_cache  # For caching results of expensive function calls
 from pathlib import Path  # Preferred over os.path for path manipulations.
-from typing import Any
 
 from . import __version__ as __version__
 from . import alias_index, stdlib_index
+from .settings import Settings
 
 try:
     import emmykit as ek
@@ -43,6 +41,8 @@ if not hasattr(ek, "register_json_type"):
         f"Upgrade it with:  pip install -U 'emmykit>=0.4.0'"
     )
 from . import json_types, venv_cache
+from .analysis.custom_modules import dict_of_custom_modules
+from .analysis.literals import collect_pathlib_aliases, safe_eval
 
 
 @functools.cache
@@ -529,7 +529,18 @@ def main() -> int:
             )
 
     time1 = dt.datetime.now()
-    options.custom_modules = dict_of_custom_modules(options)
+    settings = Settings(
+        my_name=options.my_name,
+        cwd=options.cwd,
+        stay_out_list=tuple(options.stay_out_list),
+        search_above_this_dir=options.search_above_this_dir,
+        rawlog=options.rawlog,
+    )
+    options.custom_modules = dict_of_custom_modules(
+        settings,
+        use_cache=not getattr(options.args, "rc", False)
+        and not getattr(options.args, "no_cache", False),
+    )
     time2 = dt.datetime.now()
     elapsed_time = time2 - time1
     if not options.rawlog:
@@ -673,212 +684,6 @@ def main() -> int:
     if script_exit_code < 0:
         script_exit_code = 128 - script_exit_code
     return script_exit_code
-
-
-# ---- pathlib class sets ----
-PATHLIB_CONCRETE = {"Path", "PosixPath", "WindowsPath"}
-PATHLIB_PURE = {"PurePath", "PurePosixPath", "PureWindowsPath"}
-PATHLIB_ALL = PATHLIB_CONCRETE | PATHLIB_PURE
-
-
-def collect_pathlib_aliases(module: ast.Module) -> set[str]:
-    """Return the local names that refer to pathlib classes.
-
-    Covers Path/PosixPath/WindowsPath and the Pure* variants, handles aliasing
-    via 'as', and works even if imports are nested: the whole tree is scanned.
-    """
-    aliases: set[str] = set()
-    for node in ast.walk(module):
-        if isinstance(node, ast.ImportFrom) and node.module == "pathlib":
-            for alias in node.names:
-                if alias.name in PATHLIB_ALL:
-                    aliases.add(alias.asname or alias.name)
-    return aliases
-
-
-def is_pathlib_ctor(fn: ast.AST, pathlib_aliases: set[str], allow_pure: bool) -> bool:
-    """True if 'fn' is a constructor for a pathlib *Path* type.
-
-    - When allow_pure=False, only concrete (filesystem) paths are allowed.
-    - When allow_pure=True, accept both concrete and pure paths.
-    """
-    allowed = PATHLIB_CONCRETE | (PATHLIB_PURE if allow_pure else set())
-
-    # Case: Name (possibly aliased import) e.g., Path(...), P(...), PurePath(...)
-    if isinstance(fn, ast.Name):
-        if fn.id in allowed or fn.id in pathlib_aliases:
-            return True
-
-    # Case: attribute like pathlib.Path(...), pathlib.PurePath(...)
-    if (
-        isinstance(fn, ast.Attribute)
-        and isinstance(fn.value, ast.Name)
-        and fn.value.id == "pathlib"
-        and fn.attr in allowed
-    ):
-        return True
-
-    return False
-
-
-def _safe_eval_node(node: ast.AST, pathlib_aliases: set[str] | None = None) -> Any:  # noqa: ANN401  # Evaluates arbitrary literals: str, int, list, dict, Path. Any is the honest type.
-    """Recursively evaluate a restricted subset of AST nodes.
-
-    Supported:
-    - Constants (strings, numbers, booleans, None)
-    - Lists, tuples, dicts
-    - os.getcwd()
-    - os.path.(abspath|join|dirname|realpath)(<literal strings>)
-    - pathlib.Path(<literal strings>).(resolve|absolute)() and .joinpath(<literal strings>...)
-    - The "/" operator for joining pathlib Paths.
-
-    Args:
-        node:            The AST node to evaluate.
-        pathlib_aliases: Optional set of local names that refer to pathlib classes.
-
-    Returns:
-        The evaluated Python object.
-
-    Raises:
-        ValueError: If the node contains unsupported syntax.
-    """
-    aliases = pathlib_aliases or set()
-    # --- support "/" operator for path-like objects ---
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-        left = _safe_eval_node(node.left, pathlib_aliases=aliases)
-        right = _safe_eval_node(node.right, pathlib_aliases=aliases)
-        # accept strings or any PathLike (Path, etc.)
-        if isinstance(left, (str, os.PathLike)) and isinstance(
-            right, (str, os.PathLike)
-        ):
-            # Path(left) / right → Path; str(...) to get the string path
-            return os.fspath(Path(left) / right)
-        raise ValueError(f"Unsupported path division: {ast.unparse(node)}")
-
-    # --- literals ---
-    if isinstance(node, ast.Constant):
-        # Python 3.8+: Constant covers str, int, float, bool, None
-        return node.value
-
-    # --- composite literals ---
-    if isinstance(node, ast.List):
-        return [_safe_eval_node(elt, pathlib_aliases=aliases) for elt in node.elts]
-    if isinstance(node, ast.Tuple):
-        return tuple(_safe_eval_node(elt, pathlib_aliases=aliases) for elt in node.elts)
-    if isinstance(node, ast.Dict):
-        return {
-            _safe_eval_node(k, pathlib_aliases=aliases): _safe_eval_node(
-                v, pathlib_aliases=aliases
-            )
-            for k, v in zip(node.keys, node.values, strict=False)
-        }
-
-    # --- calls ---
-    if isinstance(node, ast.Call):
-        func = node.func
-
-        # os.getcwd()
-        if (
-            isinstance(func, ast.Attribute)
-            and isinstance(func.value, ast.Name)
-            and func.value.id == "os"
-            and func.attr == "getcwd"
-            and len(node.args) == 0
-        ):
-            return os.getcwd()
-
-        # os.path.* calls
-        if (
-            isinstance(func, ast.Attribute)
-            and isinstance(func.value, ast.Attribute)
-            and func.value.attr == "path"
-            and isinstance(func.value.value, ast.Name)
-            and func.value.value.id == "os"
-        ):
-            method = func.attr
-            allowed = {"abspath", "join", "dirname", "realpath"}
-            if method in allowed:
-                arg_vals = [
-                    _safe_eval_node(arg, pathlib_aliases=aliases) for arg in node.args
-                ]
-                if all(isinstance(v, str) for v in arg_vals):
-                    path_fn = getattr(os.path, method)
-                    return path_fn(*arg_vals)
-
-        # pathlib.Path(...).resolve()/absolute()
-        if isinstance(node.func, ast.Attribute) and node.func.attr in {
-            "resolve",
-            "absolute",
-        }:
-            func = node.func
-            if isinstance(func.value, ast.Call):
-                inner = func.value
-                if (
-                    is_pathlib_ctor(inner.func, aliases, allow_pure=False)
-                    and len(inner.args) == 1
-                ):
-                    arg = _safe_eval_node(inner.args[0], pathlib_aliases=aliases)
-                    if isinstance(arg, str):
-                        # Recompute using canonical 'Path' and same method name
-                        return os.fspath(getattr(Path(arg), func.attr)())
-
-        # pathlib.Path(...).joinpath(...)
-        if isinstance(node.func, ast.Attribute) and node.func.attr == "joinpath":
-            func = node.func
-            if isinstance(func.value, ast.Call):
-                inner = func.value
-                if (
-                    is_pathlib_ctor(inner.func, aliases, allow_pure=True)
-                    and len(inner.args) == 1
-                ):
-                    base = _safe_eval_node(inner.args[0], pathlib_aliases=aliases)
-                    parts = [
-                        _safe_eval_node(a, pathlib_aliases=aliases) for a in node.args
-                    ]
-                    if isinstance(base, str) and all(isinstance(p, str) for p in parts):
-                        return os.fspath(Path(base).joinpath(*parts))
-
-        # unsupported call
-        raise ValueError(f"Unsupported call: {ast.unparse(node)}")
-
-    # anything else is disallowed
-    raise ValueError(f"Unsupported expression: {ast.dump(node)}")
-
-
-def safe_eval(expr: str, pathlib_aliases: set[str] | None = None) -> Any | None:  # noqa: ANN401  # Same as _safe_eval_node: the value is whatever literal the expression held.
-    """Safely evaluate a restricted Python expression string.
-
-    Only these are allowed:
-        - literals (str, int, float, bool, None)
-        - lists, tuples, dicts of the above
-        - os.getcwd()
-        - os.path.(abspath|join|dirname|realpath)(<literal strings>)
-        - pathlib.Path(<literal strings>).(resolve|absolute)() and
-          .joinpath(<literal strings>...) and the "/" operator for joining paths.
-        - The "/" operator for joining pathlib Paths.
-
-    Args:
-        expr:            The expression string to evaluate.
-        pathlib_aliases: Optional set of local names that refer to pathlib classes.
-
-    Returns:
-        The evaluated Python object, or None on unsupported syntax.
-
-    Raises:
-        None: All errors are caught and None is returned.
-    """
-    try:
-        # Parse in "eval" mode so we get an Expression node
-        tree = ast.parse(expr, mode="eval")
-        return _safe_eval_node(
-            tree.body, pathlib_aliases=pathlib_aliases
-        )  # tree.body is the root expr
-    except (SyntaxError, ValueError) as e:
-        if logging.getLogger().isEnabledFor(logging.DEBUG):
-            logging.debug(
-                "%s: Unsupported expression: %r: %s", ek.return_method_name(), expr, e
-            )
-        return None
 
 
 class SysPathVisitor(ast.NodeVisitor):
@@ -3900,244 +3705,3 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
                 f"{getattr(options.args, 'smallest',  False) = }"
             )
     return None
-
-
-STANDARD_LIB_PATHS: tuple[Path, ...] = (
-    Path("/") / "usr" / "lib",
-    Path("/") / "usr" / "local" / "lib",
-    Path("/") / "usr" / "lib64",
-    Path("/") / "usr" / "local" / "lib64",
-)
-
-STANDARD_LIB_NAMES: tuple[str, ...] = ("lib", "lib64")
-
-
-def is_standard_path(options: Options, path: str | os.PathLike[str]) -> bool:
-    """Check if the given path is a standard system path or part of a virtual environment."""
-    p = ek.ensure_path(path)
-    # Check if path is inside standard system paths
-    for std_path in STANDARD_LIB_PATHS:
-        if p.is_relative_to(std_path):  # Python 3.9+
-            return True
-    # Check if path contains anything in stay_out_list
-    p_str = os.fspath(p)
-    if any(s in p_str for s in options.stay_out_list):
-        return True
-    # Check for Virtualenv-style paths:
-    # .../lib/python*/site-packages or .../lib64/python*/site-packages
-    if "site-packages" in p_str:
-        parts = p.parts
-        for i in range(len(parts) - 1):
-            comp = parts[i]
-            if comp in STANDARD_LIB_NAMES:
-                nxt = parts[i + 1]
-                if nxt.startswith("python"):  # also matches "python"
-                    return True
-    return False
-
-
-def only_search_here_filename_boolean(
-    filename: str | os.PathLike[str], thestring: str
-) -> bool:
-    """Check if the given filename contains thestring, which is used to determine if the search is limited to the current directory."""
-    return thestring in os.fspath(filename)
-
-
-def search_anywhere_filename_boolean(
-    filename: str | os.PathLike[str], thestring: str
-) -> bool:
-    """Check if the given filename does NOT contain thestring. By default, those files are assumed to have been created by searching above the current directory."""
-    return thestring not in os.fspath(filename)
-
-
-def only_search_here_path_boolean(
-    options: Options, path: str | os.PathLike[str]
-) -> bool:
-    """Check if the given path is in the current directory."""
-    return Path(path).absolute().is_relative_to(options.cwd)
-
-
-def search_anywhere_path_boolean(
-    options: Options, path: str | os.PathLike[str]
-) -> bool:
-    """Return True regardless."""
-    return True
-
-
-def dict_of_custom_modules(options: Options) -> dict[str, Path]:
-    """Create (or load) a dictionary of all local custom modules in the non-standard sys.path directories and their associated filepaths."""
-    # If --rc and --no-cache were not specified, look for a pickle file with the custom modules dictionary the last time this script was run.
-
-    # I.f.f. options.search_above_this_dir is True, then search above the current directory for custom modules.
-    # Either way, only load custom module pickle files that searched in the same places as requested.
-    search_above_text_to_match = "only_search_here_"  # For legacy reasons, custom module pickle files are assumed to have searched above the current directory unless this text is present in the filename.
-    if options.search_above_this_dir:
-        search_above_text_to_write = (
-            "_"  # This will be added to the filename of the custom modules pickle file.
-        )
-        search_constraint_filename_boolean = search_anywhere_filename_boolean
-        search_constraint_path_boolean = search_anywhere_path_boolean
-    else:
-        search_above_text_to_write = search_above_text_to_match  # This will be added to the filename of the custom modules pickle file.
-        search_constraint_filename_boolean = only_search_here_filename_boolean
-        search_constraint_path_boolean = only_search_here_path_boolean
-
-    log = (
-        logging.getLogger()
-    )  # Prebind the logger to avoid repeated global lookups in hot loop
-    if log.isEnabledFor(logging.DEBUG):
-        logging.debug(
-            "Searching for custom modules pickle files with constraint: search_above_text_to_match = %s",
-            search_above_text_to_match,
-        )
-    if not getattr(options.args, "rc", False) and not getattr(
-        options.args, "no_cache", False
-    ):
-        try:
-            potential_files = [
-                file
-                for file in options.cwd.iterdir()
-                if file.name.startswith(f".{options.my_name}_custom_modules_")
-                and file.suffix.casefold() == ".pkl"
-                and ek.COMPUTER_NAME in file.name
-                and search_constraint_filename_boolean(
-                    file.name, search_above_text_to_match
-                )
-            ]
-            if not potential_files:
-                if not options.rawlog:
-                    logging.info(
-                        "No existing custom modules pickle files found in the current directory."
-                    )
-            else:
-                # If multiple files are found, pick the most recent one based on the timestamp in the filename.
-                potential_files_with_timestamps: list[tuple[Path, str]] = [
-                    (file, ts)
-                    for file in potential_files
-                    if (ts := ek.extract_timestamp(file.name)) is not None
-                ]
-                if not potential_files_with_timestamps:
-                    if not options.rawlog:
-                        logging.info(
-                            "No valid timestamps found in custom modules pickle filenames."
-                        )
-                else:
-                    # Sort by timestamp descending
-                    potential_files_with_timestamps.sort(
-                        key=lambda x: x[1], reverse=True
-                    )
-                    most_recent_file = potential_files_with_timestamps[0][0]
-                    most_recent_timestamp = potential_files_with_timestamps[0][1]
-                    if not options.rawlog:
-                        logging.info(
-                            "Loading custom modules from most recent pickle file: %s",
-                            most_recent_file,
-                        )
-                    with open(most_recent_file, "rb") as f:
-                        loaded_modules = pickle.load(f)
-                    if most_recent_timestamp < options.pathlibcutoff:
-                        if not options.rawlog:
-                            logging.info(
-                                "Custom modules file %s is from date %s "
-                                "which is older than the point when "
-                                "paths were stored as Paths (which happened on %s). "
-                                "Converting all paths to pathlib.Path objects.",
-                                most_recent_file,
-                                most_recent_timestamp,
-                                options.pathlibcutoff,
-                            )
-                        normalized: dict[str, Path] = {
-                            k: ek.ensure_path(v) for k, v in loaded_modules.items()
-                        }
-                    else:
-                        # If the pickle already contains Paths, narrow the type for mypy
-                        normalized = {
-                            k: (v if isinstance(v, Path) else ek.ensure_path(v))
-                            for k, v in loaded_modules.items()
-                        }
-                    return normalized
-        except Exception:
-            logging.exception("Error loading custom modules from pickle file.")
-            logging.error(
-                "Falling back to regenerating the custom modules dictionary from sys.path."
-            )
-
-    custom_modules: dict[str, Path] = {}
-    package_dirs: set[Path] = set()  # directories confirmed to be packages
-
-    # Use lru_cache to speed up repeated calls to is_standard_path()
-    @lru_cache(maxsize=8192)
-    def _is_std_path_cached(p: str | os.PathLike[str]) -> bool:
-        """Check if a path is a standard library path. Cached for speed."""
-        return is_standard_path(options, p)
-
-    # Prebind a few globals/attributes to locals before os.walk to cut repeated global lookups:
-    is_std = _is_std_path_cached
-    endswith_ext = ek.PYTHON_EXTENSIONS
-    safe_is_file = ek.safe_is_file
-    safe_is_dir = ek.safe_is_dir
-
-    if log.isEnabledFor(logging.DEBUG):
-        logging.debug("Generating custom modules dictionary from sys.path...")
-    for path in map(Path, sys.path):
-        if (
-            not is_std(path)
-            and safe_is_dir(path)
-            and search_constraint_path_boolean(options, path)
-        ):
-            if log.isEnabledFor(logging.DEBUG):
-                logging.debug("Checking path: %s", path)
-
-            # Prebind a few globals/attributes to locals before os.walk to cut repeated global lookups:
-            setdefault_mod = custom_modules.setdefault
-            package_dirs_add = package_dirs.add
-            # Suppress any remaining (permissions related?) walking errors with onerror = ... None
-            for root, dirs, files in os.walk(
-                path, topdown=True, onerror=(lambda e: None)
-            ):
-                root_path = Path(root)
-                # If the root itself is standard, skip the whole subtree immediately
-                if is_std(root_path):
-                    dirs[:] = []  # stop descending
-                    continue
-                # PRUNE: remove standard subdirs in-place to avoid descending into them
-                # Also collect package dirs (those with __init__.py) while we're here
-                kept_dirs = []
-                for d in dirs:
-                    if d == "__pycache__":
-                        continue
-                    pkg = root_path / d
-                    if is_std(pkg):
-                        continue  # prune
-                    kept_dirs.append(d)
-                    if safe_is_file(pkg / "__init__.py"):
-                        package_dirs_add(pkg)
-                        # prefer packages; first occurrence wins
-                        setdefault_mod(d, pkg)
-                dirs[:] = kept_dirs  # apply pruning
-                # Files: skip quickly by filename; only build Path when needed
-                for fname in files:
-                    fl = fname.casefold()
-                    # fast extension + __init__ checks (exactly final extension)
-                    if not fl.endswith(endswith_ext):
-                        continue
-                    if fl == "__init__.py":
-                        continue
-                    fpath = root_path / fname
-                    if is_std(fpath):
-                        continue
-                    # if file lives inside a known package dir, skip (package already recorded)
-                    if fpath.parent in package_dirs:
-                        continue
-                    setdefault_mod(fpath.stem, fpath)
-
-    # Now save to a pickle file:
-    current_time = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    custom_filename = f".{options.my_name}_custom_modules_{ek.COMPUTER_NAME}{search_above_text_to_write}{current_time}.pkl"
-    with open(custom_filename, "wb") as f_out:
-        if not options.rawlog:
-            logging.info("Saving custom modules to %s", custom_filename)
-        pickle.dump(
-            custom_modules, f_out, protocol=pickle.HIGHEST_PROTOCOL
-        )  # Use highest protocol for efficiency because we don't need backward compatibility for caching purposes
-    return custom_modules
