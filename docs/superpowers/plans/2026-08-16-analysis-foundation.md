@@ -79,10 +79,13 @@ Line numbers below are as of commit `8f247ed`. They shift as edits are applied, 
 - [x] `src/veny/analysis/literals.py` holds `PATHLIB_CONCRETE`, `PATHLIB_PURE`, `PATHLIB_ALL`, `collect_pathlib_aliases`, `is_pathlib_ctor`, `_safe_eval_node` and `safe_eval`, moved verbatim
 - [x] `literals.py` imports nothing from `veny.cli`, `veny.alias_index`, `veny.venv_cache`, `veny.stdlib_index` or `veny.pypi_client` — only the standard library and `emmykit`
 - [x] `cli.py`'s three consumers (`SysPathVisitor` twice, `_analyze_module` once) call it through the new module
-- [x] `tests/test_literals.py` passes with 8 tests
+- [x] `tests/test_literals.py` passes with 8 tests — **delivered as 7.** The eighth,
+  `test_an_unaliased_pathlib_name_is_not_evaluated`, asserted behaviour the code
+  does not have and was deferred to Task 2b as its red test; see that section.
 - [x] All existing tests pass
 
 **Verify:** `pixi run python -m pytest tests/test_literals.py -v` → 8 passed, then `pixi run test` → 276 passed
+— **actual: 7 passed and 275 passed**, for the reason above.
 
 **This is a pure move.** Do not fix, tidy, reformat or re-comment anything in the moved code. Task 2 makes the one behavioural change this plan contains, and keeping the move byte-identical is what lets a reviewer verify it by inspection.
 
