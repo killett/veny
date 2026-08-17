@@ -711,19 +711,40 @@ wiring rationale and for two Minors deliberately left unfixed.
      duplicated in two files. Whichever plan finally retires `pathlibcutoff`
      needs to account for both readers, not just the pickle one.
 - **Parked by 3a's reviews, 2026-08-16.** None blocking.
-  - `pyproject.toml`'s `S301` per-file-ignore for `cli.py` is now stale — the
-    `pickle.load` call it was written for moved to
-    `analysis/custom_modules.py`, which carries an inline `# noqa: S301`
-    instead. Worth cleaning up when a later plan touches `pyproject.toml`.
-  - `dict_of_custom_modules`'s docstring documents neither its new `settings`
-    parameter nor the `use_cache` keyword, and no test exercises either
-    branch of `use_cache` — the polarity was preserved by inspection and a
-    live run only.
+  - No test exercises either branch of `dict_of_custom_modules`'s `use_cache`
+    keyword — the polarity was preserved by inspection and a live run only.
+    The whole-branch review (2026-08-16) closed the verification gap, not
+    the test gap: it exercised both branches live (a cache hit, a cache
+    bypass, a legacy pre-`PATHLIB_CUTOFF` pickle whose `str` values convert to
+    `Path`, and both filename conventions) and confirmed all of it behaves
+    correctly. No *permanent* regression test exists for any of that yet;
+    plan 3b should add one alongside whatever else it does to
+    `analysis/custom_modules.py`.
   - `is_pathlib_ctor`'s `ast.Name` branch no longer honours `allow_pure=False`
     for an aliased `Pure*` name. This matches the pre-3a baseline (the old
-    `or` form had the same hole) and is unreachable in practice, since
-    `PurePath` has no `.resolve()`/`.absolute()` and that is the only
-    `allow_pure=False` caller.
+    `or` form had the same hole), so it is **not a regression** — but the
+    reason previously recorded here, that the gap is "unreachable in
+    practice, since `PurePath` has no `.resolve()`/`.absolute()`", is wrong:
+    `safe_eval` never executes the source it reads, so the `resolve`/
+    `absolute` branch happily recomputes with a canonical concrete `Path`
+    regardless of what the aliased name actually supports. Measured directly
+    against `analysis/literals.safe_eval` on this branch, 2026-08-16:
+    `safe_eval('PurePath("/a/b").resolve()', pathlib_aliases={"PurePath"})`,
+    `safe_eval('PurePosixPath("/a/b").absolute()',
+    pathlib_aliases={"PurePosixPath"})` and `safe_eval('Q("/a/b").resolve()',
+    pathlib_aliases={"Q"})` all return `'/a/b'` — the gap is reachable at the
+    AST level. The corrected reasoning: it is reachable, but only from source
+    that would itself raise `AttributeError` if actually run (`PurePath` has
+    no `.resolve`/`.absolute` method), and the pre-3a `or` form evaluated the
+    identical three expressions to the identical result, so this is not a
+    regression this plan introduced — it is baseline behaviour, mis-described
+    rather than mis-fixed.
+  - `src/veny/cli.py:124`, `search_above_this_dir` is hardcoded `True` and
+    never assigned from parsed args, so `Settings.search_above_this_dir`
+    (introduced this plan) now faithfully carries a value that is, in
+    practice, a constant. Pre-existing, not introduced by this plan. Plan
+    3e's final `Options` drain is the right place to decide whether this
+    becomes a real setting or is dropped.
 - **Parked by phase 2's reviews, 2026-08-16.** None blocking; each was ruled
   real but out of scope, and the phase they belong to is named.
   - `options.installed_imports` is **write-only** — written in `split_imports`,
