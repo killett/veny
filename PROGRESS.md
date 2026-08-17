@@ -26,15 +26,37 @@ gotchas ledger.
   | Plan | Modules | ~Lines |
   |---|---|---|
   | **3a** `docs/superpowers/plans/2026-08-16-analysis-foundation.md` (executed, complete) | `analysis/literals.py`, `analysis/custom_modules.py`, `settings.py` | 430 |
-  | 3b (not written) | `analysis/imports.py`, `call_graph.py`, `scan.py` | 1,090 |
+  | **3b** `docs/superpowers/plans/2026-08-16-analysis-imports-and-call-graph.md` (written, not executed) | `analysis/imports.py`, `call_graph.py`, `scan.py`, plus `analysis/scan_state.py` | 1,100 |
   | 3c (not written) | `classify.py`, `environment.py` | 600 |
   | 3d (not written) | `verify.py`, `cache_search.py`, `last_used.py` | 1,100 |
   | 3e (not written) | `pipeline.py`, `cli.py` slimming, `--full` deletion, final `Options` drain | 450 |
 
   Phases 1 and 2 are complete and merged to `main`.
 
-**Next action:** write and execute plan 3b on branch `analysis-foundation`.
-Plan 3a is complete on this branch: six tasks landed (a task gained mid-execution,
+**Next action:** execute plan 3b, `docs/superpowers/plans/2026-08-16-analysis-imports-and-call-graph.md`,
+on branch `analysis-imports-call-graph` (already created off `main` @ `3215df5`;
+the plan and its `.tasks.json` are committed there as `e4f79ea`, the only commit
+on the branch). Its seven tasks are ready and **none has been implemented**. The
+plan opens with a "Starting state" section written for a session that does not
+have the authoring context — read it first. Two things in it are worth knowing
+before you begin: the task order is deliberately *tests before moves*, because
+the call-graph half of the neighbourhood (`build_call_graph`,
+`collect_used_imports`, `_analyze_module`, `split_function_name`, `FunctionInfo`,
+`ModuleInfo`) has zero test coverage today; and `ImportScan` is forced rather
+than chosen, because once those symbols live under `analysis/` they cannot name
+`Options` without importing `cli`, which `tests/test_layering.py` fails on.
+
+Plan 3b also settles three things the approved design left open or wrong, all
+recorded in its own "Three things this plan settles" section: `ImportScan` must
+carry `seen_stdlib_imports` or `warn_about_system_packages` silently stops
+firing; `analysis/` receives stdlib membership as an injected
+`is_stdlib: Callable[[str], bool]` (owner's decision, 2026-08-16) rather than a
+`StdlibIndex`, which satisfies the design's wording with bit-identical
+behaviour; and the design's "Pure AST in, names out" claim is not true today —
+`_register_constant_path_for_module` and `process_import` both touch the
+filesystem during a scan — and 3b does not make it true.
+
+Phase 3a is merged to `main` at `3215df5`. It landed six tasks (a task gained mid-execution,
 numbered 2b, between the `/`-operator fix and the `settings.py`/`custom_modules.py`
 extraction), all committed —
 `a20224e` (extract `analysis/literals.py`, byte-identical move, 7 tests),
@@ -43,7 +65,9 @@ extraction), all committed —
 gate `is_pathlib_ctor`'s alias set correctly, 2 tests), `41f5ef1` (create
 `settings.py`, extract `analysis/custom_modules.py`), `728c62d`/`79cefc7`
 (`tests/test_layering.py`, 3 tests enforcing the one-way import direction),
-plus `dd811d1` recording Task 2b in the plan file. Gates on this branch: `pixi
+plus `dd811d1` recording Task 2b in the plan file, `4577189`/`73bdca0`/`4840886`/
+`c7b9d90`/`0fe47b1` closing the whole-branch review's findings, and `2c62f5b`
+correcting a false test-count claim in the plan's own Task 1. Gates on `main`: `pixi
 run test` 283 passed; `ruff check .` zero; `ruff format --check .` all 33
 files formatted; `pixi run typecheck` 37 errors (at the ceiling, not a
 regression — see Gotchas); `pixi run smoke` green (network was available, so

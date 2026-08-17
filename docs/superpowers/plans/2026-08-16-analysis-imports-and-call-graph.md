@@ -31,6 +31,18 @@
 
 ---
 
+## Starting state (this plan was written in a different session — assume nothing)
+
+- **Branch:** `analysis-imports-call-graph`, already created off `main` @ `3215df5`. It has exactly one commit, `e4f79ea`, which is this plan and its `.tasks.json`. **No task in this plan has been implemented.** Do not create a new branch.
+- **Suite:** `pixi run test` reports **283 passed** at `e4f79ea`. Confirm that before Task 1; if it differs, stop and report rather than adjusting the plan's counts.
+- **Line counts at `e4f79ea`:** `cli.py` 3,707; `analysis/literals.py` 229; `analysis/custom_modules.py` 274; `settings.py` 23. Every `cli.py` line number in this plan is as of that commit.
+- **Phase 3a is merged** (`3215df5`). It created `src/veny/analysis/` with `literals.py` and `custom_modules.py`, `src/veny/settings.py` with a frozen five-field `Settings`, and `tests/test_layering.py`. Read `PROGRESS.md` first — its Gotchas section carries traps this plan does not repeat.
+- **`pixi run typecheck` reports 37 errors and cannot reach zero.** It is a ceiling, not a gate. The pre-commit `mypy` hook is `mypy .` with `pass_filenames: false`, so it always reports them; that is expected, not a failure of your change.
+- **`.git/hooks/pre-commit` is not installed**, so `git commit` runs no hooks. Run `pixi run pre-commit run --files <paths>` by hand before each commit.
+- **The measured values in Task 1 were obtained by executing the code at `3215df5`.** Task 2's were deliberately *not* measured — see that task. Everywhere this plan states a value as measured, it was; everywhere it asks you to measure, do not substitute a value from this plan's prose.
+
+---
+
 ## Three things this plan settles that the design did not
 
 Recorded here rather than silently worked around. All three were found by measuring the tree at `3215df5`, not by reading.
@@ -250,21 +262,44 @@ git commit -m "test: characterize the call graph before extracting it"
 
 **Measure before you write.** Unlike Task 1, this plan does **not** hand you the expected values for all five. Task 1's were measured; these must be measured by you, the same way, before the test is written:
 
-```bash
-pixi run python -c "
-import ast, tempfile, pathlib
+Save this as `/tmp/probe.py` and run it with `pixi run python /tmp/probe.py`, editing `SRC` for each fixture. It is written as a file rather than a `-c` one-liner because the fixture source contains quotes and newlines that do not survive shell quoting:
+
+```python
+import pathlib
+import tempfile
+
 from veny.cli import Options, _analyze_module
-src = '<your fixture source>'
-d = pathlib.Path(tempfile.mkdtemp()); p = d / 'mod.py'; p.write_text(src)
-o = Options(); o.rawlog = True
-mods = {}
-key, = _analyze_module(o, p, mods, False)[:1]
-mi = mods[key]
-print('top_level:', sorted(mi.top_level_imports))
-print('functions:', {k: sorted(f.imports_in_function) for k, f in mi.functions.items()})
-print('aliases:', getattr(mi, 'alias_to_key', None))
-"
+
+SRC = """\
+import xml.etree.ElementTree
+from json import loads
+
+
+def go():
+    import csv
+    return csv
+"""
+
+directory = pathlib.Path(tempfile.mkdtemp())
+module_path = directory / "mod.py"
+module_path.write_text(SRC)
+
+options = Options()
+options.rawlog = True
+modules_info: dict = {}
+result = _analyze_module(options, module_path, modules_info, False)
+assert result is not None, "_analyze_module refused the fixture"
+key = result[0]
+info = modules_info[key]
+
+print("top_level_imports:", sorted(info.top_level_imports))
+print("functions:", {k: sorted(f.imports_in_function) for k, f in info.functions.items()})
+print("aliases:", info.alias_to_key)
+print("class_names:", info.class_names)
+print("base_classes:", info.base_classes)
 ```
+
+`ModuleInfo`'s attribute names are worth confirming against `cli.py:841-852` before you rely on them — this plan names `top_level_imports`, `functions`, `alias_to_key`, `class_names` and `base_classes`, and if the probe raises `AttributeError` on any of them, read the class and report the real name rather than guessing.
 
 Put the values you actually observe into the assertions, and paste that observed output into your report. If an observed value contradicts what a test name below implies, **report it before writing the test** — that is precisely the situation that produced 3a's Task 2b.
 
