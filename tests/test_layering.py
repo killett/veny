@@ -16,6 +16,21 @@ FORBIDDEN = {
         "json_types",
         "analysis",
     },
+    # The package root. It carries only __version__ today and must stay that
+    # way -- it runs at import time, before anything else, so anything it
+    # imported from within veny would be a strong hint of a cycle. Forbid
+    # everything, the same way settings.py (the bottom of the design's
+    # layering stack) does.
+    "__init__": {
+        "cli",
+        "analysis",
+        "alias_index",
+        "venv_cache",
+        "stdlib_index",
+        "pypi_client",
+        "json_types",
+        "settings",
+    },
     "analysis/literals": {
         "cli",
         "alias_index",
@@ -28,12 +43,42 @@ FORBIDDEN = {
         "cli",
         "alias_index",
         "venv_cache",
+        "stdlib_index",
         "pypi_client",
         "json_types",
     },
-    "alias_index": {"cli", "venv_cache", "json_types", "analysis"},
-    "venv_cache": {"cli", "alias_index", "pypi_client", "json_types", "analysis"},
-    "pypi_client": {"cli", "alias_index", "venv_cache", "json_types", "analysis"},
+    # The analysis subpackage marker. Plan 3b re-exports its new leaf modules
+    # from here, so this is exactly where a `from ..cli import Options`
+    # convenience import would first appear -- give it the same forbidden set
+    # as its leaf modules rather than leaving it uncovered.
+    "analysis/__init__": {
+        "cli",
+        "alias_index",
+        "venv_cache",
+        "stdlib_index",
+        "pypi_client",
+        "json_types",
+    },
+    "alias_index": {"cli", "venv_cache", "stdlib_index", "json_types", "analysis"},
+    # alias_index -> pypi_client is a real, sanctioned dependency (alias
+    # resolution ranks candidates by confirming them against PyPI), so
+    # pypi_client is deliberately absent from this forbidden set.
+    "venv_cache": {
+        "cli",
+        "alias_index",
+        "stdlib_index",
+        "pypi_client",
+        "json_types",
+        "analysis",
+    },
+    "pypi_client": {
+        "cli",
+        "alias_index",
+        "venv_cache",
+        "stdlib_index",
+        "json_types",
+        "analysis",
+    },
     "stdlib_index": {
         "cli",
         "alias_index",
@@ -42,6 +87,9 @@ FORBIDDEN = {
         "json_types",
         "analysis",
     },
+    # json_types -> alias_index and json_types -> stdlib_index are both real,
+    # sanctioned dependencies (it registers their types for JSON
+    # serialization), so both are deliberately absent from this forbidden set.
     "json_types": {"cli", "venv_cache", "pypi_client", "analysis"},
 }
 
@@ -88,11 +136,19 @@ def test_no_module_imports_above_its_layer() -> None:
 
 
 def test_the_guard_covers_every_module_it_should() -> None:
-    """A new module with no FORBIDDEN entry would be silently unguarded."""
+    """A new module with no FORBIDDEN entry would be silently unguarded.
+
+    `__init__.py` files are included -- a package `__init__` re-exporting a
+    forbidden name is exactly as much of a layering violation as the module
+    itself importing it, and this used to let `analysis/__init__.py` (and
+    `src/veny/__init__.py`) import anything with neither test noticing.
+    `__main__.py` stays exempt: it legitimately imports `cli` to invoke
+    `main()`, and nothing else in the tree may.
+    """
     on_disk = {
         str(p.relative_to(SRC).with_suffix("")).replace("\\", "/")
         for p in SRC.rglob("*.py")
-        if p.name not in {"__init__.py", "__main__.py"}
+        if p.name != "__main__.py"
     }
     unguarded = on_disk - set(FORBIDDEN) - {"cli"}
     assert unguarded == set(), f"add these to FORBIDDEN: {sorted(unguarded)}"
