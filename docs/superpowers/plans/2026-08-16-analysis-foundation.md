@@ -1,6 +1,6 @@
 # Phase 3a: Analysis Foundation — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers-extended-cc:subagent-driven-development (recommended) or superpowers-extended-cc:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers-extended-cc:subagent-driven-development (recommended) or superpowers-extended-cc:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Extract the two leaf modules of the `analysis/` subpackage out of `src/veny/cli.py`, introduce the first frozen settings object with a real consumer, and establish the layering guard the rest of phase 3 will lean on.
 
@@ -76,11 +76,11 @@ Line numbers below are as of commit `8f247ed`. They shift as edits are applied, 
 - Modify: `src/veny/cli.py` — delete lines **679-883**, import from the new module
 
 **Acceptance Criteria:**
-- [ ] `src/veny/analysis/literals.py` holds `PATHLIB_CONCRETE`, `PATHLIB_PURE`, `PATHLIB_ALL`, `collect_pathlib_aliases`, `is_pathlib_ctor`, `_safe_eval_node` and `safe_eval`, moved verbatim
-- [ ] `literals.py` imports nothing from `veny.cli`, `veny.alias_index`, `veny.venv_cache`, `veny.stdlib_index` or `veny.pypi_client` — only the standard library and `emmykit`
-- [ ] `cli.py`'s three consumers (`SysPathVisitor` twice, `_analyze_module` once) call it through the new module
-- [ ] `tests/test_literals.py` passes with 8 tests
-- [ ] All existing tests pass
+- [x] `src/veny/analysis/literals.py` holds `PATHLIB_CONCRETE`, `PATHLIB_PURE`, `PATHLIB_ALL`, `collect_pathlib_aliases`, `is_pathlib_ctor`, `_safe_eval_node` and `safe_eval`, moved verbatim
+- [x] `literals.py` imports nothing from `veny.cli`, `veny.alias_index`, `veny.venv_cache`, `veny.stdlib_index` or `veny.pypi_client` — only the standard library and `emmykit`
+- [x] `cli.py`'s three consumers (`SysPathVisitor` twice, `_analyze_module` once) call it through the new module
+- [x] `tests/test_literals.py` passes with 8 tests
+- [x] All existing tests pass
 
 **Verify:** `pixi run python -m pytest tests/test_literals.py -v` → 8 passed, then `pixi run test` → 276 passed
 
@@ -101,7 +101,7 @@ No mocking: these are pure functions over hand-written expression strings.
 
 **Steps:**
 
-- [ ] **Step 1: Create the subpackage**
+- [x] **Step 1: Create the subpackage**
 
 Create `src/veny/analysis/__init__.py` containing only a docstring:
 
@@ -109,7 +109,7 @@ Create `src/veny/analysis/__init__.py` containing only a docstring:
 """AST analysis: what a script imports, and what it does with sys.path."""
 ```
 
-- [ ] **Step 2: Move the code**
+- [x] **Step 2: Move the code**
 
 Create `src/veny/analysis/literals.py`. Move `cli.py:679-883` into it **verbatim** — from `PATHLIB_CONCRETE = {...}` through the end of `safe_eval`, stopping before `class SysPathVisitor`. Add the module docstring and exactly the imports the moved code needs:
 
@@ -132,7 +132,7 @@ import emmykit as ek
 
 `ek` is needed by `safe_eval`'s debug log (`ek.return_method_name()`). Let ruff tell you if anything else is unused.
 
-- [ ] **Step 3: Point `cli.py` at the new module**
+- [x] **Step 3: Point `cli.py` at the new module**
 
 Delete `cli.py:679-883`. Add to `cli.py`'s imports, beside the existing `from . import ...` lines:
 
@@ -142,7 +142,7 @@ from .analysis.literals import collect_pathlib_aliases, safe_eval
 
 Import only those two names — they are the only ones `cli.py` still uses (`SysPathVisitor` at lines 901 and 918, `_analyze_module` at 1754). `is_pathlib_ctor`, `_safe_eval_node` and the `PATHLIB_*` constants are internal to the new module and must not be re-exported.
 
-- [ ] **Step 4: Write the tests**
+- [x] **Step 4: Write the tests**
 
 Create `tests/test_literals.py`:
 
@@ -197,7 +197,7 @@ def test_collect_pathlib_aliases_finds_a_renamed_import() -> None:
     assert collect_pathlib_aliases(tree) == {"P"}
 ```
 
-- [ ] **Step 5: Run and prove one test can fail**
+- [x] **Step 5: Run and prove one test can fail**
 
 Run: `pixi run python -m pytest tests/test_literals.py -v` → expect `8 passed`.
 Run: `pixi run test` → expect `276 passed` (268 + 8).
@@ -206,7 +206,7 @@ Then mutate: in `literals.py`'s `_safe_eval_node`, change the `os.path` allow-li
 
 Mutate **in place** — pixi sets `PYTHONPATH = "src"` in `[activation.env]`, which overwrites an inherited value, so a side copy silently tests the real source and reports a false pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 pixi run pre-commit run --files src/veny/analysis/__init__.py src/veny/analysis/literals.py src/veny/cli.py tests/test_literals.py
@@ -225,11 +225,11 @@ git commit -m "refactor: extract the literal evaluator into analysis/literals.py
 - Modify: `tests/test_literals.py` — two new tests
 
 **Acceptance Criteria:**
-- [ ] `safe_eval('Path("a") / "b"', pathlib_aliases={"Path"})` returns `"a/b"`
-- [ ] `safe_eval('Path("a")', pathlib_aliases={"Path"})` returns `"a"`
-- [ ] A `sys.path.insert(0, Path("/opt/libs") / "extra")` line is discovered by `SysPathVisitor`
-- [ ] All three new tests fail before the fix and pass after
-- [ ] All other tests pass unchanged
+- [x] `safe_eval('Path("a") / "b"', pathlib_aliases={"Path"})` returns `"a/b"`
+- [x] `safe_eval('Path("a")', pathlib_aliases={"Path"})` returns `"a"`
+- [x] A `sys.path.insert(0, Path("/opt/libs") / "extra")` line is discovered by `SysPathVisitor`
+- [x] All three new tests fail before the fix and pass after
+- [x] All other tests pass unchanged
 
 **Verify:** `pixi run test` → 279 passed
 
@@ -263,7 +263,7 @@ veny therefore never scans `/opt/libs/extra` for custom modules, so an import sa
 
 **Steps:**
 
-- [ ] **Step 1: Write both failing tests**
+- [x] **Step 1: Write both failing tests**
 
 Append to `tests/test_literals.py`:
 
@@ -296,12 +296,12 @@ def test_sys_path_built_with_the_slash_operator_is_discovered() -> None:
     assert visitor.paths == {"/opt/libs/extra"}
 ```
 
-- [ ] **Step 2: Run them and confirm they fail**
+- [x] **Step 2: Run them and confirm they fail**
 
 Run: `pixi run python -m pytest tests/test_literals.py -v`
 Expected: the three new tests FAIL — the first two with `assert None == ...`, the third with `assert set() == {'/opt/libs/extra'}`. The eight from Task 1 still pass.
 
-- [ ] **Step 3: Add the missing branch**
+- [x] **Step 3: Add the missing branch**
 
 In `_safe_eval_node`, immediately **before** the `# unsupported call` line that raises, add a branch for a bare pathlib constructor:
 
@@ -317,7 +317,7 @@ In `_safe_eval_node`, immediately **before** the `# unsupported call` line that 
 
 It must come after the `resolve`/`absolute`/`joinpath` branches so those keep priority, and before the `raise`. `allow_pure=True` matches `joinpath`'s treatment: a `PurePath` is a legitimate way to build a path string.
 
-- [ ] **Step 4: Confirm the fix and that nothing else moved**
+- [x] **Step 4: Confirm the fix and that nothing else moved**
 
 Run: `pixi run python -m pytest tests/test_literals.py -v` → expect `11 passed`.
 Run: `pixi run test` → expect `279 passed`.
@@ -326,7 +326,7 @@ This is the one place in this plan where discovery *changes*: `tests/test_import
 
 Run: `pixi run python -m pytest tests/test_import_discovery.py -v` → expect `3 passed`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 pixi run pre-commit run --files src/veny/analysis/literals.py tests/test_literals.py
@@ -364,11 +364,11 @@ constructors.
 - Modify: `tests/test_literals.py` — one new test
 
 **Acceptance Criteria:**
-- [ ] `safe_eval('Path("a").joinpath("b")')` with no aliases returns `None`
-- [ ] The same expression with `pathlib_aliases={"Path"}` still returns `"a/b"`
-- [ ] `safe_eval('pathlib.Path("a").joinpath("b")')` still returns `"a/b"` — the attribute form does not consult the alias set
-- [ ] Task 2's three `/`-operator tests still pass
-- [ ] `tests/test_import_discovery.py` passes unchanged
+- [x] `safe_eval('Path("a").joinpath("b")')` with no aliases returns `None`
+- [x] The same expression with `pathlib_aliases={"Path"}` still returns `"a/b"`
+- [x] `safe_eval('pathlib.Path("a").joinpath("b")')` still returns `"a/b"` — the attribute form does not consult the alias set
+- [x] Task 2's three `/`-operator tests still pass
+- [x] `tests/test_import_discovery.py` passes unchanged
 
 **Verify:** `pixi run test` → 279 passed
 
@@ -409,12 +409,12 @@ Task 1 ends at 275, Task 2 at 278, Task 2b at 279, Task 3 at 279, Task 4 at 281.
 - Modify: `src/veny/cli.py` — delete lines **3915-4143**, build a `Settings` in `main()`, update the call site
 
 **Acceptance Criteria:**
-- [ ] `settings.py` defines a frozen `Settings` dataclass carrying only fields `custom_modules` actually reads
-- [ ] `custom_modules.py` takes `Settings` plus an explicit `use_cache: bool`; it does **not** import `Options` and never touches `options.args`
-- [ ] `pathlibcutoff` is a module constant in `custom_modules.py`, not a `Settings` field
-- [ ] `cli.py`'s single call site passes the flags-derived boolean, not the `Namespace`
-- [ ] `rg -n 'options\.' src/veny/analysis/` returns nothing
-- [ ] All tests pass
+- [x] `settings.py` defines a frozen `Settings` dataclass carrying only fields `custom_modules` actually reads
+- [x] `custom_modules.py` takes `Settings` plus an explicit `use_cache: bool`; it does **not** import `Options` and never touches `options.args`
+- [x] `pathlibcutoff` is a module constant in `custom_modules.py`, not a `Settings` field
+- [x] `cli.py`'s single call site passes the flags-derived boolean, not the `Namespace`
+- [x] `rg -n 'options\.' src/veny/analysis/` returns nothing
+- [x] All tests pass
 
 **Verify:** `pixi run test` → 279 passed
 
@@ -422,7 +422,7 @@ Task 1 ends at 275, Task 2 at 278, Task 2b at 279, Task 3 at 279, Task 4 at 281.
 
 **Steps:**
 
-- [ ] **Step 1: Create `settings.py`**
+- [x] **Step 1: Create `settings.py`**
 
 ```python
 """The invariants of one veny run, fixed once and never mutated."""
@@ -454,7 +454,7 @@ class Settings:
 
 `stay_out_list` is a `tuple`, not a `list`: the dataclass is frozen and a mutable member would make that a lie. `Options.stay_out_list` stays a list; the conversion happens where `Settings` is built.
 
-- [ ] **Step 2: Move the code**
+- [x] **Step 2: Move the code**
 
 Create `src/veny/analysis/custom_modules.py`. Move `cli.py:3915-4143` into it — `is_standard_path`, `only_search_here_filename_boolean`, `search_anywhere_filename_boolean`, `only_search_here_path_boolean`, `search_anywhere_path_boolean`, `stayed_out_dir` and `dict_of_custom_modules`. Add:
 
@@ -471,7 +471,7 @@ Add this module constant, replacing every `options.pathlibcutoff` reference:
 PATHLIB_CUTOFF = "20250810-224900"
 ```
 
-- [ ] **Step 3: Change the signatures**
+- [x] **Step 3: Change the signatures**
 
 `dict_of_custom_modules(options: Options)` becomes:
 
@@ -495,7 +495,7 @@ with:
 
 Change the other moved functions the same way: `is_standard_path` and `stayed_out_dir` take `settings` instead of `options`. The four filename/path boolean helpers take no options today — leave their signatures alone.
 
-- [ ] **Step 4: Update `cli.py`**
+- [x] **Step 4: Update `cli.py`**
 
 Delete `cli.py:3915-4143`. Add the import:
 
@@ -526,7 +526,7 @@ In `main()`, build the `Settings` once, just before the existing `options.custom
 
 If any other site in `cli.py` calls `is_standard_path` or `stayed_out_dir`, update it to pass `settings`. Search first: `rg -n 'is_standard_path|stayed_out_dir' src/veny/cli.py`. If a caller has no `Settings` in scope, report it rather than threading one through half of `main()` — that is a sign the call belongs to a later plan's module.
 
-- [ ] **Step 5: Verify and test**
+- [x] **Step 5: Verify and test**
 
 Run: `rg -n 'options\.' src/veny/analysis/` → expect no output.
 Run: `pixi run test` → expect `279 passed`.
@@ -541,7 +541,7 @@ pixi run veny --justprint /tmp/veny-3a.py
 
 Expected: it resolves `yaml` to `PyYAML` and reports it, without crashing in custom-module discovery. Capture the output.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 pixi run pre-commit run --files src/veny/settings.py src/veny/analysis/custom_modules.py src/veny/cli.py
@@ -559,11 +559,11 @@ git commit -m "refactor: hand custom-module discovery a Settings instead of Opti
 - Create: `tests/test_layering.py`
 
 **Acceptance Criteria:**
-- [ ] The test fails if `veny/analysis/*` imports `veny.cli`
-- [ ] The test fails if `veny/settings.py` imports anything from `veny`
-- [ ] The existing one-way rules among `alias_index`, `venv_cache`, `pypi_client` and `json_types` are covered by the same mechanism
-- [ ] It reads source with `ast`, not by importing — an import-based check would execute module bodies and could pass by accident
-- [ ] All tests pass
+- [x] The test fails if `veny/analysis/*` imports `veny.cli`
+- [x] The test fails if `veny/settings.py` imports anything from `veny`
+- [x] The existing one-way rules among `alias_index`, `venv_cache`, `pypi_client` and `json_types` are covered by the same mechanism
+- [x] It reads source with `ast`, not by importing — an import-based check would execute module bodies and could pass by accident
+- [x] All tests pass
 
 **Verify:** `pixi run python -m pytest tests/test_layering.py -v` → 2 passed, then `pixi run test` → 281 passed
 
@@ -573,7 +573,7 @@ git commit -m "refactor: hand custom-module discovery a Settings instead of Opti
 
 **Steps:**
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Create `tests/test_layering.py`:
 
@@ -654,7 +654,7 @@ def test_the_guard_covers_every_module_it_should() -> None:
 
 `cli` is exempt from the second test because it sits at the top of the stack and may import anything.
 
-- [ ] **Step 2: Run and prove both can fail**
+- [x] **Step 2: Run and prove both can fail**
 
 Run: `pixi run python -m pytest tests/test_layering.py -v` → expect `2 passed`.
 
@@ -664,7 +664,7 @@ Then prove the second bites: create an empty `src/veny/scratch.py` and confirm `
 
 Both mutations go in the working tree, not a side copy.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 pixi run pre-commit run --files tests/test_layering.py
@@ -682,20 +682,20 @@ git commit -m "test: enforce the design's one-way import direction"
 - Modify: `PROGRESS.md`
 
 **Acceptance Criteria:**
-- [ ] `pixi run test` passes with 281 tests
-- [ ] `ruff check .` zero; `ruff format --check .` every file formatted
-- [ ] `pixi run typecheck 2>&1 | tail -1` at or below 37
-- [ ] `pixi run smoke` green, or the note says it was skipped for lack of network
-- [ ] A live `pixi run veny --no-cache` run still builds and runs
-- [ ] `PROGRESS.md` **Current work** names plan 3b as the next action, with the measured `wc -l src/veny/cli.py`, and records the 3a-3e sequence
-- [ ] A Gotchas entry records the `/`-operator bug Task 2 fixed and its symptom
-- [ ] The two design-doc inaccuracies noted at the top of this plan are recorded
+- [x] `pixi run test` passes with 281 tests
+- [x] `ruff check .` zero; `ruff format --check .` every file formatted
+- [x] `pixi run typecheck 2>&1 | tail -1` at or below 37
+- [x] `pixi run smoke` green, or the note says it was skipped for lack of network
+- [x] A live `pixi run veny --no-cache` run still builds and runs
+- [x] `PROGRESS.md` **Current work** names plan 3b as the next action, with the measured `wc -l src/veny/cli.py`, and records the 3a-3e sequence
+- [x] A Gotchas entry records the `/`-operator bug Task 2 fixed and its symptom
+- [x] The two design-doc inaccuracies noted at the top of this plan are recorded
 
 **Verify:** `pixi run test && pixi run lint && pixi run smoke` → all green
 
 **Steps:**
 
-- [ ] **Step 1: Run every gate**
+- [x] **Step 1: Run every gate**
 
 ```bash
 pixi run test
@@ -715,7 +715,7 @@ pixi run veny --no-cache /tmp/veny-3a-final.py
 
 Expected: `{'i': 9}`.
 
-- [ ] **Step 2: Update PROGRESS.md**
+- [x] **Step 2: Update PROGRESS.md**
 
 Replace the **Current work** `**Next action:**` block with a plan 3b pointer carrying the measured line count, and add the 3a-3e sequence table from the top of this plan so the next session knows phase 3 is a sequence rather than one plan.
 
@@ -735,7 +735,7 @@ Add a Gotchas entry:
 
 Add the two design-doc inaccuracies (the layering guard is not `test_import_guard.py`; `pathlibcutoff` outlives phase 4) to Deferred items or Gotchas as appropriate.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 pixi run pre-commit run --files PROGRESS.md
