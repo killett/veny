@@ -51,10 +51,11 @@ ignore = [
 "tests/**" = ["ANN", "D", "S"]  # Otherwise Claude would either over-annotate every test or fight ruff constantly.
 # cli.py's asserts are internal invariants, not input validation; its
 # subprocess calls are the whole point of the program (it builds venvs and
-# runs the user's script); the pickle is its own module cache, written and
-# read by veny alone. Scoped to this one file so a genuinely unsafe call
-# elsewhere still gets flagged.
-"src/veny/cli.py" = ["S101", "S301", "S603"]
+# runs the user's script). Scoped to this one file so a genuinely unsafe call
+# elsewhere still gets flagged. (The pickle.load call this used to also cover
+# moved to analysis/custom_modules.py in plan 3a, which carries its own
+# inline `# noqa: S301` instead.)
+"src/veny/cli.py" = ["S101", "S603"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
