@@ -43,7 +43,7 @@ def is_pathlib_ctor(fn: ast.AST, pathlib_aliases: set[str], allow_pure: bool) ->
 
     # Case: Name (possibly aliased import) e.g., Path(...), P(...), PurePath(...)
     if isinstance(fn, ast.Name):
-        if fn.id in allowed or fn.id in pathlib_aliases:
+        if fn.id in pathlib_aliases and fn.id in allowed:
             return True
 
     # Case: attribute like pathlib.Path(...), pathlib.PurePath(...)

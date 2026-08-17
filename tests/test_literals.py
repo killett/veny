@@ -66,3 +66,8 @@ def test_sys_path_built_with_the_slash_operator_is_discovered() -> None:
     visitor.visit(tree)
 
     assert visitor.paths == {"/opt/libs/extra"}
+
+
+def test_an_unaliased_pathlib_name_is_not_evaluated() -> None:
+    """A user class named Path must not be mistaken for pathlib's."""
+    assert safe_eval('Path("a").joinpath("b")') is None
