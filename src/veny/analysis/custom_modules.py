@@ -75,13 +75,29 @@ def only_search_here_path_boolean(
 def search_anywhere_path_boolean(
     settings: Settings, path: str | os.PathLike[str]
 ) -> bool:
-    """Return True regardless."""
+    """Return True regardless.
+
+    Takes the same two parameters as its `only_search_here_path_boolean`
+    sibling, unused, on purpose: the two are interchangeable through
+    `dict_of_custom_modules`'s strategy dispatch, which calls whichever one
+    it selected with the same argument list. Do not drop these parameters.
+    """
     return True
 
 
 def dict_of_custom_modules(settings: Settings, *, use_cache: bool) -> dict[str, Path]:
-    """Create (or load) a dictionary of all local custom modules in the non-standard sys.path directories and their associated filepaths."""
-    # If --rc and --no-cache were not specified, look for a pickle file with the custom modules dictionary the last time this script was run.
+    """Create (or load) a dictionary of all local custom modules in the non-standard sys.path directories and their associated filepaths.
+
+    Args:
+        settings: The frozen run invariants this discovery reads.
+        use_cache: Whether to look for and reuse a pickle file left by a
+            previous run. The call site derives this from the `--rc` and
+            `--no-cache` flags; this function never sees flags itself.
+
+    Returns:
+        A mapping of local module name to its file path.
+    """
+    # If use_cache is True, look for a pickle file with the custom modules dictionary from the last time this script was run.
 
     # I.f.f. settings.search_above_this_dir is True, then search above the current directory for custom modules.
     # Either way, only load custom module pickle files that searched in the same places as requested.
