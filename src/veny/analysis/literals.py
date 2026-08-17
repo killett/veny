@@ -41,9 +41,12 @@ def is_pathlib_ctor(fn: ast.AST, pathlib_aliases: set[str], allow_pure: bool) ->
     """
     allowed = PATHLIB_CONCRETE | (PATHLIB_PURE if allow_pure else set())
 
-    # Case: Name (possibly aliased import) e.g., Path(...), P(...), PurePath(...)
+    # Case: Name bound to a pathlib class by this module's own imports, e.g.
+    # Path(...), P(...), PurePath(...). The alias set is the authority: a name
+    # this module never imported from pathlib is not pathlib's, regardless of
+    # whether it happens to spell one of pathlib's own class names.
     if isinstance(fn, ast.Name):
-        if fn.id in pathlib_aliases and fn.id in allowed:
+        if fn.id in pathlib_aliases:
             return True
 
     # Case: attribute like pathlib.Path(...), pathlib.PurePath(...)
