@@ -10,6 +10,19 @@
 
 **Global Constraints:**
 - **Behaviour must not change.** Which imports veny discovers, and which it classifies as stdlib, must be identical before and after every task in this plan. `tests/test_import_discovery.py` and `tests/test_split_imports.py` pin part of it and must pass unchanged throughout. **There is no sanctioned exception in this plan** — unlike 3a, which had two.
+
+  > **Correction (whole-branch review, 2026-08-17):** read literally, this
+  > collides with Task 4's own `process_import` signature change (`options`
+  > replaced by `scan` plus an injected `is_stdlib`), since
+  > `tests/test_split_imports.py` calls `process_import` directly. What
+  > "pass unchanged" actually protects is `test_split_imports.py`'s
+  > *assertions* — the imports it pins as discovered and the stdlib
+  > classifications it pins — not its literal source text. Updating a test's
+  > call site to match a moved function's new signature is mechanical and
+  > within scope; changing what the test asserts is not. `process_import`'s
+  > call site at `tests/test_split_imports.py:94` was updated exactly this
+  > way (`process_import(scan, "tkinter", script, is_stdlib=...)`), and the
+  > test's assertions are unchanged.
 - The suite starts at **283 passing** and must never go down. Each task states its expected count.
 - `pixi run lint` (`ruff check .`) must report zero and `pixi run python -m ruff format --check .` must report every file formatted.
 - The whole-repo mypy count must not rise above **37**. Measure with `pixi run typecheck 2>&1 | tail -1`. It cannot reach zero — 37 is a ceiling to stay under, not a gate to satisfy, and the pre-commit `mypy` hook is `mypy .` with `pass_filenames: false`, so it always reports the pre-existing errors.
@@ -301,6 +314,14 @@ print("base_classes:", info.base_classes)
 
 `ModuleInfo`'s attribute names are worth confirming against `cli.py:841-852` before you rely on them — this plan names `top_level_imports`, `functions`, `alias_to_key`, `class_names` and `base_classes`, and if the probe raises `AttributeError` on any of them, read the class and report the real name rather than guessing.
 
+> **Correction (whole-branch review, 2026-08-17):** `alias_to_key` and
+> `class_names` are not `ModuleInfo`'s real attribute names — this probe
+> would have raised `AttributeError` on both, exactly the situation the
+> paragraph above asks the implementer to catch. The real fields, as
+> declared in `src/veny/analysis/call_graph.py`'s `ModuleInfo.__init__`,
+> are `aliases` (`self.aliases: dict[str, str] = {}`) and `classes`
+> (`self.classes: set[str] = set()`).
+
 Put the values you actually observe into the assertions, and paste that observed output into your report. If an observed value contradicts what a test name below implies, **report it before writing the test** — that is precisely the situation that produced 3a's Task 2b.
 
 **Test design.** Behaviour and the bug caught, for each:
@@ -399,6 +420,15 @@ from .analysis.call_graph import (
 ```
 
 `cli.py` still needs `FunctionInfo` and `ModuleInfo` because `ImportFunctionCollector` constructs them and has not moved yet. `_SEP`, `split_function_name` and `_resolve` are internal to the new module — do not re-export them. Verify with `rg -n '_SEP|split_function_name|_resolve' src/veny/cli.py` that `cli.py` has no remaining reference.
+
+> **Correction (whole-branch review, 2026-08-17):** only `_resolve` turned
+> out to be genuinely internal. `_SEP` and `split_function_name` both gained
+> live callers outside `call_graph.py` as later tasks landed: `_SEP` is
+> imported at `src/veny/analysis/imports.py:16`
+> (`from .call_graph import _SEP, FunctionInfo, ModuleInfo`), and
+> `split_function_name` is imported at `src/veny/analysis/scan.py:17-22`
+> and called at `scan.py:247`. Re-exporting them was necessary, not an
+> error to avoid.
 
 The import must go below the emmykit guard. 3a's Task 3 hit this: an import placed above it broke the friendly "install emmykit" message that `tests/test_import_guard.py` protects.
 
@@ -732,6 +762,21 @@ def find_imports_in_script(
 ) -> ImportScan:
 ```
 
+> **Correction (whole-branch review, 2026-08-17):** this mandated signature
+> has no parameter through which a caller can hand in prior scan state. That
+> is not a style gap — `get_all_imports` calls `find_imports_in_script` once
+> per file and relies on results accumulating across calls (see the note
+> below on `cli.py:2589`-ish), so a signature that always starts from a
+> fresh `ImportScan` loses the scan's read direction and made veny report a
+> known local module as a PyPI package. This was a measured behaviour
+> regression caught during implementation, not a style preference the
+> implementer chose to override. The shipped signature in
+> `src/veny/analysis/scan.py` adds a seed parameter:
+> `find_imports_in_script(settings, first_path, *, is_stdlib, scan: ImportScan | None = None) -> ImportScan`,
+> defaulting to a fresh `ImportScan()` when none is given and returning the
+> same object it was handed (or a new one) so a caller can accumulate across
+> multiple calls the way `options.all_imports` used to.
+
 Substitutions, and nothing else:
 
 - `options.rawlog` → `settings.rawlog`
@@ -787,6 +832,20 @@ Import it as `from .analysis import scan as analysis_scan`, below the emmykit gu
     "analysis/scan": {"cli", "alias_index", "venv_cache", "stdlib_index",
                       "pypi_client", "json_types"},
 ```
+
+> **Correction (whole-branch review, 2026-08-17):** collecting this
+> `FORBIDDEN` entry, `analysis/imports`'s (above) `settings`-less set, and
+> `analysis/call_graph`'s and `analysis/scan_state`'s `settings`-*including*
+> sets (earlier in this plan) exposes an unexplained inconsistency: two of
+> these four modules give `settings` a free pass and two do not, with no
+> stated reason for the split. The review's Finding 2 replaced this whole
+> hand-written table with a derived one — every module's forbidden set comes
+> from a declared layer ordering (`tests/test_layering.py`'s `LAYERS`) rather
+> than being typed out per module — which makes the question moot: under
+> that ordering, `settings` sits in a layer below all of `analysis/*`, so
+> nothing in `analysis/` may be forbidden from importing it, and the
+> `settings`-including sets were the actual anomaly, not the ones that
+> omitted it.
 
 - [ ] **Step 5: Relocate the misplaced test**
 
