@@ -11,6 +11,7 @@ from veny import alias_index, stdlib_index, venv_cache
 from veny import cli as veny
 from veny.alias_index import Candidate, Resolution, Source
 from veny.analysis.imports import process_import
+from veny.analysis.scan import _enqueue_top_level_imports
 from veny.analysis.scan_state import ImportScan
 
 
@@ -104,9 +105,23 @@ def test_enqueue_top_level_imports_records_stdlib_and_skips_enqueue(tmp_path):
     module_path.write_text("import tkinter\n")
     processed_paths: set = set()
     modules_to_process: deque = deque()
+    scan = ImportScan(
+        all_imports=options.all_imports,
+        custom_modules=options.custom_modules,
+        loaded_custom_modules=options.loaded_custom_modules,
+        samedir_files=options.samedir_files,
+        subfolders=options.subfolders,
+        sys_path_hints=options.sys_path_hints,
+        seen_stdlib_imports=options.seen_stdlib_imports,
+    )
 
-    veny._enqueue_top_level_imports(
-        options, module_path, {"tkinter"}, processed_paths, modules_to_process
+    _enqueue_top_level_imports(
+        scan,
+        module_path,
+        {"tkinter"},
+        processed_paths,
+        modules_to_process,
+        is_stdlib=options.stdlib.__contains__,
     )
 
     assert "tkinter" in options.seen_stdlib_imports

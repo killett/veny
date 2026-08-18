@@ -10,7 +10,9 @@ broken.
 from pathlib import Path
 
 from veny.analysis.call_graph import ModuleInfo, build_call_graph, collect_used_imports
-from veny.cli import Options, _analyze_module
+from veny.analysis.scan import _analyze_module
+from veny.analysis.scan_state import ImportScan
+from veny.settings import Settings
 
 INHERITANCE_SOURCE = """\
 class Base:
@@ -41,10 +43,16 @@ def _analyze(source: str, tmp_path: Path) -> tuple[str, dict[str, ModuleInfo]]:
     """
     module_path = tmp_path / "mod.py"
     module_path.write_text(source)
-    options = Options()
-    options.rawlog = True
+    settings = Settings(
+        my_name="veny",
+        cwd=tmp_path,
+        stay_out_list=(),
+        search_above_this_dir=True,
+        rawlog=True,
+    )
+    scan = ImportScan()
     modules_info: dict[str, ModuleInfo] = {}
-    result = _analyze_module(options, module_path, modules_info, False)
+    result = _analyze_module(settings, scan, module_path, modules_info, False)
     assert result is not None, "_analyze_module refused the fixture"
     return result[0], modules_info
 
