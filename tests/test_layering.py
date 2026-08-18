@@ -207,6 +207,51 @@ def test_the_guard_covers_every_module_it_should() -> None:
     assert unguarded == [], f"assign a LAYERS group for: {unguarded}"
 
 
+def test_only_environment_py_invokes_uv() -> None:
+    """Phase 3c's whole claim is that environment.py is the only module that
+    invokes uv, and until now nothing but grep enforced it.
+
+    Two signals, both syntactic:
+
+    * a reference to the name `uv_binary` (bare or attribute) anywhere outside
+      environment.py -- the only supported way to obtain the uv executable, so
+      any other module holding it is building its own uv command line;
+    * a list or tuple literal whose first element is the string "uv" -- the one
+      remaining way to spell a uv command line without asking `uv_binary` for
+      the path.
+
+    What it does NOT catch, deliberately: a uv path reached indirectly (stored
+    in a variable, returned by a helper, or found via `shutil.which("uv")`), a
+    shell string handed to `os.system`, or a uv invocation assembled from
+    `argv[0]` at runtime. A module that calls `environment.run_uv_pip` or
+    `environment.create_venv` is not a violation and must not be flagged --
+    routing through environment is exactly the architecture this guards.
+
+    Concrete bug this catches: a later phase, needing "just one quick uv call",
+    adds `subprocess.run([environment.uv_binary(), "pip", "list", ...])` to
+    cache_search.py or pipeline.py. Nothing fails: the call works, the suite
+    stays green, and the single-owner property this phase established is gone
+    with no record of when. PROGRESS records three phase-2 regressions that
+    shipped past a stub-only suite in exactly this territory.
+    """
+    violations = []
+    for path in sorted(SRC.rglob("*.py")):
+        if path.name == "environment.py":
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Name) and node.id == "uv_binary":
+                violations.append(f"{path.relative_to(SRC)}:{node.lineno} uv_binary")
+            elif isinstance(node, ast.Attribute) and node.attr == "uv_binary":
+                violations.append(f"{path.relative_to(SRC)}:{node.lineno} uv_binary")
+            elif isinstance(node, (ast.List, ast.Tuple)) and node.elts:
+                first = node.elts[0]
+                if isinstance(first, ast.Constant) and first.value == "uv":
+                    violations.append(
+                        f"{path.relative_to(SRC)}:{node.lineno} builds a uv command"
+                    )
+    assert violations == [], violations
+
+
 def test_veny_imports_recognizes_every_spelling_of_a_veny_import(
     tmp_path: Path,
 ) -> None:
