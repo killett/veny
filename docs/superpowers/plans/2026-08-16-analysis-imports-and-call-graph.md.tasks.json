@@ -4,13 +4,13 @@
     {
       "id": 0,
       "subject": "Task 1: Characterize the call graph before moving it",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** The call-graph half of the pipeline has tests for the first time, describing exactly what it does today.\n\n**Files:**\n- Create: `tests/test_call_graph.py`\n\n**Acceptance Criteria:**\n- [ ] Six tests pass, covering: module/function collection, in-function imports, the `Class.method` naming, the `::` graph-key format, base-class method fallback, and recursion-guarded traversal\n- [ ] Every expected value is obtained by running the code, not predicted\n- [ ] No source file is modified in this task\n- [ ] Deleting `build_call_graph`'s base-class fallback (`cli.py:1419-1433`) makes a test fail\n\n**Verify:** `pixi run python -m pytest tests/test_call_graph.py -v` \u2192 6 passed, then `pixi run test` \u2192 289 passed\n\n`build_call_graph`, `collect_used_imports`, `_analyze_module`, `split_function_name`, `_resolve`, `FunctionInfo` and `ModuleInfo` have ZERO tests. Tests come before the move because this is not a byte-identical move of pure functions the way 3a's literals.py was.\n\nTRAP: `ImportFunctionCollector` fills its own `self.base_classes`; only `_analyze_module` (`cli.py:1575`) copies it onto the `ModuleInfo`. A test constructing the collector directly sees `{}` and wrongly concludes inheritance is broken. Every test goes through `_analyze_module` against a real file on `tmp_path`. Full test source in the plan, Task 1.\n\n```json:metadata\n{\"files\": [\"tests/test_call_graph.py\"], \"verifyCommand\": \"pixi run python -m pytest tests/test_call_graph.py -v\", \"acceptanceCriteria\": [\"6 tests pass\", \"values measured not predicted\", \"no source file modified\", \"base-class fallback mutation kills a test\", \"289 tests pass\"], \"modelTier\": \"standard\"}\n```"
     },
     {
       "id": 1,
       "subject": "Task 2: Characterize the import collector's paths",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         0
       ],
@@ -19,7 +19,7 @@
     {
       "id": 2,
       "subject": "Task 3: Extract analysis/call_graph.py",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         1
       ],
@@ -28,7 +28,7 @@
     {
       "id": 3,
       "subject": "Task 4: Introduce ImportScan, extract analysis/imports.py",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         2
       ],
@@ -62,5 +62,5 @@
       "description": "**Goal:** Every gate confirmed, and `PROGRESS.md` points at plan 3c.\n\n**Files:**\n- Modify: `PROGRESS.md`\n\n**Acceptance Criteria:**\n- [ ] `pixi run test` passes with 294 tests\n- [ ] `ruff check .` zero; `ruff format --check .` every file formatted\n- [ ] `pixi run typecheck 2>&1 | tail -1` at or below 37\n- [ ] `pixi run smoke` green, or the note says explicitly it was skipped and why\n- [ ] A live `pixi run veny --no-cache` run still builds a venv and runs the script\n- [ ] `PROGRESS.md` **Current work** names plan 3c as the next action, with the measured `wc -l src/veny/cli.py`, and updates the 3a-3e table\n- [ ] Gotchas records the `base_classes` copy trap and the `ImportScan` bridge\n- [ ] Deferred items records the remaining coverage gaps and the three design amendments\n\n**Verify:** `pixi run test && pixi run lint && pixi run smoke` \u2192 all green\n\nThe exact Gotchas and Deferred-items wording is in the plan, Task 7 Step 2. PROGRESS.md is long-form prose, not a bullet dump \u2014 match the surrounding register.\n\n```json:metadata\n{\"files\": [\"PROGRESS.md\"], \"verifyCommand\": \"pixi run test && pixi run lint\", \"acceptanceCriteria\": [\"294 tests pass\", \"ruff clean\", \"mypy <= 37\", \"smoke green or explicitly noted skipped\", \"live run works\", \"PROGRESS names plan 3c with measured line count\", \"base_classes trap and ImportScan bridge recorded\", \"coverage gaps and design amendments recorded\"], \"modelTier\": \"standard\"}\n```"
     }
   ],
-  "lastUpdated": "2026-08-16T19:38:54-07:00"
+  "lastUpdated": "2026-08-17T18:45:05-07:00"
 }
