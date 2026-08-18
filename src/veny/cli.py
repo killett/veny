@@ -6,6 +6,7 @@ from __future__ import (
 )  # For Python 3.7+ compatibility with type annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import json
 import logging
@@ -16,7 +17,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path  # Preferred over os.path for path manipulations.
 
@@ -36,7 +37,7 @@ if not hasattr(ek, "register_json_type"):
         f"veny requires emmykit >= 0.4.0; found {getattr(ek, '__version__', 'unknown')}.\n"
         f"Upgrade it with:  pip install -U 'emmykit>=0.4.0'"
     )
-from . import environment, json_types, venv_cache
+from . import classify, environment, json_types, venv_cache
 from .analysis import scan as analysis_scan
 from .analysis.custom_modules import dict_of_custom_modules
 from .analysis.scan_state import ImportScan
@@ -674,77 +675,22 @@ def find_imports_in_script(
     )
 
 
-def resolve_records(
-    options: Options, import_names: Iterable[str]
-) -> set[ResolvedImport]:
-    """Resolve import names into records carrying their pip names.
-
-    Args:
-        options:      Options object; reads options.aliases.
-        import_names: Import names as they would be written in source.
-
-    Returns:
-        One record per name. A name the index cannot resolve keeps its own
-        spelling as the pip name, because no evidence is not the same as
-        contrary evidence.
-    """
-    records: set[ResolvedImport] = set()
-    for name in import_names:
-        resolution = options.aliases.resolve(name)
-        primary = resolution.candidates[0].pip_name if resolution.candidates else name
-        records.add(ResolvedImport(import_name=name, pip_name=primary))
-    return records
-
-
-def requirement_records(pip_names: Iterable[str]) -> set[ResolvedImport]:
-    """Wrap pip names from a requirements file as records.
-
-    These arrive already as pip names, and nothing maps a pip name back to an
-    import name, so the same string is the best available answer for both.
-
-    Args:
-        pip_names: Package names as written in the extra requirements file.
-
-    Returns:
-        One record per name, with import_name == pip_name.
-    """
-    return {ResolvedImport(import_name=name, pip_name=name) for name in pip_names}
-
-
 def add_dependencies(options: Options) -> None:
-    """Add dependencies for uninstalled imports."""
-    # Create a copy to iterate over since we'll be modifying the set
-    initial_packages = options.uninstalled_imports.copy()
+    """Adapter: expand options.uninstalled_imports over the also_needs table.
 
-    for record in initial_packages:
-        if record.import_name in options.also_needs:
-            dependencies = options.also_needs[record.import_name]
-            if not options.rawlog:
-                logging.info(
-                    "Adding dependencies for %s: %s", record.import_name, dependencies
-                )
-            options.uninstalled_imports.update(resolve_records(options, dependencies))
+    classify.add_dependencies updates the set it is handed, so this rebinds
+    options.uninstalled_imports to the same object it already held.
 
-    # Handle nested dependencies by repeating this process until no new dependencies are added.
-    added = True
-    while added:
-        added = False
-        current_packages = options.uninstalled_imports.copy()
-        for record in current_packages:
-            if record.import_name in options.also_needs:
-                dependencies = options.also_needs[record.import_name]
-                new_dependencies = (
-                    resolve_records(options, dependencies) - options.uninstalled_imports
-                )
-                if new_dependencies:
-                    if not options.rawlog:
-                        logging.info(
-                            "Adding nested dependencies for %s: %s",
-                            record.import_name,
-                            sorted(r.import_name for r in new_dependencies),
-                        )
-                    options.uninstalled_imports.update(new_dependencies)
-                    added = True
+    Args:
+        options: Options object; reads options.also_needs, options.aliases and
+            options.rawlog, and updates options.uninstalled_imports in place.
+    """
+    options.uninstalled_imports = classify.add_dependencies(
+        options.uninstalled_imports,
+        also_needs=options.also_needs,
+        aliases=options.aliases,
+        rawlog=options.rawlog,
+    )
 
 
 # Import errors that are facts about *this machine*, not about the package: the
@@ -1205,24 +1151,6 @@ def check_packages_in_venv(
     return imported
 
 
-def _compute_bad_imports(
-    all_imports: set[str], known_bad: set[str], py2_only: frozenset[str]
-) -> set[str]:
-    """Return the imports that must never be handed to pip.
-
-    Args:
-        all_imports: Every import name found in the analysed scripts.
-        known_bad:   Project-specific names that are not on PyPI.
-        py2_only:    Python 2 standard-library names, from stdlib_index.
-
-    Returns:
-        The subset of all_imports that pip must not be asked to install.
-    """
-    bad = (known_bad | py2_only) & all_imports
-    bad.update({imp for imp in all_imports if imp.startswith("_")})
-    return bad
-
-
 def warn_about_system_packages(options: Options) -> None:
     """Warn once for each standard-library import that needs an operating-system package.
 
@@ -1240,103 +1168,81 @@ def warn_about_system_packages(options: Options) -> None:
         )
 
 
-def split_imports(options: Options) -> None:
-    """Split imports into installed, uninstalled, and bad imports."""
-    options.bad_imports = _compute_bad_imports(
-        options.all_imports, options.known_bad_imports, stdlib_index.PYTHON2_ONLY
-    )
-    if options.bad_imports:
-        if logging.getLogger().isEnabledFor(logging.DEBUG):
-            logging.debug("Identified bad imports: %s", options.bad_imports)
-    options.all_imports = options.all_imports - options.bad_imports
-    options.installed_imports = set()
-    options.uninstalled_imports = set()
-    if getattr(options.args, "reqs", False):
-        options.all_imports = options.all_imports.union(
-            options.extra_requirements.keys()
-        )
-    options.total_imports = len(options.all_imports)
-    if not options.total_imports:
-        if not options.rawlog:
-            logging.info("No imports found.")
-        return
+@contextlib.contextmanager
+def _probe_venv(options: Options) -> Iterator[Callable[[str], bool]]:
+    """Build a throwaway venv and yield a predicate that imports names in it.
 
-    max_length = max(
-        len(imp) for imp in options.all_imports
-    )  # Longest import name length, used for formatting
-    max_digits = len(
-        str(len(options.all_imports))
-    )  # Maximum number of digits in import count, also used for formatting
+    A context manager, not a plain callable, because classification must only
+    pay for the environment once it knows there is something to classify: a run
+    with no imports leaves this unentered and builds nothing.
 
+    Args:
+        options: Options object; reads options.python_command, and whatever
+            check_packages_in_venv reads.
+
+    Yields:
+        A predicate answering whether one import name imports in the venv.
+    """
     with tempfile.TemporaryDirectory() as venv_dir:
         environment.create_venv(
             venv_dir, environment.venv_build_interpreter(options.python_command)
         )
-        for i, imp in enumerate(options.all_imports, 1):
-            # The import name is all either check below needs, and resolution is
-            # deliberately not done yet: see the else branch.
-            record = ResolvedImport(import_name=imp, pip_name=imp)
-            if logging.getLogger().isEnabledFor(logging.DEBUG):
-                logging.debug("Checking if import %s is installed or uninstalled", imp)
-            if imp in options.custom_modules.keys():
-                if logging.getLogger().isEnabledFor(logging.DEBUG):
-                    logging.debug(
-                        "Custom module %s has path %s",
-                        imp,
-                        os.fspath(options.custom_modules[imp]),
-                    )
-                status_str = f"{ek.ANSI_CYAN}YES - custom module{ek.ANSI_RESET}"
-            elif check_packages_in_venv(options, record=record, venv_dir=venv_dir):
-                if logging.getLogger().isEnabledFor(logging.DEBUG):
-                    logging.debug("Module %s can be imported in venv", imp)
-                status_str = f"{ek.ANSI_GREEN}YES -     installed{ek.ANSI_RESET}"
-                # The pip name is left as the import name here because nothing
-                # needs it: an installed import is never handed to pip, and
-                # nothing downstream re-resolves it.
-                options.installed_imports.add(record)
-            else:
-                # Only a genuinely uninstalled import needs a pip name, so this
-                # is where resolution belongs. Resolving before the two checks
-                # above charged every import up to six PyPI project lookups (the
-                # name plus five mutations), each a metadata request plus up to
-                # two ranged wheel reads -- for local modules and already
-                # installed packages that never needed one.
-                resolution = options.aliases.resolve(imp)
-                # No candidate at all means no evidence either way, not a bad
-                # name, so fall back to the import name and let pip have its say.
-                primary = (
-                    resolution.candidates[0].pip_name if resolution.candidates else imp
-                )
-                if logging.getLogger().isEnabledFor(logging.DEBUG):
-                    logging.debug(
-                        "Resolved import %s to candidates %s",
-                        imp,
-                        [c.pip_name for c in resolution.candidates],
-                    )
-                if logging.getLogger().isEnabledFor(logging.DEBUG):
-                    logging.debug(
-                        "Import %s is not installed and not a custom module", imp
-                    )
-                status_str = " NO - NOT installed"
-                options.uninstalled_imports.add(
-                    ResolvedImport(import_name=imp, pip_name=primary)
-                )
-            if not options.rawlog:
-                logging.info(
-                    "Checking import %-*s : %*d/%d - %s",
-                    max_length,  # width for imp (left-aligned)
-                    imp,
-                    max_digits,  # width for i (right-aligned)
-                    i,
-                    options.total_imports,
-                    status_str,
-                )
-    if getattr(options.args, "reqs", False):
-        options.uninstalled_imports = options.uninstalled_imports.union(
-            requirement_records(options.extra_requirements.keys())
-        )
-    add_dependencies(options)
-    return
+
+        def is_importable(import_name: str) -> bool:
+            """Report whether one import name imports in the probe venv.
+
+            Args:
+                import_name: The name as it would be written in source.
+
+            Returns:
+                True if the probe venv can import it.
+            """
+            return check_packages_in_venv(
+                options,
+                record=ResolvedImport(import_name=import_name, pip_name=import_name),
+                venv_dir=venv_dir,
+            )
+
+        yield is_importable
+
+
+def split_imports(options: Options) -> None:
+    """Adapter: run classification and copy its product back onto Options.
+
+    The copy-back is total -- these five fields are the complete set the old
+    split_imports wrote. See the plan's "Why the ImportScan bridge is not
+    touched" section: classify reads the scan and writes nothing through it,
+    so nothing here depends on in-place mutation. Each frozenset becomes a set
+    again on the way back, because later stages (verify_and_repair_imports)
+    still mutate options.uninstalled_imports.
+
+    Args:
+        options: Options object; the five classification fields are replaced.
+    """
+    scan = ImportScan(
+        all_imports=options.all_imports,
+        custom_modules=options.custom_modules,
+        loaded_custom_modules=options.loaded_custom_modules,
+        samedir_files=options.samedir_files,
+        subfolders=options.subfolders,
+        sys_path_hints=options.sys_path_hints,
+        seen_stdlib_imports=options.seen_stdlib_imports,
+    )
+    result = classify.split_imports(
+        scan,
+        aliases=options.aliases,
+        known_bad_imports=options.known_bad_imports,
+        also_needs=options.also_needs,
+        extra_requirements=options.extra_requirements,
+        use_reqs=getattr(options.args, "reqs", False),
+        probe=_probe_venv(options),
+        rawlog=options.rawlog,
+    )
+    options.all_imports = set(result.all_imports)
+    options.bad_imports = set(result.bad)
+    options.installed_imports = set(result.installed)
+    options.uninstalled_imports = set(result.uninstalled)
+    options.total_imports = result.total_imports
 
 
 def list_packages(options: Options) -> None:

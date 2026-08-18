@@ -10,17 +10,23 @@ The probe venv is stubbed in every test: ``environment.create_venv`` and
 call since phase 3c task 2) and ``cli.check_packages_in_venv``. Nothing here
 builds an environment, runs a subprocess, or touches the network -- the alias
 indexes below are constructed with ``pypi=None`` and an unreachable cache
-path, so resolution is fully determined by the test.
+path, so resolution is fully determined by the test. The tests migrated from
+``tests/test_split_imports.py`` in task 4 keep to the same rule: the one that
+pins the probe venv's interpreter stubs ``subprocess.check_call`` and
+inspects the uv command instead of running it.
 """
 
 from __future__ import annotations
 
 import argparse
+import shutil
+import subprocess
 from pathlib import Path
+from typing import cast
 
 import pytest
 
-from veny import alias_index, cli, environment
+from veny import alias_index, classify, cli, environment, stdlib_index
 from veny.alias_index import ResolvedImport
 
 
@@ -424,4 +430,168 @@ def test_add_dependencies_matches_also_needs_on_the_import_name_not_the_pip_name
 
     assert options.uninstalled_imports == {
         ResolvedImport(import_name="widgetlib", pip_name="widget-lib-pypi")
+    }
+
+
+# --- Migrated from tests/test_split_imports.py by phase 3c task 4. ---------
+# These pin the same behaviour they always did; only their call sites moved
+# with the code. The three _compute_bad_imports tests now name classify's
+# copy of the function, and the three that patched the *stdlib* venv.create
+# -- which production stopped calling when task 2 extracted environment.py,
+# so they had been building a real uv venv on every run -- now patch
+# environment.create_venv, the function cli._probe_venv actually calls.
+
+
+def test_python2_name_is_classified_bad():
+    bad = classify._compute_bad_imports(
+        {"httplib", "numpy"}, set(), stdlib_index.PYTHON2_ONLY
+    )
+    assert bad == {"httplib"}
+
+
+def test_leading_underscore_name_is_classified_bad():
+    bad = classify._compute_bad_imports({"_private_thing", "numpy"}, set(), frozenset())
+    assert bad == {"_private_thing"}
+
+
+def test_ordinary_import_is_not_classified_bad():
+    bad = classify._compute_bad_imports(
+        {"numpy", "xarray"}, {"DQN"}, stdlib_index.PYTHON2_ONLY
+    )
+    assert bad == set()
+
+
+def test_seaborn_tkinter_and_msvcrt_are_no_longer_blocked():
+    blocked = cli.Options().known_bad_imports
+    assert blocked == {
+        "snakeClass",
+        "GPUampcor",
+        "pathfinding_salvo_rework",
+        "DQN",
+        "bayesOpt",
+        "non_existent_module",
+    }
+
+
+def test_split_imports_wires_python2_table_end_to_end():
+    options = cli.Options()
+    options.all_imports = {"httplib", "_private_thing"}
+    cli.split_imports(options)
+    assert options.bad_imports == {"httplib", "_private_thing"}
+    assert options.all_imports == set()
+
+
+def test_split_imports_stores_both_names_on_the_record(monkeypatch):
+    # The bug this retires: split_imports used to add the *pip* name to
+    # uninstalled_imports, so downstream import checks were handed
+    # "widget-lib-pypi" when they needed "widgetlib".
+    options = cli.Options()
+    options.aliases = _index({"widgetlib": "widget-lib-pypi"})
+    options.all_imports = {"widgetlib"}
+    monkeypatch.setattr(environment, "create_venv", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "check_packages_in_venv", lambda *a, **k: False)
+
+    cli.split_imports(options)
+
+    assert options.uninstalled_imports == {
+        ResolvedImport(import_name="widgetlib", pip_name="widget-lib-pypi")
+    }
+    assert options.installed_imports == set()
+
+
+def test_split_imports_falls_back_to_the_import_name_when_nothing_resolves(monkeypatch):
+    # An unresolvable import must still be recorded, not crash on
+    # candidates[0] and not vanish from the install list.
+    options = cli.Options()
+    options.aliases = _index({})
+    options.all_imports = {"mysterylib"}
+    monkeypatch.setattr(environment, "create_venv", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "check_packages_in_venv", lambda *a, **k: False)
+
+    cli.split_imports(options)
+
+    assert options.uninstalled_imports == {
+        ResolvedImport(import_name="mysterylib", pip_name="mysterylib")
+    }
+
+
+def test_split_imports_probe_venv_is_given_the_classified_interpreter(monkeypatch):
+    """split_imports' probe venv must be built with the interpreter imports
+    were classified against, not whatever uv's own discovery order picks.
+
+    Before this fix, split_imports called create_venv(venv_dir) with no
+    interpreter argument. `uv venv` with no --python resolves through uv's
+    own discovery order, which was measured to disagree with the interpreter
+    veny classified imports against (uv picked 3.12 while PATH's python3 was
+    3.13). A stdlib module removed in 3.13 (e.g. `cgi`) then imports
+    successfully in the mismatched 3.12 probe venv and gets marked
+    "installed", even though it is not installed -- and not installable --
+    for the interpreter the venv is actually built with. If this regresses
+    to create_venv(venv_dir) with no second argument, the captured uv
+    command below carries no --python flag at all and this test fails.
+    """
+    options = cli.Options()
+    options.python_command = "python3"
+    options.aliases = _index({})
+    options.all_imports = {"widgetlib"}
+    monkeypatch.setattr(
+        shutil,
+        "which",
+        lambda name: "/resolved/bin/python3" if name == "python3" else None,
+    )
+    monkeypatch.setattr(environment, "uv_binary", lambda: "/packaged/uv")
+    captured: list[list[str]] = []
+    monkeypatch.setattr(
+        subprocess, "check_call", lambda command: captured.append(command)
+    )
+    monkeypatch.setattr(cli, "check_packages_in_venv", lambda *a, **k: False)
+
+    cli.split_imports(options)
+
+    assert len(captured) == 1, "expected exactly one probe venv build"
+    probe_command = captured[0]
+    assert "--python" in probe_command
+    python_index = probe_command.index("--python")
+    assert probe_command[python_index + 1] == "/resolved/bin/python3"
+
+
+class _CountingIndex:
+    """Wraps an AliasIndex and records every import name resolution was asked for."""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.resolved = []
+
+    def resolve(self, import_name):
+        self.resolved.append(import_name)
+        return self.inner.resolve(import_name)
+
+
+def test_only_genuinely_uninstalled_imports_are_resolved(monkeypatch):
+    # resolve() ran before both the custom-module check and the installed
+    # check, so every import paid for resolution before veny knew whether it
+    # needed a pip name at all. An unresolved name costs up to six PyPI project
+    # lookups (the name plus five mutations), each a metadata request plus up
+    # to two ranged wheel reads, at a 10 s read timeout. A local custom module
+    # never needs a pip name, and neither does an import that is installed.
+    options = cli.Options()
+    index = _CountingIndex(_index({"missingthing": "missing-thing-pypi"}))
+    # _CountingIndex wraps an AliasIndex rather than subclassing one, which is
+    # what options.aliases is annotated as; the cast is the annotation this
+    # test needed to move without carrying a mypy error along with it.
+    options.aliases = cast(alias_index.AliasIndex, index)
+    options.all_imports = {"mycustom", "alreadyhere", "missingthing"}
+    options.custom_modules = {"mycustom": Path("/nowhere/mycustom.py")}
+    monkeypatch.setattr(environment, "create_venv", lambda *a, **k: None)
+    monkeypatch.setattr(
+        cli,
+        "check_packages_in_venv",
+        lambda opts, record=None, venv_dir=None: record.import_name == "alreadyhere",
+    )
+
+    cli.split_imports(options)
+
+    assert index.resolved == ["missingthing"]
+    assert options.uninstalled_imports == {
+        ResolvedImport(import_name="missingthing", pip_name="missing-thing-pypi")
     }
