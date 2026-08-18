@@ -1,7 +1,10 @@
 """Characterization tests for veny's import classification, before it moves.
 
-These pin what ``cli.split_imports`` and ``cli.add_dependencies`` do *today*,
-so the extraction of ``veny/classify.py`` is a move rather than a rewrite.
+These pin what ``cli.split_imports`` and ``classify.add_dependencies`` do
+*today*, so the extraction of ``veny/classify.py`` is a move rather than a
+rewrite. (They were written against ``cli.add_dependencies``, which task 4
+left with no production callers; the whole-branch review deleted that adapter
+and repointed them here, assertions untouched.)
 Every expected value here was obtained by running the code at ``d79eba4``,
 never by reading it and predicting an answer.
 
@@ -368,14 +371,14 @@ def test_add_dependencies_expands_a_nested_dependency_chain_to_a_fixed_point() -
     ``d`` are never installed, so a package pulled in as a dependency of a
     dependency is missing from the venv veny reports as complete.
     """
-    options = cli.Options()
-    options.aliases = _index()
-    options.also_needs = {"a": ["b"], "b": ["c"], "c": ["d"]}
-    options.uninstalled_imports = {ResolvedImport(import_name="a", pip_name="a")}
+    expanded = classify.add_dependencies(
+        {ResolvedImport(import_name="a", pip_name="a")},
+        also_needs={"a": ["b"], "b": ["c"], "c": ["d"]},
+        aliases=_index(),
+        rawlog=False,
+    )
 
-    cli.add_dependencies(options)
-
-    assert options.uninstalled_imports == {
+    assert expanded == {
         ResolvedImport(import_name="a", pip_name="a"),
         ResolvedImport(import_name="b", pip_name="b"),
         ResolvedImport(import_name="c", pip_name="c"),
@@ -393,16 +396,14 @@ def test_add_dependencies_resolves_dependency_names_through_the_alias_index() ->
     failure the import-name/pip-name split exists to prevent (Options'
     also_needs comment states both keys and values are *import* names).
     """
-    options = cli.Options()
-    options.aliases = _index({"widgetlib": "widget-lib-pypi"})
-    options.also_needs = {"toplevel": ["widgetlib"]}
-    options.uninstalled_imports = {
-        ResolvedImport(import_name="toplevel", pip_name="toplevel")
-    }
+    expanded = classify.add_dependencies(
+        {ResolvedImport(import_name="toplevel", pip_name="toplevel")},
+        also_needs={"toplevel": ["widgetlib"]},
+        aliases=_index({"widgetlib": "widget-lib-pypi"}),
+        rawlog=False,
+    )
 
-    cli.add_dependencies(options)
-
-    assert options.uninstalled_imports == {
+    assert expanded == {
         ResolvedImport(import_name="toplevel", pip_name="toplevel"),
         ResolvedImport(import_name="widgetlib", pip_name="widget-lib-pypi"),
     }
@@ -419,18 +420,51 @@ def test_add_dependencies_matches_also_needs_on_the_import_name_not_the_pip_name
     table written in pip names would start matching. Either way the wrong set
     of dependencies is installed.
     """
-    options = cli.Options()
-    options.aliases = _index()
-    options.also_needs = {"widget-lib-pypi": ["dep"]}
-    options.uninstalled_imports = {
+    expanded = classify.add_dependencies(
+        {ResolvedImport(import_name="widgetlib", pip_name="widget-lib-pypi")},
+        also_needs={"widget-lib-pypi": ["dep"]},
+        aliases=_index(),
+        rawlog=False,
+    )
+
+    assert expanded == {
         ResolvedImport(import_name="widgetlib", pip_name="widget-lib-pypi")
     }
 
-    cli.add_dependencies(options)
+
+def test_split_imports_expands_also_needs_onto_the_uninstalled_records(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The run's also_needs table reaches classification through cli.split_imports.
+
+    The three tests above drive ``classify.add_dependencies`` directly, so
+    none of them touches the wiring that hands it ``options.also_needs``.
+    This one goes the whole way through the adapter production uses.
+
+    Concrete bug this catches: pass ``also_needs={}`` (or drop the argument)
+    at ``cli.split_imports``' call into ``classify.split_imports`` and every
+    dependency veny's shipped table declares silently stops being installed --
+    the venv is reported complete while the package that makes ``uninst``
+    usable is absent. The chain is nested on purpose: no entry in cli.py's own
+    also_needs table is, so the ``while added`` fixed point is otherwise never
+    exercised on the path a user takes.
+    """
+    options = cli.Options()
+    options.aliases = _index({"uninst": "uninst-pypi", "deepdep": "deep-dep-pypi"})
+    options.all_imports = {"uninst"}
+    options.also_needs = {"uninst": ["depmod"], "depmod": ["deepdep"]}
+    _stub_probe(monkeypatch)
+
+    cli.split_imports(options)
 
     assert options.uninstalled_imports == {
-        ResolvedImport(import_name="widgetlib", pip_name="widget-lib-pypi")
+        ResolvedImport(import_name="uninst", pip_name="uninst-pypi"),
+        ResolvedImport(import_name="depmod", pip_name="depmod"),
+        ResolvedImport(import_name="deepdep", pip_name="deep-dep-pypi"),
     }
+    # The dependencies are records only -- they are not source imports, so they
+    # never join all_imports and never change the run's count.
+    assert options.all_imports == {"uninst"}
 
 
 # --- Migrated from tests/test_split_imports.py by phase 3c task 4. ---------

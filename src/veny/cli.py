@@ -675,24 +675,6 @@ def find_imports_in_script(
     )
 
 
-def add_dependencies(options: Options) -> None:
-    """Adapter: expand options.uninstalled_imports over the also_needs table.
-
-    classify.add_dependencies updates the set it is handed, so this rebinds
-    options.uninstalled_imports to the same object it already held.
-
-    Args:
-        options: Options object; reads options.also_needs, options.aliases and
-            options.rawlog, and updates options.uninstalled_imports in place.
-    """
-    options.uninstalled_imports = classify.add_dependencies(
-        options.uninstalled_imports,
-        also_needs=options.also_needs,
-        aliases=options.aliases,
-        rawlog=options.rawlog,
-    )
-
-
 # Import errors that are facts about *this machine*, not about the package: the
 # distribution installed and contains the module, but the native code it links
 # against will not load here. The same release imports fine once the
