@@ -55,7 +55,7 @@ def test_a_bare_pathlib_constructor_evaluates_to_its_argument() -> None:
 
 def test_sys_path_built_with_the_slash_operator_is_discovered() -> None:
     """The '/' gap silently hid whole sys.path directories from veny."""
-    from veny.cli import SysPathVisitor
+    from veny.analysis.imports import SysPathVisitor
 
     tree = ast.parse(
         "import sys\n"
