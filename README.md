@@ -101,21 +101,38 @@ and a script installing into it is working against that.
 
 ```
 src/veny/
-    __init__.py    # Version literal.
-    __main__.py    # python -m veny.
-    cli.py         # Argument parsing, import analysis driving, venv
-                   # build/run orchestration.
-    alias_index.py # Import-name -> pip-name resolution (overrides, cache,
-                   # target-interpreter probe, PyPI confirmation chain).
-    json_types.py  # Registers veny's own types with emmykit's JSON registry.
-    pypi_client.py # Confirms a project provides an import name by reading a
-                   # wheel's central directory over an HTTP range request.
+    __init__.py     # Version literal.
+    __main__.py     # python -m veny.
+    cli.py          # Argument parsing, venv build/run orchestration; builds
+                    # the ImportScan/Settings analysis/ works from and copies
+                    # results back onto Options.
+    settings.py     # Settings, the frozen per-run invariants analysis/ reads.
+    analysis/       # AST analysis: what a script imports, and what it does
+                    # with sys.path.
+        literals.py       # Evaluates the restricted expression subset veny
+                          # reads out of source (sys.path literals, a short
+                          # os.path allow-list, pathlib construction).
+        custom_modules.py # Finds the local modules a script imports that are
+                          # not on PyPI.
+        scan_state.py     # ImportScan, the mutable state one scan
+                          # accumulates.
+        call_graph.py     # The call graph of a scanned script, and what each
+                          # function reaches.
+        imports.py        # Walks a module's AST and records what it
+                          # imports, and from where.
+        scan.py           # Walks a script and the local modules it reaches,
+                          # collecting imports.
+    alias_index.py  # Import-name -> pip-name resolution (overrides, cache,
+                    # target-interpreter probe, PyPI confirmation chain).
+    json_types.py   # Registers veny's own types with emmykit's JSON registry.
+    pypi_client.py  # Confirms a project provides an import name by reading a
+                    # wheel's central directory over an HTTP range request.
     stdlib_index.py # Standard-library membership for the target interpreter.
-    venv_cache.py  # Folder naming, manifests, and matching for cached
-                   # virtual environments.
-scripts/           # smoke-install.sh: wheel + console-script verification.
-tests/             # pytest test suite.
-docs/              # Design docs and implementation plans.
+    venv_cache.py   # Folder naming, manifests, and matching for cached
+                    # virtual environments.
+scripts/            # smoke-install.sh: wheel + console-script verification.
+tests/              # pytest test suite.
+docs/               # Design docs and implementation plans.
 ```
 
 Note that `alias_index.py` is about *import-name aliases* — it is unrelated to
