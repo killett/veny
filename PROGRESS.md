@@ -745,7 +745,7 @@ wiring rationale and for two Minors deliberately left unfixed.
   `options` already holds, and the scanner mutates them in place — there is
   no copy-back. The seeding is load-bearing in both directions:
   `dict_of_custom_modules` populates `options.custom_modules` at
-  `cli.py:536`, before `list_packages` reaches the scanner at `cli.py:551`,
+  `cli.py:537`, before `list_packages` reaches the scanner at `cli.py:552`,
   and `get_all_imports` calls the scanner once per file, relying on all
   seven fields accumulating across calls. A first attempt at this bridge
   copied results *out* but never seeded them *in*; the measured consequence
