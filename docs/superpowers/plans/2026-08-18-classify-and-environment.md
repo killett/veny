@@ -227,25 +227,25 @@ LAYERS: list[frozenset[str]] = [
 
 Cover at least:
 
-- [ ] **The live install/uninstall round trip.** Build a real `uv venv` in `tmp_path`, then drive the real `install_into_venv` and `uninstall_from_venv` against a wheel this test builds itself. **Measured while writing this plan:** a hand-built wheel (a zip carrying `pkg/__init__.py` plus a `pkg-VERSION.dist-info/` with `METADATA`, `WHEEL` and `RECORD`) installs through real `uv pip install` with **no** `--no-index` or `--offline` flag and no network — re-verified under `UV_OFFLINE=1` — imports inside the venv, uninstalls cleanly, and then fails to import. So this test needs no network and no marker, and belongs in the ordinary suite. Assert all four states: install returns `True`, the import succeeds in the venv, uninstall leaves no error, and the import then fails. A test that only asserts the argv would not have caught any of phase 2's three regressions.
-- [ ] `run_uv_pip` returns `None` (and logs, rather than raising) when there is no venv interpreter.
-- [ ] `run_uv_pip` builds `[uv, "pip", <verb>, "--python", <venv python>, *rest]` in that order. The `--python` flag's position matters: it precedes the package arguments.
-- [ ] `install_into_venv` returns `False` on a non-zero uv return code instead of raising, and logs the stderr.
-- [ ] `uninstall_from_venv` warns but does not raise on a non-zero return code.
-- [ ] `parse_extra_requirements` over a fixture file: a bare name, a name with a specifier, a `#` comment line, a blank line, and leading/trailing whitespace. Measure what today's regex (`^\s*([A-Za-z0-9_\-\.]+)\s*(.*)$`) actually produces for each — do not predict it.
-- [ ] `write_requirements_file_with_extras` writes pip names in sorted order, one per line, appending a specifier only where `extra_requirements` supplies a non-empty one. Include a record whose pip name is absent from `extra_requirements` and one whose specifier is empty.
-- [ ] `venv_build_interpreter` falls back to the unresolved command **and warns** when `shutil.which` finds nothing (this branch is called out in PROGRESS as untested and believed practically dead).
+- [x] **The live install/uninstall round trip.** Build a real `uv venv` in `tmp_path`, then drive the real `install_into_venv` and `uninstall_from_venv` against a wheel this test builds itself. **Measured while writing this plan:** a hand-built wheel (a zip carrying `pkg/__init__.py` plus a `pkg-VERSION.dist-info/` with `METADATA`, `WHEEL` and `RECORD`) installs through real `uv pip install` with **no** `--no-index` or `--offline` flag and no network — re-verified under `UV_OFFLINE=1` — imports inside the venv, uninstalls cleanly, and then fails to import. So this test needs no network and no marker, and belongs in the ordinary suite. Assert all four states: install returns `True`, the import succeeds in the venv, uninstall leaves no error, and the import then fails. A test that only asserts the argv would not have caught any of phase 2's three regressions.
+- [x] `run_uv_pip` returns `None` (and logs, rather than raising) when there is no venv interpreter.
+- [x] `run_uv_pip` builds `[uv, "pip", <verb>, "--python", <venv python>, *rest]` in that order. The `--python` flag's position matters: it precedes the package arguments.
+- [x] `install_into_venv` returns `False` on a non-zero uv return code instead of raising, and logs the stderr.
+- [x] `uninstall_from_venv` warns but does not raise on a non-zero return code.
+- [x] `parse_extra_requirements` over a fixture file: a bare name, a name with a specifier, a `#` comment line, a blank line, and leading/trailing whitespace. Measure what today's regex (`^\s*([A-Za-z0-9_\-\.]+)\s*(.*)$`) actually produces for each — do not predict it.
+- [x] `write_requirements_file_with_extras` writes pip names in sorted order, one per line, appending a specifier only where `extra_requirements` supplies a non-empty one. Include a record whose pip name is absent from `extra_requirements` and one whose specifier is empty.
+- [x] `venv_build_interpreter` falls back to the unresolved command **and warns** when `shutil.which` finds nothing (this branch is called out in PROGRESS as untested and believed practically dead).
 
 Do **not** duplicate what `tests/test_uv_backend.py` already pins: `uv_binary`'s three resolution outcomes, the resolved-interpreter argv assertion, and the `create_venv`-before-requirements ordering are already covered there and stay there.
 
 **Acceptance Criteria:**
-- [ ] Every expected value obtained by running code at the branch point, not predicted
-- [ ] The live test uses the real `uv` binary and a real venv, with no `subprocess` stubbing anywhere in it
-- [ ] The live test passes with no network (verify by re-running it with `UV_OFFLINE=1` in the environment)
-- [ ] No source file under `src/` is modified in this task
-- [ ] `tests/test_environment.py` contributes zero mypy errors
-- [ ] **Mutation check:** delete `run_uv_pip`'s `"--python", os.fspath(options.venv_python)` pair and watch a named test fail; restore it and watch it pass. Record which test.
-- [ ] **Mutation check:** invert `install_into_venv`'s `if result.returncode != 0` and watch a named test fail. Record which test.
+- [x] Every expected value obtained by running code at the branch point, not predicted
+- [x] The live test uses the real `uv` binary and a real venv, with no `subprocess` stubbing anywhere in it
+- [x] The live test passes with no network (verify by re-running it with `UV_OFFLINE=1` in the environment)
+- [x] No source file under `src/` is modified in this task
+- [x] `tests/test_environment.py` contributes zero mypy errors
+- [x] **Mutation check:** delete `run_uv_pip`'s `"--python", os.fspath(options.venv_python)` pair and watch a named test fail; restore it and watch it pass. Record which test.
+- [x] **Mutation check:** invert `install_into_venv`'s `if result.returncode != 0` and watch a named test fail. Record which test.
 
 **Verify:** `pixi run python -m pytest tests/test_environment.py -v`, then `pixi run test` → 296 + (number of tests added). State the number.
 
@@ -288,13 +288,13 @@ Notes that are not optional:
 **In `cli.py`:** add `from . import environment`, delete the eight moved definitions, and repoint every call site listed in "Call sites" above. `main()` becomes `options.extra_requirements = environment.parse_extra_requirements(options.extra_requirements_file, rawlog=options.rawlog)`.
 
 **Acceptance Criteria:**
-- [ ] `src/veny/environment.py` exists and `rg -n 'options\.' src/veny/environment.py` returns nothing
-- [ ] `environment.py` imports nothing from `veny.cli` (`tests/test_layering.py` proves it)
-- [ ] `LAYERS` gains `frozenset({"environment"})` above the index layer, in this commit
-- [ ] Every one of the eight symbols is gone from `cli.py` — `rg -n '^def (uv_binary|create_venv|venv_build_interpreter|parse_extra_requirements|write_requirements_file_with_extras|run_uv_pip|install_into_venv|uninstall_from_venv)\b' src/veny/cli.py` returns nothing
-- [ ] **Every `monkeypatch.setattr(cli, "<moved symbol>", ...)` in `tests/` is repointed at the `environment` module.** Find them with `rg -n 'setattr\(\s*(cli|veny)\s*,\s*"(uv_binary|create_venv|venv_build_interpreter|run_uv_pip|install_into_venv|uninstall_from_venv|write_requirements_file_with_extras|parse_extra_requirements)"' tests/` and confirm that command returns nothing when the task is done. A missed patch does not fail loudly — it runs the real subprocess.
-- [ ] Bodies moved verbatim. Diff each one against `git show dc1c3c4:src/veny/cli.py` and confirm the only differences are the parameter substitutions the signatures above require.
-- [ ] `pixi run typecheck` ≤ 37, with `environment.py` and `tests/test_environment.py` at zero
+- [x] `src/veny/environment.py` exists and `rg -n 'options\.' src/veny/environment.py` returns nothing
+- [x] `environment.py` imports nothing from `veny.cli` (`tests/test_layering.py` proves it)
+- [x] `LAYERS` gains `frozenset({"environment"})` above the index layer, in this commit
+- [x] Every one of the eight symbols is gone from `cli.py` — `rg -n '^def (uv_binary|create_venv|venv_build_interpreter|parse_extra_requirements|write_requirements_file_with_extras|run_uv_pip|install_into_venv|uninstall_from_venv)\b' src/veny/cli.py` returns nothing
+- [x] **Every `monkeypatch.setattr(cli, "<moved symbol>", ...)` in `tests/` is repointed at the `environment` module.** Find them with `rg -n 'setattr\(\s*(cli|veny)\s*,\s*"(uv_binary|create_venv|venv_build_interpreter|run_uv_pip|install_into_venv|uninstall_from_venv|write_requirements_file_with_extras|parse_extra_requirements)"' tests/` and confirm that command returns nothing when the task is done. A missed patch does not fail loudly — it runs the real subprocess.
+- [x] Bodies moved verbatim. Diff each one against `git show dc1c3c4:src/veny/cli.py` and confirm the only differences are the parameter substitutions the signatures above require.
+- [x] `pixi run typecheck` ≤ 37, with `environment.py` and `tests/test_environment.py` at zero
 
 **Verify:** `pixi run test` (same count as end of Task 1 — this task moves code, it does not add tests), `pixi run lint`, `pixi run python -m ruff format --check .`, `pixi run typecheck 2>&1 | tail -1`. Then a live end-to-end run: `pixi run veny --no-cache <a throwaway script importing yaml>` must build a venv, install, and print the script's output. Capture the output in the task report.
 
@@ -309,21 +309,21 @@ Notes that are not optional:
 
 Today's coverage of `split_imports` in `tests/test_split_imports.py` is four tests (`test_split_imports_wires_python2_table_end_to_end`, `test_split_imports_stores_both_names_on_the_record`, `test_split_imports_falls_back_to_the_import_name_when_nothing_resolves`, `test_split_imports_probe_venv_is_given_the_classified_interpreter`) plus three `_compute_bad_imports` unit tests and `test_only_genuinely_uninstalled_imports_are_resolved`. Whole branches are unpinned. Write tests for at least these, and stub the probe venv (patch `check_packages_in_venv`) so no test in this file builds one except where noted:
 
-- [ ] **A custom module is classified as neither installed nor uninstalled.** An import name present in `options.custom_modules` must appear in neither set and must never be resolved through the alias index. Nothing pins this today, and it is the branch that makes `all_imports` a superset of `installed ∪ uninstalled` — the fact that forces `Requirements.all_imports` to exist.
-- [ ] **The zero-import early return builds no venv.** With `all_imports` empty and `--reqs` off, `split_imports` must return before `create_venv` is reached. Assert it by patching `create_venv` with something that fails the test if called. This branch is load-bearing for Task 4's context-manager design and nothing pins it today.
-- [ ] **`--reqs` folds requirement keys into `all_imports` before the count is taken**, so a run with zero source imports but a non-empty requirements file *does* build the probe venv.
-- [ ] **`--reqs` records are unioned into `uninstalled_imports` after the loop**, with `import_name == pip_name`.
-- [ ] **`add_dependencies` expands nested dependencies to a fixed point.** Build an `also_needs` chain of at least three levels (a → b, b → c) and pin that all three arrive. The `while added` loop is unpinned today.
-- [ ] **`add_dependencies` resolves dependency names through the alias index**, so a dependency's pip name is the resolved one, not the bare name.
-- [ ] **Bad imports are removed from `all_imports` and never reach the probe or the resolver.**
-- [ ] **On exit, `options.total_imports == len(options.all_imports)`.** This is the equality Task 4 turns into a property; pin it here first.
+- [x] **A custom module is classified as neither installed nor uninstalled.** An import name present in `options.custom_modules` must appear in neither set and must never be resolved through the alias index. Nothing pins this today, and it is the branch that makes `all_imports` a superset of `installed ∪ uninstalled` — the fact that forces `Requirements.all_imports` to exist.
+- [x] **The zero-import early return builds no venv.** With `all_imports` empty and `--reqs` off, `split_imports` must return before `create_venv` is reached. Assert it by patching `create_venv` with something that fails the test if called. This branch is load-bearing for Task 4's context-manager design and nothing pins it today.
+- [x] **`--reqs` folds requirement keys into `all_imports` before the count is taken**, so a run with zero source imports but a non-empty requirements file *does* build the probe venv.
+- [x] **`--reqs` records are unioned into `uninstalled_imports` after the loop**, with `import_name == pip_name`.
+- [x] **`add_dependencies` expands nested dependencies to a fixed point.** Build an `also_needs` chain of at least three levels (a → b, b → c) and pin that all three arrive. The `while added` loop is unpinned today.
+- [x] **`add_dependencies` resolves dependency names through the alias index**, so a dependency's pip name is the resolved one, not the bare name.
+- [x] **Bad imports are removed from `all_imports` and never reach the probe or the resolver.**
+- [x] **On exit, `options.total_imports == len(options.all_imports)`.** This is the equality Task 4 turns into a property; pin it here first.
 
 **Acceptance Criteria:**
-- [ ] Every expected value obtained by running the code, not predicted
-- [ ] No source file under `src/` is modified in this task
-- [ ] Each test names, in its docstring, the concrete bug that would make it fail
-- [ ] `tests/test_classify.py` contributes zero mypy errors
-- [ ] **Mutation check, three of them, each recorded with the test that caught it:** (a) delete the `if imp in options.custom_modules.keys()` branch; (b) delete the `if not options.total_imports: return` early return; (c) delete `add_dependencies`' `while added` loop body. Each must turn a named test red, and restoring it must turn it green with `git diff` empty.
+- [x] Every expected value obtained by running the code, not predicted
+- [x] No source file under `src/` is modified in this task
+- [x] Each test names, in its docstring, the concrete bug that would make it fail
+- [x] `tests/test_classify.py` contributes zero mypy errors
+- [x] **Mutation check, three of them, each recorded with the test that caught it:** (a) delete the `if imp in options.custom_modules.keys()` branch; (b) delete the `if not options.total_imports: return` early return; (c) delete `add_dependencies`' `while added` loop body. Each must turn a named test red, and restoring it must turn it green with `git diff` empty.
 
 **Verify:** `pixi run python -m pytest tests/test_classify.py -v`, then `pixi run test`. State the count.
 
@@ -441,14 +441,14 @@ The copy-back converts each `frozenset` back to a `set`, because downstream code
 `test_only_genuinely_uninstalled_imports_are_resolved` carries one of `test_split_imports.py`'s 22 mypy errors (line 531, `_CountingIndex` assigned to an `AliasIndex`-typed variable). Annotate it as it moves so `tests/test_classify.py` lands at zero.
 
 **Acceptance Criteria:**
-- [ ] `rg -n 'options\.' src/veny/classify.py src/veny/state.py` returns nothing
-- [ ] Neither module imports `veny.cli`; `LAYERS` gains `frozenset({"state"})` and `classify` joins `environment`'s layer, in this commit
-- [ ] **The copy-back is provably total.** Add an executable check, in the spirit of `test_analysis_never_rebinds_an_importscan_field`: walk `cli.split_imports`' AST and assert the set of `options.<attr>` store targets is exactly `{all_imports, bad_imports, installed_imports, uninstalled_imports, total_imports}`. This is the guard that would have caught `dbf013c`'s class of bug; a prose claim is not enough here.
-- [ ] A zero-import run still builds no probe venv (the Task 3 test proves it, unchanged)
-- [ ] `Requirements.total_imports` equals `len(all_imports)` (the Task 3 test proves it, unchanged)
-- [ ] `pixi run typecheck` ≤ 37, with `classify.py`, `state.py` and `tests/test_classify.py` at zero, and `tests/test_split_imports.py` at 21
-- [ ] Bodies moved verbatim apart from the parameter substitutions above — diff each against `git show dc1c3c4:src/veny/cli.py`
-- [ ] **Mutation check:** delete one of the five copy-back assignments and confirm the AST guard fails. Restore it.
+- [x] `rg -n 'options\.' src/veny/classify.py src/veny/state.py` returns nothing
+- [x] Neither module imports `veny.cli`; `LAYERS` gains `frozenset({"state"})` and `classify` joins `environment`'s layer, in this commit
+- [x] **The copy-back is provably total.** Add an executable check, in the spirit of `test_analysis_never_rebinds_an_importscan_field`: walk `cli.split_imports`' AST and assert the set of `options.<attr>` store targets is exactly `{all_imports, bad_imports, installed_imports, uninstalled_imports, total_imports}`. This is the guard that would have caught `dbf013c`'s class of bug; a prose claim is not enough here.
+- [x] A zero-import run still builds no probe venv (the Task 3 test proves it, unchanged)
+- [x] `Requirements.total_imports` equals `len(all_imports)` (the Task 3 test proves it, unchanged)
+- [x] `pixi run typecheck` ≤ 37, with `classify.py`, `state.py` and `tests/test_classify.py` at zero, and `tests/test_split_imports.py` at 21
+- [x] Bodies moved verbatim apart from the parameter substitutions above — diff each against `git show dc1c3c4:src/veny/cli.py`
+- [x] **Mutation check:** delete one of the five copy-back assignments and confirm the AST guard fails. Restore it.
 
 **Verify:** `pixi run test` (same count as end of Task 3 — tests move, none are added or dropped; if the count changes, stop and explain), `pixi run lint`, `pixi run python -m ruff format --check .`, `pixi run typecheck 2>&1 | tail -1`.
 
@@ -498,10 +498,10 @@ diff <(pixi run python /tmp/diffdrive.py /tmp/veny-old/src) \
 **Second differential, for `environment.py`:** with `subprocess.check_call` and `subprocess.run` captured (not executed), record every argv the two trees build for `create_venv`, `run_uv_pip`, `install_into_venv` and `uninstall_from_venv` over the same corpus, and diff those lists. This is what pins that the `--python` flag, its position, and the resolved interpreter path are unchanged.
 
 **Acceptance Criteria:**
-- [ ] Both diffs are empty, and the empty diff is shown in the task report alongside the two `veny.cli.__file__` lines proving the two runs loaded different files
-- [ ] The corpus covers all eight cases above; the report lists them
-- [ ] **The check is proven able to fail.** Introduce one deliberate one-line change in the new tree (for example, drop the `--reqs` union in `classify.split_imports`), re-run, show the non-empty diff, then revert it and show `git diff` empty and the diff empty again. A differential check nobody has seen fail is worth as little as a test that cannot fail.
-- [ ] No file in the repository is modified by this task
+- [x] Both diffs are empty, and the empty diff is shown in the task report alongside the two `veny.cli.__file__` lines proving the two runs loaded different files
+- [x] The corpus covers all eight cases above; the report lists them
+- [x] **The check is proven able to fail.** Introduce one deliberate one-line change in the new tree (for example, drop the `--reqs` union in `classify.split_imports`), re-run, show the non-empty diff, then revert it and show `git diff` empty and the diff empty again. A differential check nobody has seen fail is worth as little as a test that cannot fail.
+- [x] No file in the repository is modified by this task
 
 **Verify:** `git status --short` shows no tracked-file changes; `pixi run test` unchanged.
 
@@ -516,13 +516,13 @@ diff <(pixi run python /tmp/diffdrive.py /tmp/veny-old/src) \
 
 **Gates** — run all of them and record the actual output, not a prediction:
 
-- [ ] `pixi run test`
-- [ ] `pixi run lint` → zero
-- [ ] `pixi run python -m ruff format --check .` → every file formatted
-- [ ] `pixi run typecheck 2>&1 | tail -1` → ≤ 37 (36 predicted), with the per-file breakdown
-- [ ] `pixi run smoke` → green, or explicitly recorded as skipped for lack of network
-- [ ] `wc -l src/veny/cli.py src/veny/classify.py src/veny/environment.py src/veny/state.py`
-- [ ] A live run: `pixi run veny --no-cache` against a throwaway script importing a real third-party package, printing the script's output — the acceptance criterion PROGRESS demands of any plan touching subprocess invocation
+- [x] `pixi run test`
+- [x] `pixi run lint` → zero
+- [x] `pixi run python -m ruff format --check .` → every file formatted
+- [x] `pixi run typecheck 2>&1 | tail -1` → ≤ 37 (36 predicted), with the per-file breakdown
+- [x] `pixi run smoke` → green, or explicitly recorded as skipped for lack of network
+- [x] `wc -l src/veny/cli.py src/veny/classify.py src/veny/environment.py src/veny/state.py`
+- [x] A live run: `pixi run veny --no-cache` against a throwaway script importing a real third-party package, printing the script's output — the acceptance criterion PROGRESS demands of any plan touching subprocess invocation
 
 **README:** the project-structure block at `README.md:100-130` gains `classify.py`, `environment.py` and `state.py`, and `cli.py`'s comment is updated — it currently says cli.py "builds the ImportScan/Settings analysis/ works from and copies results back onto Options", which is still true but now also covers the classification copy-back.
 
@@ -536,11 +536,11 @@ diff <(pixi run python /tmp/diffdrive.py /tmp/veny-old/src) \
 - Anything Task 5's differential check found. If it found nothing, record that too — the runs and the empty diff are the evidence.
 
 **Acceptance Criteria:**
-- [ ] Every gate above run and its real output recorded
-- [ ] README's project-structure block matches the tree (check it against `fd -e py . src/veny`)
-- [ ] PROGRESS's "Next action" points at plan 3d and states that no branch exists for it
-- [ ] `.tasks.json` marked complete
-- [ ] Nothing left uncommitted
+- [x] Every gate above run and its real output recorded
+- [x] README's project-structure block matches the tree (check it against `fd -e py . src/veny`)
+- [x] PROGRESS's "Next action" points at plan 3d and states that no branch exists for it
+- [x] `.tasks.json` marked complete
+- [x] Nothing left uncommitted
 
 **Verify:** `git status --short` clean apart from the untracked `.claude/` and `CLAUDE.md`; `git log --oneline` shows one commit per task.
 
