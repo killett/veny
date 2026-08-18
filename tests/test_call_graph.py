@@ -9,13 +9,8 @@ broken.
 
 from pathlib import Path
 
-from veny.cli import (
-    ModuleInfo,
-    Options,
-    _analyze_module,
-    build_call_graph,
-    collect_used_imports,
-)
+from veny.analysis.call_graph import ModuleInfo, build_call_graph, collect_used_imports
+from veny.cli import Options, _analyze_module
 
 INHERITANCE_SOURCE = """\
 class Base:

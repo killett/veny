@@ -18,7 +18,8 @@ actually carries the resolved module name for an aliased import.
 
 from pathlib import Path
 
-from veny.cli import ModuleInfo, Options, _analyze_module
+from veny.analysis.call_graph import ModuleInfo
+from veny.cli import Options, _analyze_module
 
 
 def _analyze(source: str, tmp_path: Path) -> tuple[str, dict[str, ModuleInfo]]:

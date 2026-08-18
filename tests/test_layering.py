@@ -47,6 +47,15 @@ FORBIDDEN = {
         "pypi_client",
         "json_types",
     },
+    "analysis/call_graph": {
+        "cli",
+        "alias_index",
+        "venv_cache",
+        "stdlib_index",
+        "pypi_client",
+        "json_types",
+        "settings",
+    },
     # The analysis subpackage marker. Plan 3b re-exports its new leaf modules
     # from here, so this is exactly where a `from ..cli import Options`
     # convenience import would first appear -- give it the same forbidden set
