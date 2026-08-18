@@ -129,6 +129,7 @@ def find_imports_in_script(
     first_path: str | os.PathLike[str],
     *,
     is_stdlib: Callable[[str], bool],
+    scan: ImportScan | None = None,
 ) -> ImportScan:
     """Find all imports in the script.
 
@@ -139,9 +140,14 @@ def find_imports_in_script(
         first_path: Path to the Python script to analyze for imports.
         is_stdlib:  Predicate returning True for names in the target
                     interpreter's standard library.
+        scan:       Prior state to keep scanning into, e.g. a caller's
+                    already-populated custom_modules map, or accumulated
+                    results from scanning earlier files in the same run.
+                    Defaults to a fresh, empty ImportScan.
 
     Returns:
-        The ImportScan populated with everything found in the script.
+        The scan argument (or a fresh ImportScan if none was given),
+        populated with everything found in the script.
 
     Raises:
         FileNotFoundError: If the first_path does not exist.
@@ -152,7 +158,7 @@ def find_imports_in_script(
         deque,
     )  # Allows for efficient first in, first out processing of modules
 
-    scan = ImportScan()
+    scan = scan if scan is not None else ImportScan()
     first_path = ek.ensure_file(first_path)
     if not ek.is_python_script(first_path) or not ek.compile_code(first_path):
         logging.error(f"Skipping invalid Python script: {first_path}")

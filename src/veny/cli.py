@@ -40,6 +40,7 @@ if not hasattr(ek, "register_json_type"):
 from . import json_types, venv_cache
 from .analysis import scan as analysis_scan
 from .analysis.custom_modules import dict_of_custom_modules
+from .analysis.scan_state import ImportScan
 
 
 @functools.cache
@@ -690,16 +691,21 @@ def find_imports_in_script(
 
     A bridge, not a design: analysis/scan.py returns an ImportScan, while
     list_packages, split_imports and warn_about_system_packages all still read
-    these fields off Options. Phase 3c and 3e retire the copy-back by giving
+    these fields off Options. Phase 3c and 3e retire this bridge by giving
     those consumers the ImportScan directly.
 
-    get_all_imports() calls this once per file in a directory scan and relies
-    on the seven fields accumulating across calls (it resets only
-    options.all_imports, to an empty set, before its loop). So this merges
-    the scan's results into options rather than overwriting them: the set and
-    dict fields are unioned in, and the two list fields are appended to
-    without duplicating an entry options already has -- the same dedup
-    process_import itself applies when it appends to a fresh ImportScan.
+    The seven fields below are handed to the scanner by reference, not by
+    value -- the same dict/set/list objects options already holds, not
+    copies -- and the scanner only ever mutates them in place (.add,
+    .append, `d[k] = v`); it never rebinds one of them to a new object. So
+    what the scanner writes through `scan` is visible through `options`
+    immediately, with no copy-back step needed afterwards. This is also why
+    the scanner must be *seeded* with this call, not just read afterwards:
+    dict_of_custom_modules() populates options.custom_modules before
+    list_packages() ever reaches this function, and get_all_imports() calls
+    this once per file in a directory scan, relying on all seven fields
+    (not just all_imports) accumulating across calls. Passing options'
+    own objects in as `scan` is what makes both of those work.
 
     Args:
         options: The run's Options; the seven scan fields are updated in place.
@@ -712,20 +718,18 @@ def find_imports_in_script(
         search_above_this_dir=options.search_above_this_dir,
         rawlog=options.rawlog,
     )
-    scan = analysis_scan.find_imports_in_script(
-        settings, first_path, is_stdlib=options.stdlib.__contains__
+    scan = ImportScan(
+        all_imports=options.all_imports,
+        custom_modules=options.custom_modules,
+        loaded_custom_modules=options.loaded_custom_modules,
+        samedir_files=options.samedir_files,
+        subfolders=options.subfolders,
+        sys_path_hints=options.sys_path_hints,
+        seen_stdlib_imports=options.seen_stdlib_imports,
     )
-    options.all_imports |= scan.all_imports
-    options.custom_modules.update(scan.custom_modules)
-    options.loaded_custom_modules |= scan.loaded_custom_modules
-    for samedir_file in scan.samedir_files:
-        if samedir_file not in options.samedir_files:
-            options.samedir_files.append(samedir_file)
-    for subfolder in scan.subfolders:
-        if subfolder not in options.subfolders:
-            options.subfolders.append(subfolder)
-    options.sys_path_hints |= scan.sys_path_hints
-    options.seen_stdlib_imports |= scan.seen_stdlib_imports
+    analysis_scan.find_imports_in_script(
+        settings, first_path, is_stdlib=options.stdlib.__contains__, scan=scan
+    )
 
 
 def resolve_records(
