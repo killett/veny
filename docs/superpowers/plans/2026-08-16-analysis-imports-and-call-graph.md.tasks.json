@@ -37,7 +37,7 @@
     {
       "id": 4,
       "subject": "Task 5: Extract analysis/scan.py",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         3
       ],
@@ -46,7 +46,7 @@
     {
       "id": 5,
       "subject": "Task 6: Retire FunctionInfo.ast_node",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         4
       ],
@@ -55,12 +55,12 @@
     {
       "id": 6,
       "subject": "Task 7: Run the gates and update PROGRESS",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         5
       ],
       "description": "**Goal:** Every gate confirmed, and `PROGRESS.md` points at plan 3c.\n\n**Files:**\n- Modify: `PROGRESS.md`\n\n**Acceptance Criteria:**\n- [ ] `pixi run test` passes with 294 tests\n- [ ] `ruff check .` zero; `ruff format --check .` every file formatted\n- [ ] `pixi run typecheck 2>&1 | tail -1` at or below 37\n- [ ] `pixi run smoke` green, or the note says explicitly it was skipped and why\n- [ ] A live `pixi run veny --no-cache` run still builds a venv and runs the script\n- [ ] `PROGRESS.md` **Current work** names plan 3c as the next action, with the measured `wc -l src/veny/cli.py`, and updates the 3a-3e table\n- [ ] Gotchas records the `base_classes` copy trap and the `ImportScan` bridge\n- [ ] Deferred items records the remaining coverage gaps and the three design amendments\n\n**Verify:** `pixi run test && pixi run lint && pixi run smoke` \u2192 all green\n\nThe exact Gotchas and Deferred-items wording is in the plan, Task 7 Step 2. PROGRESS.md is long-form prose, not a bullet dump \u2014 match the surrounding register.\n\n```json:metadata\n{\"files\": [\"PROGRESS.md\"], \"verifyCommand\": \"pixi run test && pixi run lint\", \"acceptanceCriteria\": [\"294 tests pass\", \"ruff clean\", \"mypy <= 37\", \"smoke green or explicitly noted skipped\", \"live run works\", \"PROGRESS names plan 3c with measured line count\", \"base_classes trap and ImportScan bridge recorded\", \"coverage gaps and design amendments recorded\"], \"modelTier\": \"standard\"}\n```"
     }
   ],
-  "lastUpdated": "2026-08-17T18:45:05-07:00"
+  "lastUpdated": "2026-08-17T19:23:50-07:00"
 }
