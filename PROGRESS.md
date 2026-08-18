@@ -26,35 +26,59 @@ gotchas ledger.
   | Plan | Modules | ~Lines |
   |---|---|---|
   | **3a** `docs/superpowers/plans/2026-08-16-analysis-foundation.md` (executed, complete) | `analysis/literals.py`, `analysis/custom_modules.py`, `settings.py` | 430 |
-  | **3b** `docs/superpowers/plans/2026-08-16-analysis-imports-and-call-graph.md` (written, not executed) | `analysis/imports.py`, `call_graph.py`, `scan.py`, plus `analysis/scan_state.py` | 1,100 |
+  | **3b** `docs/superpowers/plans/2026-08-16-analysis-imports-and-call-graph.md` (executed, complete on branch `analysis-imports-call-graph`) | `analysis/imports.py`, `analysis/call_graph.py`, `analysis/scan.py`, plus `analysis/scan_state.py` (a fourth module the plan added beyond the design's original three) | 1,100 |
   | 3c (not written) | `classify.py`, `environment.py` | 600 |
   | 3d (not written) | `verify.py`, `cache_search.py`, `last_used.py` | 1,100 |
   | 3e (not written) | `pipeline.py`, `cli.py` slimming, `--full` deletion, final `Options` drain | 450 |
 
   Phases 1 and 2 are complete and merged to `main`.
 
-**Next action:** execute plan 3b, `docs/superpowers/plans/2026-08-16-analysis-imports-and-call-graph.md`,
-on branch `analysis-imports-call-graph` (already created off `main` @ `3215df5`;
-the plan and its `.tasks.json` are committed there as `e4f79ea`, the only commit
-on the branch). Its seven tasks are ready and **none has been implemented**. The
-plan opens with a "Starting state" section written for a session that does not
-have the authoring context — read it first. Two things in it are worth knowing
-before you begin: the task order is deliberately *tests before moves*, because
-the call-graph half of the neighbourhood (`build_call_graph`,
-`collect_used_imports`, `_analyze_module`, `split_function_name`, `FunctionInfo`,
-`ModuleInfo`) has zero test coverage today; and `ImportScan` is forced rather
-than chosen, because once those symbols live under `analysis/` they cannot name
-`Options` without importing `cli`, which `tests/test_layering.py` fails on.
+**Next action:** write and execute plan 3c, the next in the phase-3 sequence —
+`classify.py` and `environment.py`, ~600 lines — following the design doc's
+module boundaries and the three design amendments plan 3b recorded (below,
+and in Deferred items). No branch exists for it yet.
 
-Plan 3b also settles three things the approved design left open or wrong, all
-recorded in its own "Three things this plan settles" section: `ImportScan` must
-carry `seen_stdlib_imports` or `warn_about_system_packages` silently stops
-firing; `analysis/` receives stdlib membership as an injected
-`is_stdlib: Callable[[str], bool]` (owner's decision, 2026-08-16) rather than a
-`StdlibIndex`, which satisfies the design's wording with bit-identical
-behaviour; and the design's "Pure AST in, names out" claim is not true today —
-`_register_constant_path_for_module` and `process_import` both touch the
-filesystem during a scan — and 3b does not make it true.
+Plan 3b, `docs/superpowers/plans/2026-08-16-analysis-imports-and-call-graph.md`,
+is complete on branch `analysis-imports-call-graph` (off `main` @ `3215df5`,
+not yet merged). Its six code tasks landed as one commit each, tests before
+moves as planned: `541772c` (Task 1, `tests/test_call_graph.py`, 6
+characterization tests written before any move), `b0192e1` (Task 2,
+`tests/test_import_collector.py`, 5 tests, values measured by the
+implementer), `f1a9b91` (Task 3, extract `analysis/call_graph.py`,
+byte-identical move), `006aadb` (Task 4, introduce `analysis/scan_state.py`'s
+`ImportScan` and extract `analysis/imports.py`), `6ee6c57` (Task 5, extract
+`analysis/scan.py`) followed by `dbf013c` (a fix for a Critical the
+whole-branch review found in the bridge — see the Gotchas entry on
+`ImportScan`'s seeding), and `5dbcac2` (Task 6, retire `FunctionInfo.ast_node`,
+write-only since phase 1), plus `aa15e32`, a tracker-sync commit. `ImportScan`
+was forced rather than chosen: once the call-graph symbols moved under
+`analysis/` they could not name `Options` without importing `cli`, which
+`tests/test_layering.py` fails on.
+
+Gates on this branch: `pixi run test` **295 passed** — one more than the
+plan's own predicted 294, because Task 5's fix round (`dbf013c`) added a
+regression test; `ruff check .` zero; `ruff format --check .` all 40 files
+formatted; `pixi run typecheck` 37 errors (at the ceiling, unchanged from
+3a); `pixi run smoke` green (network was available, nothing skipped). Line
+counts measured at `5dbcac2` (`wc -l`, 2026-08-17): `src/veny/cli.py`
+**2,626 lines** (was 3,707 at the start of 3b, 4,143 at the start of 3a);
+`analysis/imports.py` 683, `analysis/scan.py` 347,
+`analysis/custom_modules.py` 274, `analysis/literals.py` 229,
+`analysis/call_graph.py` 177, `analysis/scan_state.py` 30, `settings.py` 23.
+A live run (`pixi run veny --no-cache`, a script calling `yaml.safe_load`)
+built a fresh venv and printed `{'j': 10}`.
+
+Plan 3b also settled three things the approved design left open or wrong, as
+its own "Three things this plan settles" section promised: `ImportScan`
+carries `seen_stdlib_imports`, so `warn_about_system_packages` keeps firing;
+`analysis/` receives stdlib membership as an injected
+`is_stdlib: Callable[[str], bool]` (owner's decision, 2026-08-16) rather than
+a `StdlibIndex`, satisfying the design's wording with bit-identical
+behaviour; and the design's "Pure AST in, names out" claim is still not true
+— `_register_constant_path_for_module` and `process_import` both touch the
+filesystem during a scan — 3b did not make it true, as it said upfront it
+would not. See Deferred items for the design-doc amendments this leaves
+outstanding.
 
 Phase 3a is merged to `main` at `3215df5`. It landed six tasks (a task gained mid-execution,
 numbered 2b, between the `/`-operator fix and the `settings.py`/`custom_modules.py`
@@ -706,6 +730,49 @@ wiring rationale and for two Minors deliberately left unfixed.
   reproduction with no veny involved showed `uv venv --python python3`
   picking 3.12 against the same PATH where `python3 --version` reports
   3.13.14.
+- **`ImportFunctionCollector` populates its own `self.base_classes`; only
+  `analysis/scan.py`'s `_analyze_module` copies it onto the `ModuleInfo`, as a
+  separate assignment after the walk.** A test that constructs the collector
+  directly and reads `module_info.base_classes` gets `{}`, so
+  `build_call_graph`'s base-class fallback never fires and an inherited
+  method's imports look unreachable — which reads exactly like a bug in
+  inheritance handling and is not one. Measured both ways while planning 3b:
+  direct collector gives `base_classes == {}` and `collect_used_imports`
+  returns `set()`; through `_analyze_module` it gives `{'Base': [], 'Child':
+  ['Base']}` and `{'base64'}`. Test the call graph through `_analyze_module`.
+- **The `ImportScan` bridge is seeded, not just read.** `cli.py`'s
+  `find_imports_in_script` hands `analysis/scan.py` the seven live objects
+  `options` already holds, and the scanner mutates them in place — there is
+  no copy-back. The seeding is load-bearing in both directions:
+  `dict_of_custom_modules` populates `options.custom_modules` at
+  `cli.py:536`, before `list_packages` reaches the scanner at `cli.py:551`,
+  and `get_all_imports` calls the scanner once per file, relying on all
+  seven fields accumulating across calls. A first attempt at this bridge
+  copied results *out* but never seeded them *in*; the measured consequence
+  was that a script importing a known local module reported it in
+  `all_imports` instead of `loaded_custom_modules` — i.e. veny would try to
+  install a local module from PyPI. It passed 294 green tests and a live
+  run; only a behavioural diff against the pre-move code caught it, fixed
+  in `dbf013c`.
+  `tests/test_import_discovery.py::test_a_prepopulated_custom_module_outside_the_script_dir_is_recognized`
+  now guards it.
+- **Verified by a whole-repo AST pass while planning 3b, worth keeping as an
+  invariant:** nothing under `src/veny/analysis/` ever *rebinds* one of
+  `ImportScan`'s seven fields — every write is `.add()`, `.append()` or
+  `d[k] = v` on the existing object. That invariant is what makes the
+  bridge's no-copy-back design (above) correct, and anything that breaks it
+  silently detaches the caller's objects mid-scan.
+- **Plan 3b's own text was wrong in four separate places, each caught by an
+  implementer refusing to guess rather than by any test.** The probe named
+  `ModuleInfo` attributes that do not exist (`alias_to_key`/`class_names`,
+  when the real fields are `aliases`/`classes`); three symbols were called
+  internal to `call_graph.py` when two still had callers outside it; a
+  global constraint forbade editing `tests/test_split_imports.py` while a
+  task changed a signature that file calls; and the Task 5 wrapper design
+  lost the scan's read direction (see the `ImportScan` bridge entry above).
+  The standing lesson already in this ledger — that a plan's stated
+  "measured" is not evidence — held again, and the tests-before-moves
+  ordering is what made the fourth one survivable.
 
 ## Deferred items
 
@@ -993,6 +1060,36 @@ wiring rationale and for two Minors deliberately left unfixed.
   output. If those calls ever gain `capture_output=True`, the child's output
   stops reaching the terminal live — check both sites before changing them.
 - emmykit's shell/alias helpers (`detect_shell`, `find_shell_rc_file`, `find_additional_alias_files`, and the `Options` fields `shell`, `rc_file`, `alias`, `alias_command`, `additional_alias_files`) have no caller in veny as of 2026-08-15. The usage audit is written up as a cross-repo prompt in `docs/prompts/2026-08-15-emmykit-shell-alias-helpers-audit.md` and has not been run yet. They are public API on a published 0.4.0, so removal is a breaking change and the prompt asks for a recommendation rather than a deletion.
+- **`ModuleInfo.aliases` and `ModuleInfo.classes` are write-never fields**
+  (`analysis/call_graph.py`), the same shape as the `FunctionInfo.ast_node`
+  that plan 3b's Task 6 retired. `_analyze_module` copies only
+  `base_classes` onto the `ModuleInfo`. Found during 3b's Task 2 and
+  deliberately left alone as out of scope; a later plan should decide them
+  the way Task 6 decided `ast_node`. Note that `ImportFunctionCollector` has
+  its own separate `self.aliases` which does real work internally — the two
+  must not be confused.
+- `ImportFunctionCollector`'s exotic resolution paths — `super()`, dynamic
+  `__import__`, `spec_from_file_location`, `SourceFileLoader(...).load_module()`,
+  and the `self.<attr>` type inference — still have no direct tests. 3b
+  added five tests covering the paths that decide *which* imports are
+  found; these decide *whether a call edge is drawn*, and a break in them
+  silently narrows reachability.
+- `get_all_imports` and `stayed_out_dir` remain in `cli.py` deliberately.
+  When phase 3e gives `get_all_imports` a home in `pipeline.py`,
+  `stayed_out_dir` should move with it and take `settings` — it reads only
+  `stay_out_list`, which `Settings` already carries. `get_all_imports`
+  still has no test of its own.
+- `analysis/scan.py` has a function-local `from collections import deque`
+  alongside a module-level `import collections` used only for an
+  annotation; moved verbatim, worth collapsing when 3c touches the file.
+- **Three design-doc amendments 3b records:** `ImportScan` must list
+  `seen_stdlib_imports` (its omission would silence
+  `warn_about_system_packages`); "analysis/* … takes neither `AliasIndex`
+  nor `StdlibIndex`" is satisfied by injecting
+  `is_stdlib: Callable[[str], bool]` rather than by removing the
+  dependency; and the doc's "Pure AST in, names out" claim remains untrue —
+  `_register_constant_path_for_module` and `process_import` both touch the
+  filesystem during a scan — which 3b did not change.
 
 ## Open questions
 
