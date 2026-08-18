@@ -3,7 +3,7 @@
 import sys
 
 from veny import cli as veny
-from veny import stdlib_index
+from veny import environment, stdlib_index
 
 
 def an_options(python_command: str) -> veny.Options:
@@ -19,14 +19,14 @@ def an_options(python_command: str) -> veny.Options:
 def test_venv_build_interpreter_prefers_the_classified_interpreter() -> None:
     """Building with sys.executable installs into a venv for the wrong Python."""
     assert (
-        veny.venv_build_interpreter(an_options("/usr/bin/python3.12"))
+        environment.venv_build_interpreter("/usr/bin/python3.12")
         == "/usr/bin/python3.12"
     )
 
 
 def test_venv_build_interpreter_falls_back_when_no_preferred_python_was_found() -> None:
     """find_preferred_python_version() returns "" when the preferred Python is absent."""
-    assert veny.venv_build_interpreter(an_options("")) == sys.executable
+    assert environment.venv_build_interpreter("") == sys.executable
 
 
 def test_interpreter_tag_comes_from_the_stdlib_index() -> None:

@@ -1,4 +1,4 @@
-"""Characterize the uv boundary before Task 2 moves it into environment.py.
+"""Characterize the uv boundary that environment.py owns.
 
 PROGRESS.md records three phase-2 regressions that shipped past a green,
 264-test suite because every test in it stubbed the ``uv`` subprocess -- none
@@ -7,11 +7,11 @@ exercised the command lines veny actually builds. This module's live test
 wheel, with no network and no ``subprocess`` stubbing, so a broken argv or a
 broken success/failure interpretation fails loudly here instead of shipping.
 
-Every symbol under test is imported from ``veny.cli``, where it lives today;
-Task 2 repoints these tests at ``veny.environment`` mechanically. This file
-does not duplicate what tests/test_uv_backend.py already pins: uv_binary's
-three resolution outcomes, the resolved-interpreter argv create_venv builds,
-and the create_venv-before-requirements ordering.
+Every symbol under test is imported from ``veny.environment``, where Task 2
+moved it from ``veny.cli``. This file does not duplicate what
+tests/test_uv_backend.py already pins: uv_binary's three resolution outcomes,
+the resolved-interpreter argv create_venv builds, and the
+create_venv-before-requirements ordering.
 """
 
 import logging
@@ -21,7 +21,7 @@ import subprocess
 import zipfile
 from pathlib import Path
 
-from veny import cli
+from veny import environment
 
 
 def _build_wheel(
@@ -81,28 +81,27 @@ def test_the_live_install_uninstall_round_trip_crosses_the_real_uv_boundary(
     venv_dir = tmp_path / "venv"
     python = shutil.which("python3")
     assert python is not None, "test host must have a python3 on PATH"
-    cli.create_venv(venv_dir, python)
+    environment.create_venv(venv_dir, python)
 
     wheel_path = _build_wheel(tmp_path)
 
-    options = cli.Options()
-    options.venv_python = venv_dir / "bin" / "python"
+    venv_python = venv_dir / "bin" / "python"
 
-    installed = cli.install_into_venv(options, str(wheel_path))
+    installed = environment.install_into_venv(venv_python, str(wheel_path))
     assert installed is True
 
     import_after_install = subprocess.run(
-        [str(options.venv_python), "-c", "import venytest; print(venytest.value)"],
+        [str(venv_python), "-c", "import venytest; print(venytest.value)"],
         capture_output=True,
         text=True,
     )
     assert import_after_install.returncode == 0
     assert import_after_install.stdout.strip() == "42"
 
-    cli.uninstall_from_venv(options, "venytest")
+    environment.uninstall_from_venv(venv_python, "venytest")
 
     import_after_uninstall = subprocess.run(
-        [str(options.venv_python), "-c", "import venytest"],
+        [str(venv_python), "-c", "import venytest"],
         capture_output=True,
         text=True,
     )
@@ -115,8 +114,8 @@ def test_run_uv_pip_returns_none_and_never_touches_subprocess_without_a_venv_int
 ):
     """run_uv_pip short-circuits to None, logging rather than raising or shelling out.
 
-    If the `options.venv_python is None` guard were removed or reordered
-    after the command is built, this would either raise (os.fspath(None)) or
+    If the `venv_python is None` guard were removed or reordered after the
+    command is built, this would either raise (os.fspath(None)) or
     spawn a subprocess with a garbage path. Asserting subprocess.run is never
     called catches a reordering that a return-value-only assertion would miss.
     """
@@ -129,10 +128,7 @@ def test_run_uv_pip_returns_none_and_never_touches_subprocess_without_a_venv_int
     monkeypatch.setattr(subprocess, "run", _fail_if_called)
     caplog.set_level(logging.INFO)
 
-    options = cli.Options()
-    options.venv_python = None
-
-    result = cli.run_uv_pip(options, "install", "somepkg")
+    result = environment.run_uv_pip(None, "install", "somepkg")
 
     assert result is None
     assert "no virtual environment interpreter is set" in caplog.text
@@ -160,18 +156,17 @@ def test_run_uv_pip_places_the_python_flag_before_the_package_arguments(monkeypa
 
     monkeypatch.setattr(subprocess, "run", _capture)
 
-    options = cli.Options()
-    options.venv_python = Path("/fake/venv/bin/python")
+    venv_python = Path("/fake/venv/bin/python")
 
-    cli.run_uv_pip(options, "install", "somepkg", "--upgrade")
+    environment.run_uv_pip(venv_python, "install", "somepkg", "--upgrade")
 
     assert captured == [
         [
-            cli.uv_binary(),
+            environment.uv_binary(),
             "pip",
             "install",
             "--python",
-            os.fspath(options.venv_python),
+            os.fspath(venv_python),
             "somepkg",
             "--upgrade",
         ]
@@ -198,10 +193,7 @@ def test_install_into_venv_returns_false_and_logs_stderr_on_nonzero_returncode(
     )
     caplog.set_level(logging.INFO)
 
-    options = cli.Options()
-    options.venv_python = Path("/fake/venv/bin/python")
-
-    result = cli.install_into_venv(options, "somepkg")
+    result = environment.install_into_venv(Path("/fake/venv/bin/python"), "somepkg")
 
     assert result is False
     assert "Failed to install somepkg. Error: boom happened" in caplog.text
@@ -226,10 +218,9 @@ def test_uninstall_from_venv_warns_but_does_not_raise_on_nonzero_returncode(
     )
     caplog.set_level(logging.INFO)
 
-    options = cli.Options()
-    options.venv_python = Path("/fake/venv/bin/python")
-
-    cli.uninstall_from_venv(options, "somepkg")  # must not raise
+    environment.uninstall_from_venv(
+        Path("/fake/venv/bin/python"), "somepkg"
+    )  # must not raise
 
     assert "Could not uninstall somepkg. Error: boom happened" in caplog.text
     warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
@@ -253,13 +244,9 @@ def test_parse_extra_requirements_handles_bare_names_specifiers_comments_blanks_
         "requests\nflask>=2.0\n# a full-line comment\n\n  numpy  ==1.26.0  \n"
     )
 
-    options = cli.Options()
-    options.extra_requirements_file = fixture
-    options.rawlog = True
+    extra_requirements = environment.parse_extra_requirements(fixture, rawlog=True)
 
-    cli.parse_extra_requirements(options)
-
-    assert options.extra_requirements == {
+    assert extra_requirements == {
         "requests": "",
         "flask": ">=2.0",
         "numpy": "==1.26.0",
@@ -280,16 +267,11 @@ def test_write_requirements_file_with_extras_sorts_pip_names_and_appends_specifi
     """
     requirements_file = tmp_path / "requirements.txt"
 
-    options = cli.Options()
-    options.requirements_file = requirements_file
-    options.uninstalled_imports = {
-        cli.ResolvedImport(import_name="a_import", pip_name="alpha"),
-        cli.ResolvedImport(import_name="b_import", pip_name="beta"),
-        cli.ResolvedImport(import_name="z_import", pip_name="zeta"),
-    }
-    options.extra_requirements = {"alpha": ">=1.0", "zeta": ""}
-
-    cli.write_requirements_file_with_extras(options)
+    environment.write_requirements_file_with_extras(
+        requirements_file,
+        ["zeta", "alpha", "beta"],
+        {"alpha": ">=1.0", "zeta": ""},
+    )
 
     assert requirements_file.read_text() == "alpha>=1.0\nbeta\nzeta\n"
 
@@ -308,10 +290,7 @@ def test_venv_build_interpreter_falls_back_to_the_unresolved_command_and_warns_w
     monkeypatch.setattr(shutil, "which", lambda name: None)
     caplog.set_level(logging.WARNING)
 
-    options = cli.Options()
-    options.python_command = "definitely-not-a-real-interpreter-xyz"
-
-    result = cli.venv_build_interpreter(options)
+    result = environment.venv_build_interpreter("definitely-not-a-real-interpreter-xyz")
 
     assert result == "definitely-not-a-real-interpreter-xyz"
     assert "Could not resolve interpreter" in caplog.text

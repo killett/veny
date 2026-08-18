@@ -56,6 +56,9 @@ ignore = [
 # moved to analysis/custom_modules.py in plan 3a, which carries its own
 # inline `# noqa: S301` instead.)
 "src/veny/cli.py" = ["S101", "S603"]
+# environment.py is the one module that invokes uv: its subprocess calls
+# are its entire purpose. It carries no asserts, so S101 stays enforced here.
+"src/veny/environment.py" = ["S603"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import emmykit as ek
 
-from veny import alias_index, stdlib_index, venv_cache
+from veny import alias_index, environment, stdlib_index, venv_cache
 from veny import cli as veny
 from veny.alias_index import Candidate, Resolution, Source
 from veny.analysis.imports import process_import
@@ -462,7 +462,7 @@ def test_split_imports_probe_venv_is_given_the_classified_interpreter(monkeypatc
         "which",
         lambda name: "/resolved/bin/python3" if name == "python3" else None,
     )
-    monkeypatch.setattr(veny, "uv_binary", lambda: "/packaged/uv")
+    monkeypatch.setattr(environment, "uv_binary", lambda: "/packaged/uv")
     captured: list[list[str]] = []
     monkeypatch.setattr(
         subprocess, "check_call", lambda command: captured.append(command)
@@ -912,14 +912,14 @@ class _FakeInstalledVenv:
         self.uninstalled = []  # pip names removed
         self.import_checks = []  # names the per-record import check was given
 
-    def install(self, options, pip_name):
+    def install(self, venv_python, pip_name):
         self.attempted.append(pip_name)
         if pip_name in self.install_failures:
             return False
         self.installed.append(pip_name)
         return True
 
-    def uninstall(self, options, pip_name):
+    def uninstall(self, venv_python, pip_name):
         self.uninstalled.append(pip_name)
         if pip_name in self.installed:
             self.installed.remove(pip_name)
@@ -1028,7 +1028,9 @@ def test_setup_virtualenv_verifies_every_import_before_reporting_success(
         veny.ResolvedImport(import_name="thing", pip_name="thing-pkg")
     }
     calls = []
-    monkeypatch.setattr(veny, "write_requirements_file_with_extras", lambda opts: None)
+    monkeypatch.setattr(
+        environment, "write_requirements_file_with_extras", lambda *args: None
+    )
     monkeypatch.setattr(subprocess, "check_call", lambda *a, **k: 0)
     monkeypatch.setattr(
         subprocess,
@@ -1095,8 +1097,8 @@ def test_an_import_provided_by_another_distribution_is_not_confirmed(
     monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
     monkeypatch.setattr(veny, "import_outcome_in_venv", fake.outcome)
     monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
-    monkeypatch.setattr(veny, "install_into_venv", fake.install)
-    monkeypatch.setattr(veny, "uninstall_from_venv", fake.uninstall)
+    monkeypatch.setattr(environment, "install_into_venv", fake.install)
+    monkeypatch.setattr(environment, "uninstall_from_venv", fake.uninstall)
 
     veny.verify_and_repair_imports(options)
 
@@ -1135,8 +1137,8 @@ def test_an_import_the_batch_install_did_not_provide_is_repaired(monkeypatch, tm
     monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
     monkeypatch.setattr(veny, "import_outcome_in_venv", fake.outcome)
     monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
-    monkeypatch.setattr(veny, "install_into_venv", fake.install)
-    monkeypatch.setattr(veny, "uninstall_from_venv", fake.uninstall)
+    monkeypatch.setattr(environment, "install_into_venv", fake.install)
+    monkeypatch.setattr(environment, "uninstall_from_venv", fake.uninstall)
 
     veny.verify_and_repair_imports(options)
 
@@ -1168,8 +1170,8 @@ def test_the_repair_path_import_checks_the_import_name_never_the_pip_name(
     monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
     monkeypatch.setattr(veny, "import_outcome_in_venv", fake.outcome)
     monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
-    monkeypatch.setattr(veny, "install_into_venv", fake.install)
-    monkeypatch.setattr(veny, "uninstall_from_venv", fake.uninstall)
+    monkeypatch.setattr(environment, "install_into_venv", fake.install)
+    monkeypatch.setattr(environment, "uninstall_from_venv", fake.uninstall)
 
     veny.verify_and_repair_imports(options)
 
@@ -1193,8 +1195,8 @@ def test_a_record_carrying_a_pip_spelling_is_never_repaired(monkeypatch, tmp_pat
     monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
     monkeypatch.setattr(veny, "import_outcome_in_venv", fake.outcome)
     monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
-    monkeypatch.setattr(veny, "install_into_venv", fake.install)
-    monkeypatch.setattr(veny, "uninstall_from_venv", fake.uninstall)
+    monkeypatch.setattr(environment, "install_into_venv", fake.install)
+    monkeypatch.setattr(environment, "uninstall_from_venv", fake.uninstall)
 
     veny.verify_and_repair_imports(options)
 
@@ -1213,8 +1215,8 @@ def test_a_repair_that_cannot_succeed_leaves_the_run_going(monkeypatch, tmp_path
     monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
     monkeypatch.setattr(veny, "import_outcome_in_venv", fake.outcome)
     monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
-    monkeypatch.setattr(veny, "install_into_venv", fake.install)
-    monkeypatch.setattr(veny, "uninstall_from_venv", fake.uninstall)
+    monkeypatch.setattr(environment, "install_into_venv", fake.install)
+    monkeypatch.setattr(environment, "uninstall_from_venv", fake.uninstall)
 
     veny.verify_and_repair_imports(options)
 
@@ -1315,8 +1317,8 @@ def test_a_per_record_success_credited_elsewhere_is_not_confirmed(
     monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
     monkeypatch.setattr(veny, "import_outcome_in_venv", fake.outcome)
     monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
-    monkeypatch.setattr(veny, "install_into_venv", fake.install)
-    monkeypatch.setattr(veny, "uninstall_from_venv", fake.uninstall)
+    monkeypatch.setattr(environment, "install_into_venv", fake.install)
+    monkeypatch.setattr(environment, "uninstall_from_venv", fake.uninstall)
 
     veny.verify_and_repair_imports(options)
 
@@ -1342,8 +1344,8 @@ def test_a_second_candidates_machine_scoped_failure_is_also_not_persisted(
     monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
     monkeypatch.setattr(veny, "import_outcome_in_venv", fake.outcome)
     monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
-    monkeypatch.setattr(veny, "install_into_venv", fake.install)
-    monkeypatch.setattr(veny, "uninstall_from_venv", fake.uninstall)
+    monkeypatch.setattr(environment, "install_into_venv", fake.install)
+    monkeypatch.setattr(environment, "uninstall_from_venv", fake.uninstall)
 
     veny.verify_and_repair_imports(options)
 
@@ -1407,8 +1409,8 @@ def test_a_machine_scoped_failure_leaves_no_persisted_rejection(monkeypatch, tmp
     monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
     monkeypatch.setattr(veny, "import_outcome_in_venv", fake.outcome)
     monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
-    monkeypatch.setattr(veny, "install_into_venv", fake.install)
-    monkeypatch.setattr(veny, "uninstall_from_venv", fake.uninstall)
+    monkeypatch.setattr(environment, "install_into_venv", fake.install)
+    monkeypatch.setattr(environment, "uninstall_from_venv", fake.uninstall)
 
     veny.verify_and_repair_imports(options)
 
@@ -1444,8 +1446,8 @@ def test_a_package_that_lacks_the_import_is_still_rejected_durably(
     monkeypatch.setattr(veny, "check_packages_in_venv", fake.check)
     monkeypatch.setattr(veny, "import_outcome_in_venv", fake.outcome)
     monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
-    monkeypatch.setattr(veny, "install_into_venv", fake.install)
-    monkeypatch.setattr(veny, "uninstall_from_venv", fake.uninstall)
+    monkeypatch.setattr(environment, "install_into_venv", fake.install)
+    monkeypatch.setattr(environment, "uninstall_from_venv", fake.uninstall)
 
     veny.verify_and_repair_imports(options)
 
@@ -1468,7 +1470,10 @@ def test_the_repair_installer_reports_failure_instead_of_exiting(monkeypatch, tm
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    assert veny.install_into_venv(options, "nonexistent-package") is False
+    assert (
+        environment.install_into_venv(options.venv_python, "nonexistent-package")
+        is False
+    )
 
 
 def test_resolved_import_still_round_trips_when_alias_index_is_lazy():

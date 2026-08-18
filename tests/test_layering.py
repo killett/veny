@@ -43,6 +43,11 @@ LAYERS: list[frozenset[str]] = [
             "json_types",
         }
     ),
+    # environment.py is the only module that invokes uv. It sits above the
+    # index layer because it needs nothing from it, and below cli because cli
+    # drives it -- and it has never heard of Options, so it can be exercised
+    # without building the CLI's state object.
+    frozenset({"environment"}),
     frozenset({"cli"}),
 ]
 
