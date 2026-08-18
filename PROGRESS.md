@@ -498,17 +498,22 @@ wiring rationale and for two Minors deliberately left unfixed.
   3.13; (3) the same defect again in `split_imports`' probe venv, where a script
   importing `cgi` (stdlib in 3.12, removed in 3.13) was classified "installed"
   and then died at runtime. Make a live end-to-end run an acceptance criterion
-  of any plan that touches subprocess invocation, and when phase 3c extracts
-  `environment.py` as the sole owner of uv invocation, give it a live
-  integration test rather than only argument-list assertions.
+  of any plan that touches subprocess invocation. The instruction this entry
+  used to carry — that 3c's `environment.py` get a live integration test
+  rather than only argument-list assertions — **was done**: 3c's Task 1 wrote
+  `tests/test_environment.py`'s live install/uninstall round trip against real
+  `uv` and a real venv, using a wheel the test builds itself, with no
+  subprocess stubbing and no network.
 - **`pixi.toml`'s `[activation.env]` sets `PYTHONPATH = "src"`, which
   *overwrites* an inherited `PYTHONPATH`.** So copying `src/` elsewhere,
   mutating the copy and running `PYTHONPATH=/tmp/mut/src pixi run python -m
   pytest` silently tests `/workspace/src` and reports a false pass. This
   matters because mutation testing is this project's gate for whether a test
-  can fail at all. Mutate the working tree in place and restore with
-  `git checkout -- src/veny/cli.py` (never `git stash`), or inject the copy
-  with `sys.path.insert(0, ...)` inside the process. Confirm which file was
+  can fail at all. Mutate the working tree in place — but **copy the file to a
+  scratch directory first and restore from the copy**, never with
+  `git checkout -- <path>` (see the gotcha below on why that one cost a
+  session's edits), and never with `git stash`. Or inject the copy with
+  `sys.path.insert(0, ...)` inside the process. Confirm which file was
   loaded with `pixi run python -c "import veny.cli as c; print(c.__file__)"`.
 - veny's own types are serialized by `json_types.register_types()`, called
   at `src/veny/cli.py` module scope, not inside `main()`. Anything that imports veny --
@@ -853,10 +858,20 @@ wiring rationale and for two Minors deliberately left unfixed.
   `_testclinic`, `_testclinic_limited`, `_testexternalinspection`,
   `_testimportmultiple`, `_testinternalcapi`, `_testlimitedcapi`,
   `_testmultiphase`, `_testsinglephase`, `_virtualenv` (uv's own `.pth` shim),
-  `_xxtestfuzz`, `test`, `xxlimited`, `xxlimited_35`, `xxsubtype`. Only `test`
-  is a name a real script would plausibly write, and it is the dangerous one:
-  a PyPI project named `test` exists. Verified live — `pixi run veny
-  --no-cache` on a script whose only import is `test` logs
+  `_xxtestfuzz`, `test`, `xxlimited`, `xxlimited_35`, `xxsubtype`.
+  **The probe is never asked about 17 of them.** `_compute_bad_imports` routes
+  every leading-underscore name into `bad_imports`
+  (`bad.update({imp for imp in all_imports if imp.startswith("_")})`,
+  `classify.py:42`) and `split_imports` subtracts them —
+  `all_imports = scan.all_imports - bad_imports`, `classify.py:175` — *before*
+  the probe loop opens. Measured 2026-08-18: 21 non-stdlib importable names, 4
+  surviving the underscore filter — `test`, `xxlimited`, `xxlimited_35`,
+  `xxsubtype`. The last three are CPython's own test/demo extension modules,
+  present only on builds that ship them, so the reachable set is mechanically
+  one name in practice, not a judgement about what scripts plausibly import.
+  And `test` is the dangerous one: a PyPI project named `test` exists.
+  Verified live — `pixi run veny --no-cache` on a script whose only import is
+  `test` logs
   `Checking import test : 1/1 - YES - installed`, builds no venv, and runs the
   script against the pixi interpreter's own `test` package. **So deleting the
   probe is a small but real, user-visible behaviour change**, not a pure
@@ -993,16 +1008,29 @@ wiring rationale and for two Minors deliberately left unfixed.
     becomes a real setting or is dropped.
 - **Parked by phase 2's reviews, 2026-08-16.** None blocking; each was ruled
   real but out of scope, and the phase they belong to is named.
-  - `options.installed_imports` is **write-only** — written in `split_imports`,
-    reset alongside `uninstalled_imports`, read nowhere. Deleting `use_pip_list`
-    took its last reader. Phase 4's `Requirements` dataclass is where its fate
-    belongs. (Same shape as phase 1's `FunctionInfo.ast_node`, still open.)
+  - `options.installed_imports` is **write-only** — read nowhere in
+    production. Deleting `use_pip_list` took its last reader. Still open, but
+    **two details of this entry were falsified by 3c and are corrected here
+    rather than contradicted below**: there is no longer a reset (re-measured
+    2026-08-18, `rg 'installed_imports' src/veny/cli.py` gives exactly two
+    hits — the `Options.__init__` default at `:75` and the copy-back at
+    `:1243`), and `Requirements` did not wait for phase 4 — it shipped in 3c,
+    in `state.py`. So the shape today is narrower and easier to retire:
+    `classify` computes `Requirements.installed`, `cli.py:1243` is its only
+    production reader, and it reads it only to perform the write nobody reads.
+    3d or 3e can delete the whole chain. (Same shape as phase 1's
+    `FunctionInfo.ast_node`, still open.)
   - `venv_build_interpreter()`'s `shutil.which()` fallback returns the
     **unresolved bare name** when nothing is found, which reintroduces exactly
     the resolution bug it exists to prevent — `uv venv --python python3` picks
-    by uv's own discovery, not PATH. The branch is untested and believed
-    practically dead (a `python_command` that is not on PATH). Worth either a
-    `sys.executable` fallback or a test.
+    by uv's own discovery, not PATH. Believed practically dead (a
+    `python_command` that is not on PATH). **No longer untested** — 3c's Task 1
+    added
+    `test_venv_build_interpreter_falls_back_to_the_unresolved_command_and_warns_when_which_finds_nothing`
+    (`tests/test_environment.py:279`), which pins the fallback *and* the
+    warning. What remains open is the design question the test does not
+    answer: whether the fallback should return `sys.executable` instead of the
+    unresolved bare name.
   - `rename_venv` loops over a single-element tuple, `for path in (venv_dir /
     "pyvenv.cfg",)`, left that way when the download-script half went. Simplify
     when `cache_search.py` is extracted in phase 3.
@@ -1275,7 +1303,7 @@ wiring rationale and for two Minors deliberately left unfixed.
      Python-2-only name set, and stdlib membership itself was already applied
      upstream by `analysis/`.
   2. `Requirements` needs an `all_imports` field the design's field list (line
-     316) omits. The post-filter `all_imports` has consumers outside
+     317) omits. The post-filter `all_imports` has consumers outside
      `split_imports`, and it is **not** derivable from `installed ∪
      uninstalled`: a name recognized as a custom module lands in neither set
      (`classify.py:207` sets only a display string), so reconstructing it that
@@ -1383,8 +1411,13 @@ wiring rationale and for two Minors deliberately left unfixed.
     `disallow_untyped_calls` off.
   - `environment.parse_extra_requirements` returns `dict[str, str | None]`;
     the `None` value is unreachable today — the widening exists only to keep
-    the mypy ceiling from rising (measured: `dict[str, str]` gives 38 errors,
-    `dict[str, str | None]` gives 37) and deserves a comment saying so.
+    the mypy ceiling from rising, and deserves a comment saying so.
+    **Re-measured 2026-08-18** on a `git archive HEAD` copy, because the
+    per-task ledger's figures were taken before Task 4 removed an error and
+    were stale by one on both sides: narrowing the return (and its local) to
+    `dict[str, str]` gives **37**, leaving it `dict[str, str | None]` gives
+    **36**. The one extra error is `src/veny/cli.py:462`, dict invariance at
+    `options.extra_requirements = environment.parse_extra_requirements(...)`.
   - The `write_requirements_file_with_extras` stub at
     `tests/test_split_imports.py:878` was loosened to `lambda *args`, so no
     test pins that `cli.py` hands `environment` an interpreter *path* rather
