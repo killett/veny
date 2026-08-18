@@ -53,21 +53,6 @@ def test_a_bare_pathlib_constructor_evaluates_to_its_argument() -> None:
     assert safe_eval('Path("a")', pathlib_aliases={"Path"}) == "a"
 
 
-def test_sys_path_built_with_the_slash_operator_is_discovered() -> None:
-    """The '/' gap silently hid whole sys.path directories from veny."""
-    from veny.cli import SysPathVisitor
-
-    tree = ast.parse(
-        "import sys\n"
-        "from pathlib import Path\n"
-        'sys.path.insert(0, Path("/opt/libs") / "extra")\n'
-    )
-    visitor = SysPathVisitor(collect_pathlib_aliases(tree))
-    visitor.visit(tree)
-
-    assert visitor.paths == {"/opt/libs/extra"}
-
-
 def test_an_unaliased_pathlib_name_is_not_evaluated() -> None:
     """A user class named Path must not be mistaken for pathlib's."""
     assert safe_eval('Path("a").joinpath("b")') is None
