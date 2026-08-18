@@ -27,33 +27,68 @@ gotchas ledger.
   |---|---|---|
   | **3a** `docs/superpowers/plans/2026-08-16-analysis-foundation.md` (executed, complete) | `analysis/literals.py`, `analysis/custom_modules.py`, `settings.py` | 430 |
   | **3b** `docs/superpowers/plans/2026-08-16-analysis-imports-and-call-graph.md` (executed, complete on branch `analysis-imports-call-graph`) | `analysis/imports.py`, `analysis/call_graph.py`, `analysis/scan.py`, plus `analysis/scan_state.py` (a fourth module the plan added beyond the design's original three) | 1,100 |
-  | 3c (not written) | `classify.py`, `environment.py` | 600 |
+  | **3c** `docs/superpowers/plans/2026-08-18-classify-and-environment.md` (executed, complete on branch `classify-and-environment`) | `classify.py`, `environment.py`, plus `state.py` (a third module the plan added, carrying `Requirements`) | 600 |
   | 3d (not written) | `verify.py`, `cache_search.py`, `last_used.py` | 1,100 |
   | 3e (not written) | `pipeline.py`, `cli.py` slimming, `--full` deletion, final `Options` drain | 450 |
 
   Phases 1 and 2 are complete and merged to `main`.
 
-**Next action:** write and execute plan 3c, the next in the phase-3 sequence —
-`classify.py` and `environment.py`, ~600 lines — following the design doc's
-module boundaries and the three design amendments plan 3b recorded (below,
-and in Deferred items). The plan is **not written yet**, so the next session
-writes it first, gets it approved, and only then executes it. No branch
-exists for it.
+**Next action:** write and execute plan 3d, the next in the phase-3 sequence —
+`verify.py`, `cache_search.py` and `last_used.py`, ~1,100 lines — following the
+design doc's module boundaries and the six design amendments plans 3b and 3c
+have now recorded (in Deferred items). The plan is **not written yet**, so the
+next session writes it first, gets it approved, and only then executes it.
+**No branch exists for it.** 3d also inherits a named list of deferred cleanups
+and a written-down residual risk from 3c — both in Deferred items, and both
+worth reading before the plan is written, because the residual risk names the
+parts of the uv path 3c's differential could *not* cover.
 
-Two things to carry into 3c specifically, both learned the hard way in 3b.
-**Retire the `ImportScan` bridge in one commit, not incrementally.**
-`cli.py`'s `find_imports_in_script` hands `analysis/scan.py` the seven live
-objects `Options` holds and relies on in-place mutation with no copy-back;
-that is safe *because it is total*. A partial migration — some consumers on
-`ImportScan`, some still reading `options.*` — is exactly where a copy-back
-regression hides, and it would pass the suite, as `dbf013c`'s Critical did.
-**And verify behaviour differentially, not just by a green suite:**
-`git archive <base> src/veny | tar -x -C /tmp/old`, then run old and new code
-in separate interpreters over one corpus and diff the serialized state. It is
-read-only, needs no worktree or checkout, takes under a minute, and it is the
-only technique in this whole program that caught a regression *before* a fix
-round rather than after. Given this repository's three-regressions-past-green
-history, it belongs in 3c's Verify section.
+Plan 3c, `docs/superpowers/plans/2026-08-18-classify-and-environment.md`, is
+complete on branch `classify-and-environment` (off `main` @ `dc1c3c4`), **not
+merged**. Six tasks; five commits on the branch before this one, tests before
+moves as planned: `cde577b` (the plan itself), `cabe20d` (Task 1,
+`tests/test_environment.py`, the uv boundary characterized live before it
+moved), `d79eba4` (Task 2, extract
+`environment.py`, veny's only `uv` caller), `b79f418` (Task 3,
+`tests/test_classify.py`, 11 characterization tests written before any move),
+`332d69e` (Task 4, introduce `state.Requirements` and extract `classify.py`),
+and this commit (Task 6). Task 5 was verification and produced no commits.
+`state.py` was forced rather than chosen: `classify` had to return a product
+`cli` could read without either module importing the other.
+
+Gates measured on `classify-and-environment` @ `332d69e` (2026-08-18):
+`pixi run test` **316 passed** (was 296 on `main` after 3b, so 3c is +20
+tests); `pixi run lint` zero; `pixi run python -m ruff format --check .` all
+**45 files** formatted; `pixi run typecheck` **36 errors in 5 files** — one
+below the 37-error ceiling that has held since phase 2, and the first time it
+has moved (see Deferred items for where the remaining 21 in
+`tests/test_split_imports.py` live); `pixi run smoke` **green**, network was
+available and nothing was skipped. Line counts (`wc -l`, 2026-08-18):
+`src/veny/cli.py` **2,314 lines** (was 2,626 at the start of 3c, 4,143 at the
+start of 3a), `analysis/imports.py` 683, `venv_cache.py` 465, `analysis/scan.py`
+347, `pypi_client.py` 314, `environment.py` 280, `analysis/custom_modules.py`
+274, `classify.py` 274, `analysis/literals.py` 229, `analysis/call_graph.py`
+177, `json_types.py` 136, `state.py` 51, `analysis/scan_state.py` 30,
+`settings.py` 23 (`alias_index.py` 826 and `stdlib_index.py` 233 are untouched
+by phase 3 so far). A live run (`pixi run veny --no-cache` on a throwaway
+script calling `yaml.safe_load`) resolved `yaml` → `pyyaml`, built the venv,
+installed with uv and printed `{'t6': 42, 'names': ['alpha', 'beta']}`.
+
+Behaviour was verified differentially, not just by a green suite — the
+technique 3b prescribed for 3c, now written up in Gotchas so 3d can reuse it.
+Two differentials over a nine-entry corpus (classification state, and the argv
+handed to `uv`) came back **empty**, and the check was proved capable of
+failing four times over by deliberate mutation. What the differential does
+*not* cover is recorded as a residual risk in Deferred items; it is not a
+clean bill of health for the whole uv path.
+
+3c did **not** deliver one thing the design promised of it. The design says
+this is where `split_imports` "stops needing a temporary virtual environment";
+it still needs one. The probe venv is now *injected* as a `ContextManager`
+(`cli._probe_venv`) rather than removed, which keeps 3c behaviour-preserving
+and delivers the testability the design was after. Removing it is a real,
+user-visible behaviour change — see the Gotchas entry measuring exactly what
+the probe can still answer "installed" to.
 
 Plan 3b, `docs/superpowers/plans/2026-08-16-analysis-imports-and-call-graph.md`,
 is complete and **merged to `main` at `e570ad8`** (branch
@@ -803,6 +838,96 @@ wiring rationale and for two Minors deliberately left unfixed.
   The standing lesson already in this ledger — that a plan's stated
   "measured" is not evidence — held again, and the tests-before-moves
   ordering is what made the fourth one survivable.
+- **The probe virtual environment can only ever answer "installed" for a name
+  that is importable from a bare interpreter yet absent from
+  `sys.stdlib_module_names`** — and there are more of those than you would
+  guess. `all_imports` is already stdlib-free by the time classification sees
+  it (`analysis/scan.py` filters through `is_stdlib`, which is
+  `sys.stdlib_module_names` on the *target* interpreter), and a bare `uv venv`
+  has no third-party package in it, so every other name necessarily comes back
+  "not installed". Measured 2026-08-18 against this machine's target
+  interpreter (conda-forge CPython 3.13.14), a bare `uv venv` can import 21
+  such names: `__hello__`, `__phello__`, `_ctypes_test`,
+  `_sysconfigdata__linux_x86_64-linux-gnu`,
+  `_sysconfigdata_x86_64_conda_linux_gnu`, `_testbuffer`, `_testcapi`,
+  `_testclinic`, `_testclinic_limited`, `_testexternalinspection`,
+  `_testimportmultiple`, `_testinternalcapi`, `_testlimitedcapi`,
+  `_testmultiphase`, `_testsinglephase`, `_virtualenv` (uv's own `.pth` shim),
+  `_xxtestfuzz`, `test`, `xxlimited`, `xxlimited_35`, `xxsubtype`. Only `test`
+  is a name a real script would plausibly write, and it is the dangerous one:
+  a PyPI project named `test` exists. Verified live — `pixi run veny
+  --no-cache` on a script whose only import is `test` logs
+  `Checking import test : 1/1 - YES - installed`, builds no venv, and runs the
+  script against the pixi interpreter's own `test` package. **So deleting the
+  probe is a small but real, user-visible behaviour change**, not a pure
+  refactor: `import test` would go from silently "installed" to being sent to
+  PyPI. Whoever removes it must decide, deliberately, whether `test` belongs
+  in `known_bad_imports`.
+- **A local module in the same directory as the script does *not* reach
+  `classify.py`'s custom-module branch** — plan 3c's own corpus text claimed
+  it did, and that was wrong. `process_import` returns `True` for a same-dir
+  `.py` (`analysis/imports.py:104`), and `analysis/scan.py:113` adds a name to
+  `scan.all_imports` only when it returns `False`; classification iterates
+  `all_imports`, so the branch at `classify.py:207` never sees the name. The
+  branch fires **only when a name enters `all_imports` before becoming a known
+  custom module** — e.g. a directory scan in which one file imports an
+  unresolvable name and a later-scanned file registers that name as a local
+  module. Found by an implementer refusing to guess, and confirmed by a
+  reviewer's independent mutation: of nine corpus entries, that construction
+  was the only one that reached the branch. Re-verified against the source
+  2026-08-18.
+- **Stale `__pycache__` can make an old-vs-new differential check falsely
+  PASS.** A same-size source edit — a pure line reorder, which is exactly what
+  refactoring produces — restored within the same *integer second* as the
+  mutated compile leaves a `.pyc` whose recorded source mtime and source size
+  both still match, so CPython's timestamp invalidation accepts it and the
+  import serves the *pre-restore* behaviour. Reproduced from scratch
+  2026-08-18: a module whose source says `A = 1` then `A = 2` imported as
+  `A == 1` (the reorder's answer) while the file on disk was byte-for-byte the
+  original. The remedy is `sys.dont_write_bytecode = True` **plus** a
+  `__pycache__` purge before the first import (`PYTHONDONTWRITEBYTECODE=1` or
+  `python -B` do the same job); with the purge in place the same setup imports
+  as `A == 2`, the real answer. Observed for real during 3c's review, where a
+  reviewer constructed the trap deliberately and proved both that it fires and
+  that the guard defeats it.
+- **The differential-corpus technique, written up so the next phase can reuse
+  it.** It is the only technique in this program that has caught a regression
+  *before* a fix round rather than after, and 3c ran it twice. The shape:
+  `git archive <base> src/veny | tar -x -C /tmp/old` to materialize the old
+  tree read-only (no worktree, no `git checkout`); one driver script that takes
+  the tree root as an **argument** — never `PYTHONPATH`, because `pixi.toml`'s
+  `[activation.env]` overwrites it and you silently test the live source
+  twice; the driver prints `veny.cli.__file__` first, so the captured evidence
+  itself shows the two runs loaded different files; an **offline**
+  `AliasIndex`, `PYTHONHASHSEED=0` and sorted serialization, so the only thing
+  that can differ is behaviour; and a throwaway `my_dir`, so `~/veny` is
+  neither read nor written. Run it at two layers: the classification state, and
+  the argv handed to `uv` captured at the `subprocess` boundary — the argv
+  capture is what lets one driver compare two trees that put the same functions
+  in different modules. Guard the imports as in the `__pycache__` entry above.
+  And the rule that earns the whole thing its keep: **prove the check can fail
+  before you trust an empty diff** — mutate the new tree, watch the diff appear,
+  restore, watch it vanish.
+- **Never `git checkout -- <path>` to undo a deliberate in-place mutation.** It
+  reverts the *whole* file to HEAD, discarding every unrelated edit in it, not
+  just the mutation you were testing. It cost 3c's Task 4 an entire session's
+  worth of `cli.py` edits, which had to be reapplied from recorded
+  substitutions. Copy the file to the scratch directory first and restore from
+  the copy. This is the companion to the standing rule against
+  `git checkout <sha>` for investigative checkouts.
+- **With `--reqs`, one import name can legitimately produce two records, and
+  one requirement can land in both the installed and the uninstalled set.**
+  Measured during 3c's Task 3 and pinned by `tests/test_classify.py`'s
+  `test_reqs_records_are_unioned_in_after_the_loop_with_import_name_as_pip_name`
+  and
+  `test_a_requirement_already_importable_in_the_probe_is_recorded_in_both_sets`:
+  an alias-renamed requirement yields the loop's *resolved*
+  spelling and, after the loop, the verbatim `--reqs` spelling; and a
+  requirement the probe can already import appears in `installed_imports`
+  *and* in `uninstalled_imports`. This is current behaviour, not a bug found
+  and left — but it means `Requirements` must not quietly normalize either
+  case away, and any plan that "tidies" the record sets is making a
+  behaviour change.
 
 ## Deferred items
 
@@ -1120,7 +1245,9 @@ wiring rationale and for two Minors deliberately left unfixed.
   still has no test of its own.
 - `analysis/scan.py` has a function-local `from collections import deque`
   alongside a module-level `import collections` used only for an
-  annotation; moved verbatim, worth collapsing when 3c touches the file.
+  annotation; moved verbatim, worth collapsing when a plan touches the file.
+  Still open: 3c did not touch `analysis/scan.py` (verified against
+  `git diff --stat dc1c3c4..332d69e`), so the condition was never met.
 - **Three design-doc amendments 3b records:** `ImportScan` must list
   `seen_stdlib_imports` (its omission would silence
   `warn_about_system_packages`); "analysis/* … takes neither `AliasIndex`
@@ -1138,6 +1265,145 @@ wiring rationale and for two Minors deliberately left unfixed.
   by this branch, just a pre-existing gap the review happened to notice.
   Left for a later plan (3d or after) to decide whether single-file scans
   should also enqueue submodules reached this way.
+- **Three more design-doc amendments 3c records** (a fourth, fifth and sixth,
+  after 3b's three).
+  1. `classify.py` is handed `stdlib_index.PYTHON2_ONLY` — a module-level
+     `Final[frozenset[str]]` (`stdlib_index.py:187`) — **not** a `StdlibIndex`
+     instance. The design's line 239 ("`classify.py` is handed an
+     `ImportScan`, a `StdlibIndex`, an `AliasIndex` …") is wrong for this
+     module: the only standard-library fact classification needs is the
+     Python-2-only name set, and stdlib membership itself was already applied
+     upstream by `analysis/`.
+  2. `Requirements` needs an `all_imports` field the design's field list (line
+     316) omits. The post-filter `all_imports` has consumers outside
+     `split_imports`, and it is **not** derivable from `installed ∪
+     uninstalled`: a name recognized as a custom module lands in neither set
+     (`classify.py:207` sets only a display string), so reconstructing it that
+     way would silently drop every local module from the run's accounting.
+     `Requirements.total_imports` is a property over it.
+  3. The design's "This is where `split_imports` stops needing a temporary
+     virtual environment" (line 241) is **not delivered by 3c**. The probe is
+     injected as a `ContextManager` (`cli._probe_venv`) rather than removed,
+     which keeps 3c behaviour-preserving and still delivers the testability
+     the design was after. See the Gotchas entry measuring what the probe can
+     still answer, before removing it.
+- **The mypy ceiling moved for the first time: 37 → 36.** Measured both ends on
+  2026-08-18 — `main` @ `dc1c3c4` gives `Found 37 errors in 5 files (checked 37
+  source files)`, `classify-and-environment` @ `332d69e` gives `Found 36 errors
+  in 5 files (checked 42 source files)`. The per-file breakdown is otherwise
+  identical: `src/veny/cli.py` 10, `analysis/imports.py` 3,
+  `analysis/literals.py` 1, `analysis/call_graph.py` 1. The whole delta is
+  `tests/test_split_imports.py`, **22 before 3c and 21 after** — the
+  twenty-second moved to `tests/test_classify.py` with its test and was
+  annotated there, so the two new test modules and the three new source
+  modules contribute **zero**. Leaving the remaining 21 was a decision taken
+  during 3c's *planning*, not an oversight found afterwards. Where they live,
+  measured by enclosing function: **17 are 3d's territory** — 11 in the
+  `resolve_and_verify` tests (`_RecordingIndex` passed where `AliasIndex` is
+  declared, plus `Candidate | None` dereferences), 2 in
+  `_run_check_against_fake_venv` (the `check_packages_in_venv` helper, an
+  untyped def), 4 at `_live_index`'s `AliasIndex(**fields)` construction. The
+  **other 4 are not**, and 3d will not clear them by rewriting `verify.py`'s
+  tests: 2 in `test_enqueue_top_level_imports_records_stdlib_and_skips_enqueue`
+  (bare `set` / `deque` annotations, a scan-layer test that belongs with
+  `analysis/scan.py`) and 2 in the `build_alias_index` offline/online pair
+  (`options.python_command = None` against a `str`-declared field).
+- **`Requirements.seen_stdlib` and `Requirements.extra_requirements` are
+  pass-throughs**, not products: classification neither computes nor changes
+  them (the first is copied off the scan, the second is the caller's own
+  `--reqs` input), and they travel on `Requirements` only because later stages
+  need them alongside the classification. 3e should decide whether they stay
+  there once `pipeline.py` owns sequencing, or are carried separately.
+- **RESIDUAL RISK carried into 3d from 3c's differential.** Both differentials
+  came back empty and the check was proved able to fail, but the evidence is
+  bounded and the bounds matter more than the empty diff:
+  - `environment.write_requirements_file_with_extras` is **entirely uncovered**.
+    The argv differential pins `uv pip install --python … -r requirements.txt`,
+    but nothing pins that file's **contents** — a mis-sort, a dropped version
+    specifier or an omitted extra produces a byte-identical argv diff and
+    installs the wrong versions. It has unit tests; it has no old-vs-new
+    comparison.
+  - Everything downstream of `list_packages` — the install→probe→uninstall
+    verification loop, `venv_cache` naming, manifest writing — is never driven
+    old-vs-new.
+  - The online alias-resolution path is excluded, by `offline=True`.
+  - Interpreter selection is bypassed (`python_command = sys.executable`), so
+    `environment.venv_build_interpreter`'s `shutil.which() is None` fallback
+    and `create_venv`'s no-`--python` branch are never taken.
+  - Non-default CLI shapes (`--full`, the debug branches, the custom-module
+    pickle cache) are outside the comparison.
+  - Whether `Requirements` shares or copies its frozensets is invisible unless
+    it changes a final value.
+- **Named for 3d to pick up, from 3c's execution.** None blocking.
+  - `cli.add_dependencies` (`src/veny/cli.py:678`) has **zero production
+    callers** — verified 2026-08-18, its only callers are three of Task 3's
+    characterization tests in `tests/test_classify.py`. 3d should retire it
+    with those tests repointed at `classify.add_dependencies`, or state the
+    decision to keep it.
+  - `tests/test_split_imports.py:314`'s `_index_with` is dead — zero
+    references, verified 2026-08-18. Ruff does not flag unused module-level
+    functions, so nothing will ever report it.
+  - `tests/test_classify.py` carries two near-duplicate resolve-recording
+    helpers (`_RecordingIndex` at :57, `_CountingIndex` at :558) and two
+    probe-stubbing idioms — an artifact of the mandated verbatim migration.
+    Consolidate in 3d.
+  - `state.Requirements.extra_requirements` stores the caller's `Mapping` by
+    reference, so `frozen=True` is shallow and the auto-generated `__hash__`
+    would raise on a `dict`. Nothing hashes a `Requirements` today.
+  - `state.py` has no `from __future__ import annotations`. (The per-task
+    ledger called it the only top-level module in `src/veny/` without one;
+    measured 2026-08-18, that is wrong — `cli.py` and `settings.py` lack it
+    too. `state.py` is the only *new* module of 3c that lacks it.)
+  - `classify.py:139`'s `known_bad_imports` is typed `set[str]` but never
+    mutated; `AbstractSet[str]` is the honest type.
+  - `tests/test_layering.py:275`'s copy-back guard proves **totality**, not
+    source correctness: rewriting the adapter as
+    `options.bad_imports = set(result.installed)` still passes it.
+  - The three-assert block plus the `pip_name` generator are duplicated at both
+    `write_requirements_file_with_extras` call sites in `cli.py`
+    (`1560`-`1573` and `1766`-`1779`); the
+    `assert options.uninstalled_imports is not None` in
+    `verify_and_repair_imports` is dead, since the attribute is dereferenced
+    two lines above it.
+- **Parked by 3c's reviews, 2026-08-18.** None blocking; recorded because the
+  per-task ledger they came from does not survive the phase.
+  - `tests/test_environment.py` (line numbers re-measured 2026-08-18; the
+    per-task ledger's were taken before Task 2 repointed the file, and two of
+    its six notes turned out to be obsolete — every `options.` reference is
+    gone from the file, which was Task 2's point): the live round trip's
+    uninstall (`:101`) asserts "no error" only by the absence of an exception,
+    with no WARNING-record check; the argv assertion's element 0 is
+    `environment.uv_binary()` compared against itself (`:165`), so 6 of its 7
+    elements are actually pinned; the live test hardcodes the `bin/python`
+    venv layout (`:88`) instead of reusing `cli.venv_python_for`;
+    `parse_extra_requirements(fixture, rawlog=True)` (`:247`) deviates from
+    the default with no comment. And "`tests/test_environment.py` contributes
+    zero mypy errors" is a weaker claim than it sounds: `pyproject.toml:82-87`
+    relaxes `tests.*` to `strict = false` with `disallow_untyped_defs` and
+    `disallow_untyped_calls` off.
+  - `environment.parse_extra_requirements` returns `dict[str, str | None]`;
+    the `None` value is unreachable today — the widening exists only to keep
+    the mypy ceiling from rising (measured: `dict[str, str]` gives 38 errors,
+    `dict[str, str | None]` gives 37) and deserves a comment saying so.
+  - The `write_requirements_file_with_extras` stub at
+    `tests/test_split_imports.py:878` was loosened to `lambda *args`, so no
+    test pins that `cli.py` hands `environment` an interpreter *path* rather
+    than an `Options`; only mypy covers it.
+  - `cli.py`'s `--reqs` block (`:461`) no longer resets
+    `options.extra_requirements` to `{}` before reading it — unreachable while
+    `my_fopen` has `suppress_errors=True`.
+  - `test_no_source_imports_means_no_probe_venv_is_built`
+    (`tests/test_classify.py:166`) is killed by a `ValueError` out of `max()`
+    rather than by its own `created == []` assertion.
+  - `requirement_records` dropping a version specifier — it is called as
+    `requirement_records(extra_requirements.keys())` (`classify.py:262`) — is
+    not pinned by any test.
+  - Corpus coverage gaps that no differential run will close:
+    `add_dependencies`' `while` loop never runs a second pass (no chain in
+    `cli.py`'s `also_needs` is nested); `_compute_bad_imports`' `PYTHON2_ONLY`
+    intersection is unexercised; `install_into_venv`'s success predicate is
+    never compared, because the driver's fake `subprocess.run` always returns
+    `returncode=1` and the return value is discarded.
 
 ## Open questions
 
