@@ -1060,14 +1060,23 @@ wiring rationale and for two Minors deliberately left unfixed.
   output. If those calls ever gain `capture_output=True`, the child's output
   stops reaching the terminal live — check both sites before changing them.
 - emmykit's shell/alias helpers (`detect_shell`, `find_shell_rc_file`, `find_additional_alias_files`, and the `Options` fields `shell`, `rc_file`, `alias`, `alias_command`, `additional_alias_files`) have no caller in veny as of 2026-08-15. The usage audit is written up as a cross-repo prompt in `docs/prompts/2026-08-15-emmykit-shell-alias-helpers-audit.md` and has not been run yet. They are public API on a published 0.4.0, so removal is a breaking change and the prompt asks for a recommendation rather than a deletion.
-- **`ModuleInfo.aliases` and `ModuleInfo.classes` are write-never fields**
-  (`analysis/call_graph.py`), the same shape as the `FunctionInfo.ast_node`
-  that plan 3b's Task 6 retired. `_analyze_module` copies only
-  `base_classes` onto the `ModuleInfo`. Found during 3b's Task 2 and
-  deliberately left alone as out of scope; a later plan should decide them
-  the way Task 6 decided `ast_node`. Note that `ImportFunctionCollector` has
-  its own separate `self.aliases` which does real work internally — the two
-  must not be confused.
+- **`ModuleInfo.aliases` (`analysis/call_graph.py:34`) is a write-never
+  field, the same shape as the `FunctionInfo.ast_node` that plan 3b's Task 6
+  retired.** A later plan should decide it the way Task 6 decided `ast_node`.
+  **Correction (whole-branch review of 3b, 2026-08-17): an earlier version of
+  this entry also named `ModuleInfo.classes` as write-never. That was wrong —
+  `classes` is live and load-bearing**, written at
+  `analysis/imports.py:244` (`self.module_info.classes.add(node.name)`) and
+  read at `analysis/call_graph.py:87` and `:103` to resolve a class
+  constructor call (`Child()` → `Child.__init__`) in the call graph, plus at
+  `analysis/imports.py:318`, `:341`, `:348`, `:350`, `:370` and logged at
+  `analysis/scan.py:224`. Deleting it would break inheritance-aware
+  reachability — exactly what plan 3b's Task 1 characterization tests exist
+  to protect. Note that `ImportFunctionCollector` has its own separate
+  `self.aliases` (`analysis/imports.py:176`, written at `:191`/`:208`, read
+  at `:254-255`, `:304-305`, `:477`, `:492`) which does real work internally
+  — a different attribute on a different object, and the source of the
+  original mix-up. The two must not be confused.
 - `ImportFunctionCollector`'s exotic resolution paths — `super()`, dynamic
   `__import__`, `spec_from_file_location`, `SourceFileLoader(...).load_module()`,
   and the `self.<attr>` type inference — still have no direct tests. 3b
@@ -1090,6 +1099,15 @@ wiring rationale and for two Minors deliberately left unfixed.
   dependency; and the doc's "Pure AST in, names out" claim remains untrue —
   `_register_constant_path_for_module` and `process_import` both touch the
   filesystem during a scan — which 3b did not change.
+- **Reachability gap: a single-file scan misses imports inside a submodule
+  reached via `from package import submodule` followed by a call.** A
+  directory scan (which enqueues every local module a package exposes) finds
+  those imports; a single-file scan does not, so they never reach
+  `all_imports`. Found during the whole-branch review of 3b (2026-08-17) and
+  confirmed byte-identical before and after 3b — not a regression introduced
+  by this branch, just a pre-existing gap the review happened to notice.
+  Left for a later plan (3d or after) to decide whether single-file scans
+  should also enqueue submodules reached this way.
 
 ## Open questions
 
