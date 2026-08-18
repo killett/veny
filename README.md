@@ -110,6 +110,7 @@ src/veny/
     settings.py     # Settings, the frozen per-run invariants analysis/ reads.
     analysis/       # AST analysis: what a script imports, and what it does
                     # with sys.path.
+        __init__.py       # Subpackage docstring only; exports nothing.
         literals.py       # Evaluates the restricted expression subset veny
                           # reads out of source (sys.path literals, a short
                           # os.path allow-list, pathlib construction).
