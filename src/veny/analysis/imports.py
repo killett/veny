@@ -219,7 +219,7 @@ class ImportFunctionCollector(ast.NodeVisitor):
         func_name = node.name
         if self.current_class:
             func_name = f"{self.current_class}.{func_name}"
-        self.module_info.functions[func_name] = FunctionInfo(func_name, node)
+        self.module_info.functions[func_name] = FunctionInfo(func_name)
         if logging.getLogger().isEnabledFor(logging.DEBUG):
             logging.debug(
                 "Added function: %s to module %s",

@@ -5,17 +5,19 @@ reachable from the script's entry point, so this records who calls whom and
 walks the result.
 """
 
-import ast
 import logging
 
 
 class FunctionInfo:
     """Class to hold information about a function."""
 
-    def __init__(self, function_name: str, node: ast.FunctionDef) -> None:
-        """Initialize the function information, storing its AST node too."""
+    def __init__(self, function_name: str) -> None:
+        """Initialize the function information.
+
+        Args:
+            function_name: The name of the function this tracks.
+        """
         self.function_name: str = function_name
-        self.ast_node: ast.FunctionDef = node
         self.imports_in_function: set[str] = set()
         self.function_calls: set[str] = set()
 
