@@ -36,11 +36,29 @@ gotchas ledger.
 **Next action:** write and execute plan 3c, the next in the phase-3 sequence —
 `classify.py` and `environment.py`, ~600 lines — following the design doc's
 module boundaries and the three design amendments plan 3b recorded (below,
-and in Deferred items). No branch exists for it yet.
+and in Deferred items). The plan is **not written yet**, so the next session
+writes it first, gets it approved, and only then executes it. No branch
+exists for it.
+
+Two things to carry into 3c specifically, both learned the hard way in 3b.
+**Retire the `ImportScan` bridge in one commit, not incrementally.**
+`cli.py`'s `find_imports_in_script` hands `analysis/scan.py` the seven live
+objects `Options` holds and relies on in-place mutation with no copy-back;
+that is safe *because it is total*. A partial migration — some consumers on
+`ImportScan`, some still reading `options.*` — is exactly where a copy-back
+regression hides, and it would pass the suite, as `dbf013c`'s Critical did.
+**And verify behaviour differentially, not just by a green suite:**
+`git archive <base> src/veny | tar -x -C /tmp/old`, then run old and new code
+in separate interpreters over one corpus and diff the serialized state. It is
+read-only, needs no worktree or checkout, takes under a minute, and it is the
+only technique in this whole program that caught a regression *before* a fix
+round rather than after. Given this repository's three-regressions-past-green
+history, it belongs in 3c's Verify section.
 
 Plan 3b, `docs/superpowers/plans/2026-08-16-analysis-imports-and-call-graph.md`,
-is complete on branch `analysis-imports-call-graph` (off `main` @ `3215df5`,
-not yet merged). Its six code tasks landed as one commit each, tests before
+is complete and **merged to `main` at `e570ad8`** (branch
+`analysis-imports-call-graph`, off `main` @ `3215df5`, deleted after merge).
+Its six code tasks landed as one commit each, tests before
 moves as planned: `541772c` (Task 1, `tests/test_call_graph.py`, 6
 characterization tests written before any move), `b0192e1` (Task 2,
 `tests/test_import_collector.py`, 5 tests, values measured by the
@@ -55,9 +73,21 @@ was forced rather than chosen: once the call-graph symbols moved under
 `analysis/` they could not name `Options` without importing `cli`, which
 `tests/test_layering.py` fails on.
 
-Gates on this branch: `pixi run test` **295 passed** — one more than the
-plan's own predicted 294, because Task 5's fix round (`dbf013c`) added a
-regression test; `ruff check .` zero; `ruff format --check .` all 40 files
+A whole-branch review then found four Important issues, fixed in one wave
+(`b1e4a31`, `4ef3e46`, `20c920c`, `ea2c9bb`): a false claim in this file that
+`ModuleInfo.classes` is write-never (it is live — see Deferred items); a
+layering guard that could not cover a module which does not exist yet, now
+rewritten to derive its forbidden sets from a declared layer ordering so
+3c's new modules cannot slip through unguarded; a README project-structure
+block seven modules out of date; and the plan file itself, now annotated in
+place with the five instructions execution proved wrong. That wave also added
+an executable guard for the bridge's no-rebind invariant, deriving its field
+list from `ImportScan` itself.
+
+Gates on `main` after the merge: `pixi run test` **296 passed** — two more
+than the plan's own predicted 294, because Task 5's fix round (`dbf013c`)
+added a regression test and the final fix wave added the no-rebind guard;
+`ruff check .` zero; `ruff format --check .` all 40 files
 formatted; `pixi run typecheck` 37 errors (at the ceiling, unchanged from
 3a); `pixi run smoke` green (network was available, nothing skipped). Line
 counts measured at `5dbcac2` (`wc -l`, 2026-08-17): `src/veny/cli.py`
@@ -65,8 +95,8 @@ counts measured at `5dbcac2` (`wc -l`, 2026-08-17): `src/veny/cli.py`
 `analysis/imports.py` 683, `analysis/scan.py` 347,
 `analysis/custom_modules.py` 274, `analysis/literals.py` 229,
 `analysis/call_graph.py` 177, `analysis/scan_state.py` 30, `settings.py` 23.
-A live run (`pixi run veny --no-cache`, a script calling `yaml.safe_load`)
-built a fresh venv and printed `{'j': 10}`.
+A live run on `main` after the merge (`pixi run veny --no-cache`, a script
+calling `yaml.safe_load`) built a fresh venv and printed `{'k': 11}`.
 
 Plan 3b also settled three things the approved design left open or wrong, as
 its own "Three things this plan settles" section promised: `ImportScan`
