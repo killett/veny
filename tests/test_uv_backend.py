@@ -334,10 +334,15 @@ def test_verify_and_repair_imports_is_handed_the_whole_description_of_the_run(
 
     assert cli.setup_virtualenv(options) is True
 
+    # Literal paths, not options.venv_python / options.requirements_file:
+    # setup_virtualenv writes those two fields itself (via set_venv_dir), so
+    # asserting against them would compare the call site to its own output and
+    # pass however the folder name was built.
+    built = tmp_path / "failed-wiredenv-py3.12-20260101-010203-thing-pkg"
     assert len(seen) == 1
     assert seen[0] == {
-        "venv_python": options.venv_python,
-        "requirements_file": options.requirements_file,
+        "venv_python": built / "bin" / "python",
+        "requirements_file": built / "requirements.txt",
         "uninstalled": {cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
         "extra_requirements": {"extra-pkg": ">=2.0"},
         "source_names": {"thing"},

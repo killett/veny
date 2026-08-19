@@ -35,10 +35,13 @@ Three layers are captured:
    outcomes -- one of which is ``returncode=0``. 3c's driver always returned 1
    and discarded the value, which left that success predicate uncompared.
 3. **The cache-search decision**: which folder ``find_match_dir_in_cache``
-   returns out of three manifest-bearing candidates (one matching, one for the
-   wrong interpreter, one whose manifest is missing a package), the ordered
-   sequence of ``venv_cache.read_manifest`` / ``venv_cache.satisfies`` calls
-   made while deciding, and the final state of the four ``args`` flags.
+   returns out of four manifest-bearing candidates (two matching at different
+   timestamps, one for the wrong interpreter, one whose manifest is missing a
+   package), the ordered sequence of ``venv_cache.read_manifest`` /
+   ``venv_cache.satisfies`` calls made while deciding, and the final state of
+   the four ``args`` flags. Two candidates survive rather than one so that
+   which *ranking* function ran (latest / oldest / smallest) is observable in
+   the chosen folder.
 
 Layer 3 is *expected* to differ in its call sequence, and only there: task 7
 deliberately stopped re-reading and re-matching the winning candidate's
@@ -92,7 +95,10 @@ def reexec_with_fixed_hash_seed() -> None:
     if os.environ.get(_HASH_SEED_MARKER) == "1":
         # Already re-execed once and the seed still is not what we asked for.
         # Say so rather than looping forever.
-        print("WARNING: could not fix PYTHONHASHSEED; orderings may vary")
+        print(
+            "WARNING: could not fix PYTHONHASHSEED; orderings may vary",
+            file=sys.stderr,
+        )
         return
     os.environ["PYTHONHASHSEED"] = "0"
     os.environ[_HASH_SEED_MARKER] = "1"
@@ -498,11 +504,19 @@ def layer_two(tree: Tree, workdir: Path, fake: FakeSubprocess) -> None:
 
 
 def build_fake_cache(tree: Tree, my_dir: Path) -> None:
-    """Write three manifest-bearing venv folders into a throwaway cache.
+    """Write four manifest-bearing venv folders into a throwaway cache.
 
-    One matches this run outright; one is for another interpreter; one carries
-    a manifest missing a package its folder name advertises, so it survives the
-    cheap name filter and is rejected only once its manifest is read.
+    Two match this run outright, at different timestamps; one is for another
+    interpreter; one carries a manifest missing a package its folder name
+    advertises, so it survives the cheap name filter and is rejected only once
+    its manifest is read.
+
+    The second *surviving* folder is what makes the ranking functions
+    observable. With a single survivor, latest_venv, oldest_venv and
+    smallest_venv all return the same folder, and swapping one for another is a
+    change this capture cannot see -- measured: a latest_venv -> oldest_venv
+    mutation left the diff unmoved. With two, the chosen folder names which
+    ranking ran.
 
     Args:
         tree:   The loaded tree.
@@ -532,8 +546,11 @@ def build_fake_cache(tree: Tree, my_dir: Path) -> None:
         )
 
     record = tree.venv_cache.PackageRecord
-    a_folder("3.12", "20260101-030303", [record("thing", "thing-pkg", "2.5.0", None)])
-    a_folder("3.11", "20260101-020202", [record("thing", "thing-pkg", "2.5.0", None)])
+    thing = [record("thing", "thing-pkg", "2.5.0", None)]
+    # Two survivors, so latest != oldest and the ranking function is visible.
+    a_folder("3.12", "20260101-040404", thing)
+    a_folder("3.12", "20260101-030303", thing)
+    a_folder("3.11", "20260101-020202", thing)
     a_folder("3.12", "20260101-010101", [record("other", "other-pkg", "1.0.0", None)])
 
 
@@ -656,8 +673,12 @@ def main() -> int:
         tree = Tree()
         print(f"veny.cli.__file__: {tree.cli.__file__}")
         print(f"tree shape: {'split (3d)' if tree.split else 'monolithic (pre-3d)'}")
-        print(f"PYTHONHASHSEED: {os.environ.get('PYTHONHASHSEED')}")
-        print(f"__pycache__ directories purged: {purged}")
+        # Diagnostics, not observations: the purge count depends on whether
+        # this tree happened to have been imported recently, so on stdout it
+        # would put a spurious third hunk in the documented diff. They go to
+        # stderr, where they are still captured next to the run.
+        print(f"PYTHONHASHSEED: {os.environ.get('PYTHONHASHSEED')}", file=sys.stderr)
+        print(f"__pycache__ directories purged: {purged}", file=sys.stderr)
         fake = FakeSubprocess()
         install_fakes(tree, fake)
         layer_one(tree, workdir)

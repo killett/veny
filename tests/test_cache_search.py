@@ -745,6 +745,13 @@ def test_every_branch_hands_check_venv_dir_the_same_description_of_the_run(
     The expected values are derived from the run's own inputs (the same
     wanted_packages/source_import_names calls main() makes), not read back
     off the production call.
+
+    A spy proves the wiring but not that the wiring does anything, so the test
+    then puts the REAL check_venv_dir back and drives the same branch against
+    a cached venv whose folder name advertises thing-pkg while its manifest
+    records only other-pkg. Every branch must reject it. That is the case the
+    cheap folder-name prefilter cannot catch, so it is the one that proves
+    `wanted` and `tag` are actually consulted rather than merely passed.
     """
     options, venv_dir = _a_run_with_a_pinned_package(tmp_path)
     options.args = argparse.Namespace(**flags)
@@ -754,6 +761,7 @@ def test_every_branch_hands_check_venv_dir_the_same_description_of_the_run(
         calls.append({"venv_dir": venv_dir_arg, **kwargs})
         return True
 
+    real_check_venv_dir = cache_search.check_venv_dir
     monkeypatch.setattr(cache_search, "check_venv_dir", spy)
     last_used_options = ek.Options()
     last_used_options.venv_dir = venv_dir  # type: ignore[attr-defined]
@@ -787,6 +795,49 @@ def test_every_branch_hands_check_venv_dir_the_same_description_of_the_run(
         assert call["matched_manifest"] == venv_cache.read_manifest(venv_dir)
     else:
         assert call.get("matched_manifest") is None
+
+    # Second phase, with the REAL check_venv_dir: the arguments above are only
+    # worth pinning if this branch actually rejects on them. The cache here
+    # holds one folder whose name advertises thing-pkg and whose manifest does
+    # not have it -- the one shape the folder-name prefilter cannot catch. Every
+    # branch must come back empty-handed. No import-level probe is stubbed
+    # because none is reached: venv_cache.satisfies rejects the candidate
+    # first, which is the point.
+    monkeypatch.setattr(cache_search, "check_venv_dir", real_check_venv_dir)
+    liar_dir = tmp_path / "liar"
+    liar_dir.mkdir()
+    liar = a_cached_venv(
+        liar_dir,
+        venv_cache.build_folder_name(
+            venv_name="myenv",
+            interpreter_tag="3.12",
+            timestamp="20260814-091500",
+            pip_names=["thing-pkg"],
+        ),
+        [venv_cache.PackageRecord("other", "other-pkg", "1.0.0", None)],
+    )
+    liar_last_used = ek.Options()
+    liar_last_used.venv_dir = liar  # type: ignore[attr-defined]
+    options.args = argparse.Namespace(**flags)
+
+    assert (
+        cache_search.find_match_dir_in_cache(
+            options.args,
+            my_dir=liar_dir,
+            venv_name=options.venv_name,
+            uninstalled=options.uninstalled_imports,
+            extra_requirements=options.extra_requirements,
+            source_names=verify.source_import_names(
+                options.all_imports,
+                options.extra_requirements,
+                getattr(options.args, "reqs", False),
+            ),
+            tag=cache_search.interpreter_tag(options.stdlib),
+            rawlog=options.rawlog,
+            load_last_used=lambda: liar_last_used,
+        )
+        is None
+    ), "a venv whose manifest lacks the package must never be reused"
 
 
 def test_the_cache_search_filters_the_folders_against_this_run_not_a_blank_one(

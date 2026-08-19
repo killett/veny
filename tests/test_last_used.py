@@ -227,22 +227,77 @@ def test_is_virtualenv_reflects_prefix_vs_base_prefix(
     assert last_used.is_virtualenv() is False
 
 
+def test_the_last_used_adapter_returns_the_record_this_run_is_entitled_to(
+    tmp_path: Path,
+) -> None:
+    """cli._load_last_used must return the newest record that clears the cutoff.
+
+    This drives the adapter for real, against two records written into the
+    script's own directory: one stamped before options.pathlibcutoff (records
+    written before 2025-08-10 22:49:00 stored paths as strings and must never
+    be loaded) and one after. Which venv_dir comes back is the observable, and
+    it is decided by all four of the keyword arguments the adapter builds --
+    a wrong script_dir or python_script finds no file at all, a wrong cutoff
+    rejects both, and only the wired cutoff rejects exactly the stale one.
+
+    Concrete bug this catches: hand over a cutoff of "00000000-000000" (or
+    drop the comparison) and the pre-cutoff record wins whenever it is the
+    newer file, resurrecting string-valued paths into a run that expects
+    Paths. Nothing raises; the failure lands much later, wherever one of those
+    strings is used as a Path.
+    """
+    options, script = _options_for(tmp_path)
+    options.rawlog = True
+    _write_record(
+        tmp_path, script, "20250101-000000", venv_dir=tmp_path / "before-the-cutoff"
+    )
+    _write_record(
+        tmp_path, script, "20260202-020202", venv_dir=tmp_path / "after-the-cutoff"
+    )
+
+    loaded = cli._load_last_used(options)
+
+    assert loaded is not None
+    assert getattr(loaded, "venv_dir", None) == tmp_path / "after-the-cutoff"
+
+    # And the other direction, which the pair above cannot show: a pre-cutoff
+    # record is always the *older* file, so lowering the cutoff never changes
+    # which of two records wins. A directory holding only the stale one does
+    # show it -- with the cutoff wired, there is nothing to load.
+    stale_only = tmp_path / "stale_only"
+    stale_only.mkdir()
+    stale_script = stale_only / "thing.py"
+    stale_script.write_text("import yaml\n")
+    _write_record(
+        stale_only,
+        stale_script,
+        "20250101-000000",
+        venv_dir=stale_only / "before-the-cutoff",
+    )
+    stale_options = cli.Options()
+    stale_options.python_script = stale_script
+    stale_options.script_dir = stale_only
+    stale_options.rawlog = True
+
+    assert cli._load_last_used(stale_options) is None
+
+
 def test_the_last_used_adapter_hands_over_this_runs_script_and_cutoff(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """cli._load_last_used is the only place these five arguments are wired.
+    """The same five arguments again, this time read off the call itself.
 
-    load_last_used_options used to read them off the Options object it was
-    given; the extraction turned four of them into explicit keyword arguments
-    built at this one call site, and measured by substitution all five could
-    be replaced with a wrong value while all 338 tests stayed green -- nothing
+    Secondary to the behavioural test above, and kept because two of the five
+    are invisible to it: the Options object handed over as the first argument
+    (ek.load_options_from_json loads *into* it, so a fresh one still yields a
+    record) and rawlog, which only decides whether the "no previous JSON
+    files" line is logged. Measured by substitution: all five could be
+    replaced with a wrong value while all 338 tests stayed green -- nothing
     drove cli._load_last_used at all.
 
     Concrete bug this catches: a wrong `script_dir` looks in a directory that
     holds no last-used JSON, so the cache search silently falls through to
-    "latest" on every run and the last-used pointer never wins; a wrong
-    `pathlibcutoff` (say a timestamp in the future) rejects every record ever
-    written, with the same silent effect and no error anywhere.
+    "latest" on every run and the last-used pointer never wins.
     """
     options = cli.Options()
     options.script_dir = tmp_path / "scripts"
