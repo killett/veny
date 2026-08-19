@@ -37,7 +37,7 @@ if not hasattr(ek, "register_json_type"):
         f"veny requires emmykit >= 0.4.0; found {getattr(ek, '__version__', 'unknown')}.\n"
         f"Upgrade it with:  pip install -U 'emmykit>=0.4.0'"
     )
-from . import classify, environment, json_types, venv_cache, verify
+from . import classify, environment, json_types, last_used, venv_cache, verify
 from .analysis import scan as analysis_scan
 from .analysis.custom_modules import dict_of_custom_modules
 from .analysis.scan_state import ImportScan
@@ -346,7 +346,14 @@ def main() -> int:
             )
 
     if getattr(options.args, "feeling_lucky", False) and options.python_script:
-        last_used_venv_python = load_last_used_venv_python(options)
+        assert options.script_dir is not None, "options.script_dir must be set"
+        last_used_venv_python = last_used.load_last_used_venv_python(
+            options,
+            script_dir=options.script_dir,
+            python_script=options.python_script,
+            pathlibcutoff=options.pathlibcutoff,
+            rawlog=options.rawlog,
+        )
         if last_used_venv_python:
             command_list = [
                 os.fspath(last_used_venv_python),
@@ -526,7 +533,7 @@ def main() -> int:
         elapsed_raw_time = dt.datetime.now() - start_raw_time
         if not options.rawlog:
             logging.info("Runtime: %s", elapsed_raw_time)
-    elif is_virtualenv():
+    elif last_used.is_virtualenv():
         if not options.rawlog:
             logging.info("Already in a virtual environment.")
         assert options.venv_dir is not None, "options.venv_dir must be set"
@@ -1212,108 +1219,6 @@ def rename_venv(options: Options, new_name: str) -> None:
             )
 
 
-def is_virtualenv() -> bool:
-    """Check if currently running in a virtual environment."""
-    return sys.prefix != sys.base_prefix
-
-
-def load_last_used_options(options: Options) -> Options | None:
-    """Look for the most recent JSON file in the script directory that matches the script name and load it into a new Options object. Ignore any JSON files created before the options.pathlibcutoff timestamp."""
-    assert options.script_dir is not None, "options.script_dir must be set"
-    assert options.python_script is not None, "options.python_script must be set"
-    pattern = re.compile(r"last-used-on-(\d{8}-\d{6})")
-    json_files = [
-        f
-        for f in options.script_dir.iterdir()
-        if f.name.startswith("." + options.python_script.name)
-        and f.suffix.casefold() == ".json"
-        and (m := pattern.search(f.name))  # extract timestamp
-        and m.group(1) >= options.pathlibcutoff  # compare as strings
-    ]
-    if not json_files:
-        if not options.rawlog:
-            logging.info("No previous JSON files found in the script directory.")
-        return None
-    if len(json_files) > 1:
-        json_files.sort(
-            key=lambda x: dt.datetime.strptime(
-                x.name.split("-")[-2] + x.name.split("-")[-1].replace(".json", ""),
-                "%Y%m%d%H%M%S",
-            ),
-            reverse=True,
-        )
-    return ek.load_options_from_json(options, options.script_dir / json_files[0])
-
-
-def load_last_used_venv_dir(options: Options) -> Path | None:
-    """Look for the most recent JSON file in the script directory that matches the script name and return the venv_dir from it."""
-    last_used_options = load_last_used_options(options)
-    if not last_used_options:
-        if not options.rawlog:
-            logging.info("No last used options found, so no venv directory to return.")
-        return None
-    elif not hasattr(last_used_options, "venv_dir"):
-        if not options.rawlog:
-            logging.info("Last used options do not have a venv_dir attribute.")
-        return None
-    elif last_used_options.venv_dir is None:
-        if not options.rawlog:
-            logging.info("Last used venv directory is None.")
-        return None
-    elif not ek.safe_is_dir(last_used_options.venv_dir):
-        if not options.rawlog:
-            logging.warning(
-                "Last used venv directory %s is no longer valid.",
-                os.fspath(last_used_options.venv_dir),
-            )
-        return None
-    else:
-        if not options.rawlog:
-            logging.info(
-                "Last used venv directory found: %s",
-                os.fspath(last_used_options.venv_dir),
-            )
-        return last_used_options.venv_dir
-
-
-def load_last_used_venv_python(options: Options) -> Path | None:
-    """Look for the most recent JSON file in the script directory that matches the script name and return the venv_python from it.
-
-    Args:
-        options: Options object containing settings and paths.
-
-    Returns:
-        The Path object of the last used venv_python, or None if not found or invalid.
-    """
-    last_used_options = load_last_used_options(options)
-    if not last_used_options:
-        if not options.rawlog:
-            logging.info("No last used options found, so no venv_python to return.")
-        return None
-    elif not hasattr(last_used_options, "venv_python"):
-        if not options.rawlog:
-            logging.info("Last used options do not have a venv_python attribute.")
-        return None
-    elif last_used_options.venv_python is None:
-        if not options.rawlog:
-            logging.info("Last used venv_python is None.")
-        return None
-    elif not ek.safe_is_file(last_used_options.venv_python):
-        if not options.rawlog:
-            logging.warning(
-                "Last used venv_python %s is no longer valid.",
-                os.fspath(last_used_options.venv_python),
-            )
-        return None
-    else:
-        if not options.rawlog:
-            logging.info(
-                "Last used venv_python found: %s",
-                os.fspath(last_used_options.venv_python),
-            )
-        return last_used_options.venv_python
-
-
 def latest_venv(final_venv_folders: dict[Path, dict[str, int]]) -> Path | None:
     """Return the folder Path that has the latest timestamp.
 
@@ -1567,7 +1472,13 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
         and not getattr(options.args, "latest", False)
         and not getattr(options.args, "smallest", False)
     ):
-        options_last_used = load_last_used_options(options)
+        options_last_used = last_used.load_last_used_options(
+            options,
+            script_dir=options.script_dir,  # type: ignore[arg-type]
+            python_script=options.python_script,  # type: ignore[arg-type]
+            pathlibcutoff=options.pathlibcutoff,
+            rawlog=options.rawlog,
+        )
         # venv_dir is declared in veny.Options.__init__, not in the base
         # emmykit.Options that load_last_used_options builds from, so a
         # last-used JSON written without that key must not raise here.

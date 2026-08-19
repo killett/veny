@@ -1,4 +1,4 @@
-"""Characterize the last-used record before it becomes veny.last_used.
+"""Characterize the last-used record now that it lives in veny.last_used.
 
 Fixtures write records via ``ek.save_options_to_json`` rather than hand-rolled
 JSON. ``ek.load_options_from_json`` round-trips tagged values (a bare JSON
@@ -30,7 +30,7 @@ from pathlib import Path
 import emmykit as ek
 import pytest
 
-from veny import cli
+from veny import cli, last_used
 
 
 def _write_record(tmp_path: Path, script: Path, stamp: str, **fields: object) -> Path:
@@ -99,9 +99,15 @@ def test_the_most_recent_matching_json_wins(tmp_path: Path) -> None:
         "20260202-020202",
         venv_dir=tmp_path / "newer",
     )
-    loaded = cli.load_last_used_options(options)
+    loaded = last_used.load_last_used_options(
+        options,
+        script_dir=tmp_path,
+        python_script=script,
+        pathlibcutoff=options.pathlibcutoff,
+        rawlog=options.rawlog,
+    )
     assert loaded is not None
-    assert loaded.venv_dir == tmp_path / "newer"
+    assert getattr(loaded, "venv_dir", None) == tmp_path / "newer"
 
 
 def test_a_json_older_than_the_pathlib_cutoff_is_ignored(tmp_path: Path) -> None:
@@ -119,13 +125,31 @@ def test_a_json_older_than_the_pathlib_cutoff_is_ignored(tmp_path: Path) -> None
         "20250101-000000",
         venv_dir=tmp_path / "ancient",
     )
-    assert cli.load_last_used_options(options) is None
+    assert (
+        last_used.load_last_used_options(
+            options,
+            script_dir=tmp_path,
+            python_script=script,
+            pathlibcutoff=options.pathlibcutoff,
+            rawlog=options.rawlog,
+        )
+        is None
+    )
 
 
 def test_no_matching_json_returns_none(tmp_path: Path) -> None:
     """An empty script directory yields None, not an exception."""
-    options, _script = _options_for(tmp_path)
-    assert cli.load_last_used_options(options) is None
+    options, script = _options_for(tmp_path)
+    assert (
+        last_used.load_last_used_options(
+            options,
+            script_dir=tmp_path,
+            python_script=script,
+            pathlibcutoff=options.pathlibcutoff,
+            rawlog=options.rawlog,
+        )
+        is None
+    )
 
 
 def test_a_recorded_interpreter_that_no_longer_exists_returns_none(
@@ -144,7 +168,16 @@ def test_a_recorded_interpreter_that_no_longer_exists_returns_none(
         "20260202-020202",
         venv_python=tmp_path / "gone" / "bin" / "python",
     )
-    assert cli.load_last_used_venv_python(options) is None
+    assert (
+        last_used.load_last_used_venv_python(
+            options,
+            script_dir=tmp_path,
+            python_script=script,
+            pathlibcutoff=options.pathlibcutoff,
+            rawlog=options.rawlog,
+        )
+        is None
+    )
 
 
 def test_a_recorded_interpreter_that_exists_is_returned(tmp_path: Path) -> None:
@@ -159,7 +192,16 @@ def test_a_recorded_interpreter_that_exists_is_returned(tmp_path: Path) -> None:
         "20260202-020202",
         venv_python=interpreter,
     )
-    assert cli.load_last_used_venv_python(options) == interpreter
+    assert (
+        last_used.load_last_used_venv_python(
+            options,
+            script_dir=tmp_path,
+            python_script=script,
+            pathlibcutoff=options.pathlibcutoff,
+            rawlog=options.rawlog,
+        )
+        == interpreter
+    )
 
 
 def test_is_virtualenv_reflects_prefix_vs_base_prefix(
@@ -178,8 +220,8 @@ def test_is_virtualenv_reflects_prefix_vs_base_prefix(
     """
     monkeypatch.setattr(sys, "prefix", "/fake/venv")
     monkeypatch.setattr(sys, "base_prefix", "/fake/base")
-    assert cli.is_virtualenv() is True
+    assert last_used.is_virtualenv() is True
 
     monkeypatch.setattr(sys, "prefix", "/fake/same")
     monkeypatch.setattr(sys, "base_prefix", "/fake/same")
-    assert cli.is_virtualenv() is False
+    assert last_used.is_virtualenv() is False

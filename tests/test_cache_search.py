@@ -10,7 +10,7 @@ from pathlib import Path
 import emmykit as ek
 import pytest
 
-from veny import alias_index, stdlib_index, venv_cache
+from veny import alias_index, last_used, stdlib_index, venv_cache
 from veny import cli as veny
 from veny.alias_index import ResolvedImport
 
@@ -286,6 +286,8 @@ def test_find_match_dir_in_cache_tolerates_a_last_used_options_without_venv_dir(
     options.args = argparse.Namespace(
         latest=False, oldest=False, last_used=False, smallest=False
     )
-    monkeypatch.setattr(veny, "load_last_used_options", lambda opts: ek.Options())
+    monkeypatch.setattr(
+        last_used, "load_last_used_options", lambda *a, **k: ek.Options()
+    )
 
     assert veny.find_match_dir_in_cache(options) is None

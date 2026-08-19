@@ -56,8 +56,10 @@ LAYERS: list[frozenset[str]] = [
     # default. Both sit above the index layer because they need nothing from
     # each other, and below cli because cli drives them -- and neither has ever
     # heard of Options, so both can be exercised without building the CLI's
-    # state object.
-    frozenset({"classify", "environment"}),
+    # state object. last_used.py joins them as a third peer: it imports
+    # nothing from veny at all (only stdlib and emmykit), so it forbids
+    # everything at or above its layer and needs nothing from its peers.
+    frozenset({"classify", "environment", "last_used"}),
     # verify.py proves what a venv really provides and repairs what it does
     # not. It is NOT a peer of environment: it installs candidates,
     # uninstalls rejected ones and rewrites requirements.txt, and every one
