@@ -439,7 +439,12 @@ wiring rationale and for two Minors deliberately left unfixed.
   `shutil.which("uv")`) or a shell string handed to `os.system`; the docstring
   says so, because a guard that overclaims is worse than none. Calling
   `environment.run_uv_pip` / `environment.create_venv` from anywhere is not a
-  violation — routing through `environment` is the point.
+  violation — routing through `environment` is the point. The docstring is
+  honest about those false negatives but states no false-positive limit: the
+  list/tuple-literal signal could in principle fire on a non-command sequence
+  whose first element happens to be the string `"uv"`; no such sequence
+  exists in the tree today, so this is a known, accepted cost, not a bug in
+  the guard.
 - **`requires-python = ">=3.12,<3.14"`,** so `sys.stdlib_module_names`
   (Python 3.10+) is unconditionally available. No version guards needed for
   it in our own code.
@@ -1493,15 +1498,36 @@ wiring rationale and for two Minors deliberately left unfixed.
     too. `state.py` is the only *new* module of 3c that lacks it.)
   - `classify.py:139`'s `known_bad_imports` is typed `set[str]` but never
     mutated; `AbstractSet[str]` is the honest type.
-  - `tests/test_layering.py:275`'s copy-back guard proves **totality**, not
+  - `tests/test_layering.py:320`'s copy-back guard proves **totality**, not
     source correctness: rewriting the adapter as
     `options.bad_imports = set(result.installed)` still passes it.
   - The three-assert block plus the `pip_name` generator are duplicated at both
     `write_requirements_file_with_extras` call sites in `cli.py`
-    (`1560`-`1573` and `1766`-`1779`); the
+    (`1542`-`1555` and `1748`-`1761`); the
     `assert options.uninstalled_imports is not None` in
     `verify_and_repair_imports` is dead, since the attribute is dereferenced
     two lines above it.
+- **Sweep for 3d: roughly eight pre-existing stale `src/veny/cli.py` citations
+  elsewhere in this file, predating this phase and not caused by it.**
+  Starting points, each verified against HEAD (`6b2217a`) while writing this
+  entry:
+  - `cli.py:1005` for `FunctionInfo.ast_node` — the symbol left `cli.py`
+    entirely in phase 3b (`5dbcac2`); `rg ast_node src/` returns nothing. The
+    citation is dead, not merely shifted.
+  - `cli.py:2606`, `cli.py:2860`, `cli.py:3304`, `cli.py:3323` — all beyond
+    EOF; `cli.py` is now 2,296 lines. These date from before the phase-3
+    extractions.
+  - `cli.py:124` (actual `:63`), `cli.py:229` (actual `:168`) are stale by a
+    shift. `cli.py:537`/`:552`, cited for "`dict_of_custom_modules` populates
+    `options.custom_modules`" and "`list_packages` reaches the scanner", are
+    also stale by a shift — but the actual lines are `:480` and `:495`, not
+    `:488` as an earlier draft of this entry had it; `:488` is a `logging.info`
+    call inside the same block, not the `list_packages(options)` call site.
+  Line-number citations in a long-lived document are systematically fragile
+  across extractions, and are better written as a symbol name plus a
+  commit-qualified line number — the way the existing `cli.py:2197` citation
+  is (explicitly qualified to `dc1c3c4`, and still correct because of that
+  qualification).
 - **Parked by 3c's reviews, 2026-08-18.** None blocking; recorded because the
   per-task ledger they came from does not survive the phase.
   - `tests/test_environment.py` (line numbers re-measured 2026-08-18; the
@@ -1535,7 +1561,7 @@ wiring rationale and for two Minors deliberately left unfixed.
     `options.extra_requirements` to `{}` before reading it — unreachable while
     `my_fopen` has `suppress_errors=True`.
   - `test_no_source_imports_means_no_probe_venv_is_built`
-    (`tests/test_classify.py:166`) is killed by a `ValueError` out of `max()`
+    (`tests/test_classify.py:169`) is killed by a `ValueError` out of `max()`
     rather than by its own `created == []` assertion.
   - `requirement_records` dropping a version specifier — it is called as
     `requirement_records(extra_requirements.keys())` (`classify.py:262`) — is
