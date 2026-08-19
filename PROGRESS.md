@@ -2094,11 +2094,14 @@ wiring rationale and for two Minors deliberately left unfixed.
     than an `Options`; only mypy covers it. **Re-measured at `7debbb3`: the
     stub is `tests/test_split_imports.py:253`** (the file fell 21 lines short
     of the old citation's *EOF*, 351 lines now, because 3d migrated 35 tests
-    out of it). **Narrowed by 3d, not closed:** `tests/test_uv_backend.py`
-    now pins the contract at the `setup_virtualenv` call site (`:109`,
-    `:118`) and `tests/test_verify.py:1291` at the repair site, so the written
-    file's contents are asserted even though this particular stub is still
-    loose.
+    out of it). **Narrowed by 3d, not closed:** `tests/test_uv_backend.py`'s
+    `test_setup_virtualenv_writes_the_extra_requirements_version_specifiers`
+    (`def` at `854ee89:tests/test_uv_backend.py:102`) now pins the contract
+    in its docstring, and `tests/test_verify.py`'s
+    `test_a_repair_rewrites_requirements_txt_with_the_extra_requirements`
+    (`def` at `854ee89:tests/test_verify.py:1275`) does the same at the
+    repair site, so the written file's contents are asserted even though
+    this particular stub is still loose.
   - `cli.py`'s `--reqs` block (cited as `:461`; `cli.main` @ `7debbb3:501`)
     no longer resets
     `options.extra_requirements` to `{}` before reading it — unreachable while
