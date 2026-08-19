@@ -27,7 +27,7 @@ gotchas ledger.
   |---|---|---|
   | **3a** `docs/superpowers/plans/2026-08-16-analysis-foundation.md` (executed, complete) | `analysis/literals.py`, `analysis/custom_modules.py`, `settings.py` | 430 |
   | **3b** `docs/superpowers/plans/2026-08-16-analysis-imports-and-call-graph.md` (executed, complete on branch `analysis-imports-call-graph`) | `analysis/imports.py`, `analysis/call_graph.py`, `analysis/scan.py`, plus `analysis/scan_state.py` (a fourth module the plan added beyond the design's original three) | 1,100 |
-  | **3c** `docs/superpowers/plans/2026-08-18-classify-and-environment.md` (executed, complete on branch `classify-and-environment`; whole-branch review 2026-08-18 → "merge after fixes", fixes applied) | `classify.py`, `environment.py`, plus `state.py` (a third module the plan added, carrying `Requirements`) | 600 |
+  | **3c** `docs/superpowers/plans/2026-08-18-classify-and-environment.md` (executed, complete on branch `classify-and-environment`) | `classify.py`, `environment.py`, plus `state.py` (a third module the plan added, carrying `Requirements`) | 600 |
   | 3d (not written) | `verify.py`, `cache_search.py`, `last_used.py` | 1,100 |
   | 3e (not written) | `pipeline.py`, `cli.py` slimming, `--full` deletion, final `Options` drain | 450 |
 
@@ -44,35 +44,65 @@ worth reading before the plan is written, because the residual risk names the
 parts of the uv path 3c's differential could *not* cover.
 
 Plan 3c, `docs/superpowers/plans/2026-08-18-classify-and-environment.md`, is
-complete on branch `classify-and-environment` (off `main` @ `dc1c3c4`), **not
-merged**. Six tasks; five commits on the branch before this one, tests before
+complete and **merged to `main` at `3aa5d7e`** (a `--no-ff` merge; branch
+`classify-and-environment`, off `main` @ `dc1c3c4`, deleted after merging —
+it was at `3d9ae39`). Six tasks; twelve commits on the branch, tests before
 moves as planned: `cde577b` (the plan itself), `cabe20d` (Task 1,
 `tests/test_environment.py`, the uv boundary characterized live before it
 moved), `d79eba4` (Task 2, extract
 `environment.py`, veny's only `uv` caller), `b79f418` (Task 3,
 `tests/test_classify.py`, 11 characterization tests written before any move),
 `332d69e` (Task 4, introduce `state.Requirements` and extract `classify.py`),
-and this commit (Task 6). Task 5 was verification and produced no commits.
-`state.py` was forced rather than chosen: `classify` had to return a product
-`cli` could read without either module importing the other.
+`a742de3` (Task 6, closing the phase with measured gates and this ledger;
+Task 5 was verification and produced no commits), `6551490` (tracker sync,
+marking the plan's task checkboxes complete), `1b8a865` (a PROGRESS migration
+commit, moving three falsified entries onto their originals), then the
+whole-branch review's fix wave in three commits — `143f909` (deletes the dead
+`cli.add_dependencies` adapter), `19702c8` (pins the arguments Task 2's
+extraction made mis-wirable, plus the single-uv-owner guard), `6b2217a`
+(records 3c's two unlogged design gaps and corrects a falsified citation) —
+and finally `3d9ae39` (corrects three shifted PROGRESS citations from the fix
+wave). `state.py` was forced rather than chosen: `classify` had to return a
+product `cli` could read without either module importing the other.
 
-Gates measured on `classify-and-environment` @ `332d69e` (2026-08-18):
-`pixi run test` **316 passed** (was 296 on `main` after 3b, so 3c is +20
-tests); `pixi run lint` zero; `pixi run python -m ruff format --check .` all
+The whole-branch review's two Important findings are written up in full in
+Gotchas (the STANDING CHECK entry) and Deferred items (the resolved
+`cli.add_dependencies` entry) — not repeated here. In short: a defect can live
+in the seam between two individually-correct tasks (Task 3's characterization
+tests targeted `cli.add_dependencies` while it was still the production path;
+Task 4 moved the call inside `classify.split_imports` without repointing
+them, leaving the adapter with zero production callers and `also_needs`
+expansion unpinned on the path users take — measured, `also_needs={}` at the
+call site left all 316 tests green); and an extraction can turn an implicit
+`options.<field>` read into an explicit, mis-wirable call-site argument that
+nothing pinned (two more arguments were each replaceable with a wrong value
+leaving 316 tests green). Both are now pinned; the STANDING CHECK entry is the
+mechanical check ("mutate every argument at every new call site, confirm a
+test dies") that would have caught both, added to Gotchas so future
+extractions run it as a matter of course.
+
+Gates measured on `main` after the merge (2026-08-18): `pixi run test` **321
+passed** (was 296 on `main` after 3b, so 3c is +25 tests — +20 through Task 4
+at `332d69e`, +5 more from the fix wave, which added tests along with its
+fixes); `pixi run lint` zero; `pixi run python -m ruff format --check .` all
 **45 files** formatted; `pixi run typecheck` **36 errors in 5 files** — one
-below the 37-error ceiling that has held since phase 2, and the first time it
-has moved (see Deferred items for where the remaining 21 in
-`tests/test_split_imports.py` live); `pixi run smoke` **green**, network was
+below the 37-error ceiling that has held since phase 2, unchanged from the
+`332d69e` measurement (see Deferred items for where the remaining 21 in
+`tests/test_split_imports.py` live: `tests/test_split_imports.py` 21,
+`src/veny/cli.py` 10, `analysis/imports.py` 3, `analysis/literals.py` 1,
+`analysis/call_graph.py` 1); `pixi run smoke` **green**, network was
 available and nothing was skipped. Line counts (`wc -l`, 2026-08-18):
-`src/veny/cli.py` **2,314 lines** (was 2,626 at the start of 3c, 4,143 at the
-start of 3a), `analysis/imports.py` 683, `venv_cache.py` 465, `analysis/scan.py`
-347, `pypi_client.py` 314, `environment.py` 280, `analysis/custom_modules.py`
-274, `classify.py` 274, `analysis/literals.py` 229, `analysis/call_graph.py`
-177, `json_types.py` 136, `state.py` 51, `analysis/scan_state.py` 30,
-`settings.py` 23 (`alias_index.py` 826 and `stdlib_index.py` 233 are untouched
-by phase 3 so far). A live run (`pixi run veny --no-cache` on a throwaway
-script calling `yaml.safe_load`) resolved `yaml` → `pyyaml`, built the venv,
-installed with uv and printed `{'t6': 42, 'names': ['alpha', 'beta']}`.
+`src/veny/cli.py` **2,296 lines** (was 2,314 at `332d69e`, 18 fewer after the
+fix wave deleted `cli.add_dependencies`; 2,626 at the start of 3c, 4,143 at
+the start of 3a), `analysis/imports.py` 683, `venv_cache.py` 465,
+`analysis/scan.py` 347, `pypi_client.py` 314, `environment.py` 280,
+`analysis/custom_modules.py` 274, `classify.py` 274, `analysis/literals.py`
+229, `analysis/call_graph.py` 177, `json_types.py` 136, `state.py` 51,
+`analysis/scan_state.py` 30, `settings.py` 23 (`alias_index.py` 826 and
+`stdlib_index.py` 233 are untouched by phase 3 so far). A live run on `main`
+after the merge (`pixi run veny --no-cache` on a script importing `yaml`)
+built a fresh venv, installed PyYAML with uv, and printed `{'merged': True,
+'phase': '3c'}`.
 
 Behaviour was verified differentially, not just by a green suite — the
 technique 3b prescribed for 3c, now written up in Gotchas so 3d can reuse it.
