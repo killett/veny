@@ -107,6 +107,10 @@ src/veny/
                     # the ImportScan/Settings analysis/ works from and the
                     # throwaway probe venv classify.py is handed, and copies
                     # the results of both back onto Options.
+    cache_search.py # Picks a cached virtual environment for this run
+                    # (last-used / latest / oldest / smallest), confirms it
+                    # by import-checking it, and records the state of a
+                    # freshly built one (folder rename + manifest).
     settings.py     # Settings, the frozen per-run invariants analysis/ reads.
     analysis/       # AST analysis: what a script imports, and what it does
                     # with sys.path.
@@ -131,6 +135,9 @@ src/veny/
     environment.py  # The one place veny invokes uv: venv creation, package
                     # install/uninstall, and the requirements file they read.
     json_types.py   # Registers veny's own types with emmykit's JSON registry.
+    last_used.py    # The one record veny keeps between runs: which
+                    # environment last ran this script. Imports nothing from
+                    # veny.
     pypi_client.py  # Confirms a project provides an import name by reading a
                     # wheel's central directory over an HTTP range request.
     state.py        # Requirements, the frozen product classification hands
@@ -138,8 +145,13 @@ src/veny/
     stdlib_index.py # Standard-library membership for the target interpreter.
     venv_cache.py   # Folder naming, manifests, and matching for cached
                     # virtual environments.
+    verify.py       # Proves what a virtual environment really provides, and
+                    # repairs what it does not (import checks, candidate
+                    # resolution, attributable confirmation).
 scripts/            # smoke-install.sh: wheel + console-script verification.
-tests/              # pytest test suite.
+                    # differential_3d.py: the phase-3d old-vs-new differential.
+tests/              # pytest test suite; wheels.py builds the wheel the live
+                    # environment/verify tests install.
 docs/               # Design docs and implementation plans.
 ```
 

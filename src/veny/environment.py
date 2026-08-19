@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Iterable, Mapping
+from pathlib import Path
 
 import emmykit as ek
 
@@ -79,6 +80,22 @@ def create_venv(target: str | os.PathLike[str], python: str = "") -> None:
             "Creating venv: %s", " ".join(shlex.quote(str(arg)) for arg in command)
         )
     subprocess.check_call(command)
+
+
+def venv_python_for(venv_dir: str | os.PathLike[str]) -> Path:
+    """Return the interpreter inside a virtual environment.
+
+    Args:
+        venv_dir: The venv to look in.
+
+    Returns:
+        The path to that venv's python.
+    """
+    venv_dir = ek.ensure_dir(venv_dir)
+    if sys.platform == "win32":
+        return (venv_dir / "Scripts" / "python.exe").absolute()
+    # Do NOT use resolve() here because this is a symlink and resolve() would break it
+    return (venv_dir / "bin" / "python").absolute()
 
 
 def venv_build_interpreter(python_command: str) -> str:

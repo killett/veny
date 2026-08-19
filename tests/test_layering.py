@@ -56,8 +56,25 @@ LAYERS: list[frozenset[str]] = [
     # default. Both sit above the index layer because they need nothing from
     # each other, and below cli because cli drives them -- and neither has ever
     # heard of Options, so both can be exercised without building the CLI's
-    # state object.
-    frozenset({"classify", "environment"}),
+    # state object. last_used.py joins them as a third peer: it imports
+    # nothing from veny at all (only stdlib and emmykit), so it forbids
+    # everything at or above its layer and needs nothing from its peers.
+    frozenset({"classify", "environment", "last_used"}),
+    # verify.py proves what a venv really provides and repairs what it does
+    # not. It is NOT a peer of environment: it installs candidates,
+    # uninstalls rejected ones and rewrites requirements.txt, and every one
+    # of those goes through environment (design amendment 10) -- routing
+    # through the single uv owner is the point, so verify sits one layer
+    # above it. It stays below cli because it has never heard of Options.
+    frozenset({"verify"}),
+    # cache_search.py picks which cached venv this run gets to reuse. It sits
+    # above verify because a selection is not final until the chosen venv's
+    # imports really import: check_venv_dir confirms every candidate through
+    # verify.check_packages_in_venv rather than trusting the manifest alone.
+    # It is a layer of its own rather than a peer of verify for the same
+    # reason -- the dependency is real and one-way. Like verify, it has never
+    # heard of Options, so it stays below cli.
+    frozenset({"cache_search"}),
     frozenset({"cli"}),
 ]
 
@@ -329,7 +346,7 @@ def test_split_imports_copies_back_every_field_it_owns() -> None:
     -- which is how dbf013c survived -- is invisible. So this reads the
     assignments themselves rather than any behaviour.
 
-    The five names are written out rather than derived from Requirements'
+    The four names are written out rather than derived from Requirements'
     fields: the mapping is deliberately not one-to-one (`total_imports` is a
     property, `seen_stdlib` and `extra_requirements` are pass-throughs that
     Options already holds and must not be re-written), so deriving them would
@@ -337,6 +354,13 @@ def test_split_imports_copies_back_every_field_it_owns() -> None:
     targets whose value is the name `options` count -- the local `scan = ...`
     and `result = ...` bindings are names, not attributes, and must not trip
     this guard.
+
+    This proves the copy-back is *total* -- every field split_imports owns
+    gets written -- and nothing more. It does not prove the copy-back is
+    *correct*: `options.bad_imports = set(result.installed)` (the right
+    field name, the wrong source attribute) still writes to `bad_imports` and
+    so still passes this guard. Catching that class of bug needs a
+    behavioural test that reads the value back, not this one.
     """
     tree = ast.parse((SRC / "cli.py").read_text())
     adapters = [
@@ -364,7 +388,6 @@ def test_split_imports_copies_back_every_field_it_owns() -> None:
     assert written == {
         "all_imports",
         "bad_imports",
-        "installed_imports",
         "uninstalled_imports",
         "total_imports",
     }

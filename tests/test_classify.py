@@ -10,7 +10,7 @@ never by reading it and predicting an answer.
 
 The probe venv is stubbed in every test: ``environment.create_venv`` and
 ``environment.venv_build_interpreter`` (the module that owns every ``uv``
-call since phase 3c task 2) and ``cli.check_packages_in_venv``. Nothing here
+call since phase 3c task 2) and ``verify.check_packages_in_venv``. Nothing here
 builds an environment, runs a subprocess, or touches the network -- the alias
 indexes below are constructed with ``pypi=None`` and an unreachable cache
 path, so resolution is fully determined by the test. The tests migrated from
@@ -22,15 +22,17 @@ inspects the uv command instead of running it.
 from __future__ import annotations
 
 import argparse
+import logging
 import shutil
 import subprocess
 from pathlib import Path
-from typing import cast
+from typing import Any
 
 import pytest
 
-from veny import alias_index, classify, cli, environment, stdlib_index
+from veny import alias_index, classify, cli, environment, stdlib_index, verify
 from veny.alias_index import ResolvedImport
+from veny.state import Requirements
 
 
 def _index(overrides: dict[str, str] | None = None) -> alias_index.AliasIndex:
@@ -114,10 +116,11 @@ def _stub_probe(
         created.append((str(target), python))
 
     def fake_check(
-        options: cli.Options,
+        venv_python: object,
+        *,
         record: ResolvedImport | None = None,
-        venv_dir: object = None,
-        source_names: object = None,
+        uninstalled: object = frozenset(),
+        source_names: object = frozenset(),
     ) -> bool:
         assert record is not None
         probed.append(record.import_name)
@@ -127,8 +130,37 @@ def _stub_probe(
     monkeypatch.setattr(
         environment, "venv_build_interpreter", lambda command: "/fake/python"
     )
-    monkeypatch.setattr(cli, "check_packages_in_venv", fake_check)
+    monkeypatch.setattr(verify, "check_packages_in_venv", fake_check)
     return created, probed
+
+
+def _capture_split_imports_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[Requirements]:
+    """Record every Requirements that classify.split_imports returns.
+
+    cli.split_imports no longer copies ``result.installed`` onto Options --
+    phase 3d task 8 deleted that write-only mirror -- so a test that needs to
+    see which imports were classified as installed has to read it off the
+    Requirements classify.split_imports itself produces, captured here as
+    cli.split_imports calls it internally.
+
+    Args:
+        monkeypatch: pytest's monkeypatch fixture.
+
+    Returns:
+        A list that gains one Requirements per classify.split_imports call.
+    """
+    captured: list[Requirements] = []
+    real_split_imports = classify.split_imports
+
+    def _recording(*args: Any, **kwargs: Any) -> Requirements:
+        result = real_split_imports(*args, **kwargs)
+        captured.append(result)
+        return result
+
+    monkeypatch.setattr(classify, "split_imports", _recording)
+    return captured
 
 
 def test_a_custom_module_is_classified_as_neither_installed_nor_uninstalled(
@@ -149,10 +181,11 @@ def test_a_custom_module_is_classified_as_neither_installed_nor_uninstalled(
     options.all_imports = {"mymod", "inst", "uninst"}
     options.custom_modules = {"mymod": Path("/x/mymod.py")}
     created, probed = _stub_probe(monkeypatch, installed=frozenset({"inst"}))
+    results = _capture_split_imports_result(monkeypatch)
 
     cli.split_imports(options)
 
-    assert options.installed_imports == {
+    assert results[-1].installed == {
         ResolvedImport(import_name="inst", pip_name="inst")
     }
     assert options.uninstalled_imports == {
@@ -181,13 +214,14 @@ def test_no_source_imports_means_no_probe_venv_is_built(
     options.aliases = _RecordingIndex()
     options.all_imports = set()
     created, probed = _stub_probe(monkeypatch)
+    results = _capture_split_imports_result(monkeypatch)
 
     cli.split_imports(options)
 
     assert created == []
     assert probed == []
     assert options.total_imports == 0
-    assert options.installed_imports == set()
+    assert results[-1].installed == set()
     assert options.uninstalled_imports == set()
 
 
@@ -318,10 +352,11 @@ def test_a_requirement_already_importable_in_the_probe_is_recorded_in_both_sets(
     options.extra_requirements = {"reqonly": None}
     options.args = argparse.Namespace(reqs=True)
     _stub_probe(monkeypatch, installed=frozenset({"reqonly"}))
+    results = _capture_split_imports_result(monkeypatch)
 
     cli.split_imports(options)
 
-    assert options.installed_imports == {
+    assert results[-1].installed == {
         ResolvedImport(import_name="reqonly", pip_name="reqonly")
     }
     assert options.uninstalled_imports == {
@@ -348,6 +383,7 @@ def test_total_imports_equals_the_size_of_all_imports_when_split_imports_returns
     options.extra_requirements = {"reqpkg": None}
     options.args = argparse.Namespace(reqs=True)
     _stub_probe(monkeypatch, installed=frozenset({"inst"}))
+    results = _capture_split_imports_result(monkeypatch)
 
     cli.split_imports(options)
 
@@ -356,7 +392,7 @@ def test_total_imports_equals_the_size_of_all_imports_when_split_imports_returns
     assert options.total_imports == len(options.all_imports)
     # all_imports is a strict superset of the two classified sets: the custom
     # module is in neither, and the bad import is in none of the three.
-    classified = {record.import_name for record in options.installed_imports} | {
+    classified = {record.import_name for record in results[-1].installed} | {
         record.import_name for record in options.uninstalled_imports
     }
     assert classified == {"inst", "uninst", "reqpkg"}
@@ -522,15 +558,15 @@ def test_split_imports_stores_both_names_on_the_record(monkeypatch):
     options = cli.Options()
     options.aliases = _index({"widgetlib": "widget-lib-pypi"})
     options.all_imports = {"widgetlib"}
-    monkeypatch.setattr(environment, "create_venv", lambda *a, **k: None)
-    monkeypatch.setattr(cli, "check_packages_in_venv", lambda *a, **k: False)
+    _stub_probe(monkeypatch)
+    results = _capture_split_imports_result(monkeypatch)
 
     cli.split_imports(options)
 
     assert options.uninstalled_imports == {
         ResolvedImport(import_name="widgetlib", pip_name="widget-lib-pypi")
     }
-    assert options.installed_imports == set()
+    assert results[-1].installed == set()
 
 
 def test_split_imports_falls_back_to_the_import_name_when_nothing_resolves(monkeypatch):
@@ -539,8 +575,7 @@ def test_split_imports_falls_back_to_the_import_name_when_nothing_resolves(monke
     options = cli.Options()
     options.aliases = _index({})
     options.all_imports = {"mysterylib"}
-    monkeypatch.setattr(environment, "create_venv", lambda *a, **k: None)
-    monkeypatch.setattr(cli, "check_packages_in_venv", lambda *a, **k: False)
+    _stub_probe(monkeypatch)
 
     cli.split_imports(options)
 
@@ -578,7 +613,7 @@ def test_split_imports_probe_venv_is_given_the_classified_interpreter(monkeypatc
     monkeypatch.setattr(
         subprocess, "check_call", lambda command: captured.append(command)
     )
-    monkeypatch.setattr(cli, "check_packages_in_venv", lambda *a, **k: False)
+    monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: False)
 
     cli.split_imports(options)
 
@@ -589,16 +624,46 @@ def test_split_imports_probe_venv_is_given_the_classified_interpreter(monkeypatc
     assert probe_command[python_index + 1] == "/resolved/bin/python3"
 
 
-class _CountingIndex:
-    """Wraps an AliasIndex and records every import name resolution was asked for."""
+def test_the_classification_adapter_lets_classify_report_each_import(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """cli.split_imports must hand classify this run's rawlog, not a constant.
 
-    def __init__(self, inner):
-        self.inner = inner
-        self.resolved = []
+    Measured 2026-08-19 across all 17 `rawlog=` sites in
+    cli/cache_search/last_used/verify: substituting the wrong-but-type-correct
+    `True` -- a value the STANDING CHECK's own stated method covers -- left 16
+    of them with the whole suite green, this one included, because every test
+    that reaches this adapter asserts on the classification it returns and
+    none reads a log record.
 
-    def resolve(self, import_name):
-        self.resolved.append(import_name)
-        return self.inner.resolve(import_name)
+    Concrete bug this catches: `rawlog=True` here silences the per-import
+    "Checking import X : n/N - YES/NO" running commentary, which is the only
+    thing veny prints while the slowest part of a cold run (a PyPI lookup per
+    unresolved name) is happening. A user watching a stalled terminal has no
+    way to tell which import it is stuck on.
+    """
+    options = cli.Options()
+    options.aliases = _index({"uninst": "uninst-pypi"})
+    options.all_imports = {"uninst"}
+    _stub_probe(monkeypatch)
+
+    with caplog.at_level(logging.INFO):
+        cli.split_imports(options)
+
+    assert "Checking import uninst" in caplog.text
+
+    # And the other direction: a run that asked for raw logging must stay
+    # quiet, so a hardcoded `rawlog=False` at that call site is caught too.
+    caplog.clear()
+    quiet = cli.Options()
+    quiet.rawlog = True
+    quiet.aliases = _index({"uninst": "uninst-pypi"})
+    quiet.all_imports = {"uninst"}
+
+    with caplog.at_level(logging.INFO):
+        cli.split_imports(quiet)
+
+    assert "Checking import" not in caplog.text
 
 
 def test_only_genuinely_uninstalled_imports_are_resolved(monkeypatch):
@@ -609,19 +674,11 @@ def test_only_genuinely_uninstalled_imports_are_resolved(monkeypatch):
     # to two ranged wheel reads, at a 10 s read timeout. A local custom module
     # never needs a pip name, and neither does an import that is installed.
     options = cli.Options()
-    index = _CountingIndex(_index({"missingthing": "missing-thing-pypi"}))
-    # _CountingIndex wraps an AliasIndex rather than subclassing one, which is
-    # what options.aliases is annotated as; the cast is the annotation this
-    # test needed to move without carrying a mypy error along with it.
-    options.aliases = cast(alias_index.AliasIndex, index)
+    index = _RecordingIndex({"missingthing": "missing-thing-pypi"})
+    options.aliases = index
     options.all_imports = {"mycustom", "alreadyhere", "missingthing"}
     options.custom_modules = {"mycustom": Path("/nowhere/mycustom.py")}
-    monkeypatch.setattr(environment, "create_venv", lambda *a, **k: None)
-    monkeypatch.setattr(
-        cli,
-        "check_packages_in_venv",
-        lambda opts, record=None, venv_dir=None: record.import_name == "alreadyhere",
-    )
+    _stub_probe(monkeypatch, installed=frozenset({"alreadyhere"}))
 
     cli.split_imports(options)
 
@@ -629,3 +686,50 @@ def test_only_genuinely_uninstalled_imports_are_resolved(monkeypatch):
     assert options.uninstalled_imports == {
         ResolvedImport(import_name="missingthing", pip_name="missing-thing-pypi")
     }
+
+
+def test_the_probe_venv_is_asked_about_the_interpreter_it_just_built(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """cli._probe_venv must check imports inside the venv it created, not elsewhere.
+
+    _probe_venv creates a throwaway venv and closes over its directory; the
+    is_importable predicate then builds an interpreter path from that same
+    directory with environment.venv_python_for. Measured by substitution:
+    both halves of that wiring -- the directory handed to create_venv and the
+    interpreter handed to check_packages_in_venv -- could be replaced with a
+    fixed foreign path and all 338 tests stayed green, because every other
+    probe test stubs the check and ignores which interpreter it was given.
+
+    Concrete bug this catches: the probe answers from the interpreter running
+    veny instead of the empty throwaway venv, so every import already
+    installed alongside veny is classified "installed" and never installed
+    into the venv the user's script actually runs in -- the same class of
+    defect as the 3.12/3.13 `cgi` mismatch PROGRESS records, but total rather
+    than version-dependent.
+    """
+    options = cli.Options()
+    options.aliases = _index({})
+    options.all_imports = {"widgetlib"}
+    created: list[Path] = []
+    asked: list[Path] = []
+
+    monkeypatch.setattr(
+        environment,
+        "create_venv",
+        lambda target, python="": created.append(Path(target)),
+    )
+
+    def fake_check(venv_python, *, record=None, **kwargs):
+        assert record is not None, "the probe checks one record at a time"
+        asked.append(Path(venv_python))
+        return False
+
+    monkeypatch.setattr(verify, "check_packages_in_venv", fake_check)
+
+    cli.split_imports(options)
+
+    assert len(created) == 1, "exactly one probe venv is built"
+    # Options.set_venv_dir's documented shape, written out rather than read
+    # back through venv_python_for -- the directory is gone by now.
+    assert asked == [created[0] / "bin" / "python"]
