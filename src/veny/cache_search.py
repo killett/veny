@@ -457,7 +457,7 @@ def check_venv_dir(
     uninstalled: AbstractSet[ResolvedImport],
     source_names: AbstractSet[str],
     rawlog: bool,
-    matched_manifest: venv_cache.Manifest | None = None,
+    candidate: CacheCandidate | None = None,
 ) -> bool:
     """Check whether a cached venv directory can serve this run.
 
@@ -475,35 +475,46 @@ def check_venv_dir(
         source_names:     The import names actually written in the user's
                           source.
         rawlog:           Whether informational logging is suppressed.
-        matched_manifest: The venv's manifest, ALREADY read and ALREADY
-                          checked against this same wanted/tag by
-                          venv_cache.satisfies -- as cache_candidates does for
-                          every folder it returns. When given, this call
-                          trusts that check and goes straight to the
-                          import-level confirmation: it neither re-reads the
-                          manifest from disk nor calls satisfies again.
-                          Passing a manifest that has NOT already passed that
-                          same check (for instance one read directly from
-                          disk without matching it first) silently skips the
-                          match check entirely -- do not do that. Callers
-                          with no such pre-matched manifest, such as the
-                          last-used path, which has no CacheCandidate to hand
-                          over, must leave this None; the manifest is then
+        candidate:        This same folder's entry from cache_candidates, when
+                          the caller has one. Only cache_candidates builds a
+                          CacheCandidate, and only for a folder whose manifest
+                          it has just read and put through
+                          venv_cache.satisfies against this same wanted/tag --
+                          so the type itself is the evidence that a match has
+                          already been made, and this call trusts it and goes
+                          straight to the import-level confirmation, neither
+                          re-reading the manifest from disk nor calling
+                          satisfies again. Callers with no candidate, such as
+                          the last-used path, whose folder never came from a
+                          scan, must leave this None; the manifest is then
                           read from venv_dir and checked with satisfies here,
                           exactly as when this parameter did not exist.
 
     Returns:
         True if the venv holds what this run needs, for the right interpreter,
         and its imports really import.
+
+    Raises:
+        ValueError: If `candidate` describes some other folder than
+                    `venv_dir`. Its match was made about that other folder, so
+                    trusting it here would accept this one on nothing but the
+                    caller's mistake. Raised rather than asserted because
+                    S101 is enforced in this module and `python -O` would
+                    strip an assert.
     """
     venv_dir = ek.ensure_path(venv_dir)
+    if candidate is not None and candidate.folder != venv_dir:
+        raise ValueError(
+            f"check_venv_dir was given a candidate for {os.fspath(candidate.folder)} "
+            f"while checking {os.fspath(venv_dir)}"
+        )
     if not ek.safe_is_dir(venv_dir):
         if not rawlog:
             logging.info(
                 "The cached venv directory %s is no longer there.", os.fspath(venv_dir)
             )
         return False
-    if matched_manifest is None:
+    if candidate is None:
         manifest = venv_cache.read_manifest(venv_dir)
         if manifest is None:
             if not rawlog:
@@ -521,10 +532,11 @@ def check_venv_dir(
                     result.reason,
                 )
             return False
-    # The manifest match is confirmed either just above, or already by the
-    # caller's own satisfies() check when matched_manifest was supplied (see
-    # the docstring -- that trust is the whole point of the parameter: it is
-    # what lets the winning candidate's manifest be checked once, not twice).
+    # The manifest match is confirmed either just above, or -- when a
+    # CacheCandidate was supplied -- by cache_candidates' own satisfies()
+    # call, which is the only way one of those can exist (see the docstring:
+    # that is what lets the winning candidate's manifest be checked once, not
+    # twice).
     # This is the import-level confirmation: source_names is now always
     # passed explicitly, since verify's empty default cannot work it out for
     # itself, and an empty set here would silently widen every check to the
@@ -664,7 +676,7 @@ def find_match_dir_in_cache(
                 uninstalled=uninstalled,
                 source_names=source_names,
                 rawlog=rawlog,
-                matched_manifest=candidates_by_folder[latest_venv_folder].manifest,
+                candidate=candidates_by_folder[latest_venv_folder],
             ):
                 return latest_venv_folder
             if not rawlog:
@@ -693,7 +705,7 @@ def find_match_dir_in_cache(
                 uninstalled=uninstalled,
                 source_names=source_names,
                 rawlog=rawlog,
-                matched_manifest=candidates_by_folder[oldest_venv_folder].manifest,
+                candidate=candidates_by_folder[oldest_venv_folder],
             ):
                 return oldest_venv_folder
             if not rawlog:
@@ -722,7 +734,7 @@ def find_match_dir_in_cache(
                 uninstalled=uninstalled,
                 source_names=source_names,
                 rawlog=rawlog,
-                matched_manifest=candidates_by_folder[smallest_venv_folder].manifest,
+                candidate=candidates_by_folder[smallest_venv_folder],
             ):
                 return smallest_venv_folder
             if not rawlog:

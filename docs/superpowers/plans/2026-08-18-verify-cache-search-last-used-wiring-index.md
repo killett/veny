@@ -53,11 +53,11 @@ a row whose test no longer dies is a hole, not a stale row.
 | `cache_search.check_venv_dir` -> `verify.check_packages_in_venv` | `venv_python` | `tests/test_cache_search.py::test_check_venv_dir_probes_the_interpreter_inside_the_venv_it_was_given` |
 | ↳ | `uninstalled`, `source_names` | `tests/test_cache_search.py::test_check_venv_dir_checks_the_name_the_user_wrote_not_the_distributions_others` |
 | `cache_search.find_match_dir_in_cache` -> `check_venv_dir` (last-used branch) | `venv_dir`, `wanted`, `uninstalled`, `source_names`, `rawlog` | `tests/test_cache_search.py::test_every_branch_hands_check_venv_dir_the_same_description_of_the_run` |
-| ↳ | `tag`, `matched_manifest_omitted` | `tests/test_cache_search.py::test_a_last_used_hit_still_reads_and_matches_its_own_manifest` |
-| `cache_search.find_match_dir_in_cache` -> `check_venv_dir` (--latest branch) | `venv_dir`, `matched_manifest` | `tests/test_cache_search.py::test_a_cache_hit_reads_and_matches_each_manifest_once` |
+| ↳ | `tag`, `candidate_omitted` | `tests/test_cache_search.py::test_a_last_used_hit_still_reads_and_matches_its_own_manifest` |
+| `cache_search.find_match_dir_in_cache` -> `check_venv_dir` (--latest branch) | `venv_dir`, `candidate` | `tests/test_cache_search.py::test_a_cache_hit_reads_and_matches_each_manifest_once` |
 | ↳ | `wanted`, `tag`, `uninstalled`, `source_names`, `rawlog` | `tests/test_cache_search.py::test_every_branch_hands_check_venv_dir_the_same_description_of_the_run` |
-| `cache_search.find_match_dir_in_cache` -> `check_venv_dir` (--oldest branch) | `venv_dir`, `wanted`, `tag`, `uninstalled`, `source_names`, `rawlog`, `matched_manifest` | `tests/test_cache_search.py::test_every_branch_hands_check_venv_dir_the_same_description_of_the_run` |
-| `cache_search.find_match_dir_in_cache` -> `check_venv_dir` (--smallest branch) | `venv_dir`, `wanted`, `tag`, `uninstalled`, `source_names`, `rawlog`, `matched_manifest` | `tests/test_cache_search.py::test_every_branch_hands_check_venv_dir_the_same_description_of_the_run` |
+| `cache_search.find_match_dir_in_cache` -> `check_venv_dir` (--oldest branch) | `venv_dir`, `wanted`, `tag`, `uninstalled`, `source_names`, `rawlog`, `candidate` | `tests/test_cache_search.py::test_every_branch_hands_check_venv_dir_the_same_description_of_the_run` |
+| `cache_search.find_match_dir_in_cache` -> `check_venv_dir` (--smallest branch) | `venv_dir`, `wanted`, `tag`, `uninstalled`, `source_names`, `rawlog`, `candidate` | `tests/test_cache_search.py::test_every_branch_hands_check_venv_dir_the_same_description_of_the_run` |
 | `cache_search.find_match_dir_in_cache` -> `cache_candidates` | `folders`, `tag` | `tests/test_cache_search.py::test_a_cache_hit_reads_and_matches_each_manifest_once` |
 | ↳ | `wanted` | `tests/test_cache_search.py::test_every_branch_hands_check_venv_dir_the_same_description_of_the_run` |
 | ↳ | `rawlog` | `tests/test_cache_search.py::test_the_cache_search_filters_the_folders_against_this_run_not_a_blank_one` |

@@ -827,20 +827,27 @@ wiring rationale and for two Minors deliberately left unfixed.
   is why `record_venv_state` renames after repairs — the manifest is the
   source of truth, but a wrong folder name still causes a wasted match
   attempt before the manifest is even read.
-- **`cache_search.check_venv_dir`'s `matched_manifest` parameter carries a
-  trust contract, and the name is the contract.** When it is not `None` it
-  means: *this manifest was read from this exact folder during the cache
-  scan, and `satisfies` has already been run on it* — so `check_venv_dir`
-  must neither re-read nor re-check it. Passing a manifest that came from
-  anywhere else silently authorizes a venv that was never matched. Measured
-  cost per cache hit after 3d's Task 7: **1 `read_manifest`, 1 `satisfies`**
-  (it was 2 and 2), pinned by
-  `test_a_cache_hit_reads_and_matches_each_manifest_once`
+- **`cache_search.check_venv_dir`'s `candidate` parameter carries a trust
+  contract, and since 3d's whole-branch review the *type* is the contract.**
+  It takes a `CacheCandidate`, which only `cache_candidates` can build, and
+  only for a folder whose manifest it has just read and put through
+  `satisfies` against this same `wanted`/`tag` — so "already matched, and for
+  this folder" is structural, not prose. It was `matched_manifest:
+  Manifest | None` until the review: any `Manifest` disabled the match check,
+  including one read straight off disk or belonging to a different folder,
+  with only a docstring forbidding it. The remaining hole — a candidate for
+  *some other* folder — is closed by an explicit `ValueError` (not an
+  `assert`: S101 is enforced in `cache_search.py` and `python -O` strips
+  asserts), pinned by
+  `test_check_venv_dir_refuses_a_candidate_that_describes_another_folder`.
+  Measured cost per cache hit, unchanged by the review fix: **1
+  `read_manifest`, 1 `satisfies`** (it was 2 and 2 before 3d's Task 7),
+  pinned by `test_a_cache_hit_reads_and_matches_each_manifest_once`
   (`tests/test_cache_search.py:440`). The **last-used path
-  passes `None` and does its own 1 read / 1 satisfies**, and must: it reaches
+  passes nothing and does its own 1 read / 1 satisfies**, and must: it reaches
   the folder from a recorded pointer, not from the scan, so there is no
   `CacheCandidate` and nothing has vouched for the manifest. That asymmetry
-  is the one branch of the four whose `matched_manifest` handling differs,
+  is the one branch of the four whose `candidate` handling differs,
   and it is the branch 3d's differential could not reach — it is covered by
   unit tests and by a live two-run check only.
 - `version_satisfies` refuses every non-numeric version form (pre-releases,
@@ -1660,11 +1667,12 @@ wiring rationale and for two Minors deliberately left unfixed.
   and the manifest was read twice with it. Both redundancies are gone on the
   winning-candidate path. `cache_search.find_match_dir_in_cache` now keeps the
   whole `CacheCandidate` for each ranked folder — not just the folder — and
-  passes its already-read manifest into `check_venv_dir` as **`matched_manifest`**
-  (the parameter was renamed from `manifest` in the fix round precisely so the
-  trust contract is explicit in the name: *this manifest was read from this
-  folder during the scan; do not re-read it and do not re-run `satisfies` on
-  it*). Measured, per cache hit: **1 `read_manifest`, 1 `satisfies`**, down
+  passes it into `check_venv_dir` as **`candidate`** (the parameter went
+  `manifest` → `matched_manifest` in the fix round, to make the trust contract
+  explicit in the name, and then → `candidate: CacheCandidate | None` after the
+  whole-branch review, to make it explicit in the *type*: a `CacheCandidate`
+  can only come from `cache_candidates`, which has already read that folder's
+  manifest and run `satisfies` on it). Measured, per cache hit: **1 `read_manifest`, 1 `satisfies`**, down
   from 2 and 2, pinned by
   `test_a_cache_hit_reads_and_matches_each_manifest_once`
   (`tests/test_cache_search.py:440`); the last-used side has its own,
@@ -1797,9 +1805,9 @@ wiring rationale and for two Minors deliberately left unfixed.
   7. **The last-used *hit* path is never exercised** — layer 3's script
      directory holds no last-used JSON, so `load_last_used_options`'
      timestamp filtering, the `pathlibcutoff` comparison and
-     `check_venv_dir(matched_manifest=None)` against a real last-used pointer
+     `check_venv_dir` with no `candidate` against a real last-used pointer
      are all unreached. This is the **one branch of the four whose
-     `matched_manifest` handling differs** — exactly the code Task 7 changed —
+     `candidate` handling differs** — exactly the code Task 7 changed —
      and the differential sees only its miss. It has unit tests and it was
      exercised by Task 10's second live run; it has no old-vs-new comparison.
   8. **Non-default CLI shapes** (`--full`, `--blank-slate`, `--justprint`,

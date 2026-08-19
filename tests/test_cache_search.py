@@ -442,8 +442,8 @@ def test_a_cache_hit_reads_and_matches_each_manifest_once(
 ) -> None:
     """The winning candidate's manifest is read from disk once AND satisfies-checked once.
 
-    A bug that would make this fail: dropping the matched_manifest= argument
-    at a selection branch in find_match_dir_in_cache, which restores both the
+    A bug that would make this fail: dropping the candidate= argument at a
+    selection branch in find_match_dir_in_cache, which restores both the
     second read_manifest call and the second satisfies call check_venv_dir
     used to make on the winning folder.
 
@@ -467,11 +467,11 @@ def test_a_cache_hit_reads_and_matches_each_manifest_once(
     merely the disk read.
 
     After closing the item fully: 1 read_manifest call, 1 satisfies call.
-    check_venv_dir's matched_manifest parameter now means what its name says:
-    a manifest already checked against this same wanted/tag by
-    venv_cache.satisfies, so check_venv_dir trusts that and skips its own
-    satisfies call entirely, going straight to the import-level
-    confirmation.
+    check_venv_dir's `candidate` parameter carries that trust in its type: a
+    CacheCandidate can only be built by cache_candidates, which has already
+    put its manifest through venv_cache.satisfies against this same
+    wanted/tag, so check_venv_dir skips its own satisfies call entirely and
+    goes straight to the import-level confirmation.
     """
     venv_dir = a_cached_venv(
         tmp_path,
@@ -540,18 +540,19 @@ def test_check_venv_dir_survives_the_manifest_vanishing_after_it_was_already_rea
     from disk and re-ran satisfies on what it read, so a manifest deleted
     between cache_candidates' scan and check_venv_dir's own check was caught
     there: read_manifest returned None and the folder was rejected. Now that
-    find_match_dir_in_cache hands check_venv_dir a matched_manifest --
-    cache_candidates' own already-satisfies-checked manifest -- neither the
-    read nor the satisfies call happens again, so the same disappearance is
-    invisible to check_venv_dir: the folder is accepted on the strength of
-    the caller's earlier check, provided the import-level check still
-    passes. Only the whole directory vanishing (not just the manifest file
-    inside it) is still caught, by check_venv_dir's is_dir check at the top.
+    find_match_dir_in_cache hands check_venv_dir the CacheCandidate itself --
+    cache_candidates' own already-satisfies-checked manifest, paired with the
+    folder it was read from -- neither the read nor the satisfies call
+    happens again, so the same disappearance is invisible to check_venv_dir:
+    the folder is accepted on the strength of the caller's earlier check,
+    provided the import-level check still passes. Only the whole directory
+    vanishing (not just the manifest file inside it) is still caught, by
+    check_venv_dir's is_dir check at the top.
 
-    A bug that would make this fail: restoring the matched_manifest=None
-    default at a call site (as in the read/satisfies-count test above) would
-    make this venv rejected instead of accepted, since check_venv_dir would
-    then try to read the now-missing manifest itself.
+    A bug that would make this fail: restoring the candidate=None default at
+    a call site (as in the read/satisfies-count test above) would make this
+    venv rejected instead of accepted, since check_venv_dir would then try to
+    read the now-missing manifest itself.
     """
     venv_dir = a_cached_venv(
         tmp_path,
@@ -562,7 +563,7 @@ def test_check_venv_dir_survives_the_manifest_vanishing_after_it_was_already_rea
     options.all_imports = {"thing"}
     found = candidates(options, [venv_dir])
     assert [c.folder for c in found] == [venv_dir]
-    manifest_already_matched = found[0].manifest
+    already_matched = found[0]
 
     (venv_dir / venv_cache.MANIFEST_FILENAME).unlink()
 
@@ -587,7 +588,82 @@ def test_check_venv_dir_survives_the_manifest_vanishing_after_it_was_already_rea
                 getattr(options.args, "reqs", False),
             ),
             rawlog=options.rawlog,
-            matched_manifest=manifest_already_matched,
+            candidate=already_matched,
+        )
+        is True
+    )
+
+
+def test_check_venv_dir_refuses_a_candidate_that_describes_another_folder(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The candidate's match is evidence about its own folder and no other.
+
+    `candidate` is what lets check_venv_dir skip venv_cache.satisfies
+    entirely: a CacheCandidate can only come from cache_candidates, which has
+    already matched that folder's manifest against this same wanted/tag. The
+    one way that guarantee can still be wrong is a caller handing over a
+    candidate for a different folder -- and then the venv actually being
+    checked is accepted on evidence gathered about someone else, with only
+    the folder-name prefilter standing between the run and a venv that does
+    not hold what it needs.
+
+    Concrete bug this catches: phase 3e's move of the cache decision into
+    pipeline.py rewiring a branch as
+    `check_venv_dir(chosen, candidate=candidates[0])` -- correct whenever the
+    first candidate happens to win, silently wrong the moment it does not.
+    Here `other_dir`'s manifest records only other-pkg while this run needs
+    thing-pkg, and the import-level probe is stubbed to succeed, so without
+    the folder check this call returns True and hands back a venv missing
+    the package the script imports.
+    """
+    wanted_dir = a_cached_venv(
+        tmp_path,
+        "myenv-py3.12-20260814-091500-thing-pkg",
+        [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
+    )
+    other_dir = a_cached_venv(
+        tmp_path,
+        "myenv-py3.12-20260814-091501-other-pkg",
+        [venv_cache.PackageRecord("other", "other-pkg", "1.0.0", None)],
+    )
+    options = an_options({ResolvedImport("thing", "thing-pkg")})
+    options.all_imports = {"thing"}
+    found = candidates(options, [wanted_dir])
+    assert [c.folder for c in found] == [wanted_dir]
+
+    monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: True)
+
+    with pytest.raises(ValueError) as excinfo:
+        cache_search.check_venv_dir(
+            other_dir,
+            wanted=cache_search.wanted_packages(
+                options.uninstalled_imports, options.extra_requirements
+            ),
+            tag=cache_search.interpreter_tag(options.stdlib),
+            uninstalled=options.uninstalled_imports,
+            source_names={"thing"},
+            rawlog=options.rawlog,
+            candidate=found[0],
+        )
+
+    message = str(excinfo.value)
+    assert os.fspath(wanted_dir) in message
+    assert os.fspath(other_dir) in message
+
+    # The control: the very same candidate against its own folder is fine, so
+    # what the check rejects is the mismatch and not the candidate itself.
+    assert (
+        cache_search.check_venv_dir(
+            wanted_dir,
+            wanted=cache_search.wanted_packages(
+                options.uninstalled_imports, options.extra_requirements
+            ),
+            tag=cache_search.interpreter_tag(options.stdlib),
+            uninstalled=options.uninstalled_imports,
+            source_names={"thing"},
+            rawlog=options.rawlog,
+            candidate=found[0],
         )
         is True
     )
@@ -602,12 +678,12 @@ def test_a_last_used_hit_still_reads_and_matches_its_own_manifest(
     previous run's options JSON, not from cache_candidates' scan -- so it has
     no manifest that has already passed venv_cache.satisfies. It must keep
     reading its own manifest and keep calling satisfies on it, exactly as
-    before matched_manifest existed.
+    before the candidate parameter existed.
 
     A bug that would make this fail: find_match_dir_in_cache's last-used
-    branch passing matched_manifest from somewhere (there is nothing correct
-    it could pass), which would skip the match check entirely and hand back
-    a venv never confirmed against what this run wants.
+    branch passing a candidate from somewhere (there is nothing correct it
+    could pass), which would skip the match check entirely and hand back a
+    venv never confirmed against what this run wants.
     """
     venv_dir = a_cached_venv(
         tmp_path,
@@ -700,7 +776,7 @@ def _a_run_with_a_pinned_package(tmp_path: Path) -> tuple[veny.Options, Path]:
 
 
 @pytest.mark.parametrize(
-    ("flags", "manifest_is_handed_over"),
+    ("flags", "candidate_is_handed_over"),
     [
         (
             {"latest": False, "oldest": False, "last_used": True, "smallest": False},
@@ -725,7 +801,7 @@ def test_every_branch_hands_check_venv_dir_the_same_description_of_the_run(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     flags: dict[str, bool],
-    manifest_is_handed_over: bool,
+    candidate_is_handed_over: bool,
 ) -> None:
     """All four selection branches must describe the run to check_venv_dir identically.
 
@@ -791,10 +867,13 @@ def test_every_branch_hands_check_venv_dir_the_same_description_of_the_run(
     assert call["uninstalled"] == {ResolvedImport("thing", "thing-pkg")}
     assert call["source_names"] == {"thing", "other"}
     assert call["rawlog"] is True
-    if manifest_is_handed_over:
-        assert call["matched_manifest"] == venv_cache.read_manifest(venv_dir)
+    if candidate_is_handed_over:
+        handed_over = call["candidate"]
+        assert isinstance(handed_over, cache_search.CacheCandidate)
+        assert handed_over.folder == venv_dir
+        assert handed_over.manifest == venv_cache.read_manifest(venv_dir)
     else:
-        assert call.get("matched_manifest") is None
+        assert call.get("candidate") is None
 
     # Second phase, with the REAL check_venv_dir: the arguments above are only
     # worth pinning if this branch actually rejects on them. The cache here
