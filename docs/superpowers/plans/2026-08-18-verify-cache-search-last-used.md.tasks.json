@@ -4,14 +4,14 @@
     {
       "id": 0,
       "subject": "Task 1: Shared wheel-builder fixture",
-      "status": "pending",
+      "status": "completed",
       "activeForm": "Sharing the wheel-builder fixture",
       "description": "**Goal:** `tests/test_verify.py` can build a real, installable wheel without copying 30 lines out of `tests/test_environment.py`.\n\n**Files:**\n- Create: `tests/wheels.py`\n- Modify: `tests/test_environment.py:27-57` (delete `_build_wheel`, import it)\n\n**Acceptance Criteria:**\n- [ ] `tests/wheels.py` exposes `build_wheel(directory, *, name=\"venytest\", version=\"0.1\", value=42) -> Path`, behaviourally identical to `tests/test_environment.py`'s current `_build_wheel`\n- [ ] `tests/test_environment.py` imports it and its live round trip still passes otherwise untouched\n- [ ] Test count unchanged at 321\n\n**Verify:** `pixi run test -q` \u2192 321 passed\n\n```json:metadata\n{\"files\": [\"tests/wheels.py\", \"tests/test_environment.py\"], \"verifyCommand\": \"pixi run test -q\", \"acceptanceCriteria\": [\"tests/wheels.py exposes build_wheel with the same behaviour as _build_wheel\", \"test_environment.py imports it and its live round trip still passes\", \"test count unchanged at 321\"], \"modelTier\": \"mechanical\", \"plan\": \"docs/superpowers/plans/2026-08-18-verify-cache-search-last-used.md\"}\n```"
     },
     {
       "id": 1,
       "subject": "Task 2: Characterize the verify boundary",
-      "status": "pending",
+      "status": "completed",
       "activeForm": "Characterizing the verify boundary",
       "description": "**Goal:** every behaviour `verify.py` will own is pinned against the *current* `cli.py` implementation, including one test that crosses the real interpreter boundary, before a line of it moves.\n\n**Files:**\n- Create: `tests/test_verify.py`\n\n**Acceptance Criteria:**\n- [ ] A live test: real venv via `environment.create_venv`, the Task 1 wheel installed via `environment.install_into_venv`, then `cli.import_outcome_in_venv` asserted to report `imported=True` and `providers == frozenset({\"venytest\"})`; after uninstall, `imported=False`, `rejection_kind == \"import_failed\"`, non-empty `detail`. Nothing about the subprocess is stubbed.\n- [ ] `source_import_names` pinned for three cases: no `--reqs`; `--reqs` entries overlapping `all_imports` (subtracted); `--reqs` entries not overlapping (no change)\n- [ ] `check_packages_in_venv`'s bulk branch pinned to check a source name under that name alone \u2014 the mis-wiring Task 3 makes possible\n- [ ] Every expected value obtained by running code; each docstring says how\n- [ ] Each test mutation-checked: make the one-line mutation its docstring names (restoring from a scratch copy, never `git checkout --`) and confirm that named test fails\n\n**Verify:** `pixi run test tests/test_verify.py -q` \u2192 all pass against unmoved `cli.py`\n\n```json:metadata\n{\"files\": [\"tests/test_verify.py\"], \"verifyCommand\": \"pixi run test tests/test_verify.py -q\", \"acceptanceCriteria\": [\"live import_outcome_in_venv test crosses the real interpreter boundary with no stubbing\", \"source_import_names pinned for all three --reqs cases\", \"bulk branch pinned to check a source name under that name alone\", \"every expected value measured by running code, recorded in the docstring\", \"every test mutation-checked and observed to fail\"], \"modelTier\": \"standard\", \"plan\": \"docs/superpowers/plans/2026-08-18-verify-cache-search-last-used.md\"}\n```",
       "blockedBy": [
@@ -31,7 +31,7 @@
     {
       "id": 3,
       "subject": "Task 4: Characterize the last-used loader",
-      "status": "pending",
+      "status": "completed",
       "activeForm": "Characterizing the last-used loader",
       "description": "**Goal:** the three last-used behaviours are pinned before the module exists \u2014 they have zero direct tests today (measured: `load_last_used_venv_python` has two references in `src/`, none in `tests/`).\n\n**Files:**\n- Create: `tests/test_last_used.py`\n\n**Acceptance Criteria:**\n- [ ] The record filename format measured by calling `ek.save_options_to_json` and printing the name, not transcribed from the plan\n- [ ] `load_last_used_options` pinned to pick the most recent JSON when several match, and to return `None` for an empty directory\n- [ ] The `pathlibcutoff` filter pinned: a record older than \"20250810-224900\" is ignored\n- [ ] `load_last_used_venv_python` pinned both ways: `None` when the recorded interpreter is gone, the path when it exists\n- [ ] Each expected value obtained by writing real files into `tmp_path` and running the current `cli.py`\n- [ ] Mutation-checked: delete `reverse=True`, then the cutoff comparison, then the `ek.safe_is_file` guard (restoring from a scratch copy each time) and confirm the named test fails each time\n\n**Verify:** `pixi run test tests/test_last_used.py -q` \u2192 all pass against unmoved `cli.py`\n\n```json:metadata\n{\"files\": [\"tests/test_last_used.py\"], \"verifyCommand\": \"pixi run test tests/test_last_used.py -q\", \"acceptanceCriteria\": [\"filename format measured, not transcribed\", \"most-recent-wins pinned\", \"pathlibcutoff filter pinned\", \"load_last_used_venv_python pinned in both directions\", \"three mutations each kill a named test\"], \"modelTier\": \"standard\", \"plan\": \"docs/superpowers/plans/2026-08-18-verify-cache-search-last-used.md\"}\n```"
     },
@@ -98,5 +98,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-08-18"
+  "lastUpdated": "2026-08-18T20:51:00.388012"
 }
