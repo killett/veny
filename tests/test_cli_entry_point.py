@@ -134,8 +134,13 @@ def _drive_main(
     code.
 
     Returns:
-        A one-element list that receives the Options object main() built, so a
-        test can assert against the very fields main() wired from.
+        A pair: the one-element list that receives the Options object main()
+        built, so a test can assert against the very fields main() wired from,
+        and a list that receives one entry per script launch -- the exact
+        command main() handed subprocess.run, as strings. The second is what
+        lets a branch test tell "ran under sys.executable" apart from "ran
+        under the venv's interpreter"; the old stub discarded its arguments,
+        so no test could see which interpreter ran the script.
     """
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
@@ -157,11 +162,13 @@ def _drive_main(
     monkeypatch.setattr(ek, "print_all_errors", lambda *a, **k: None)
     monkeypatch.setattr(ek, "save_options_to_json", lambda options: None)
     monkeypatch.setattr(logging, "shutdown", lambda: None)
-    monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *a, **k: subprocess.CompletedProcess(args=[], returncode=0),
-    )
+    launched: list[list[str]] = []
+
+    def record_run(command, *args, **kwargs):
+        launched.append([os.fspath(part) for part in command])
+        return subprocess.CompletedProcess(args=command, returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", record_run)
     captured: list[cli.Options] = []
 
     def fake_list_packages(options):
@@ -172,7 +179,7 @@ def _drive_main(
         captured.append(options)
 
     monkeypatch.setattr(cli, "list_packages", fake_list_packages)
-    return captured
+    return captured, launched
 
 
 def test_main_describes_the_run_to_the_cache_search(monkeypatch, tmp_path):
@@ -191,7 +198,7 @@ def test_main_describes_the_run_to_the_cache_search(monkeypatch, tmp_path):
     holds; `load_last_used=lambda: None` disables the last-used pointer
     entirely, silently, since a missing record is a legitimate miss.
     """
-    captured = _drive_main(
+    captured, _ = _drive_main(
         monkeypatch,
         tmp_path,
         ["--rawlog"],
@@ -364,7 +371,7 @@ def test_main_loads_the_requirements_file_and_keeps_its_names_out_of_the_import_
     `import extra_pkg` works, condemns a perfectly installed distribution,
     and rebuilds the environment on every run.
     """
-    captured = _drive_main(
+    captured, _ = _drive_main(
         monkeypatch,
         tmp_path,
         ["--rawlog", "--reqs"],
@@ -422,7 +429,7 @@ def test_main_checks_the_surrounding_virtualenv_against_this_runs_imports(
     what lets the wiring below be pinned now, so that whoever repairs the
     branch inherits a test of it.
     """
-    captured = _drive_main(
+    captured, _ = _drive_main(
         monkeypatch,
         tmp_path,
         ["--rawlog", "--reqs"],
@@ -477,7 +484,7 @@ def test_main_drops_the_failed_prefix_from_the_venv_it_just_built(
     for good -- every later run rebuilds, and the orphan folder is never
     reused or cleaned up.
     """
-    captured = _drive_main(
+    captured, _ = _drive_main(
         monkeypatch,
         tmp_path,
         ["--rawlog", "--no-cache"],
@@ -556,3 +563,207 @@ def test_main_asks_the_last_used_loader_about_this_script(monkeypatch, tmp_path)
     passed = passed_options[0]
     assert getattr(passed.args, "feeling_lucky", False) is True
     assert passed.python_script == script
+
+
+def test_main_runs_the_script_under_the_running_interpreter_when_nothing_is_missing(
+    monkeypatch, tmp_path
+):
+    """With no uninstalled imports, main() runs the script under sys.executable.
+
+    Behaviour under test: the first of main()'s four branches. Concrete bug
+    this catches: routing this branch through the venv interpreter instead --
+    which the cached-venv branch below legitimately does -- would make a run
+    that needs no environment build a venv anyway, or crash on a venv_python
+    that is None. Expected value obtained from the branch's own contract: no
+    environment was acquired, so the only interpreter available is the one
+    veny is running under.
+    """
+    captured, launched = _drive_main(
+        monkeypatch, tmp_path, ["--rawlog"], uninstalled=set(), all_imports={"os"}
+    )
+
+    status = cli.main()
+
+    assert status == 0
+    assert launched == [[sys.executable, os.fspath(tmp_path / "script.py")]]
+
+
+def test_main_runs_the_script_under_the_cached_venvs_interpreter_on_a_cache_hit(
+    monkeypatch, tmp_path
+):
+    """A cache hit runs the script under that venv's python, not sys.executable.
+
+    Behaviour under test: the fourth branch, on the path where
+    find_match_dir_in_cache returns a folder. Concrete bug this catches:
+    launching with sys.executable after a cache hit would run the user's
+    script in whatever environment veny itself is in -- the packages just
+    matched would not be importable, and the failure would look like a bad
+    cache match rather than a bad launch. Expected value obtained by
+    construction: set_venv_dir puts the interpreter at <venv>/bin/python.
+    """
+    venv_dir = tmp_path / "home" / "veny" / "myenv-py3.12-20260819-000000-thing"
+    venv_dir.mkdir(parents=True)
+    captured, launched = _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--rawlog"],
+        uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing")},
+        all_imports={"thing"},
+    )
+    monkeypatch.setattr(
+        cache_search, "find_match_dir_in_cache", lambda *a, **k: venv_dir
+    )
+
+    status = cli.main()
+
+    assert status == 0
+    assert launched == [
+        [
+            os.fspath(venv_dir / "bin" / "python"),
+            os.fspath(tmp_path / "script.py"),
+        ]
+    ]
+
+
+def test_main_builds_an_environment_when_the_cache_misses(monkeypatch, tmp_path):
+    """A cache miss calls setup_virtualenv and runs under what it built.
+
+    Behaviour under test: the same branch's other side. Concrete bug this
+    catches: taking options.venv_dir instead of the builder's result would
+    silently run the script under a stale directory from an earlier run of
+    the same process. Expected value obtained by construction: the fake
+    builder is the only thing that sets venv_dir, and it sets it to built_dir.
+    """
+    built_dir = tmp_path / "home" / "veny" / "myenv-py3.12-20260819-111111-thing"
+    built_dir.mkdir(parents=True)
+    captured, launched = _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--rawlog"],
+        uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing")},
+        all_imports={"thing"},
+    )
+    monkeypatch.setattr(cache_search, "find_match_dir_in_cache", lambda *a, **k: None)
+
+    def fake_setup(options):
+        options.set_venv_dir(built_dir)
+        return True
+
+    monkeypatch.setattr(cli, "setup_virtualenv", fake_setup)
+
+    status = cli.main()
+
+    assert status == 0
+    assert launched == [
+        [os.fspath(built_dir / "bin" / "python"), os.fspath(tmp_path / "script.py")]
+    ]
+
+
+def test_main_reports_failure_when_the_surrounding_virtualenv_is_short_a_package(
+    monkeypatch, tmp_path
+):
+    """Inside a virtualenv that cannot satisfy the imports, main() returns 1.
+
+    Behaviour under test: the third branch's failure side. Concrete bug this
+    catches: returning 0 here would tell a shell script that the run
+    succeeded when veny never ran anything. Expected value obtained from the
+    design's exit table: 1 means veny could not build or find an environment.
+    """
+    captured, launched = _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--rawlog"],
+        uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing")},
+        all_imports={"thing"},
+        venv_dir=tmp_path / "active",
+    )
+    monkeypatch.setattr(last_used, "is_virtualenv", lambda: True)
+    monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: False)
+
+    status = cli.main()
+
+    assert status == 1
+    assert launched == []
+
+
+def test_justprint_runs_no_script_and_exits_zero(monkeypatch, tmp_path):
+    """--justprint reports and stops. Nothing is launched, status is 0.
+
+    Behaviour under test: the flag's entire contract. Concrete bug this
+    catches: a reordering that puts the justprint check after the
+    all-installed branch would run the user's script on a flag that promises
+    not to. Expected value obtained from --help's own wording: "Don't run the
+    script, just print its package requirements."
+    """
+    captured, launched = _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--justprint", "--rawlog"],
+        uninstalled=set(),
+        all_imports={"os"},
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main()
+
+    assert exit_info.value.code == 0
+    assert launched == []
+
+
+def test_blank_slate_deletes_the_state_directory_and_leaves_other_files_alone(
+    monkeypatch, tmp_path
+):
+    """--blank-slate removes ~/veny and veny's own dotfiles, nothing else.
+
+    Behaviour under test: the destructive mode, driven in process for the
+    first time. Concrete bug this catches: a widened glob deleting the user's
+    own .json files in the working directory -- the branch's filter is four
+    OR'd name tests and nothing pinned any of them. The mirror-image bug is
+    caught too: narrowing the filter to the .out clause alone leaves the
+    last-used JSON record behind, so ~/veny is gone while a pointer into it
+    survives in the working directory and the next --feeling-lucky run
+    follows it to a directory that no longer exists. Expected values obtained
+    by construction from the four clauses: .veny-run.out matches the first
+    (".veny-" prefix, ".out" suffix); .script.py-veny-last-used-on-...json
+    matches the fourth (dot prefix, "-veny-" inside, ".json" suffix);
+    keep.json does not start with a dot and so matches none of them.
+
+    The confirmation prompt is stubbed rather than answered by -y, because
+    measured 2026-08-19 the flag does not reach this branch: argparse gives
+    `-y/--yes` the dest `yes`, while the branch reads
+    `getattr(options.args, "y", False)`, which is never set and so is always
+    False. That is a pre-existing bug, recorded here rather than fixed,
+    because this phase is behaviour-preserving; -y is kept in argv so this
+    test keeps working unchanged once the dest is corrected and the prompt
+    stops being reached at all. Stubbing the
+    prompt is a stdin boundary stub, not a stub of the code under test: the
+    deletion loop below still runs for real, against real files.
+    """
+    home = tmp_path / "home"
+    state_dir = home / "veny"
+    state_dir.mkdir(parents=True)
+    (state_dir / "myenv-py3.12-000000-thing").mkdir()
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    (workdir / ".veny-run.out").write_text("log\n")
+    (workdir / ".script.py-veny-last-used-on-20260101-000000.json").write_text("{}\n")
+    (workdir / "keep.json").write_text("{}\n")
+    monkeypatch.chdir(workdir)
+    captured, launched = _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--blank-slate", "-y"],
+        uninstalled=set(),
+        all_imports=set(),
+    )
+    monkeypatch.setattr(sys, "argv", ["veny", "--blank-slate", "-y"])
+    monkeypatch.setattr(ek, "prompt_then_confirm", lambda prompt: True)
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main()
+
+    assert exit_info.value.code == 0
+    assert not state_dir.exists()
+    assert not (workdir / ".veny-run.out").exists()
+    assert not (workdir / ".script.py-veny-last-used-on-20260101-000000.json").exists()
+    assert (workdir / "keep.json").exists()
