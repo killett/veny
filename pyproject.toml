@@ -68,6 +68,14 @@ ignore = [
 # moved here verbatim from cli.py. It carries no asserts, so S101 stays
 # enforced here.
 "src/veny/cache_search.py" = ["S603"]
+# The 3d differential driver speaks to two differently-shaped source trees
+# through module handles it imports by name, so every veny object it touches is
+# genuinely of unknown static type -- ANN401 has nothing better to offer than
+# `Any` here, and annotating these as the pre-3d types would be a lie about the
+# post-3d tree (and vice versa). S606 is its one os.execv, which exists solely
+# to restart the process with PYTHONHASHSEED=0 set before the interpreter
+# starts; it re-runs this same file with this same interpreter.
+"scripts/differential_3d.py" = ["ANN401", "S606"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
