@@ -606,6 +606,7 @@ def find_match_dir_in_cache(
         if ek.safe_is_dir(f) and f.name.startswith(venv_name)
     ]
     final_venv_folders: dict[Path, dict[str, int]] = {}
+    candidates_by_folder: dict[Path, CacheCandidate] = {}
     for candidate in cache_candidates(
         all_venv_folders, wanted=wanted, tag=tag, rawlog=rawlog
     ):
@@ -613,6 +614,7 @@ def find_match_dir_in_cache(
             "timestamp": int(candidate.parsed.timestamp.replace("-", "")),
             "num_packages": len(candidate.manifest.packages),
         }
+        candidates_by_folder[candidate.folder] = candidate
     if not final_venv_folders:
         if not rawlog:
             logging.info("No matching venv folders found in the cache.")
@@ -642,6 +644,7 @@ def find_match_dir_in_cache(
                 uninstalled=uninstalled,
                 source_names=source_names,
                 rawlog=rawlog,
+                manifest=candidates_by_folder[latest_venv_folder].manifest,
             ):
                 return latest_venv_folder
             if not rawlog:
@@ -670,6 +673,7 @@ def find_match_dir_in_cache(
                 uninstalled=uninstalled,
                 source_names=source_names,
                 rawlog=rawlog,
+                manifest=candidates_by_folder[oldest_venv_folder].manifest,
             ):
                 return oldest_venv_folder
             if not rawlog:
@@ -698,6 +702,7 @@ def find_match_dir_in_cache(
                 uninstalled=uninstalled,
                 source_names=source_names,
                 rawlog=rawlog,
+                manifest=candidates_by_folder[smallest_venv_folder].manifest,
             ):
                 return smallest_venv_folder
             if not rawlog:

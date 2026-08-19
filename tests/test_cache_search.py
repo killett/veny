@@ -163,7 +163,20 @@ def test_a_pin_is_checked_against_the_installed_version(tmp_path: Path) -> None:
 def test_a_folder_that_loses_its_manifest_between_calls_is_dropped_not_raised(
     tmp_path: Path,
 ) -> None:
-    """The cache directory can be mutated by another process; a vanished manifest must degrade, not crash."""
+    """cache_candidates' own resilience to a vanished manifest, called twice directly.
+
+    This pins cache_candidates in isolation: it must degrade, not crash, if a
+    folder that matched on one call has lost its manifest by the next. It
+    does NOT represent find_match_dir_in_cache's scan-then-check window any
+    more: before ledger item 2 was closed, check_venv_dir re-read the
+    manifest from disk, so this two-calls-to-cache_candidates shape was a
+    fair proxy for "scan, then check" in production. Now that
+    find_match_dir_in_cache passes the winning candidate's already-read
+    manifest into check_venv_dir instead of letting it re-read, that window
+    is a different mechanism -- see
+    test_check_venv_dir_survives_the_manifest_vanishing_after_it_was_already_read
+    for what actually happens there now.
+    """
     venv_dir = a_cached_venv(
         tmp_path,
         "myenv-py3.12-20260814-091500-numpy",
@@ -413,4 +426,156 @@ def test_find_match_dir_in_cache_tolerates_a_last_used_options_without_venv_dir(
             load_last_used=lambda: ek.Options(),
         )
         is None
+    )
+
+
+def test_a_cache_hit_reads_each_manifest_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The winning candidate's manifest is read from disk once, not twice.
+
+    A bug that would make this fail: dropping the manifest= argument at a
+    selection branch in find_match_dir_in_cache, which restores the second
+    read_manifest call check_venv_dir used to make -- and with it a window
+    where a folder changing on disk between the scan and the check could
+    give the two reads different answers.
+
+    Measured directly (not assumed) with counting spies around
+    venv_cache.read_manifest and venv_cache.satisfies, driving
+    find_match_dir_in_cache's default ("latest") path against a cache
+    holding one matching folder:
+
+    Before this task: 2 read_manifest calls, 2 satisfies calls -- one pair
+    from cache_candidates' scan, one pair from check_venv_dir re-reading and
+    re-checking the same folder.
+
+    After this task: 1 read_manifest call, 2 satisfies calls. read_manifest
+    drops to one because check_venv_dir now receives the manifest
+    cache_candidates already read instead of reading it again. satisfies
+    stays at two -- not one -- because check_venv_dir still calls
+    venv_cache.satisfies itself even when handed a manifest (see its
+    docstring: it is the venv's own authority, checked independently of how
+    the caller found the folder, which is also what keeps the last-used
+    path -- which has no candidate to hand over -- correct). What ledger
+    item 2 closes is the redundant disk *read*, which could race with
+    another process; recomputing satisfies() twice against the identical,
+    already-in-memory manifest object is deterministic and cheap, not the
+    hazard the design ledger named.
+    """
+    venv_dir = a_cached_venv(
+        tmp_path,
+        "myenv-py3.12-20260814-091500-thing-pkg",
+        [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
+    )
+    options = an_options({ResolvedImport("thing", "thing-pkg")})
+    options.all_imports = {"thing"}
+    options.my_dir = tmp_path
+    options.venv_name = "myenv"
+    options.args = argparse.Namespace(
+        latest=True, oldest=False, last_used=False, smallest=False
+    )
+    monkeypatch.setattr(
+        alias_index,
+        "probe_interpreter",
+        lambda python, timeout=30.0: ("3.12", {"thing": ["thing-pkg"]}),
+    )
+    _stub_successful_import_check(monkeypatch, importable={"thing"})
+
+    read_manifest_calls = 0
+    satisfies_calls = 0
+    orig_read_manifest = venv_cache.read_manifest
+    orig_satisfies = venv_cache.satisfies
+
+    def counting_read_manifest(venv_dir):
+        nonlocal read_manifest_calls
+        read_manifest_calls += 1
+        return orig_read_manifest(venv_dir)
+
+    def counting_satisfies(*args, **kwargs):
+        nonlocal satisfies_calls
+        satisfies_calls += 1
+        return orig_satisfies(*args, **kwargs)
+
+    monkeypatch.setattr(venv_cache, "read_manifest", counting_read_manifest)
+    monkeypatch.setattr(venv_cache, "satisfies", counting_satisfies)
+
+    result = cache_search.find_match_dir_in_cache(
+        options.args,
+        my_dir=options.my_dir,
+        venv_name=options.venv_name,
+        uninstalled=options.uninstalled_imports,
+        extra_requirements=options.extra_requirements,
+        source_names=verify.source_import_names(
+            options.all_imports,
+            options.extra_requirements,
+            getattr(options.args, "reqs", False),
+        ),
+        tag=cache_search.interpreter_tag(options.stdlib),
+        rawlog=options.rawlog,
+        load_last_used=_never_called,
+    )
+
+    assert result == venv_dir
+    assert read_manifest_calls == 1
+    assert satisfies_calls == 2
+
+
+def test_check_venv_dir_survives_the_manifest_vanishing_after_it_was_already_read(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Pins the lost-manifest window this task's change narrows.
+
+    Before ledger item 2 was closed, check_venv_dir re-read the manifest
+    from disk, so a manifest deleted between cache_candidates' scan and
+    check_venv_dir's own check was caught there: read_manifest returned
+    None and the folder was rejected. Now that find_match_dir_in_cache hands
+    check_venv_dir the manifest cache_candidates already read, that read
+    never happens, so the same disappearance is invisible to check_venv_dir
+    -- the folder is accepted, based on the manifest already held in memory,
+    provided the import-level check still passes. Only the whole directory
+    vanishing (not just the manifest file inside it) is still caught, by
+    check_venv_dir's is_dir check at the top.
+
+    A bug that would make this fail: restoring the manifest=None default at
+    a call site (as in the read-count test above) would make this venv
+    rejected instead of accepted, since check_venv_dir would then try to
+    read the now-missing manifest itself.
+    """
+    venv_dir = a_cached_venv(
+        tmp_path,
+        "myenv-py3.12-20260814-091500-thing-pkg",
+        [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
+    )
+    options = an_options({ResolvedImport("thing", "thing-pkg")})
+    options.all_imports = {"thing"}
+    found = candidates(options, [venv_dir])
+    assert [c.folder for c in found] == [venv_dir]
+    manifest_already_read = found[0].manifest
+
+    (venv_dir / venv_cache.MANIFEST_FILENAME).unlink()
+
+    monkeypatch.setattr(
+        alias_index,
+        "probe_interpreter",
+        lambda python, timeout=30.0: ("3.12", {"thing": ["thing-pkg"]}),
+    )
+    _stub_successful_import_check(monkeypatch, importable={"thing"})
+
+    assert (
+        cache_search.check_venv_dir(
+            venv_dir,
+            wanted=cache_search.wanted_packages(
+                options.uninstalled_imports, options.extra_requirements
+            ),
+            tag=cache_search.interpreter_tag(options.stdlib),
+            uninstalled=options.uninstalled_imports,
+            source_names=verify.source_import_names(
+                options.all_imports,
+                options.extra_requirements,
+                getattr(options.args, "reqs", False),
+            ),
+            rawlog=options.rawlog,
+            manifest=manifest_already_read,
+        )
+        is True
     )
