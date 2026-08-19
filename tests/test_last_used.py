@@ -24,9 +24,11 @@ which satisfies both of ``load_last_used_options``'s filters: the
 ``last-used-on-(\\d{8}-\\d{6})`` regex.
 """
 
+import sys
 from pathlib import Path
 
 import emmykit as ek
+import pytest
 
 from veny import cli
 
@@ -158,3 +160,26 @@ def test_a_recorded_interpreter_that_exists_is_returned(tmp_path: Path) -> None:
         venv_python=interpreter,
     )
     assert cli.load_last_used_venv_python(options) == interpreter
+
+
+def test_is_virtualenv_reflects_prefix_vs_base_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both branches of the sys.prefix / sys.base_prefix comparison are pinned.
+
+    A bug that would make this fail: inverting the comparison (`==` instead
+    of `!=`), or comparing the wrong pair of attributes (e.g. sys.prefix to
+    itself, always True, or sys.base_prefix to itself, always False) — any
+    of which would make veny take the already-in-a-virtualenv path on a bare
+    interpreter and skip building a venv at all, or vice versa.
+
+    Both branches are exercised so a mutation that only breaks one of them
+    (e.g. hard-coding True) cannot slip through unnoticed.
+    """
+    monkeypatch.setattr(sys, "prefix", "/fake/venv")
+    monkeypatch.setattr(sys, "base_prefix", "/fake/base")
+    assert cli.is_virtualenv() is True
+
+    monkeypatch.setattr(sys, "prefix", "/fake/same")
+    monkeypatch.setattr(sys, "base_prefix", "/fake/same")
+    assert cli.is_virtualenv() is False
