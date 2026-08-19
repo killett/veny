@@ -237,6 +237,115 @@ def test_main_describes_the_run_to_the_cache_search(monkeypatch, tmp_path):
     assert loaded == [options]
 
 
+def test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs(
+    monkeypatch, tmp_path, caplog
+):
+    """main() must hand the cache search and the last-used loader this run's own rawlog.
+
+    Every other test that drives main() passes --rawlog, so `rawlog=True` --
+    a wrong-but-type-correct value the STANDING CHECK's own method covers --
+    could be hardcoded at either call site with the whole suite green: the
+    spy tests assert `rawlog is True` and get exactly that. Measured
+    2026-08-19 across all 17 `rawlog=` sites in cli/cache_search/last_used/
+    verify: 16 of them survived the `True` substitution.
+
+    Concrete bug this catches: `rawlog=True` at the find_match_dir_in_cache
+    call site silences every informational line a normal run sees from the
+    cache search -- "Checking the cache for a virtual environment...",
+    "Skipping the cached venv X because Y", "Found N matching venv folders",
+    "No matching venv folders found" -- so a user watching veny decide
+    whether to reuse an environment is told nothing at all, and the same at
+    the _load_last_used call site hides why the last-used pointer was not
+    used.
+    """
+    _drive_main(
+        monkeypatch,
+        tmp_path,
+        [],
+        uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
+        all_imports={"thing"},
+    )
+    (tmp_path / "home" / "veny").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(cli, "setup_virtualenv", lambda options: False)
+    monkeypatch.setattr(ek, "my_critical_error", lambda *a, **k: None)
+
+    with caplog.at_level(logging.INFO):
+        cli.main()
+
+    # From cache_search.find_match_dir_in_cache (cli.py's rawlog argument to it).
+    assert (
+        "Checking the cache for a virtual environment with all the required packages"
+        in caplog.text
+    )
+    # From last_used.load_last_used_options, reached through _load_last_used --
+    # the cache search's default branch asks for the last-used record first.
+    assert "No previous JSON files found in the script directory." in caplog.text
+
+    # The other direction: --rawlog must reach both, so a hardcoded
+    # `rawlog=False` at either site is caught too.
+    caplog.clear()
+    _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--rawlog"],
+        uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
+        all_imports={"thing"},
+    )
+    monkeypatch.setattr(cli, "setup_virtualenv", lambda options: False)
+    with caplog.at_level(logging.INFO):
+        cli.main()
+
+    assert "Checking the cache for a virtual environment" not in caplog.text
+    assert "No previous JSON files found" not in caplog.text
+
+
+def test_main_lets_the_feeling_lucky_loader_speak_on_a_run_that_did_not_ask_for_raw_logs(
+    monkeypatch, tmp_path, caplog
+):
+    """--feeling-lucky's loader gets its own rawlog argument, and its own hole.
+
+    Measured 2026-08-19: `rawlog=True` at the load_last_used_venv_python call
+    site left all 360 tests green. The cache search is stubbed out here on
+    purpose -- main()'s other last-used call site (_load_last_used, reached
+    from find_match_dir_in_cache) logs the identical line, so leaving it live
+    would let either site cover for the other and neither would be pinned.
+
+    Concrete bug this catches: a --feeling-lucky run that finds no usable
+    record explains nothing about why, on a run that did not ask for raw
+    logs.
+    """
+    _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--feeling-lucky"],
+        uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
+        all_imports={"thing"},
+    )
+    monkeypatch.setattr(cache_search, "find_match_dir_in_cache", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "setup_virtualenv", lambda options: False)
+    monkeypatch.setattr(ek, "my_critical_error", lambda *a, **k: None)
+
+    with caplog.at_level(logging.INFO):
+        cli.main()
+
+    assert "No previous JSON files found in the script directory." in caplog.text
+
+    caplog.clear()
+    _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--feeling-lucky", "--rawlog"],
+        uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
+        all_imports={"thing"},
+    )
+    monkeypatch.setattr(cache_search, "find_match_dir_in_cache", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "setup_virtualenv", lambda options: False)
+    with caplog.at_level(logging.INFO):
+        cli.main()
+
+    assert "No previous JSON files found" not in caplog.text
+
+
 def test_main_loads_the_requirements_file_and_keeps_its_names_out_of_the_import_check(
     monkeypatch, tmp_path
 ):

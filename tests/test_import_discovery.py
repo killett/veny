@@ -1,6 +1,9 @@
 """Pin which imports veny's scan discovers, independent of I/O recording."""
 
+import logging
 from pathlib import Path
+
+import pytest
 
 from veny import cli
 
@@ -22,6 +25,56 @@ def _scan(script: Path, custom_modules: dict[str, Path]) -> cli.Options:
     options.custom_modules = custom_modules
     cli.find_imports_in_script(options, script)
     return options
+
+
+def test_the_scan_adapter_lets_the_scanner_name_the_files_it_opens(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """find_imports_in_script builds the Settings the scanner logs through.
+
+    `rawlog` is one of five fields cli.find_imports_in_script copies onto the
+    Settings it hands analysis.scan. Measured 2026-08-19 across all 17
+    `rawlog=` sites in cli/cache_search/last_used/verify: substituting the
+    wrong-but-type-correct `True` left 16 of them with the whole suite green,
+    this one included -- every scan test here sets rawlog=True and asserts on
+    the imports found, never on a log record.
+
+    Concrete bug this catches: `rawlog=True` in that Settings and the
+    "Processing module: X" line vanishes for every file the scan walks into.
+    That line is what tells a user which of their own local modules veny
+    followed an import into -- the only visible trace of the recursive walk,
+    and the first thing to look at when the scan reports an import from a
+    file nobody expected it to open.
+    """
+    helper = tmp_path / "helper.py"
+    helper.write_text("import numpy\n")
+    script = tmp_path / "s.py"
+    script.write_text("import helper\n\nhelper\n")
+    options = cli.Options()
+    options.rawlog = False
+    options.python_script = script
+    options.script_dir = tmp_path
+    options.custom_modules = {"helper": helper}
+
+    with caplog.at_level(logging.INFO):
+        cli.find_imports_in_script(options, script)
+
+    assert options.all_imports == {"numpy"}
+    assert f"Processing module: {script}" in caplog.text
+
+    # And the other direction: a run that asked for raw logging must stay
+    # quiet, so a hardcoded `rawlog=False` in that Settings is caught too.
+    caplog.clear()
+    quiet = cli.Options()
+    quiet.rawlog = True
+    quiet.python_script = script
+    quiet.script_dir = tmp_path
+    quiet.custom_modules = {"helper": helper}
+
+    with caplog.at_level(logging.INFO):
+        cli.find_imports_in_script(quiet, script)
+
+    assert "Processing module:" not in caplog.text
 
 
 def test_function_body_import_in_a_custom_module_is_discovered(

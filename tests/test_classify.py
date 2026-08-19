@@ -22,6 +22,7 @@ inspects the uv command instead of running it.
 from __future__ import annotations
 
 import argparse
+import logging
 import shutil
 import subprocess
 from pathlib import Path
@@ -621,6 +622,48 @@ def test_split_imports_probe_venv_is_given_the_classified_interpreter(monkeypatc
     assert "--python" in probe_command
     python_index = probe_command.index("--python")
     assert probe_command[python_index + 1] == "/resolved/bin/python3"
+
+
+def test_the_classification_adapter_lets_classify_report_each_import(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """cli.split_imports must hand classify this run's rawlog, not a constant.
+
+    Measured 2026-08-19 across all 17 `rawlog=` sites in
+    cli/cache_search/last_used/verify: substituting the wrong-but-type-correct
+    `True` -- a value the STANDING CHECK's own stated method covers -- left 16
+    of them with the whole suite green, this one included, because every test
+    that reaches this adapter asserts on the classification it returns and
+    none reads a log record.
+
+    Concrete bug this catches: `rawlog=True` here silences the per-import
+    "Checking import X : n/N - YES/NO" running commentary, which is the only
+    thing veny prints while the slowest part of a cold run (a PyPI lookup per
+    unresolved name) is happening. A user watching a stalled terminal has no
+    way to tell which import it is stuck on.
+    """
+    options = cli.Options()
+    options.aliases = _index({"uninst": "uninst-pypi"})
+    options.all_imports = {"uninst"}
+    _stub_probe(monkeypatch)
+
+    with caplog.at_level(logging.INFO):
+        cli.split_imports(options)
+
+    assert "Checking import uninst" in caplog.text
+
+    # And the other direction: a run that asked for raw logging must stay
+    # quiet, so a hardcoded `rawlog=False` at that call site is caught too.
+    caplog.clear()
+    quiet = cli.Options()
+    quiet.rawlog = True
+    quiet.aliases = _index({"uninst": "uninst-pypi"})
+    quiet.all_imports = {"uninst"}
+
+    with caplog.at_level(logging.INFO):
+        cli.split_imports(quiet)
+
+    assert "Checking import" not in caplog.text
 
 
 def test_only_genuinely_uninstalled_imports_are_resolved(monkeypatch):

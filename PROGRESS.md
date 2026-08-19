@@ -1118,6 +1118,28 @@ wiring rationale and for two Minors deliberately left unfixed.
   **Run this on 3e before claiming its extraction is pinned.** 3e slims
   `cli.py` further and drains `Options`, which is the same transformation
   that produced these 104.
+- **A two-valued argument needs BOTH values substituted, and a spy pins only
+  one of them.** The first rule above is half a rule, and 3d's whole-branch
+  review measured the other half: for a `bool`, `True` is a
+  wrong-but-type-correct value too, and on 2026-08-18 substituting it at every
+  one of the **17 `rawlog=<expr>` sites** in `cli.py` (10), `cache_search.py`
+  (5), `last_used.py` (1) and `verify.py` (1) left **16 of 17 green** — all 10
+  of `cli.py`'s among them. The mechanism is worth remembering: the pinning
+  tests are *argument spies* asserting `rawlog is True` on runs driven with
+  `--rawlog`, so the `True` substitution hands each spy exactly the value it
+  asserts. A spy proves a value arrived; only reading the *effect* proves the
+  right value arrived. Closed 2026-08-19 by seven `caplog` tests that drive
+  each path with `rawlog=False` and assert a specific `logging.INFO` record
+  (and its absence under `rawlog=True`, so one test covers both directions).
+  **12 of 17 now kill a named test; 5 remain open holes**, all in `cli.py`
+  (`406` `ek.configure_logging`, `503` `parse_extra_requirements`, `518`
+  `Settings`→`dict_of_custom_modules`, `1038` `verify_and_repair_imports`,
+  `1055` `record_venv_state`) — two of them (`406`, `518`) unpinned in *both*
+  directions. Both sweeps, site by site, are the `rawlog` table in
+  `docs/superpowers/plans/2026-08-18-verify-cache-search-last-used-wiring-index.md`;
+  the index's headline "every one of them kills a named test" now names the
+  substitution class it was measured under, because that qualifier is the
+  whole difference between the claim being true and being false.
 - **Never `git checkout -- <path>` to undo a deliberate in-place mutation.** It
   reverts the *whole* file to HEAD, discarding every unrelated edit in it, not
   just the mutation you were testing. It cost 3c's Task 4 an entire session's

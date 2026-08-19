@@ -24,6 +24,7 @@ which satisfies both of ``load_last_used_options``'s filters: the
 ``last-used-on-(\\d{8}-\\d{6})`` regex.
 """
 
+import logging
 import sys
 from pathlib import Path
 
@@ -150,6 +151,63 @@ def test_no_matching_json_returns_none(tmp_path: Path) -> None:
         )
         is None
     )
+
+
+def test_the_venv_python_loader_lets_the_record_search_explain_itself(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """load_last_used_venv_python must pass the caller's rawlog down, not a constant.
+
+    It has two voices on a miss: its own ("No last used options found, so no
+    venv_python to return.") and the one from load_last_used_options it
+    delegates to ("No previous JSON files found in the script directory."),
+    which is the only one that says *why*. The second is the one this call
+    site's `rawlog` argument controls.
+
+    Measured 2026-08-19 across all 17 `rawlog=` sites in
+    cli/cache_search/last_used/verify: substituting the wrong-but-type-correct
+    `True` -- covered by the STANDING CHECK's own stated method -- left 16 of
+    them green, this one included, because nothing in the suite read a log
+    record from this path.
+
+    Concrete bug this catches: `rawlog=True` here, and a --feeling-lucky run
+    that finds nothing reports only that it found nothing, never that the
+    script's directory holds no record at all (as opposed to holding one that
+    is too old, or one whose interpreter has been deleted -- each of which
+    has its own line).
+    """
+    options, script = _options_for(tmp_path)
+
+    with caplog.at_level(logging.INFO):
+        assert (
+            last_used.load_last_used_venv_python(
+                options,
+                script_dir=tmp_path,
+                python_script=script,
+                pathlibcutoff=options.pathlibcutoff,
+                rawlog=False,
+            )
+            is None
+        )
+
+    assert "No previous JSON files found in the script directory." in caplog.text
+
+    # And the other direction: a run that asked for raw logging must stay
+    # quiet, so a hardcoded `rawlog=False` at that call site is caught too.
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        assert (
+            last_used.load_last_used_venv_python(
+                options,
+                script_dir=tmp_path,
+                python_script=script,
+                pathlibcutoff=options.pathlibcutoff,
+                rawlog=True,
+            )
+            is None
+        )
+
+    assert "No previous JSON files found" not in caplog.text
 
 
 def test_a_recorded_interpreter_that_no_longer_exists_returns_none(

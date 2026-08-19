@@ -16,11 +16,67 @@ are in `.superpowers/sdd/2026-08-18-verify-cache-search-last-used/task-9-report.
 Run of record: task 9, **2026-08-18**, against the branch
 `verify-cache-search-last-used`, whose phase branch point is **`313e800`**.
 **147 arguments across 40 call-site groups; every one of them kills a named
-test.** 104 of the 147 did not before task 9. Method, per argument: copy the
-file to a scratch directory, substitute in place, run `pixi run pytest -q`,
-record the named failures, restore from the copy — never `git stash`, never
-`git checkout -- <path>`. Re-run this whole check after any further extraction;
-a row whose test no longer dies is a hole, not a stale row.
+test under the substitution class that run used** — an empty value, the
+parameter's own default, or (where neither exists) a wrong-but-type-correct
+one, which for a `bool` means **the class default `False`**. 104 of the 147
+did not before task 9. Method, per argument: copy the file to a scratch
+directory, substitute in place, run `pixi run pytest -q`, record the named
+failures, restore from the copy — never `git stash`, never
+`git checkout -- <path>`. Re-run this whole check after any further
+extraction; a row whose test no longer dies is a hole, not a stale row.
+
+**`rawlog` is the one argument whose row above is not the whole story, and the
+`rawlog` table below is the authority for it.** `True` is also a
+wrong-but-type-correct value for a `bool`, and the whole-branch review
+measured it: substituting the literal `True` for every `rawlog=<expr>` — 17
+sites across `cli.py`, `cache_search.py`, `last_used.py` and `verify.py` — left
+**16 of 17 green**, and all 10 of `cli.py`'s survived. The reason every
+`rawlog` row above still passed its own check is that the tests behind them
+are argument spies asserting `rawlog is True` on a run driven with `--rawlog`:
+substituting `True` hands the spy exactly the value it asserts. Nothing read a
+log *record*. Closed on **2026-08-19** by seven `caplog` tests (10 cases,
+one per affected path) that drive the path with `rawlog=False` and assert a specific
+`logging.INFO` record; the sweep was then re-run over all 17 sites. **12 of 17
+now kill a named test; the remaining 5 are marked OPEN HOLE below and are
+real, not stale.** The lesson generalises past `rawlog`: for a two-valued
+argument, *both* values are wrong-but-type-correct substitutions, and a spy
+that asserts the value the call site happens to carry pins nothing against
+the other one.
+
+### `rawlog`, every site, both substitution directions (measured 2026-08-19)
+
+Both directions were swept site by site on 2026-08-19 (34 suite runs; mutate
+in place, run `pixi run test -q`, restore from a scratch copy). Column 3 names
+every test that dies when that site is rewritten to the literal `rawlog=True`;
+column 4 the same for `rawlog=False`, which is the direction task 9's run of
+record used. Nothing here is transcribed from the main table — both columns
+are what the sweep printed. Line numbers are as of `3bc82ea`.
+
+| Site | Passed to | Dies under `rawlog=True` | Dies under `rawlog=False` |
+|---|---|---|---|
+| `cli.py:349` (`_load_last_used`) | `last_used.load_last_used_options` | `tests/test_cli_entry_point.py::test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs` | `tests/test_cli_entry_point.py::test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs`<br>`tests/test_last_used.py::test_the_last_used_adapter_hands_over_this_runs_script_and_cutoff` |
+| `cli.py:388` (`main`, --feeling-lucky) | `last_used.load_last_used_venv_python` | `tests/test_cli_entry_point.py::test_main_lets_the_feeling_lucky_loader_speak_on_a_run_that_did_not_ask_for_raw_logs` | `tests/test_cli_entry_point.py::test_main_asks_the_last_used_loader_about_this_script`<br>`tests/test_cli_entry_point.py::test_main_lets_the_feeling_lucky_loader_speak_on_a_run_that_did_not_ask_for_raw_logs` |
+| `cli.py:406` (`main`) | `ek.configure_logging` | **OPEN HOLE** — emmykit owns the effect (log formatting) and no veny test observes it; unpinned in *both* directions | **OPEN HOLE** — emmykit owns the effect (log formatting) and no veny test observes it; unpinned in *both* directions |
+| `cli.py:503` (`main`, --reqs) | `environment.parse_extra_requirements` | **OPEN HOLE** — the value is only forwarded to `ek.my_fopen(suppress_errors=True)`, whose logging is emmykit's | `tests/test_cli_entry_point.py::test_main_loads_the_requirements_file_and_keeps_its_names_out_of_the_import_check` |
+| `cli.py:518` (`main`) | `Settings` → `dict_of_custom_modules` | **OPEN HOLE** — every test that drives `main()` stubs `dict_of_custom_modules`, and the real one writes a pickle into the cwd; unpinned in *both* directions | **OPEN HOLE** — every test that drives `main()` stubs `dict_of_custom_modules`, and the real one writes a pickle into the cwd; unpinned in *both* directions |
+| `cli.py:615` (`main`) | `cache_search.find_match_dir_in_cache` | `tests/test_cli_entry_point.py::test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs` | `tests/test_cli_entry_point.py::test_main_describes_the_run_to_the_cache_search`<br>`tests/test_cli_entry_point.py::test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs` |
+| `cli.py:731` (`find_imports_in_script`) | `Settings` → `analysis.scan` | `tests/test_import_discovery.py::test_the_scan_adapter_lets_the_scanner_name_the_files_it_opens` | `tests/test_import_discovery.py::test_the_scan_adapter_lets_the_scanner_name_the_files_it_opens` |
+| `cli.py:830` (`split_imports`) | `classify.split_imports` | `tests/test_classify.py::test_the_classification_adapter_lets_classify_report_each_import` | `tests/test_classify.py::test_the_classification_adapter_lets_classify_report_each_import` |
+| `cli.py:1038` (`setup_virtualenv`) | `verify.verify_and_repair_imports` | **OPEN HOLE** — the line it controls is reached only on a repair, and `test_uv_backend`'s driver stubs the repair pass out | `tests/test_uv_backend.py::test_verify_and_repair_imports_is_handed_the_whole_description_of_the_run` |
+| `cli.py:1055` (`setup_virtualenv`) | `cache_search.record_venv_state` | **OPEN HOLE** — the line it controls fires only when the folder name has drifted, and that driver stubs `record_venv_state` out | `tests/test_uv_backend.py::test_the_manifest_and_the_final_check_describe_the_venv_after_repair` |
+| `cache_search.py:620` (last-used branch) | `check_venv_dir` | `tests/test_cache_search.py::test_every_branch_lets_check_venv_dir_report_a_venv_that_vanished[last_used]` | `tests/test_cache_search.py::test_every_branch_hands_check_venv_dir_the_same_description_of_the_run[last_used]`<br>`tests/test_cache_search.py::test_every_branch_lets_check_venv_dir_report_a_venv_that_vanished[last_used]` |
+| `cache_search.py:643` | `cache_candidates` | `tests/test_cache_search.py::test_the_cache_search_lets_cache_candidates_explain_a_rejected_folder` | `tests/test_cache_search.py::test_the_cache_search_filters_the_folders_against_this_run_not_a_blank_one`<br>`tests/test_cache_search.py::test_the_cache_search_lets_cache_candidates_explain_a_rejected_folder` |
+| `cache_search.py:678` (--latest branch) | `check_venv_dir` | `tests/test_cache_search.py::test_every_branch_lets_check_venv_dir_report_a_venv_that_vanished[latest]` | `tests/test_cache_search.py::test_every_branch_hands_check_venv_dir_the_same_description_of_the_run[latest]`<br>`tests/test_cache_search.py::test_every_branch_lets_check_venv_dir_report_a_venv_that_vanished[latest]` |
+| `cache_search.py:707` (--oldest branch) | `check_venv_dir` | `tests/test_cache_search.py::test_every_branch_lets_check_venv_dir_report_a_venv_that_vanished[oldest]` | `tests/test_cache_search.py::test_every_branch_hands_check_venv_dir_the_same_description_of_the_run[oldest]`<br>`tests/test_cache_search.py::test_every_branch_lets_check_venv_dir_report_a_venv_that_vanished[oldest]` |
+| `cache_search.py:736` (--smallest branch) | `check_venv_dir` | `tests/test_cache_search.py::test_every_branch_lets_check_venv_dir_report_a_venv_that_vanished[smallest]` | `tests/test_cache_search.py::test_every_branch_hands_check_venv_dir_the_same_description_of_the_run[smallest]`<br>`tests/test_cache_search.py::test_every_branch_lets_check_venv_dir_report_a_venv_that_vanished[smallest]` |
+| `last_used.py:79` (`load_last_used_venv_python`) | `load_last_used_options` | `tests/test_cli_entry_point.py::test_main_lets_the_feeling_lucky_loader_speak_on_a_run_that_did_not_ask_for_raw_logs`<br>`tests/test_last_used.py::test_the_venv_python_loader_lets_the_record_search_explain_itself` | `tests/test_cli_entry_point.py::test_main_lets_the_feeling_lucky_loader_speak_on_a_run_that_did_not_ask_for_raw_logs`<br>`tests/test_last_used.py::test_the_venv_python_loader_lets_the_record_search_explain_itself` |
+| `verify.py:667` (`verify_and_repair_imports`) | `repair_unsatisfied_import` | `tests/test_verify.py::test_the_repair_pass_names_the_package_that_finally_provided_the_import` | `tests/test_verify.py::test_the_repair_pass_names_the_package_that_finally_provided_the_import` |
+
+Each new `caplog` test asserts the message under `rawlog=False` **and** its
+absence under `rawlog=True`, so one test covers both directions rather than
+needing a spy for one and a log for the other. Two sites — `cli.py:406` and
+`cli.py:518` — are unpinned in **both** directions: no test in the suite
+reads `rawlog` at either of them at all.
 
 | Call site | Arguments | Pinned by |
 |---|---|---|

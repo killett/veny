@@ -4,7 +4,9 @@ import argparse
 import contextlib
 import importlib
 import io
+import logging
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -917,6 +919,147 @@ def test_every_branch_hands_check_venv_dir_the_same_description_of_the_run(
         )
         is None
     ), "a venv whose manifest lacks the package must never be reused"
+
+
+def test_the_cache_search_lets_cache_candidates_explain_a_rejected_folder(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """cache_candidates gets this run's rawlog, and it is the only voice on a rejection.
+
+    Measured 2026-08-19 across all 17 `rawlog=` sites in
+    cli/cache_search/last_used/verify: substituting the wrong-but-type-correct
+    `True` -- a value the STANDING CHECK's own stated method covers -- left 16
+    of them with the whole suite green, this one included. The existing pins
+    all substitute the class default `False`, which the spy tests catch and a
+    silenced run does not.
+
+    Concrete bug this catches: `rawlog=True` at the cache_candidates call
+    site. Every "Skipping the cached venv X because Y" line disappears from a
+    normal run, so the one explanation veny offers for rebuilding an
+    environment the user can see sitting in ~/veny -- a missing package, a
+    pin that no longer holds -- is never printed, and the rebuild looks
+    arbitrary.
+    """
+    # The folder name advertises thing-pkg; the manifest records only
+    # other-pkg. That is the one shape the cheap name prefilter cannot reject,
+    # so venv_cache.satisfies rejects it and cache_candidates says why.
+    venv_dir = a_cached_venv(
+        tmp_path,
+        "myenv-py3.12-20260814-091500-thing-pkg",
+        [venv_cache.PackageRecord("other", "other-pkg", "1.0.0", None)],
+    )
+    options = an_options({ResolvedImport("thing", "thing-pkg")})
+    options.all_imports = {"thing"}
+
+    def run(rawlog: bool) -> Path | None:
+        return cache_search.find_match_dir_in_cache(
+            argparse.Namespace(
+                latest=True, oldest=False, last_used=False, smallest=False
+            ),
+            my_dir=tmp_path,
+            venv_name="myenv",
+            uninstalled=options.uninstalled_imports,
+            extra_requirements=options.extra_requirements,
+            source_names={"thing"},
+            tag=cache_search.interpreter_tag(options.stdlib),
+            rawlog=rawlog,
+            load_last_used=_never_called,
+        )
+
+    with caplog.at_level(logging.INFO):
+        assert run(False) is None
+
+    assert f"Skipping the cached venv {os.fspath(venv_dir)} because" in caplog.text
+
+    # And the other direction: a run that asked for raw logging must stay
+    # quiet, so a hardcoded `rawlog=False` at that call site is caught too.
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        assert run(True) is None
+
+    assert "Skipping the cached venv" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        {"latest": False, "oldest": False, "last_used": True, "smallest": False},
+        {"latest": True, "oldest": False, "last_used": False, "smallest": False},
+        {"latest": False, "oldest": True, "last_used": False, "smallest": False},
+        {"latest": False, "oldest": False, "last_used": False, "smallest": True},
+    ],
+    ids=["last_used", "latest", "oldest", "smallest"],
+)
+def test_every_branch_lets_check_venv_dir_report_a_venv_that_vanished(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    flags: dict[str, bool],
+) -> None:
+    """All four branches pass their own rawlog to check_venv_dir, and it must be the run's.
+
+    Measured 2026-08-19: `rawlog=True` substituted at any of the four
+    check_venv_dir call sites left all 360 tests green. The four-branch
+    argument test above pins `rawlog` only against the class default `False`,
+    by reading it off a spy -- with `True` hardcoded the spy sees the very
+    value it asserts.
+
+    The venv is deleted after cache_candidates has already returned a
+    CacheCandidate for it, which is the real window: the scan reads a folder,
+    the selection then checks it, and anything can happen in between. The
+    last-used branch reaches the same code from a recorded pointer, so it
+    needs no such stub.
+
+    Concrete bug this catches: a run whose cached venv was deleted (a manual
+    clean-up, another veny run's --blank-slate) silently rebuilds from
+    scratch with no line saying the environment it meant to reuse is gone.
+    """
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    venv_dir = a_cached_venv(
+        cache_dir,
+        "myenv-py3.12-20260814-091500-thing-pkg",
+        [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
+    )
+    options = an_options({ResolvedImport("thing", "thing-pkg")})
+    options.all_imports = {"thing"}
+    already_found = candidates(options, [venv_dir])
+    assert [c.folder for c in already_found] == [venv_dir]
+
+    shutil.rmtree(venv_dir)
+    if not flags["last_used"]:
+        monkeypatch.setattr(
+            cache_search, "cache_candidates", lambda *a, **k: already_found
+        )
+    last_used_options = ek.Options()
+    last_used_options.venv_dir = venv_dir  # type: ignore[attr-defined]
+
+    def run(rawlog: bool) -> Path | None:
+        return cache_search.find_match_dir_in_cache(
+            argparse.Namespace(**flags),
+            my_dir=cache_dir,
+            venv_name="myenv",
+            uninstalled=options.uninstalled_imports,
+            extra_requirements=options.extra_requirements,
+            source_names={"thing"},
+            tag=cache_search.interpreter_tag(options.stdlib),
+            rawlog=rawlog,
+            load_last_used=lambda: last_used_options,
+        )
+
+    with caplog.at_level(logging.INFO):
+        assert run(False) is None
+
+    assert (
+        f"The cached venv directory {os.fspath(venv_dir)} is no longer there."
+        in caplog.text
+    )
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        assert run(True) is None
+
+    assert "is no longer there" not in caplog.text
 
 
 def test_the_cache_search_filters_the_folders_against_this_run_not_a_blank_one(
