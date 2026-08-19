@@ -18,43 +18,10 @@ import logging
 import os
 import shutil
 import subprocess
-import zipfile
 from pathlib import Path
 
+from tests.wheels import build_wheel
 from veny import environment
-
-
-def _build_wheel(
-    directory: Path, *, name: str = "venytest", version: str = "0.1", value: int = 42
-) -> Path:
-    """Build a minimal, real, installable wheel entirely from scratch.
-
-    A plain zip carrying ``<name>/__init__.py`` plus a
-    ``<name>-<version>.dist-info/`` with METADATA, WHEEL and RECORD -- the
-    format verified (2026-08-18, while planning this task) to install through
-    real ``uv pip install`` with no --no-index/--offline flag and no network.
-    """
-    staging = directory / "wheel-staging"
-    pkg_dir = staging / name
-    pkg_dir.mkdir(parents=True)
-    (pkg_dir / "__init__.py").write_text(f"value = {value}\n")
-
-    dist_info = staging / f"{name}-{version}.dist-info"
-    dist_info.mkdir()
-    (dist_info / "METADATA").write_text(
-        f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n"
-    )
-    (dist_info / "WHEEL").write_text(
-        "Wheel-Version: 1.0\nGenerator: test_environment\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
-    )
-    (dist_info / "RECORD").write_text("")
-
-    wheel_path = directory / f"{name}-{version}-py3-none-any.whl"
-    with zipfile.ZipFile(wheel_path, "w") as archive:
-        for path in sorted(staging.rglob("*")):
-            if path.is_file():
-                archive.write(path, path.relative_to(staging))
-    return wheel_path
 
 
 def test_the_live_install_uninstall_round_trip_crosses_the_real_uv_boundary(
@@ -83,7 +50,7 @@ def test_the_live_install_uninstall_round_trip_crosses_the_real_uv_boundary(
     assert python is not None, "test host must have a python3 on PATH"
     environment.create_venv(venv_dir, python)
 
-    wheel_path = _build_wheel(tmp_path)
+    wheel_path = build_wheel(tmp_path)
 
     venv_python = venv_dir / "bin" / "python"
 
