@@ -28,20 +28,92 @@ gotchas ledger.
   | **3a** `docs/superpowers/plans/2026-08-16-analysis-foundation.md` (executed, complete) | `analysis/literals.py`, `analysis/custom_modules.py`, `settings.py` | 430 |
   | **3b** `docs/superpowers/plans/2026-08-16-analysis-imports-and-call-graph.md` (executed, complete on branch `analysis-imports-call-graph`) | `analysis/imports.py`, `analysis/call_graph.py`, `analysis/scan.py`, plus `analysis/scan_state.py` (a fourth module the plan added beyond the design's original three) | 1,100 |
   | **3c** `docs/superpowers/plans/2026-08-18-classify-and-environment.md` (executed, complete on branch `classify-and-environment`) | `classify.py`, `environment.py`, plus `state.py` (a third module the plan added, carrying `Requirements`) | 600 |
-  | 3d (not written) | `verify.py`, `cache_search.py`, `last_used.py` | 1,100 |
+  | **3d** `docs/superpowers/plans/2026-08-18-verify-cache-search-last-used.md` (executed, complete on branch `verify-cache-search-last-used`) | `verify.py`, `cache_search.py`, `last_used.py` | 1,100 |
   | 3e (not written) | `pipeline.py`, `cli.py` slimming, `--full` deletion, final `Options` drain | 450 |
 
   Phases 1 and 2 are complete and merged to `main`.
 
-**Next action:** write and execute plan 3d, the next in the phase-3 sequence —
-`verify.py`, `cache_search.py` and `last_used.py`, ~1,100 lines — following the
-design doc's module boundaries and the eight design amendments plans 3b and 3c
-have now recorded (in Deferred items). The plan is **not written yet**, so the
-next session writes it first, gets it approved, and only then executes it.
-**No branch exists for it.** 3d also inherits a named list of deferred cleanups
-and a written-down residual risk from 3c — both in Deferred items, and both
-worth reading before the plan is written, because the residual risk names the
-parts of the uv path 3c's differential could *not* cover.
+**Next action:** run the whole-branch review of `verify-cache-search-last-used`
+(3d) and merge it `--no-ff`, then write and execute plan 3e, the last in the
+phase-3 sequence — `pipeline.py`, the final `cli.py` slimming, the `--full`
+deletion and the final `Options` drain, ~450 lines. **Plan 3e is not written
+yet and no branch exists for it**; the next session writes it first, gets it
+approved, and only then executes it. It follows the design doc's module
+boundaries and the **eleven** design amendments plans 3b, 3c and 3d have now
+recorded (all in Deferred items). 3e also inherits, all in Deferred items:
+3d's declined list (the `environment.uv_binary` / `create_venv`
+exit-ownership change is explicitly 3e's), the ten residual risks 3d's
+differential still cannot see, 3d's deferred minors, and — most consequential
+— the STANDING CHECK result in Gotchas, which found **104 of 147** arguments
+at 3d's new call sites replaceable with a wrong value while the whole suite
+stayed green. Read that entry before writing 3e; 3e's extraction is the same
+shape and will produce the same class of holes.
+
+Plan 3d, `docs/superpowers/plans/2026-08-18-verify-cache-search-last-used.md`,
+is complete on branch `verify-cache-search-last-used`, off `main` @ `313e800`.
+**Not merged**: the whole-branch review runs before the merge, which will be
+`--no-ff` like 3b's and 3c's. Ten tasks; **twenty commits**, tests before moves
+as planned: `23e1fd0` (the plan itself), `fb83800` (Task 1, `tests/wheels.py`,
+the shared wheel builder), `238fd5a`/`f526d28` (Task 2, `tests/test_verify.py`,
+the verification boundary characterized live before it moved, plus its fix
+round), `a5733bb`/`36f6644` (Task 4, `tests/test_last_used.py`, written before
+any move, plus a fix round pinning `is_virtualenv` on both branches),
+`c0510da`/`f957056`/`277dde4` (Task 3 — `venv_python_for` to `environment.py`,
+then `verify.py`, then `cli.py` rewired onto it), `0943370`/`937951f` (Task 5,
+extract `last_used.py` and delete the dead `load_last_used_venv_dir`, plus the
+fix round that restored the assert-before-crash at the cache-search call site),
+`a9ad966`/`6d2b344` (Task 6, `cache_search.py` and the move out of `cli.py`),
+`93bca53`/`f961ada` (Task 7, design ledger item 2), `e430a37`/`f0a1bc4`
+(Task 8, the dead-symbol sweep and the `rename_venv` mypy block), and
+`939856c`/`32a12f7`/`7debbb3` (Task 9, the STANDING CHECK, the committed
+differential driver, and the review's three findings). Task 10 is this entry.
+
+Three modules landed, and `cli.py` **more than halved**: 2,296 → **1,064
+lines**. `verify.py` is 680, `cache_search.py` 741, `last_used.py` 109 — 1,530
+new lines against 1,232 removed, the difference being docstrings and the
+explicit argument lists that replaced implicit `options.<field>` reads.
+`last_used.py` imports nothing from veny at all; `verify` sits above
+`environment` and `cache_search` above `verify` (amendment 10), enforced by
+`tests/test_layering.py` with **no** new sanctioned exception.
+
+Gates measured on this branch at `7debbb3` (2026-08-18): `pixi run test`
+**359 passed** (was 321 on `main` at the branch point, so 3d is +38 tests —
++18 through Task 8, then +20 in Task 9 alone, all closing STANDING CHECK
+holes); `pixi run lint` zero; `pixi run python -m ruff format --check .` all
+**52 files** formatted; `pixi run typecheck` **33 errors in 6 files** — the
+ceiling was 37 through phase 3b, 36 after 3c, and it has **never been this
+low**; the breakdown is `tests/test_verify.py` 15, `src/veny/cli.py` 7,
+`tests/test_split_imports.py` 6, `analysis/imports.py` 3,
+`analysis/literals.py` 1, `analysis/call_graph.py` 1. `pixi run smoke`
+**green**, network was available and nothing was skipped. Line counts
+(`wc -l`, 2026-08-18): `src/veny/cli.py` **1,064**, `alias_index.py` 826,
+`cache_search.py` **741**, `analysis/imports.py` 683, `verify.py` **680**,
+`venv_cache.py` 465, `analysis/scan.py` 347, `pypi_client.py` 314,
+`environment.py` 297, `classify.py` 274, `analysis/custom_modules.py` 274,
+`stdlib_index.py` 233, `analysis/literals.py` 229, `analysis/call_graph.py`
+177, `json_types.py` 136, `last_used.py` **109**, `state.py` 51,
+`analysis/scan_state.py` 30, `settings.py` 23.
+
+Two live runs closed the phase, because the second one is the only end-to-end
+exercise of Task 7's change — a unit test cannot prove it. Run 1,
+`pixi run veny --no-cache` on a throwaway script importing `yaml`, built
+`~/veny/myenv-py3.13-20260818-234604-pyyaml` (the `failed-` prefix dropped on
+success), installed PyYAML through uv and printed
+`{'phase': '3d', 'closed': True}`. Run 2, the **same script with no flag**,
+logged `Using existing virtual environment:
+/home/claudeuser/veny/myenv-py3.13-20260818-234604-pyyaml` — the identical
+folder — and printed the same result, with the cache now taking **one**
+`read_manifest` and **one** `satisfies` on the winning candidate instead of
+two of each.
+
+3d delivered everything the plan promised and recorded three design amendments
+(9, 10, 11 — see Deferred items), plus a named list of what it declined and a
+latent defect it deliberately did not fix (`main()`'s already-in-a-virtualenv
+branch is unreachable; pre-existing at `313e800`). Its most important finding
+is not in the code at all: the STANDING CHECK, run mechanically over 147
+arguments at 40 call sites, found **104 of them replaceable with an empty or
+wrong value with all 338 tests still green**. That is written up in Gotchas as
+a standing lesson, not just as a phase result.
 
 Plan 3c, `docs/superpowers/plans/2026-08-18-classify-and-environment.md`, is
 complete and **merged to `main` at `3aa5d7e`** (a `--no-ff` merge; branch
@@ -442,7 +514,7 @@ wiring rationale and for two Minors deliberately left unfixed.
 
 - **Standard-library membership is a property of the *target* interpreter,**
   not of the interpreter running veny. `options.python_command` is resolved
-  early in `main()` (`veny.py:1478`), before any import analysis, so the
+  early in `main()` (`cli.main` @ `7debbb3:409`), before any import analysis, so the
   target can be probed without a virtual environment. Decided 2026-08-12.
 - **No third-party dependency may be required to run veny.** veny is a
   bootstrapping tool that must work on a bare interpreter, so packages such as
@@ -755,6 +827,20 @@ wiring rationale and for two Minors deliberately left unfixed.
   is why `record_venv_state` renames after repairs — the manifest is the
   source of truth, but a wrong folder name still causes a wasted match
   attempt before the manifest is even read.
+- **`cache_search.check_venv_dir`'s `matched_manifest` parameter carries a
+  trust contract, and the name is the contract.** When it is not `None` it
+  means: *this manifest was read from this exact folder during the cache
+  scan, and `satisfies` has already been run on it* — so `check_venv_dir`
+  must neither re-read nor re-check it. Passing a manifest that came from
+  anywhere else silently authorizes a venv that was never matched. Measured
+  cost per cache hit after 3d's Task 7: **1 `read_manifest`, 1 `satisfies`**
+  (it was 2 and 2), pinned by a call-counting test. The **last-used path
+  passes `None` and does its own 1 read / 1 satisfies**, and must: it reaches
+  the folder from a recorded pointer, not from the scan, so there is no
+  `CacheCandidate` and nothing has vouched for the manifest. That asymmetry
+  is the one branch of the four whose `matched_manifest` handling differs,
+  and it is the branch 3d's differential could not reach — it is covered by
+  unit tests and by a live two-run check only.
 - `version_satisfies` refuses every non-numeric version form (pre-releases,
   post-releases, dev releases, local version identifiers, epochs), so an
   installed pre-release always fails the match and forces a rebuild — this is
@@ -861,7 +947,8 @@ wiring rationale and for two Minors deliberately left unfixed.
   `options` already holds, and the scanner mutates them in place — there is
   no copy-back. The seeding is load-bearing in both directions:
   `dict_of_custom_modules` populates `options.custom_modules` at
-  `cli.py:537`, before `list_packages` reaches the scanner at `cli.py:552`,
+  `cli.main` @ `7debbb3:520`, before `list_packages` reaches the scanner at
+  `cli.main` @ `7debbb3:535`,
   and `get_all_imports` calls the scanner once per file, relying on all
   seven fields accumulating across calls. A first attempt at this bridge
   copied results *out* but never seeded them *in*; the measured consequence
@@ -990,6 +1077,36 @@ wiring rationale and for two Minors deliberately left unfixed.
   copy taken beforehand — **never `git stash`, never
   `git checkout -- <path>`**; 3c's Task 4 used the latter and it reverted the
   whole file, discarding every unrelated edit.
+- **The standing check paid for itself at a scale nobody predicted: 3d ran it
+  mechanically and found that 104 of 147 arguments could be replaced with an
+  empty or wrong value with all 338 tests still green.** Measured 2026-08-18
+  by 3d's Task 9 over **26 named call sites** (40 once each `check_venv_dir`
+  branch and each duplicated site is counted separately) — the plan's own
+  call-site table had **14 rows**, so more than half the sites the extraction
+  created were not even on the list to check. Before: 147 arguments, 43
+  killing a named test, **104 holes**. After: 147 / 147 / **0**, closed by 20
+  new tests (`939856c`, `7debbb3`). Two concentrations account for half the
+  holes and are the transferable lesson:
+  - **`cli.main()` alone had 27**, for one reason — *nothing in the suite
+    drove `main()` in process at all*. Every argument of the cache search,
+    the rename, the in-virtualenv check, `--feeling-lucky` and `--reqs` was
+    free. A module can be exhaustively unit-tested and its **entry point**
+    still be untested; a suite's test count says nothing about whether
+    anything ever calls the function that wires the modules together.
+  - **The `--oldest` and `--smallest` cache-search branches had zero
+    arguments pinned**, and `--latest` had only two of its own; 25 holes sat
+    in `find_match_dir_in_cache`'s four `check_venv_dir` branches. Four
+    near-identical branches are exactly where a suite quietly covers one and
+    calls it coverage.
+  Two substitution rules learned the hard way, both worth reusing: a
+  boolean's substitution must be the **class default** (`rawlog=False`), not
+  its opposite — substituting `True` is a no-op on any run already defaulting
+  to `False` and reports false coverage; and an argument with no natural
+  empty value gets a **wrong-but-type-correct** value (`Path("/tmp/wrong-…")`,
+  `"wrongname"`, `"9.9"`), recorded in the table so the evidence is auditable.
+  **Run this on 3e before claiming its extraction is pinned.** 3e slims
+  `cli.py` further and drains `Options`, which is the same transformation
+  that produced these 104.
 - **Never `git checkout -- <path>` to undo a deliberate in-place mutation.** It
   reverts the *whole* file to HEAD, discarding every unrelated edit in it, not
   just the mutation you were testing. It cost 3c's Task 4 an entire session's
@@ -1067,7 +1184,7 @@ wiring rationale and for two Minors deliberately left unfixed.
     identical three expressions to the identical result, so this is not a
     regression this plan introduced — it is baseline behaviour, mis-described
     rather than mis-fixed.
-  - `src/veny/cli.py:124`, `search_above_this_dir` is hardcoded `True` and
+  - `cli.Options.__init__` @ `7debbb3:69`, `search_above_this_dir` is hardcoded `True` and
     never assigned from parsed args, so `Settings.search_above_this_dir`
     (introduced this plan) now faithfully carries a value that is, in
     practice, a constant. Pre-existing, not introduced by this plan. Plan
@@ -1090,11 +1207,16 @@ wiring rationale and for two Minors deliberately left unfixed.
     substring of `uninstalled_imports`. Re-measured 2026-08-18 at
     `143f909`; the line numbers moved by 18 when that commit deleted
     `cli.add_dependencies`.) So the shape today is narrower and easier to
-    retire: `classify` computes `Requirements.installed`, `cli.py:1225` is its
-    only production reader, and it reads it only to perform the write nobody
-    reads.
-    3d or 3e can delete the whole chain. (Same shape as phase 1's
-    `FunctionInfo.ast_node`, still open.)
+    retire: `classify` computes `Requirements.installed`, `cli.py:1225` was
+    its only production reader, and it read it only to perform the write
+    nobody reads.
+    **CLOSED by 3d's Task 8 (`e430a37`): the whole chain is deleted** — the
+    `Options.__init__` default, the copy-back in `cli.split_imports` and the
+    docstring field description all went. `Requirements.installed` is kept
+    (`classify.split_imports` @ `7debbb3:src/veny/classify.py:187`, `:270`);
+    only veny's write-only mirror of it on `Options` is gone, and
+    `tests/test_layering.py`'s copy-back totality guard now covers four fields
+    instead of five. The `cli.py:1225` citation is dead.
   - `venv_build_interpreter()`'s `shutil.which()` fallback returns the
     **unresolved bare name** when nothing is found, which reintroduces exactly
     the resolution bug it exists to prevent — `uv venv --python python3` picks
@@ -1132,14 +1254,19 @@ wiring rationale and for two Minors deliberately left unfixed.
     directory (empty succeeds, non-empty fails with `error: Failed to
     create virtual environment / Caused by: A directory already exists
     at: <path> / hint: Use the --clear flag or set UV_VENV_CLEAR=1`).
-  - Mechanism: `setup_virtualenv` (`src/veny/cli.py:3304`) calls
+  - Mechanism: `setup_virtualenv` (`cli.setup_virtualenv` @ `7debbb3:956`)
+    calls
     `options.set_venv_dir(options.my_dir / f"failed-{folder_name}")`, whose
-    `set_venv_dir` (`cli.py:229`) does `p.mkdir(parents=True,
+    `set_venv_dir` (`cli.Options.set_venv_dir` @ `7debbb3:173`) does
+    `p.mkdir(parents=True,
     exist_ok=True)` — creating the target directory. It used to then call
-    `write_requirements_file_with_extras(options)` (`cli.py:2860`), which
+    `write_requirements_file_with_extras(options)` (now
+    `environment.write_requirements_file_with_extras` @
+    `7debbb3:src/veny/environment.py:179`, called from `7debbb3:994`), which
     opens `options.requirements_file` (`venv_dir / "requirements.txt"`) for
     writing — putting a file inside the now-existing directory — before
-    calling `create_venv(options.venv_dir, ...)` (`cli.py:3323`), which runs
+    calling `create_venv(options.venv_dir, ...)` (now `environment.create_venv`
+    @ `7debbb3:src/veny/environment.py:62`, called from `7debbb3:974`), which runs
     `uv venv <target>`. Stdlib `venv.create()` (what this code path was
     written against, pre-migration) tolerates a pre-existing, non-empty
     target directory; `uv venv` does not, and raised. Nothing caught the
@@ -1151,8 +1278,8 @@ wiring rationale and for two Minors deliberately left unfixed.
   - Scope: hit every "build a new venv" path through `setup_virtualenv` —
     i.e. any run where no cache match is found, which includes a new
     user's very first invocation with an empty `~/veny`. The
-    `tempfile.TemporaryDirectory()`-based `create_venv` call at
-    `cli.py:2606` (inside the alias-resolution probe path) was unaffected,
+    `tempfile.TemporaryDirectory()`-based `create_venv` call in
+    `cli._probe_venv` @ `7debbb3:779` (the alias-resolution probe path) was unaffected,
     because nothing writes into that directory before `create_venv` runs.
   - **The fix:** `setup_virtualenv` now calls `create_venv` first and only
     calls `write_requirements_file_with_extras` after it returns
@@ -1221,7 +1348,10 @@ wiring rationale and for two Minors deliberately left unfixed.
   measured before `ruff format` rewrote ~3,200 lines of it and unwound the
   hand-aligned column style — the formatting reversal, not new code,
   accounted for that earlier difference.
-- `FunctionInfo.ast_node` (`src/veny/cli.py:1005`) is write-only as of phase 1.
+- `FunctionInfo.ast_node` (cited as `src/veny/cli.py:1005`; the field was
+  retired by 3b's Task 6 (`5dbcac2`) and `FunctionInfo` now lives at
+  `analysis/call_graph.py` @ `7debbb3:11` with no such field) was write-only
+  as of phase 1.
   Its only reader was the per-function loop that ran `FileOperationsVisitor`
   over each reachable `FunctionDef`, deleted with the visitor block. Every
   function of every analyzed module now retains a live `ast.FunctionDef`
@@ -1279,7 +1409,15 @@ wiring rationale and for two Minors deliberately left unfixed.
   fails the bulk check, with `all_imports` naming only that second record —
   then removing the filter uninstalls the package and the existing
   `assert fake.uninstalled == []` fails. Found by mutation testing in the
-  final review, 2026-08-13.
+  final review, 2026-08-13. **RESOLVED by 3d's Task 3 (`277dde4`),
+  exactly as prescribed.** The test now lives at `tests/test_verify.py:990`
+  and carries a second record (`unsatisfied`) that fails the bulk check, with
+  `source_names={"thing"}` naming only that second record, so the per-record
+  loop actually runs. The filter deletion was re-run against the repaired
+  test: `fake.uninstalled` becomes `["opencv-python"]` and exactly this test
+  fails, with the other 39 in the file green. It also gained
+  `assert fake.attempted == ["thing-only-pkg"]`, which pins that the
+  pip-spelled record was filtered out rather than merely surviving.
 - `run_import_check_in_venv()` in `src/veny/cli.py` — the `Provided by:` line reports the *succeeding*
   alternative while `successes.append(alternatives[0])` records the first,
   and `import_providers` unions across every such line. Provably equivalent
@@ -1312,6 +1450,26 @@ wiring rationale and for two Minors deliberately left unfixed.
      branch. **This makes that branch's `script_exit_code = 1` unreachable
      through the front door** — the fix is correct but currently inert, and
      was verified by monkeypatching around `main()` rather than organically.
+     **Re-found independently and re-measured by 3d's Task 9 (2026-08-18),
+     which is worth recording because it arrived from a different direction:
+     the STANDING CHECK harness could not kill any argument of this branch,
+     which is how it surfaced.** A correction to the entry above: 3d's brief
+     called this a *third* crash; it is not — it is this one, item 2, and
+     3d's independent measurement confirms it rather than adding to the
+     count. Two facts 3d adds. First, **where the assert now lives**: at
+     `313e800` the branch read `if check_packages_in_venv(options):` and the
+     assert sat one frame deeper, inside `cli.venv_python_for`; 3d's Task 3
+     moved `venv_python_for` to `environment.py` (amendment 11), which
+     dropped its `options`-defaulting branch, and Task 5's fix round
+     deliberately re-asserted at the `main()` call site to preserve the
+     `AssertionError` exactly rather than let it become a `TypeError`. So the
+     crash is **byte-for-byte the same behaviour** across the whole phase —
+     3d moved it, it did not introduce it, and it is out of scope for a
+     behaviour-preserving phase. Second, **the branch now has a test**:
+     `test_main_checks_the_surrounding_virtualenv_against_this_runs_imports`
+     sets `venv_dir` in its harness so the wiring is pinned, and its
+     docstring says why, so whoever finally repairs the branch inherits a
+     test of it rather than starting from nothing.
 - `src/veny/cli.py`'s script-failure log lines read `result.returncode` as of
   2026-08-15; they previously read `result.stderr`, which was always `None`
   because none of the three script-running `subprocess.run` calls capture
@@ -1396,7 +1554,10 @@ wiring rationale and for two Minors deliberately left unfixed.
      Error-handling section.** The design says "`environment.py` never raises
      and never exits" (design doc line 362) and "`cli.py` owns every exit.
      `sys.exit` and `ek.my_critical_error` do not appear below it" (line 376).
-     Measured 2026-08-18: `environment.uv_binary` (`environment.py:55`) holds
+     Measured 2026-08-18: `environment.uv_binary`
+     (`environment.uv_binary` @ `7debbb3:src/veny/environment.py:56`; the
+     citation `environment.py:55` in an earlier draft of this entry was
+     correct before 3d and is off by one now) holds
      the **only `raise SystemExit` anywhere under `src/veny/` below `cli.py`**,
      `__main__.py`'s `sys.exit(main())` aside; and `create_venv` lets
      `subprocess.check_call` raise `CalledProcessError` (documented in its own
@@ -1420,8 +1581,88 @@ wiring rationale and for two Minors deliberately left unfixed.
      `VenvHandle` arriving in phase 4, at which point `run_uv_pip`,
      `install_into_venv` and `uninstall_from_venv` take it instead — which
      also removes the `None` argument that made the mis-wiring the review
-     found at `cli.py:1409` (`install_into_venv(options.venv_python, …)`)
-     possible in the first place, since a handle has no null spelling.
+     found in `repair_unsatisfied_import` possible in the first place, since a
+     handle has no null spelling. (Citation re-measured for 3d: that call has
+     left `cli.py` entirely — it is
+     `verify.repair_unsatisfied_import` @ `7debbb3:src/veny/verify.py:513`,
+     `environment.install_into_venv(venv_python, pip_name)`. The old
+     `cli.py:1409` citation is dead.)
+- **Three more design-doc amendments 3d records** (a ninth through eleventh,
+  after 3b's three and 3c's five). Each is a consequence of a correct,
+  behaviour-preserving move, **not a defect**, and none should be "fixed" in
+  code inside 3d.
+  9. **`cache_search.find_match_dir_in_cache` keeps taking the
+     `argparse.Namespace` and keeps mutating it.** The design says argparse
+     dies at the `cli.py` boundary (design doc line 260, and the phase-4 note
+     that `args` dies at the argparse boundary). It cannot die here: the
+     function's selection policy *writes* `args.last_used = True` as its "no
+     flags given" default, and `args.latest = True` / `args.last_used = False`
+     as its fallback after a last-used miss — and those writes reach disk,
+     because `ek.save_options_to_json` serializes `options.__dict__.copy()`
+     and the `args` Namespace is part of that payload. Passing four booleans
+     in and dropping the write-back would change the bytes of a user-visible
+     artifact. `argparse.Namespace` is stdlib, so taking it introduces no
+     veny-layer dependency and the layering guard is satisfied. **What
+     resolves it:** phase 3e or 4, when `cli.py` owns the flag surface and the
+     persistence change removes the JSON payload the mutation leaks into.
+  10. **`verify.py` imports `environment.py`; they are not peers.** The
+      design's stack (line 267) lists them side by side under `pipeline`.
+      Measured: `repair_unsatisfied_import` installs and uninstalls through
+      `environment`, and `verify_and_repair_imports` rewrites
+      `requirements.txt` through
+      `environment.write_requirements_file_with_extras`. So `verify` is a
+      layer **above** `environment`, and `cache_search` a layer above
+      `verify` (it calls `check_venv_dir` → `verify.check_packages_in_venv`).
+      `tests/test_layering.py`'s `LAYERS` now reads, bottom to top:
+      `{settings}`, `{analysis, alias_index, venv_cache, stdlib_index,
+      pypi_client, json_types}`, `{state}`, `{classify, environment,
+      last_used}`, `{verify}`, `{cache_search}`, `{cli}` — with **no new
+      entry in `SANCTIONED_EXCEPTIONS`**, verified by running the suite, not
+      by reading the plan.
+  11. **`venv_python_for` moved to `environment.py`, not to `verify.py`.**
+      The design does not place it. It is venv-layout knowledge (`bin/python`
+      vs `Scripts/python.exe`), which is what `environment.py` owns, and
+      `tests/test_environment.py` already carried a parked note that its live
+      test hardcodes that layout "instead of reusing `cli.venv_python_for`".
+      Its `options`-defaulting branch died with the move: every caller now
+      passes a directory. Phase 4's `VenvHandle` replaces it outright. One
+      widened precondition came with it — see the 3d deferred-minors entry.
+- **What 3d explicitly declined, each with the phase that owns it.** Stated
+  here rather than left ambiguous, and none of these is a defect 3d
+  introduced:
+  - **The `environment.uv_binary` / `create_venv` exit-ownership change**
+    (amendment 4, above). A real behaviour-boundary change. **Owner: 3e**,
+    which owns the final `cli.py` slimming and is the natural place for
+    `cli.py` to take back the exit.
+  - **The single-file reachability gap** — imports inside a submodule reached
+    via `from package import submodule` (its own entry above). It is an
+    `analysis/` question; none of 3d's three modules can see it. **Owner: a
+    later `analysis/` plan**, not 3e by default.
+  - **Removing the probe venv from classification** (amendment 3). The probe
+    is injected, not removed, and Gotchas measures exactly what it can still
+    answer "installed" to. **Owner: whichever phase is willing to own the
+    user-visible behaviour change**; it is not 3d's.
+  - **The two pre-existing `AssertionError` crashes** (their own entry above,
+    now three — see below). Out of scope by the design. 3d's Task 3 was
+    required to *preserve* the second one exactly, and its Task 5 fix round
+    restored it at the new call site after the move had accidentally turned it
+    into a `TypeError`.
+- **Design ledger item 2 is CLOSED by 3d's Task 7** (`93bca53`, `f961ada`).
+  The item, escalated from `venv-cache`'s whole-branch review (2026-08-14) as
+  needing a design decision: `satisfies()` ran twice on the winning candidate,
+  and the manifest was read twice with it. Both redundancies are gone on the
+  winning-candidate path. `cache_search.find_match_dir_in_cache` now keeps the
+  whole `CacheCandidate` for each ranked folder — not just the folder — and
+  passes its already-read manifest into `check_venv_dir` as **`matched_manifest`**
+  (the parameter was renamed from `manifest` in the fix round precisely so the
+  trust contract is explicit in the name: *this manifest was read from this
+  folder during the scan; do not re-read it and do not re-run `satisfies` on
+  it*). Measured, per cache hit: **1 `read_manifest`, 1 `satisfies`**, down
+  from 2 and 2, pinned by a call-counting test. The **last-used path still
+  does its own 1 read / 1 satisfies** and must: it has no `CacheCandidate`,
+  because it is reached from a recorded pointer rather than from the scan.
+  A folder that loses its manifest between the scan and the check is still
+  handled, and what happens is now pinned by a test rather than assumed.
 - **The mypy ceiling moved for the first time: 37 → 36.** Measured both ends on
   2026-08-18 — `main` @ `dc1c3c4` gives `Found 37 errors in 5 files (checked 37
   source files)`, `classify-and-environment` @ `332d69e` gives `Found 36 errors
@@ -1443,6 +1684,27 @@ wiring rationale and for two Minors deliberately left unfixed.
   (bare `set` / `deque` annotations, a scan-layer test that belongs with
   `analysis/scan.py`) and 2 in the `build_alias_index` offline/online pair
   (`options.python_command = None` against a `str`-declared field).
+  **Updated 2026-08-18 after 3d: the ceiling is now 33**, measured on
+  `verify-cache-search-last-used` @ `7debbb3` — `Found 33 errors in 6 files
+  (checked 49 source files)`. It has never been this low. Breakdown:
+  `tests/test_verify.py` 15, `src/veny/cli.py` 7,
+  `tests/test_split_imports.py` 6, `analysis/imports.py` 3,
+  `analysis/literals.py` 1, `analysis/call_graph.py` 1. Two corrections to the
+  prediction above, both worth carrying: 3c predicted **17** of
+  `test_split_imports.py`'s errors would travel to `tests/test_verify.py` with
+  the migrated tests; **15** actually did (21 → 6 in the source file). The two
+  that did not are `_run_check_against_fake_venv`'s untyped-def pair: the
+  helper now exists in **both** files — the migrated copy in
+  `tests/test_verify.py:553` was given type hints and contributes zero, while
+  the untyped original stayed at `tests/test_split_imports.py:145` for the one
+  test still using it (`:218`) and kept its 2 errors there. A migrated helper
+  can be typed on arrival even when the migration is meant to be verbatim, and
+  a duplicated helper means the prediction's arithmetic never balances.
+  And `src/veny/cli.py` fell 10 → 7 without anyone typing it —
+  the three errors went with the code that left the file (Task 8's `f0a1bc4`
+  cleared the `rename_venv` block by asserting at the call site). The three
+  new source modules and the two new test modules contribute **zero**, the
+  standard 3c set and 3d held.
 - **`Requirements.seen_stdlib` and `Requirements.extra_requirements` are
   pass-throughs**, not products: classification neither computes nor changes
   them (the first is copied off the scan, the second is the caller's own
@@ -1477,6 +1739,109 @@ wiring rationale and for two Minors deliberately left unfixed.
     pickle cache) are outside the comparison.
   - Whether `Requirements` shares or copies its frozensets is invisible unless
     it changes a final value.
+  **Narrowed by 3d's differential (2026-08-18), not closed** — see the 3d
+  entry below for the current bounds. Three of the six items above moved:
+  `write_requirements_file_with_extras`' output **contents** are now compared
+  (sort order and the multi-entry `extra_requirements` case included);
+  `install_into_venv`'s success predicate is now compared on all three
+  outcomes (`returncode=0`, `returncode=1`, raising), closing the specific gap
+  named below; and the cache-search decision is compared at all, which 3c did
+  not attempt. The other three stand.
+- **RESIDUAL RISK carried into 3e from 3d's differential (ten items).** 3d's
+  driver is **committed** this time — `scripts/differential_3d.py`, with
+  `PYTHONHASHSEED=0` set *inside the script*, `sys.dont_write_bytecode = True`,
+  a `__pycache__` purge before the first import, the tree root taken as an
+  argument rather than through `PYTHONPATH`, and `veny.cli.__file__` printed
+  first. Layers 1 and 2 came back **byte-identical**; layer 3 shows only the
+  sanctioned Task 7 divergence (one fewer `read_manifest`, one fewer
+  `satisfies`) with the chosen folder and the flag write-back identical. The
+  check was proved able to fail **six** times by deliberate mutation. As
+  always, the bounds matter more than the empty diff:
+  1. **The import-level confirmation is stubbed, not driven.**
+     `check_packages_in_venv` is replaced in both trees, so its own internals
+     — the alternatives list, the PEP 503 fallback,
+     `run_import_check_in_venv`'s generated snippet — are never compared
+     old-vs-new. They have unit tests; they have no differential.
+  2. **The repair loop never runs.** With the bulk check answering `True`,
+     `verify_and_repair_imports` returns before `repair_unsatisfied_import`,
+     `resolve_and_verify`, `confirm_if_attributable` and the requirements
+     rewrite. The whole install→probe→uninstall verification loop is outside
+     the comparison — the same shape as 3c's "everything downstream of
+     `list_packages`".
+  3. **`record_venv_state` and manifest writing are not compared.** Layer 2
+     drives `setup_virtualenv`, which calls it, but the driver records only
+     the uv argv and the requirements file — not the folder rename or the
+     manifest bytes. `cache_search.manifest_for`'s output is unverified
+     old-vs-new.
+  4. **The online alias-resolution path is excluded** (`pypi=None`, fixed
+     seed), as in 3c.
+  5. **Interpreter selection is bypassed** (`python_command = ""`), so
+     `venv_build_interpreter`'s `shutil.which() is None` fallback and
+     `create_venv`'s no-`--python` branch are never taken.
+  6. **`alias_index.probe_interpreter` is pinned** to `("3.12", {})`, so
+     `import_names_by_distribution` and every attribution decision built on it
+     are constant rather than compared.
+  7. **The last-used *hit* path is never exercised** — layer 3's script
+     directory holds no last-used JSON, so `load_last_used_options`'
+     timestamp filtering, the `pathlibcutoff` comparison and
+     `check_venv_dir(matched_manifest=None)` against a real last-used pointer
+     are all unreached. This is the **one branch of the four whose
+     `matched_manifest` handling differs** — exactly the code Task 7 changed —
+     and the differential sees only its miss. It has unit tests and it was
+     exercised by Task 10's second live run; it has no old-vs-new comparison.
+  8. **Non-default CLI shapes** (`--full`, `--blank-slate`, `--justprint`,
+     `--debug`, the custom-module pickle cache, `--reqs` at layer 1) are
+     outside the comparison.
+  9. **`smallest_venv` is still not distinguishable, measured.** The fix round
+     added a fourth cache folder so the chosen folder now names which ranking
+     ran, and a `latest_venv` → `oldest_venv` swap is caught. What genuinely
+     remains: `latest_venv` → **`smallest_venv`** still does **not** move the
+     chosen folder (`…040404` either way), because both surviving fake-cache
+     folders carry exactly one package, so their `num_packages` **tie** and
+     the tie-break returns the first folder encountered. Distinguishing
+     `smallest` needs a survivor with a different package count. And only the
+     `--latest` branch is driven by the differential at all — `--oldest` and
+     `--smallest` are reached by the unit tests only.
+  10. **`main()` itself is never driven by the differential.** The layers call
+      `list_packages`, `setup_virtualenv` and `find_match_dir_in_cache`
+      directly. `main()`'s sequencing is covered by the tests Task 9 added
+      instead, not by an old-vs-new comparison — which is a weaker guarantee,
+      and is the same blind spot that let 27 of `main()`'s arguments go
+      unpinned in the first place.
+- **3d's deferred minors, none blocking.** Recorded here because the per-task
+  ledger they came from (`.superpowers/sdd/2026-08-18-verify-cache-search-last-used/`)
+  is gitignored scratch and is deleted when the phase finishes.
+  - `tests/test_verify.py`'s bulk-branch test uses a literal `/tmp` path with
+    `set_venv_dir` (which has an `mkdir` side effect) instead of `tmp_path`.
+    Plan-mandated wording; worth switching whenever that test is next touched.
+  - **`environment.venv_python_for` now calls `ek.ensure_dir` on the path that
+    `cli.venv_python_for`'s `options` branch did not** — a widened
+    precondition. Unreachable today (every caller passes a directory that
+    already exists), but it is a real difference introduced by amendment 11's
+    move, and **phase 4's `VenvHandle` inherits it** when it replaces the
+    function.
+  - `assert options.requirements_file is not None` appears **twice** in
+    `cli.setup_virtualenv` (mypy re-narrowing). The second site wants a
+    one-line comment saying why.
+  - Commit `c0510da` swept a dirty `tasks.json` in via `git add -u`. Later 3d
+    tasks used explicit paths; **keep doing that** — `git add -u` is how an
+    unrelated tracker edit lands in a refactor commit.
+  - `tests/test_manifest_writing.py`'s `manifest_kwargs` helper has no type
+    hints. (`f0a1bc4` typed it — **resolved**, listed here only so the ledger
+    entry is not lost silently.)
+  - `cache_search.installed_state_in_venv` carries a now-dead
+    `# noqa: S603`; the `pyproject.toml` per-file ignore already silences it.
+  - `tests/test_classify.py`'s `_capture_split_imports_result` inner wrapper
+    takes `*args`/`**kwargs` typed `Any` rather than mirroring
+    `classify.split_imports`' signature, so it would not catch a signature
+    drift.
+  - `pyproject.toml` gained one per-file-ignore for `scripts/differential_3d.py`
+    (`ANN401`, `S606`), with the reasoning inline — check it still applies if
+    that script is ever generalized beyond 3d.
+  - The differential driver used to print its `__pycache__` purge count to
+    stdout, adding a third diff hunk that varied with how recently the tree
+    had been tested. Diagnostics now go to **stderr**; any future driver
+    should do the same from the start.
 - **Named for 3d to pick up, from 3c's execution.** None blocking.
   - ~~`cli.add_dependencies` has **zero production callers**~~ — **resolved by
     the whole-branch fix wave, 2026-08-18 (`143f909`), not deferred to 3d.**
@@ -1498,12 +1863,20 @@ wiring rationale and for two Minors deliberately left unfixed.
     orderings that differ between two runs of the *same* tree, which reads as
     a regression that is not there. If 3d commits its driver, the env var
     should go in the driver, not in the invocation.
+    **CLOSED by 3d (`32a12f7`):** the driver is now
+    `scripts/differential_3d.py`, tracked in git, and it sets
+    `PYTHONHASHSEED=0` inside the script. `rg -n 'PYTHONHASHSEED' .` now hits
+    the driver as well as this file.
   - **`install_into_venv`'s success predicate is never compared by the
     differential** — the driver's fake `subprocess.run` always returns
     `returncode=1` and the driver discards the return value, so the
     `result is not None and result.returncode == 0` logic is invisible to it
     in both trees. Unit tests cover it; the old-vs-new comparison does not.
     3d owns `verify.py`, which is where that predicate's callers live.
+    **CLOSED by 3d's Task 9:** the driver's fake `subprocess.run` now returns
+    `returncode=0` for at least one case and the return value is compared, so
+    all three outcomes (`returncode=0`, `returncode=1`, raising) are covered
+    old-vs-new.
   - **`cli.load_last_used_venv_dir` (`src/veny/cli.py:1867`) has zero
     references anywhere in `src/` or `tests/`** — definition only. Verified
     2026-08-18 at both ends: `git grep -n 'load_last_used_venv_dir' dc1c3c4 --
@@ -1512,13 +1885,26 @@ wiring rationale and for two Minors deliberately left unfixed.
     whoever owns `last_used.py` in 3d: delete it, or state why it stays.
     (Ruff does not flag an unused module-level function, so nothing will ever
     report it — the same blind spot as `_index_with` below.)
+    **CLOSED by 3d's Task 5 (`0943370`): deleted, not moved.** The symbol
+    exists nowhere in `src/` or `tests/` at `7debbb3`. The `cli.py:2197 @
+    dc1c3c4` citation above is the commit-qualified historical form and is
+    still correct *because* it is qualified — the unqualified
+    `src/veny/cli.py:1867` in this entry's first line is dead and is recorded
+    in the citation sweep below.
   - `tests/test_split_imports.py:314`'s `_index_with` is dead — zero
     references, verified 2026-08-18. Ruff does not flag unused module-level
-    functions, so nothing will ever report it.
+    functions, so nothing will ever report it. **CLOSED by 3d's Task 8
+    (`e430a37`): deleted.**
   - `tests/test_classify.py` carries two near-duplicate resolve-recording
     helpers (`_RecordingIndex` at :57, `_CountingIndex` at :558) and two
     probe-stubbing idioms — an artifact of the mandated verbatim migration.
-    Consolidate in 3d.
+    Consolidate in 3d. **CLOSED by 3d's Task 8 (`e430a37`):** one recording
+    helper (`_RecordingIndex`, now at `tests/test_classify.py:61`), one
+    probe-stubbing idiom. Task 8 also hit something its brief did not
+    anticipate — **five live `installed_imports` readers in
+    `tests/test_classify.py`**, where the brief expected the chain to be
+    write-only everywhere; they were rewired onto the `Requirements` product
+    rather than deleted.
   - `state.Requirements.extra_requirements` stores the caller's `Mapping` by
     reference, so `frozen=True` is shallow and the auto-generated `__hash__`
     would raise on a `dict`. Nothing hashes a `Requirements` today.
@@ -1527,49 +1913,88 @@ wiring rationale and for two Minors deliberately left unfixed.
     measured 2026-08-18, that is wrong — `cli.py` and `settings.py` lack it
     too. `state.py` is the only *new* module of 3c that lacks it.)
   - `classify.py:139`'s `known_bad_imports` is typed `set[str]` but never
-    mutated; `AbstractSet[str]` is the honest type.
-  - `tests/test_layering.py:320`'s copy-back guard proves **totality**, not
-    source correctness: rewriting the adapter as
-    `options.bad_imports = set(result.installed)` still passes it.
+    mutated; `AbstractSet[str]` is the honest type. (Line re-measured at
+    `7debbb3`: still `classify.py:139`. Still open.)
+  - The copy-back guard proves **totality**, not source correctness:
+    rewriting the adapter as `options.bad_imports = set(result.installed)`
+    still passes it. (Cited as `tests/test_layering.py:320`; re-measured at
+    `7debbb3` it is `test_split_imports_copy_back_is_total` @
+    `tests/test_layering.py:338`, and 3d's Task 8 narrowed it from five
+    fields to **four** when the write-only `installed_imports` chain went.
+    Still open.)
   - The three-assert block plus the `pip_name` generator are duplicated at both
     `write_requirements_file_with_extras` call sites in `cli.py`
     (`1542`-`1555` and `1748`-`1761`); the
     `assert options.uninstalled_imports is not None` in
     `verify_and_repair_imports` is dead, since the attribute is dereferenced
-    two lines above it.
-- **Sweep for 3d: roughly eight pre-existing stale `src/veny/cli.py` citations
-  elsewhere in this file, predating this phase and not caused by it.**
-  Starting points, each verified against HEAD (`6b2217a`) while writing this
-  entry:
-  - `cli.py:1005` for `FunctionInfo.ast_node` — the symbol left `cli.py`
-    entirely in phase 3b (`5dbcac2`); `rg ast_node src/` returns nothing. The
-    citation is dead, not merely shifted.
-  - `cli.py:2606`, `cli.py:2860`, `cli.py:3304`, `cli.py:3323` — all beyond
-    EOF; `cli.py` is now 2,296 lines. These date from before the phase-3
-    extractions.
-  - `cli.py:124` (actual `:63`), `cli.py:229` (actual `:168`) are stale by a
-    shift. `cli.py:537`/`:552`, cited for "`dict_of_custom_modules` populates
-    `options.custom_modules`" and "`list_packages` reaches the scanner", are
-    also stale by a shift — but the actual lines are `:480` and `:495`, not
-    `:488` as an earlier draft of this entry had it; `:488` is a `logging.info`
-    call inside the same block, not the `list_packages(options)` call site.
-  Line-number citations in a long-lived document are systematically fragile
-  across extractions, and are better written as a symbol name plus a
-  commit-qualified line number — the way the existing `cli.py:2197` citation
-  is (explicitly qualified to `dc1c3c4`, and still correct because of that
-  qualification).
+    two lines above it. **CLOSED by 3d's Task 3, structurally rather than by
+    de-duplication:** the two call sites are no longer both in `cli.py`. One
+    is `cli.setup_virtualenv` @ `7debbb3:991-999` (it still carries the three
+    asserts, because `Options`' fields are still `| None`); the other left the
+    file with the code, and is now
+    `verify.verify_and_repair_imports` @ `7debbb3:src/veny/verify.py:675`,
+    which takes `requirements_file` and `extra_requirements` as explicit
+    non-optional arguments and therefore needs **no** asserts at all. The dead
+    `assert options.uninstalled_imports is not None` went with the move. The
+    remaining three asserts in `cli.py` die with the `Options` drain in 3e.
+- **Stale-citation sweep: DONE by 3d's Task 10, 2026-08-18.** The sweep was
+  named for 3d because the citations were already stale; every one of them
+  then moved **again** under this phase, which removed 1,232 lines from
+  `cli.py` (2,296 → 1,064). Each was re-measured against
+  `verify-cache-search-last-used` @ `7debbb3` and rewritten as
+  **`symbol name @ <sha>:<line>`** — the commit-qualified form the existing
+  `cli.py:2197 @ dc1c3c4` citation already used, and the reason that one
+  citation is *still* correct while every unqualified neighbour rotted.
+
+  | was | symbol | now, at `7debbb3` |
+  |---|---|---|
+  | `veny.py:1478` | `options.python_command = ek.find_preferred_python_version()` | `cli.main` @ `7debbb3:409` |
+  | `cli.py:537` | `options.custom_modules = dict_of_custom_modules(...)` | `cli.main` @ `7debbb3:520` |
+  | `cli.py:552` | `list_packages(options)` | `cli.main` @ `7debbb3:535` |
+  | `cli.py:124` | `Options.__init__`'s `self.search_above_this_dir = True` | `cli.Options.__init__` @ `7debbb3:69` |
+  | `cli.py:229` | `Options.set_venv_dir` (the `mkdir` side effect) | `cli.Options.set_venv_dir` @ `7debbb3:173` |
+  | `cli.py:461` | the `--reqs` block in `main()` | `cli.main` @ `7debbb3:501` |
+  | `cli.py:462` | the dict-invariance mypy error at `options.extra_requirements = environment.parse_extra_requirements(...)` | `cli.main` @ `7debbb3:502` |
+  | `cli.py:1225` | the only production reader of `Requirements.installed` (the `options.installed_imports` copy-back) | **dead** — the whole chain was deleted by 3d's Task 8 (`e430a37`). `Requirements.installed` is still computed, in `classify.split_imports` @ `7debbb3:src/veny/classify.py:187` and `:270`; `cli.py` has no reader. |
+  | `cli.py:2606` | the `TemporaryDirectory`-based `create_venv` on the probe path | `cli._probe_venv` @ `7debbb3:779` |
+  | `cli.py:2860` | `write_requirements_file_with_extras(options)` in `setup_virtualenv` | **left `cli.py`'s ownership**: the callee is `environment.write_requirements_file_with_extras` @ `7debbb3:src/veny/environment.py:179`; the `setup_virtualenv` call site is `7debbb3:994` |
+  | `cli.py:3304` | `setup_virtualenv` | `cli.setup_virtualenv` @ `7debbb3:956` |
+  | `cli.py:3323` | `create_venv(options.venv_dir, ...)` in `setup_virtualenv` | **left `cli.py`'s ownership**: `environment.create_venv` @ `7debbb3:src/veny/environment.py:62`; the call site is `7debbb3:974` |
+  | `cli.py:1005` | `FunctionInfo.ast_node` | **dead twice over** — the *field* was retired by 3b's Task 6 (`5dbcac2`) and the *class* left `cli.py` in 3b too. `FunctionInfo` is now `analysis/call_graph.py` @ `7debbb3:11`, with no `ast_node`. |
+  | `cli.py:1409` | `install_into_venv(options.venv_python, …)` | **left `cli.py`**: `verify.repair_unsatisfied_import` @ `7debbb3:src/veny/verify.py:513` |
+  | `cli.py:1867` | `cli.load_last_used_venv_dir` | **deleted** by 3d's Task 5 (`0943370`); the symbol exists nowhere in `src/` or `tests/` |
+  | `cli.py:1542-1555` / `1748-1761` | the duplicated three-assert block + `pip_name` generator at the two `write_requirements_file_with_extras` call sites | `cli.setup_virtualenv` @ `7debbb3:991-999` (asserts kept — `Options`' fields are still `\| None`) and `verify.verify_and_repair_imports` @ `7debbb3:src/veny/verify.py:675` (no asserts — explicit non-optional arguments) |
+  | `cli.py:2197 @ dc1c3c4` | `cli.load_last_used_venv_dir`, historical | **unchanged and still correct** — it was commit-qualified, so the deletion above does not invalidate it |
+
+  Four of the sixteen turned out to be **dead symbols rather than shifted
+  lines**, which is the point of the exercise: a line number that has drifted
+  is merely wrong, but a line number for a symbol that no longer exists reads
+  as a live fact about the code and is worse than no citation at all. Three
+  more now name a *different module*. Write every future citation as
+  `symbol @ <sha>:<line>`; if the symbol is worth citing, it is worth naming.
 - **Parked by 3c's reviews, 2026-08-18.** None blocking; recorded because the
   per-task ledger they came from does not survive the phase.
   - `tests/test_environment.py` (line numbers re-measured 2026-08-18; the
     per-task ledger's were taken before Task 2 repointed the file, and two of
     its six notes turned out to be obsolete — every `options.` reference is
-    gone from the file, which was Task 2's point): the live round trip's
-    uninstall (`:101`) asserts "no error" only by the absence of an exception,
-    with no WARNING-record check; the argv assertion's element 0 is
-    `environment.uv_binary()` compared against itself (`:165`), so 6 of its 7
+    gone from the file, which was Task 2's point). **All four line numbers
+    below were re-measured again at `7debbb3`, because 3d's Task 1 moved the
+    wheel builder out of this file into `tests/wheels.py` and shifted every
+    one of them:** the live round trip's uninstall
+    (`test_the_live_install_uninstall_round_trip_crosses_the_real_uv_boundary`
+    @ `7debbb3:tests/test_environment.py:68`, was cited `:101`) asserts "no
+    error" only by the absence of an exception, with no WARNING-record check;
+    the argv assertion's element 0 is `environment.uv_binary()` compared
+    against itself
+    (`test_run_uv_pip_places_the_python_flag_before_the_package_arguments` @
+    `7debbb3:tests/test_environment.py:132`, was cited `:165`), so 6 of its 7
     elements are actually pinned; the live test hardcodes the `bin/python`
-    venv layout (`:88`) instead of reusing `cli.venv_python_for`;
-    `parse_extra_requirements(fixture, rawlog=True)` (`:247`) deviates from
+    venv layout (`7debbb3:tests/test_environment.py:55`, was cited `:88`)
+    instead of reusing what is now `environment.venv_python_for` — amendment
+    11 moved it into this very module, so the reuse the note asks for is now
+    a one-line change with no layering objection;
+    `parse_extra_requirements(fixture, rawlog=True)`
+    (`7debbb3:tests/test_environment.py:214`, was cited `:247`) deviates from
     the default with no comment. And "`tests/test_environment.py` contributes
     zero mypy errors" is a weaker claim than it sounds: `pyproject.toml:82-87`
     relaxes `tests.*` to `strict = false` with `disallow_untyped_defs` and
@@ -1581,21 +2006,33 @@ wiring rationale and for two Minors deliberately left unfixed.
     per-task ledger's figures were taken before Task 4 removed an error and
     were stale by one on both sides: narrowing the return (and its local) to
     `dict[str, str]` gives **37**, leaving it `dict[str, str | None]` gives
-    **36**. The one extra error is `src/veny/cli.py:462`, dict invariance at
-    `options.extra_requirements = environment.parse_extra_requirements(...)`.
-  - The `write_requirements_file_with_extras` stub at
-    `tests/test_split_imports.py:878` was loosened to `lambda *args`, so no
+    **36**. The one extra error is dict invariance at
+    `options.extra_requirements = environment.parse_extra_requirements(...)`
+    (cited as `src/veny/cli.py:462`; `cli.main` @ `7debbb3:502`). Both figures
+    predate 3d, whose ceiling is 33.
+  - The `write_requirements_file_with_extras` stub, cited as
+    `tests/test_split_imports.py:878`, was loosened to `lambda *args`, so no
     test pins that `cli.py` hands `environment` an interpreter *path* rather
-    than an `Options`; only mypy covers it.
-  - `cli.py`'s `--reqs` block (`:461`) no longer resets
+    than an `Options`; only mypy covers it. **Re-measured at `7debbb3`: the
+    stub is `tests/test_split_imports.py:253`** (the file fell 21 lines short
+    of the old citation's *EOF*, 351 lines now, because 3d migrated 35 tests
+    out of it). **Narrowed by 3d, not closed:** `tests/test_uv_backend.py`
+    now pins the contract at the `setup_virtualenv` call site (`:109`,
+    `:118`) and `tests/test_verify.py:1291` at the repair site, so the written
+    file's contents are asserted even though this particular stub is still
+    loose.
+  - `cli.py`'s `--reqs` block (cited as `:461`; `cli.main` @ `7debbb3:501`)
+    no longer resets
     `options.extra_requirements` to `{}` before reading it — unreachable while
     `my_fopen` has `suppress_errors=True`.
-  - `test_no_source_imports_means_no_probe_venv_is_built`
-    (`tests/test_classify.py:169`) is killed by a `ValueError` out of `max()`
-    rather than by its own `created == []` assertion.
+  - `test_no_source_imports_means_no_probe_venv_is_built` (cited as
+    `tests/test_classify.py:169`; re-measured at `7debbb3` it is
+    `tests/test_classify.py:201`) is killed by a `ValueError` out of `max()`
+    rather than by its own `created == []` assertion. Still open.
   - `requirement_records` dropping a version specifier — it is called as
-    `requirement_records(extra_requirements.keys())` (`classify.py:262`) — is
-    not pinned by any test.
+    `requirement_records(extra_requirements.keys())`
+    (`classify.split_imports` @ `7debbb3:src/veny/classify.py:262`, unmoved by
+    3d) — is not pinned by any test. Still open.
   - Corpus coverage gaps that no differential run will close:
     `add_dependencies`' `while` loop never runs a second pass (no chain in
     `cli.py`'s `also_needs` is nested) — **closed by test, 2026-08-18

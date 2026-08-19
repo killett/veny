@@ -2,8 +2,17 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers-extended-cc:subagent-driven-development (recommended) or superpowers-extended-cc:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **ANNOTATED IN PLACE BY TASK 10, 2026-08-18 (execution complete, branch
+> `verify-cache-search-last-used` @ `7debbb3`).** Every block below marked
+> **[EXECUTION]** records something this plan's own text got wrong. Phases 3b
+> and 3c both did this and both found real errors; so did this one, seven
+> times. The checkboxes are all marked complete.
+
 **Goal:** Extract `verify.py`, `cache_search.py` and `last_used.py` out of
-`src/veny/cli.py` — 1,088 measured lines of it — with each extraction stating
+`src/veny/cli.py` — 1,088 measured lines of it (**[EXECUTION]** it removed
+**1,232**: `cli.py` went 2,296 → 1,064. The 1,088 figure counted the measured
+symbol *bodies* in the File Structure tables below and missed the import
+lines, blank lines and comment blocks that went with them.) — with each extraction stating
 what it is handed and what it returns, and with tests written at the new
 interface before the code moves.
 
@@ -45,6 +54,12 @@ working and what phase 3c established.
    `pixi run lint` zero, `pixi run python -m ruff format --check .` all files
    formatted, `pixi run typecheck` **≤ 36 errors** (the current ceiling — it
    may fall, it must not rise), `pixi run smoke` green.
+   **[EXECUTION]** It fell, twice, without anyone setting out to lower it:
+   36 → 35 at Task 5, back to 36 at Task 6, then **36 → 33 at Task 8**. Final:
+   **33 errors in 6 files** (`tests/test_verify.py` 15, `src/veny/cli.py` 7,
+   `tests/test_split_imports.py` 6, `analysis/imports.py` 3,
+   `analysis/literals.py` 1, `analysis/call_graph.py` 1). Lowest it has ever
+   been. Final suite: **359 passed** (321 at the branch point).
 8. **Do not reintroduce hand-aligned columns.** `ruff format` owns the layout.
 9. `pixi run pre-commit run --files <paths>` before every commit —
    `.git/hooks/pre-commit` is not installed, so `git commit` does not run them.
@@ -166,6 +181,19 @@ where `AliasIndex` is declared, plus `Candidate | None` dereferences), 2 in
 `_run_check_against_fake_venv`, 4 at `_live_index`'s `AliasIndex(**fields)`.
 
 Those 17 travel to `tests/test_verify.py` with the tests that carry them.
+
+> **[EXECUTION] Fifteen travelled, not seventeen** — measured at `7debbb3`:
+> `tests/test_split_imports.py` fell 21 → **6**, `tests/test_verify.py`
+> arrived at **15**. The two that did not travel are
+> `_run_check_against_fake_venv`'s untyped-def pair. The helper now exists in
+> **both** files: the migrated copy at `tests/test_verify.py:553` was given
+> type hints on arrival (so it contributes zero), while the untyped original
+> stayed at `tests/test_split_imports.py:145` for the one test still using it
+> (`:218`). This plan's "the migration is meant to move the tests verbatim"
+> and its arithmetic do not survive a helper being *duplicated* rather than
+> moved — a prediction that adds up only if every symbol has exactly one home
+> is not a prediction, it is an assumption. `src/veny/cli.py` also fell 10 →
+> **7** with nobody typing anything: the errors left with the code.
 **This plan does not promise to clear them** — clearing them means typing the
 fakes properly, which is a change to test code the migration is meant to move
 verbatim. The requirement is: measure the count per file after Task 3 and after
@@ -323,6 +351,26 @@ layering suite, not by reading this sentence.
 | `cli.py:1785` | `record_venv_state(options)` | `options.set_venv_dir(cache_search.record_venv_state(...))` |
 | `cli.py:1787` | `check_packages_in_venv(options)` | `verify.check_packages_in_venv(...)` |
 
+> **[EXECUTION] This table is not "the whole list", and the gap was large.**
+> Task 9 re-derived it from the tree with
+> `rg -n 'verify\.|cache_search\.|last_used\.|environment\.' src/veny/*.py`
+> and found **26 named call sites (40 once each `check_venv_dir` branch and
+> each duplicated site is counted separately) carrying 147 arguments** —
+> against the **14 rows** above. Twelve of the 26 have no row here at all,
+> including every `environment.*` site the extraction created
+> (`create_venv`/`venv_build_interpreter` at two places, `run_uv_pip`,
+> `write_requirements_file_with_extras`, `parse_extra_requirements`), all
+> three `verify.source_import_names` sites, both `cache_search.interpreter_tag`
+> sites, `venv_cache.build_folder_name`, and `cli._load_last_used` →
+> `last_used.load_last_used_options`, which has no row whatsoever. Row 9's
+> "all four keywords" is also wrong — `load_last_used_venv_python` takes
+> **five** arguments. Consequence, measured: **104 of the 147 arguments could
+> be replaced with an empty or wrong value with all 338 tests still green**
+> before Task 9 closed them. A plan-authored call-site table is a starting
+> point for the standing check, never its scope: 3e must re-derive its own
+> from the tree.
+
+
 Test files that must be repointed, with measured counts:
 
 | File | Tests touching 3d symbols | Note |
@@ -348,15 +396,15 @@ copying 30 lines out of `tests/test_environment.py`.
 - Modify: `tests/test_environment.py:27-57` (delete `_build_wheel`, import it)
 
 **Acceptance Criteria:**
-- [ ] `tests/wheels.py` exposes `build_wheel(directory, *, name="venytest", version="0.1", value=42) -> Path`, byte-identical in behaviour to `tests/test_environment.py`'s current `_build_wheel`
-- [ ] `tests/test_environment.py` imports it and its live round trip still passes untouched otherwise
-- [ ] Test count unchanged at 321
+- [x] `tests/wheels.py` exposes `build_wheel(directory, *, name="venytest", version="0.1", value=42) -> Path`, byte-identical in behaviour to `tests/test_environment.py`'s current `_build_wheel`
+- [x] `tests/test_environment.py` imports it and its live round trip still passes untouched otherwise
+- [x] Test count unchanged at 321
 
 **Verify:** `pixi run test -q` → 321 passed
 
 **Steps:**
 
-- [ ] **Step 1: Move the helper**
+- [x] **Step 1: Move the helper**
 
 Create `tests/wheels.py` with the body of `_build_wheel` from
 `tests/test_environment.py:27-57`, renamed `build_wheel` and with the
@@ -413,7 +461,7 @@ def build_wheel(
     return wheel_path
 ```
 
-- [ ] **Step 2: Repoint `tests/test_environment.py`**
+- [x] **Step 2: Repoint `tests/test_environment.py`**
 
 Delete its `_build_wheel` and add, beside its other imports:
 
@@ -424,7 +472,7 @@ from tests.wheels import build_wheel
 Replace its single call `wheel_path = _build_wheel(tmp_path)` with
 `wheel_path = build_wheel(tmp_path)`.
 
-- [ ] **Step 3: Run the suite**
+- [x] **Step 3: Run the suite**
 
 Run: `pixi run test -q`
 Expected: 321 passed. If the `from tests.wheels import ...` form fails to
@@ -432,7 +480,7 @@ import, use `from .wheels import build_wheel` — `tests/__init__.py` exists, so
 the package-relative form is available; pick whichever the suite accepts and
 use the same form in Task 2.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 pixi run pre-commit run --files tests/wheels.py tests/test_environment.py
@@ -452,18 +500,18 @@ boundary, before a line of it moves.
 - Create: `tests/test_verify.py`
 
 **Acceptance Criteria:**
-- [ ] A **live** test: build a real venv with `environment.create_venv`, install the Task 1 wheel with `environment.install_into_venv`, and assert `cli.import_outcome_in_venv` reports `imported=True` and `providers == frozenset({"venytest"})`; then uninstall and assert `imported=False`, `rejection_kind == "import_failed"`, and a non-empty `detail`. Nothing about the subprocess is stubbed.
-- [ ] `source_import_names` pinned for three cases: no `--reqs` (returns `all_imports` unchanged), `--reqs` with entries that overlap `all_imports` (they are subtracted), `--reqs` with entries that do not overlap (no change)
-- [ ] `check_packages_in_venv`'s bulk branch pinned to fail when `source_names` is empty but `uninstalled` is not — the mis-wiring Task 3 makes possible
-- [ ] Every expected value obtained by running code, and the docstring says how
-- [ ] Test count rises to 321 + N; record N
+- [x] A **live** test: build a real venv with `environment.create_venv`, install the Task 1 wheel with `environment.install_into_venv`, and assert `cli.import_outcome_in_venv` reports `imported=True` and `providers == frozenset({"venytest"})`; then uninstall and assert `imported=False`, `rejection_kind == "import_failed"`, and a non-empty `detail`. Nothing about the subprocess is stubbed.
+- [x] `source_import_names` pinned for three cases: no `--reqs` (returns `all_imports` unchanged), `--reqs` with entries that overlap `all_imports` (they are subtracted), `--reqs` with entries that do not overlap (no change)
+- [x] `check_packages_in_venv`'s bulk branch pinned to fail when `source_names` is empty but `uninstalled` is not — the mis-wiring Task 3 makes possible
+- [x] Every expected value obtained by running code, and the docstring says how
+- [x] Test count rises to 321 + N; record N
 
 **Verify:** `pixi run test tests/test_verify.py -q` → all pass against
 *unmoved* `cli.py`
 
 **Steps:**
 
-- [ ] **Step 1: Write the live boundary test first**
+- [x] **Step 1: Write the live boundary test first**
 
 It is the one test in this file that cannot be faked into passing. Note that it
 imports from `veny.cli` — this file is written *before* the move and repointed
@@ -523,14 +571,14 @@ def test_a_live_import_check_reports_the_distribution_that_provided_it(tmp_path)
     assert "venytest" in after.detail
 ```
 
-- [ ] **Step 2: Run it and record what it actually reports**
+- [x] **Step 2: Run it and record what it actually reports**
 
 Run: `pixi run test tests/test_verify.py -q`
 If `providers` does not come back as `frozenset({"venytest"})`, **do not adjust
 the production code** — adjust the assertion to what was measured and say so in
 the docstring. The point of this test is to record today's answer.
 
-- [ ] **Step 3: Pin `source_import_names`, all three cases**
+- [x] **Step 3: Pin `source_import_names`, all three cases**
 
 ```python
 def test_source_import_names_returns_all_imports_when_reqs_is_off():
@@ -574,7 +622,7 @@ def test_source_import_names_leaves_non_overlapping_requirements_alone():
     assert cli.source_import_names(options) == {"yaml"}
 ```
 
-- [ ] **Step 4: Pin the bulk branch against an empty `source_names`**
+- [x] **Step 4: Pin the bulk branch against an empty `source_names`**
 
 This is the test that has to die in Task 9 when the argument is mutated. It
 must fail for its own reason, not incidentally.
@@ -618,7 +666,7 @@ def test_the_bulk_branch_checks_a_source_name_under_that_name_alone(monkeypatch)
     assert seen == [[["cv2"]]]
 ```
 
-- [ ] **Step 5: Run, then mutate to prove each test can fail**
+- [x] **Step 5: Run, then mutate to prove each test can fail**
 
 Run: `pixi run test tests/test_verify.py -q` → all pass.
 Then, for each test, make the one-line mutation its docstring names (copy the
@@ -626,7 +674,7 @@ file to the scratch directory first; restore from that copy — never
 `git checkout --`), run the file, confirm the named test fails, restore.
 Record the four mutation results in the commit message.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 pixi run pre-commit run --files tests/test_verify.py
@@ -653,14 +701,30 @@ through the module.
 - Modify: `tests/test_uv_backend.py` (4 setattr sites)
 
 **Acceptance Criteria:**
-- [ ] `src/veny/verify.py` exists with the signatures given in Step 2, and no function in it takes an `Options`
-- [ ] `environment.venv_python_for(venv_dir)` exists; `cli.venv_python_for` is gone
-- [ ] `verify_and_repair_imports` **returns** the final uninstalled set instead of mutating `options`
-- [ ] `tests/test_layering.py` passes with `verify` in its own layer and no new sanctioned exception
-- [ ] The 35 verify tests measured in `tests/test_split_imports.py` now live in `tests/test_verify.py`, assertions unchanged except where a signature forced it
-- [ ] `test_a_record_carrying_a_pip_spelling_is_never_repaired` is repaired: it gains a second record that fails the bulk check, with `all_imports` naming only that second record, so deleting the `source_import_names` filter makes it fail
-- [ ] The already-in-a-venv branch at `cli.py:532` still raises `AssertionError("options.venv_dir must be set")`, not `TypeError`
-- [ ] `pixi run test` green; lint zero; format clean; mypy ≤ 36
+- [x] `src/veny/verify.py` exists with the signatures given in Step 2, and no function in it takes an `Options`
+- [x] `environment.venv_python_for(venv_dir)` exists; `cli.venv_python_for` is gone
+- [x] `verify_and_repair_imports` **returns** the final uninstalled set instead of mutating `options`
+- [x] `tests/test_layering.py` passes with `verify` in its own layer and no new sanctioned exception
+- [x] The 35 verify tests measured in `tests/test_split_imports.py` now live in `tests/test_verify.py`, assertions unchanged except where a signature forced it
+- [x] `test_a_record_carrying_a_pip_spelling_is_never_repaired` is repaired: it gains a second record that fails the bulk check, with `all_imports` naming only that second record, so deleting the `source_import_names` filter makes it fail
+- [x] The already-in-a-venv branch at `cli.py:532` still raises `AssertionError("options.venv_dir must be set")`, not `TypeError`
+
+> **[EXECUTION] Preserved, but it took a fix round, and the branch is
+> unreachable either way.** The move dropped `venv_python_for`'s
+> `options`-defaulting branch (amendment 11) and with it the assert that
+> lived inside it; Task 5's fix round (`937951f`) re-asserted at the `main()`
+> call site to restore the exact `AssertionError`. Separately, Task 9's
+> standing check could not kill *any* argument of this branch, which is how
+> it surfaced that the branch is **unreachable**: nothing between `Options()`
+> and the assert ever assigns `venv_dir`, so a real run inside an activated
+> virtualenv with an uninstalled import dies on the assertion. Measured
+> byte-identical at `313e800` (the assert sat one frame deeper, inside
+> `cli.venv_python_for`), so this is **pre-existing and out of scope for a
+> behaviour-preserving phase** — it is PROGRESS's already-recorded
+> `AssertionError` crash #2, re-found from a new direction, not a new one.
+> `test_main_checks_the_surrounding_virtualenv_against_this_runs_imports`
+> now pins the wiring so whoever repairs the branch inherits a test.
+- [x] `pixi run test` green; lint zero; format clean; mypy ≤ 36
 
 **Verify:** `pixi run test -q` → all pass, and
 `pixi run python -c "from veny import verify; print(verify.__file__)"` prints
@@ -668,7 +732,7 @@ the new module
 
 **Steps:**
 
-- [ ] **Step 1: Add `venv_python_for` to `environment.py`**
+- [x] **Step 1: Add `venv_python_for` to `environment.py`**
 
 Move `cli.py:924-944` into `environment.py`, dropping the `options` parameter
 and its `None` branch — every caller now passes a directory:
@@ -695,7 +759,7 @@ Note the pre-existing inconsistency, and **do not fix it here**:
 Windows branch. That is today's behaviour on both paths; changing it is a
 behaviour change and belongs to phase 4's `VenvHandle`.
 
-- [ ] **Step 2: Create `src/veny/verify.py` with these exact signatures**
+- [x] **Step 2: Create `src/veny/verify.py` with these exact signatures**
 
 Move the bodies verbatim; change only what the argument list forces.
 
@@ -845,7 +909,7 @@ def verify_and_repair_imports(
     return final
 ```
 
-- [ ] **Step 3: Delete the moved spans from `cli.py` and import the module**
+- [x] **Step 3: Delete the moved spans from `cli.py` and import the module**
 
 Add `verify` to the existing `from . import classify, environment, json_types,
 venv_cache` line (keep it alphabetical: `classify, environment, json_types,
@@ -853,7 +917,7 @@ venv_cache, verify`). Delete `cli.py:678-728`, `731-766`, `769-843`, `846-944`,
 `947-1133`, `1366-1555`. Leave `warn_about_system_packages` (`1136-1150`) and
 `_probe_venv` (`1153-1188`) where they are.
 
-- [ ] **Step 4: Rewire `cli._probe_venv`**
+- [x] **Step 4: Rewire `cli._probe_venv`**
 
 ```python
         def is_importable(import_name: str) -> bool:
@@ -871,7 +935,7 @@ venv_cache, verify`). Delete `cli.py:678-728`, `731-766`, `769-843`, `846-944`,
             )
 ```
 
-- [ ] **Step 5: Rewire `cli.setup_virtualenv`**
+- [x] **Step 5: Rewire `cli.setup_virtualenv`**
 
 Replace `verify_and_repair_imports(options)` at `cli.py:1781` and the bulk
 check at `:1787`:
@@ -904,7 +968,7 @@ check at `:1787`:
     )
 ```
 
-- [ ] **Step 6: Rewire `cli.py:532` and preserve its crash exactly**
+- [x] **Step 6: Rewire `cli.py:532` and preserve its crash exactly**
 
 That branch runs with `options.venv_dir` still `None` (a pre-existing defect
 PROGRESS records and the design puts out of scope). Today the `AssertionError`
@@ -930,14 +994,14 @@ exception type and message are unchanged:
 (`last_used.is_virtualenv` lands in Task 5; until then leave `is_virtualenv()`
 as it is and change only the `check_packages_in_venv` call.)
 
-- [ ] **Step 7: Update `tests/test_layering.py`**
+- [x] **Step 7: Update `tests/test_layering.py`**
 
 Insert `frozenset({"verify"})` between the `{"classify", "environment"}` layer
 and `{"cli"}`, with a comment saying why it is not a peer of `environment`:
 `verify` installs, uninstalls and rewrites `requirements.txt` through it
 (design amendment 10).
 
-- [ ] **Step 8: Migrate the 35 verify tests and repoint every stub**
+- [x] **Step 8: Migrate the 35 verify tests and repoint every stub**
 
 Move these 35 test functions from `tests/test_split_imports.py` to
 `tests/test_verify.py` **with their assertions unchanged**, adjusting only the
@@ -1002,7 +1066,7 @@ assertion to the new argument names rather than loosening it. PROGRESS records
 that loosening `write_requirements_file_with_extras`'s stub to `lambda *args`
 lost a real assertion.
 
-- [ ] **Step 9: Repair the decorative test**
+- [x] **Step 9: Repair the decorative test**
 
 `test_a_record_carrying_a_pip_spelling_is_never_repaired` currently passes
 `all_imports=set()`, so `verify_and_repair_imports` returns before reaching the
@@ -1031,7 +1095,7 @@ def test_a_record_carrying_a_pip_spelling_is_never_repaired(monkeypatch, tmp_pat
 Then prove it: delete the filter, run this test, confirm it now fails, restore
 the filter. Record the evidence in the commit message.
 
-- [ ] **Step 10: Run everything**
+- [x] **Step 10: Run everything**
 
 ```
 pixi run test -q
@@ -1043,7 +1107,7 @@ Expected: suite green; lint zero; format clean; mypy ≤ 36 — and record the
 per-file breakdown, because 17 of `test_split_imports.py`'s 21 errors travel to
 `test_verify.py` with the tests that carry them.
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 pixi run pre-commit run --files src/veny/verify.py src/veny/environment.py \
@@ -1066,17 +1130,17 @@ has two references in `src/` and none in `tests/`).
 - Create: `tests/test_last_used.py`
 
 **Acceptance Criteria:**
-- [ ] `load_last_used_options` pinned to pick the **most recent** JSON when several match, and to return `None` when the directory holds none
-- [ ] The `pathlibcutoff` filter pinned: a JSON whose timestamp is older than the cutoff is ignored
-- [ ] `load_last_used_venv_python` pinned to return `None` when the recorded interpreter no longer exists on disk, and the path when it does
-- [ ] Each expected value obtained by writing real files into `tmp_path` and running the current `cli.py`
+- [x] `load_last_used_options` pinned to pick the **most recent** JSON when several match, and to return `None` when the directory holds none
+- [x] The `pathlibcutoff` filter pinned: a JSON whose timestamp is older than the cutoff is ignored
+- [x] `load_last_used_venv_python` pinned to return `None` when the recorded interpreter no longer exists on disk, and the path when it does
+- [x] Each expected value obtained by writing real files into `tmp_path` and running the current `cli.py`
 
 **Verify:** `pixi run test tests/test_last_used.py -q` → all pass against
 *unmoved* `cli.py`
 
 **Steps:**
 
-- [ ] **Step 1: Write the tests**
+- [x] **Step 1: Write the tests**
 
 **First, measure the filename format**, rather than transcribing it: build an
 `Options`, point `script_dir`/`python_script`/`timestamp` at a `tmp_path`
@@ -1192,14 +1256,14 @@ tagged values, so a bare string may not decode to a `Path`), write the fixtures
 with `ek.save_options_to_json` instead and keep the assertions. Whichever route
 works, say in the module docstring which one was used and why.
 
-- [ ] **Step 2: Run, and mutate to prove each can fail**
+- [x] **Step 2: Run, and mutate to prove each can fail**
 
 Run: `pixi run test tests/test_last_used.py -q`
 Then delete the `reverse=True`, then the `>= options.pathlibcutoff` term, then
 the `ek.safe_is_file` guard — one at a time, restoring from a scratch copy each
 time — and confirm the named test fails each time.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 pixi run pre-commit run --files tests/test_last_used.py
@@ -1222,18 +1286,18 @@ fourth is deleted.
 - Modify: `tests/test_cache_search.py:289` (setattr target)
 
 **Acceptance Criteria:**
-- [ ] `src/veny/last_used.py` imports nothing from veny — only stdlib and emmykit
-- [ ] `load_last_used_venv_dir` is deleted, not moved
-- [ ] `cli.py:349` and `cli.py:529` call through `last_used`
-- [ ] `tests/test_layering.py` passes with `last_used` in the `{"classify", "environment"}` layer
-- [ ] `pixi run test` green; lint zero; format clean; mypy ≤ 36
+- [x] `src/veny/last_used.py` imports nothing from veny — only stdlib and emmykit
+- [x] `load_last_used_venv_dir` is deleted, not moved
+- [x] `cli.py:349` and `cli.py:529` call through `last_used`
+- [x] `tests/test_layering.py` passes with `last_used` in the `{"classify", "environment"}` layer
+- [x] `pixi run test` green; lint zero; format clean; mypy ≤ 36
 
 **Verify:** `pixi run test -q` → all pass;
 `rg -n '^from \.|^from veny' src/veny/last_used.py` → no veny imports
 
 **Steps:**
 
-- [ ] **Step 1: Create the module**
+- [x] **Step 1: Create the module**
 
 ```python
 """The one record veny keeps between runs: which environment last ran this script."""
@@ -1291,13 +1355,13 @@ the same keywords it received.
 `is_virtualenv` needs `import sys`; keep the import list minimal and let
 `ruff check` tell you what is unused.
 
-- [ ] **Step 2: Delete `cli.py:1834-1933` entirely**
+- [x] **Step 2: Delete `cli.py:1834-1933` entirely**
 
 That span is all four functions, including `load_last_used_venv_dir`
 (`1867-1895`), which is deleted rather than moved: measured zero references in
 `src/` and `tests/`, and already dead at `dc1c3c4`.
 
-- [ ] **Step 3: Rewire `cli.py`**
+- [x] **Step 3: Rewire `cli.py`**
 
 Add `last_used` to the `from . import ...` line. At `:349`:
 
@@ -1318,7 +1382,7 @@ above, matching the assertion the old body carried.
 
 At `:529`, `is_virtualenv()` becomes `last_used.is_virtualenv()`.
 
-- [ ] **Step 4: Update the layering test and the one test stub**
+- [x] **Step 4: Update the layering test and the one test stub**
 
 `LAYERS`'s `frozenset({"classify", "environment"})` becomes
 `frozenset({"classify", "environment", "last_used"})`, with a comment: it
@@ -1330,7 +1394,7 @@ needs nothing from its peers.
 becomes `monkeypatch.setattr(last_used, "load_last_used_options", lambda *a, **k: ek.Options())`
 — and note that Task 6 replaces this patch entirely with an injected callable.
 
-- [ ] **Step 5: Run the gates and commit**
+- [x] **Step 5: Run the gates and commit**
 
 ```bash
 pixi run test -q && pixi run lint && pixi run python -m ruff format --check . && pixi run typecheck
@@ -1356,21 +1420,21 @@ with the last-used loader injected as a callable rather than reached for.
   `tests/test_uv_backend.py`, `tests/test_split_imports.py` (repoint)
 
 **Acceptance Criteria:**
-- [ ] `src/veny/cache_search.py` exists with the signatures in Step 1; no function in it takes an `Options`
-- [ ] `rename_venv` and `record_venv_state` **return** the (possibly new) venv directory instead of mutating `options`
-- [ ] `find_match_dir_in_cache` takes the `argparse.Namespace` and a
+- [x] `src/veny/cache_search.py` exists with the signatures in Step 1; no function in it takes an `Options`
+- [x] `rename_venv` and `record_venv_state` **return** the (possibly new) venv directory instead of mutating `options`
+- [x] `find_match_dir_in_cache` takes the `argparse.Namespace` and a
       `load_last_used: Callable[[], ek.Options | None]`, and its four flag
       writes are preserved exactly (design amendment 9)
-- [ ] `rename_venv`'s single-element tuple loop is gone (deferred item closed)
-- [ ] `tests/test_layering.py` passes with `cache_search` above `verify`
-- [ ] `pixi run test` green; lint zero; format clean; mypy ≤ 36
+- [x] `rename_venv`'s single-element tuple loop is gone (deferred item closed)
+- [x] `tests/test_layering.py` passes with `cache_search` above `verify`
+- [x] `pixi run test` green; lint zero; format clean; mypy ≤ 36
 
 **Verify:** `pixi run test -q` → all pass;
 `pixi run python -c "from veny import cache_search; print(cache_search.__file__)"`
 
 **Steps:**
 
-- [ ] **Step 1: Create the module with these signatures**
+- [x] **Step 1: Create the module with these signatures**
 
 ```python
 """Choose a cached virtual environment, and record the state of a fresh one."""
@@ -1499,12 +1563,12 @@ Body changes, all mechanical:
   Compute `wanted = wanted_packages(uninstalled, extra_requirements)` once at
   the top and pass it to both `cache_candidates` and every `check_venv_dir`.
 
-- [ ] **Step 2: Delete the moved spans from `cli.py`**
+- [x] **Step 2: Delete the moved spans from `cli.py`**
 
 Delete `cli.py:1349-1363`, `1558-1621`, `1624-1669`, `1672-1717`, `1790-1831`,
 `1936-2296`. Add `cache_search` to the `from . import ...` line.
 
-- [ ] **Step 3: Rewire the four `cli.py` call sites**
+- [x] **Step 3: Rewire the four `cli.py` call sites**
 
 `setup_virtualenv`'s folder name (`:1725-1730`):
 
@@ -1578,13 +1642,13 @@ directory it is given. The old `rename_venv` also called `set_venv_dir`, so
 this is the same number of `mkdir` calls on the same path, not a new one.
 Confirm that by reading `set_venv_dir` before you claim it.
 
-- [ ] **Step 4: Update the layering test**
+- [x] **Step 4: Update the layering test**
 
 Insert `frozenset({"cache_search"})` between `{"verify"}` and `{"cli"}`, with a
 comment: it selects a cached environment and confirms the selection by
 import-checking it, so it sits above `verify`.
 
-- [ ] **Step 5: Repoint the four test files**
+- [x] **Step 5: Repoint the four test files**
 
 `tests/test_manifest_writing.py` (13 tests), `tests/test_cache_search.py` (15),
 `tests/test_rename_venv.py` (3) and `tests/test_venv_naming.py` (1) all change
@@ -1607,7 +1671,7 @@ venv dir>)` — note the stub must now **return a Path**, since
 here is exactly the kind of seam defect this plan's Task 9 hunts; make the stub
 return the directory it was given.
 
-- [ ] **Step 6: Run the gates and commit**
+- [x] **Step 6: Run the gates and commit**
 
 ```bash
 pixi run test -q && pixi run lint && pixi run python -m ruff format --check . && pixi run typecheck
@@ -1635,32 +1699,51 @@ deletions.
 - Modify: `tests/test_cache_search.py`
 
 **Acceptance Criteria:**
-- [ ] `find_match_dir_in_cache` keeps the `CacheCandidate` for each ranked folder and passes its already-read `manifest` into `check_venv_dir`
-- [ ] `check_venv_dir` with a supplied manifest performs **zero** `read_manifest` calls and **one** `satisfies` call
-- [ ] The last-used path, which has no candidate, still reads the manifest itself
-- [ ] A test counts the `read_manifest` calls for a cache hit and pins the new number
-- [ ] A folder that loses its manifest between the scan and the check is still handled — pin what happens now
+- [x] `find_match_dir_in_cache` keeps the `CacheCandidate` for each ranked folder and passes its already-read `manifest` into `check_venv_dir`
+- [x] `check_venv_dir` with a supplied manifest performs **zero** `read_manifest` calls and **one** `satisfies` call
+
+> **[EXECUTION] This criterion is wrong, and a half-fix satisfied it.** The
+> design it cites says `check_venv_dir` "is left doing only the import-level
+> confirmation" — which means **zero** `satisfies` calls on the supplied
+> manifest, not one, because `cache_candidates` has already run it. Writing
+> "one" into the acceptance criteria made the first attempt (`93bca53`) look
+> complete: it removed the redundant `read_manifest` and left the redundant
+> `satisfies` in place, meeting every box on this list while closing only
+> half of design ledger item 2. The review caught it and `f961ada` finished
+> the job — and renamed the parameter `manifest` → **`matched_manifest`**, so
+> the trust contract ("this was read from this folder during the scan and has
+> already been checked") is stated in the name rather than implied. The real
+> post-condition, measured per cache hit: **1 `read_manifest`, 1 `satisfies`
+> for the whole search** (down from 2 and 2), with `check_venv_dir` itself
+> contributing zero of each on the supplied-manifest path. The last-used
+> path, which passes `matched_manifest=None`, still does its own 1 and 1.
+> Lesson for 3e: when a criterion restates a design sentence in numbers,
+> derive the numbers from the sentence — an off-by-one in an acceptance
+> criterion is indistinguishable from success.
+- [x] The last-used path, which has no candidate, still reads the manifest itself
+- [x] A test counts the `read_manifest` calls for a cache hit and pins the new number
+- [x] A folder that loses its manifest between the scan and the check is still handled — pin what happens now
 
 **Verify:** `pixi run test tests/test_cache_search.py -q` → all pass, including
 the new call-count test
 
 **Steps:**
 
-- [ ] **Step 1: Measure the current call counts first**
+- [x] **Step 1: Measure the current call counts first**
 
 Wrap `venv_cache.read_manifest` and `venv_cache.satisfies` with counting
 spies in a scratch test, run `find_match_dir_in_cache` against a cache with one
 matching folder, and record both numbers. Write them into the commit message.
 Do not proceed on the assumption that they are 2 and 2.
 
-- [ ] **Step 2: Keep the candidate, not just the folder**
+- [x] **Step 2: Keep the candidate, not just the folder**
 
 `find_match_dir_in_cache` currently reduces each `CacheCandidate` to two ints
 in `final_venv_folders`. Keep a `dict[Path, CacheCandidate]` beside it, and at
 each of the three selection branches pass
 `manifest=candidates[chosen].manifest` into `check_venv_dir`.
 
-- [ ] **Step 3: Write the call-count test**
+- [x] **Step 3: Write the call-count test**
 
 ```python
 def test_a_cache_hit_reads_each_manifest_once(monkeypatch, tmp_path):
@@ -1676,12 +1759,12 @@ def test_a_cache_hit_reads_each_manifest_once(monkeypatch, tmp_path):
     """
 ```
 
-- [ ] **Step 4: Prove the old behaviour is gone and the new one is pinned**
+- [x] **Step 4: Prove the old behaviour is gone and the new one is pinned**
 
 Restore the `manifest=` argument to `None` at one branch, run the test, confirm
 it fails, restore.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 pixi run test -q && pixi run lint && pixi run python -m ruff format --check .
@@ -1706,11 +1789,23 @@ duplicated, in one reviewable commit.
 - Modify: `tests/test_layering.py` (the copy-back guard's field list)
 
 **Acceptance Criteria:**
-- [ ] `tests/test_split_imports.py`'s `_index_with` is gone
-- [ ] `tests/test_classify.py` has one recording helper, not two, and the two probe-stubbing idioms are one
-- [ ] The write-only `options.installed_imports` chain is deleted: the `Options.__init__` default, the copy-back in `cli.split_imports`, and the docstring field description
-- [ ] `state.Requirements.installed` is **kept** — `classify` still computes it and it is part of the product; only veny's write-only mirror of it on `Options` goes
-- [ ] `tests/test_layering.py`'s copy-back totality guard is updated to the four remaining fields, and still fails if a field stops being copied
+- [x] `tests/test_split_imports.py`'s `_index_with` is gone
+- [x] `tests/test_classify.py` has one recording helper, not two, and the two probe-stubbing idioms are one
+- [x] The write-only `options.installed_imports` chain is deleted: the `Options.__init__` default, the copy-back in `cli.split_imports`, and the docstring field description
+
+> **[EXECUTION] "Write-only" was true of `src/`, not of `tests/`.** Task 8's
+> brief and this criterion both assumed the chain had no readers anywhere;
+> `tests/test_classify.py` held **five live `installed_imports` readers**
+> that the deletion broke. They were rewired onto the `Requirements` product
+> (`result.installed`) rather than deleted, which is the right outcome — they
+> were asserting a real classification fact through veny's mirror of it. The
+> measurement that would have caught this before the delete is the one the
+> plan prescribes two paragraphs earlier and this task's Step 1 repeats:
+> `rg -nw 'installed_imports' src/ tests/` — **with `tests/`**, and with
+> `-w`, since `installed_imports` is a substring of `uninstalled_imports`
+> and the unworded search returns 26 hits.
+- [x] `state.Requirements.installed` is **kept** — `classify` still computes it and it is part of the product; only veny's write-only mirror of it on `Options` goes
+- [x] `tests/test_layering.py`'s copy-back totality guard is updated to the four remaining fields, and still fails if a field stops being copied
 
 **Verify:** `pixi run test -q` → green;
 `rg -nw 'installed_imports' src/veny/cli.py` → no hits (note `-w`: without it
@@ -1719,14 +1814,14 @@ PROGRESS entry miscounted)
 
 **Steps:**
 
-- [ ] **Step 1: Re-measure before deleting**
+- [x] **Step 1: Re-measure before deleting**
 
 Run `rg -nw 'installed_imports' src/ tests/`. PROGRESS records three hits in
 `cli.py` at `143f909` — the `Options.__init__` default, the copy-back, and a
 docstring — and that none is a reader. Re-measure on this branch; the line
 numbers have moved twice since.
 
-- [ ] **Step 2: Delete the chain**
+- [x] **Step 2: Delete the chain**
 
 Remove `self.installed_imports: set[...] = set()` from `Options.__init__`, the
 `options.installed_imports = set(result.installed)` line from
@@ -1735,7 +1830,7 @@ Remove `self.installed_imports: set[...] = set()` from `Options.__init__`, the
 computes it, `tests/test_classify.py` asserts on it, and it is a product field
 the design lists.
 
-- [ ] **Step 3: Update the copy-back guard**
+- [x] **Step 3: Update the copy-back guard**
 
 `tests/test_layering.py:320`'s guard proves the copy-back is *total*. Its field
 list must drop `installed_imports` and still fail when a remaining field stops
@@ -1745,14 +1840,14 @@ correctness (`options.bad_imports = set(result.installed)` still passes it);
 leave that limitation as it is, but say so in the guard's docstring if it does
 not already.
 
-- [ ] **Step 4: Delete `_index_with` and consolidate the classify helpers**
+- [x] **Step 4: Delete `_index_with` and consolidate the classify helpers**
 
 `tests/test_split_imports.py:314`'s `_index_with` has zero references. Delete
 it. In `tests/test_classify.py`, fold `_CountingIndex` (:558) into
 `_RecordingIndex` (:57) — the count is derivable from the recorded calls — and
 collapse the two probe-stubbing idioms into one. Every assertion stays.
 
-- [ ] **Step 5: Run and commit**
+- [x] **Step 5: Run and commit**
 
 ```bash
 pixi run test -q && pixi run lint && pixi run python -m ruff format --check . && pixi run typecheck
@@ -1774,18 +1869,32 @@ records as the only ones that have caught a real regression in this program.
 - Modify: whichever test files the STANDING CHECK proves are missing an assertion
 
 **Acceptance Criteria:**
-- [ ] Every argument at every new call site in the table below has been substituted with an empty/None/default value, the suite run, and a **named** test observed to fail. Any argument with no named failure gets a test in this task.
-- [ ] The differential driver is committed, sets `PYTHONHASHSEED=0` **inside the script**, sets `sys.dont_write_bytecode = True` and purges `__pycache__` before the first import, takes the tree root as an argument (never `PYTHONPATH`), and prints `veny.cli.__file__` first
-- [ ] Three differentials come back empty: the classification state, the argv handed to `uv`, and the cache-search decision (which folder is chosen, and the `read_manifest`/`satisfies` call sequence)
-- [ ] The differential is proved able to fail at least four times by deliberate mutation, one per layer
-- [ ] `install_into_venv`'s success predicate is covered this time: the driver's fake `subprocess.run` must return `returncode=0` for at least one case and the return value must be compared, closing the gap PROGRESS names
+- [x] Every argument at every new call site in the table below has been substituted with an empty/None/default value, the suite run, and a **named** test observed to fail. Any argument with no named failure gets a test in this task.
+- [x] The differential driver is committed, sets `PYTHONHASHSEED=0` **inside the script**, sets `sys.dont_write_bytecode = True` and purges `__pycache__` before the first import, takes the tree root as an argument (never `PYTHONPATH`), and prints `veny.cli.__file__` first
+- [x] Three differentials come back empty: the classification state, the argv handed to `uv`, and the cache-search decision (which folder is chosen, and the `read_manifest`/`satisfies` call sequence)
+- [x] The differential is proved able to fail at least four times by deliberate mutation, one per layer
+
+> **[EXECUTION] The third differential cannot come back empty, and this plan
+> should have said so.** Layer 3 compares the `read_manifest`/`satisfies`
+> call sequence — which is exactly what **Task 7 deliberately changed**, with
+> this same plan's blessing (Global Constraint 1 names it as one of two
+> sanctioned exceptions). An empty layer-3 diff would have meant Task 7 did
+> nothing. What layer 3 actually shows is **one sanctioned divergence** (one
+> fewer read, one fewer satisfies) with the chosen folder and the flag
+> write-back identical, which is the correct pass condition and is what was
+> recorded. Layers 1 and 2 are byte-identical as written. The mutation count
+> came in at **six**, not four. Lesson for 3e: a differential's pass
+> condition is "the diff is exactly the sanctioned change", not "the diff is
+> empty" — state the expected divergence in the plan, or the criterion
+> contradicts the phase.
+- [x] `install_into_venv`'s success predicate is covered this time: the driver's fake `subprocess.run` must return `returncode=0` for at least one case and the return value must be compared, closing the gap PROGRESS names
 
 **Verify:** `pixi run python scripts/differential_3d.py /tmp/old-veny` and
 `... /workspace` produce byte-identical output for all three layers
 
 **Steps:**
 
-- [ ] **Step 1: The call sites to mutate (this is the complete list)**
+- [x] **Step 1: The call sites to mutate (this is the complete list)**
 
 | Call site | Arguments to mutate |
 |---|---|
@@ -1809,7 +1918,7 @@ value in place, run `pixi run test -q`, record which named test failed, restore
 from the copy. **Never `git checkout --`.** Record the whole table's results in
 the commit message; PROGRESS's 3c entry is the model.
 
-- [ ] **Step 2: Write the differential driver**
+- [x] **Step 2: Write the differential driver**
 
 Follow the technique write-up in PROGRESS's Gotchas exactly. Materialize the
 old tree with `git archive <base> src/veny | tar -x -C /tmp/old-veny` — no
@@ -1833,7 +1942,7 @@ Three capture layers:
    ordered sequence of `read_manifest`/`satisfies` calls, and the final state
    of the four `args` flags.
 
-- [ ] **Step 3: Run it both ways and prove it can fail**
+- [x] **Step 3: Run it both ways and prove it can fail**
 
 ```bash
 git archive dc1c3c4 src/veny | tar -x -C /tmp/old-veny
@@ -1852,7 +1961,7 @@ apply (online alias resolution excluded, interpreter selection bypassed,
 `requirements.txt` contents uncompared). Carry the unclosed parts forward as a
 residual risk in Task 10 rather than implying they were covered.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 pixi run pre-commit run --files scripts/differential_3d.py
@@ -1874,42 +1983,42 @@ session can resume from.
   (annotate in place anything execution proved wrong)
 
 **Acceptance Criteria:**
-- [ ] All five gates measured and recorded with their numbers: `pixi run test`, `pixi run lint`, `ruff format --check .`, `pixi run typecheck` (≤ 36, with the per-file breakdown), `pixi run smoke` (and whether the network was up)
-- [ ] A live run recorded: `pixi run veny --no-cache` on a script importing `yaml`, plus a **second** run without `--no-cache` proving the cache path this phase touched still matches the venv the first run built
-- [ ] `wc -l` for `cli.py` and every new module, recorded
-- [ ] README's project-structure block lists `verify.py`, `cache_search.py` and `last_used.py`
-- [ ] PROGRESS's Current work names 3e as the next action and states 3d's amendments (9, 10, 11), its declined items, and its residual risk
-- [ ] The ~eight stale `src/veny/cli.py` citations PROGRESS names are swept, each rewritten as a symbol name plus a commit-qualified line number
-- [ ] The plan's own task checkboxes and `.tasks.json` marked complete
+- [x] All five gates measured and recorded with their numbers: `pixi run test`, `pixi run lint`, `ruff format --check .`, `pixi run typecheck` (≤ 36, with the per-file breakdown), `pixi run smoke` (and whether the network was up)
+- [x] A live run recorded: `pixi run veny --no-cache` on a script importing `yaml`, plus a **second** run without `--no-cache` proving the cache path this phase touched still matches the venv the first run built
+- [x] `wc -l` for `cli.py` and every new module, recorded
+- [x] README's project-structure block lists `verify.py`, `cache_search.py` and `last_used.py`
+- [x] PROGRESS's Current work names 3e as the next action and states 3d's amendments (9, 10, 11), its declined items, and its residual risk
+- [x] The ~eight stale `src/veny/cli.py` citations PROGRESS names are swept, each rewritten as a symbol name plus a commit-qualified line number
+- [x] The plan's own task checkboxes and `.tasks.json` marked complete
 
 **Verify:** `pixi run test -q && pixi run lint && pixi run python -m ruff format
 --check . && pixi run typecheck && pixi run smoke`
 
 **Steps:**
 
-- [ ] **Step 1: Measure the gates.** Record the actual numbers, not "green".
-- [ ] **Step 2: Live-run twice.** First `pixi run veny --no-cache` against a
+- [x] **Step 1: Measure the gates.** Record the actual numbers, not "green".
+- [x] **Step 2: Live-run twice.** First `pixi run veny --no-cache` against a
   throwaway script importing `yaml`; then the same script with no flag, and
   confirm the log says `Using existing virtual environment: <the folder the
   first run built>`. The second run is what exercises Task 7's change end to
   end; a unit test cannot.
-- [ ] **Step 3: Update README's project structure.**
-- [ ] **Step 4: Update PROGRESS.** Current work gets 3d's ledger in the shape
+- [x] **Step 3: Update README's project structure.**
+- [x] **Step 4: Update PROGRESS.** Current work gets 3d's ledger in the shape
   3c's has: commits, gates, line counts, what was and was not delivered.
   Deferred items gets amendments 9-11, the declined list, the residual risk
   from Task 9 Step 3, and anything the STANDING CHECK found that was fixed
   rather than pinned. Move nothing that is now done — delete it and say where
   it landed.
-- [ ] **Step 5: Sweep the stale citations.** PROGRESS names the starting
+- [x] **Step 5: Sweep the stale citations.** PROGRESS names the starting
   points: `cli.py:1005` (dead — the symbol left in 3b), `cli.py:2606`,
   `:2860`, `:3304`, `:3323` (all beyond EOF), `cli.py:124` (actual `:63`),
   `:229` (actual `:168`), `:537`/`:552` (actual `:480`/`:495`). Every one of
   those will have moved *again* under this phase; re-measure each against this
   branch's HEAD and rewrite it as `symbol name @ <sha>:<line>`.
-- [ ] **Step 6: Annotate this plan in place** with anything execution proved
+- [x] **Step 6: Annotate this plan in place** with anything execution proved
   wrong. 3b and 3c both did this and both found real errors in their own text;
   assume this plan has some too.
-- [ ] **Step 7: Commit, then request a whole-branch review** with
+- [x] **Step 7: Commit, then request a whole-branch review** with
   `superpowers-extended-cc:requesting-code-review` before merging. Every phase
   so far has had a whole-branch review find something no per-task review did.
 
