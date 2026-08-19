@@ -2,8 +2,8 @@
 
 import sys
 
+from veny import cache_search, environment, stdlib_index
 from veny import cli as veny
-from veny import environment, stdlib_index
 
 
 def an_options(python_command: str) -> veny.Options:
@@ -40,4 +40,4 @@ def test_interpreter_tag_comes_from_the_stdlib_index() -> None:
         3,
         12,
     )  # sanity: the two sources really disagree
-    assert veny.interpreter_tag(options) == "3.12"
+    assert cache_search.interpreter_tag(options.stdlib) == "3.12"

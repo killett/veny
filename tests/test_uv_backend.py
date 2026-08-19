@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from veny import cli, environment, verify
+from veny import cache_search, cli, environment, verify
 
 
 def test_the_packaged_uv_is_preferred_over_the_one_on_path(monkeypatch):
@@ -81,7 +81,13 @@ def test_setup_virtualenv_builds_the_venv_before_writing_requirements_txt(
         lambda *, uninstalled, **kwargs: frozenset(uninstalled),
     )
     monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: True)
-    monkeypatch.setattr(cli, "record_venv_state", lambda opts: None)
+    # record_venv_state returns the (possibly renamed) venv directory now, and
+    # setup_virtualenv feeds that return value straight to options.set_venv_dir.
+    # A stub returning None would set_venv_dir(None) and mkdir a path built from
+    # it, so the stub hands back the directory it was given.
+    monkeypatch.setattr(
+        cache_search, "record_venv_state", lambda venv_dir, **kwargs: venv_dir
+    )
 
     assert cli.setup_virtualenv(options) is True
 
@@ -136,7 +142,13 @@ def test_setup_virtualenv_writes_the_extra_requirements_version_specifiers(
         lambda *, uninstalled, **kwargs: frozenset(uninstalled),
     )
     monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: True)
-    monkeypatch.setattr(cli, "record_venv_state", lambda opts: None)
+    # record_venv_state returns the (possibly renamed) venv directory now, and
+    # setup_virtualenv feeds that return value straight to options.set_venv_dir.
+    # A stub returning None would set_venv_dir(None) and mkdir a path built from
+    # it, so the stub hands back the directory it was given.
+    monkeypatch.setattr(
+        cache_search, "record_venv_state", lambda venv_dir, **kwargs: venv_dir
+    )
 
     cli.setup_virtualenv(options)
 

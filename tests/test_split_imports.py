@@ -5,7 +5,7 @@ from pathlib import Path
 
 import emmykit as ek
 
-from veny import alias_index, environment, venv_cache, verify
+from veny import alias_index, cache_search, environment, venv_cache, verify
 from veny import cli as veny
 from veny.analysis.imports import process_import
 from veny.analysis.scan import _enqueue_top_level_imports
@@ -228,7 +228,7 @@ def test_check_venv_dir_rejects_a_manifest_match_whose_import_does_not_actually_
             schema_version=venv_cache.SCHEMA_VERSION,
             created="20260814-091500",
             veny_version="0.2.2",
-            interpreter_tag=veny.interpreter_tag(options),
+            interpreter_tag=cache_search.interpreter_tag(options.stdlib),
             interpreter_path="/usr/bin/python3",
             packages=(venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None),),
         ),
@@ -242,7 +242,23 @@ def test_check_venv_dir_rejects_a_manifest_match_whose_import_does_not_actually_
     # actually imports in this venv.
     _run_check_against_fake_venv(monkeypatch, importable=set())
 
-    assert veny.check_venv_dir(options, cached_dir) is False
+    assert (
+        cache_search.check_venv_dir(
+            cached_dir,
+            wanted=cache_search.wanted_packages(
+                options.uninstalled_imports, options.extra_requirements
+            ),
+            tag=cache_search.interpreter_tag(options.stdlib),
+            uninstalled=options.uninstalled_imports,
+            source_names=verify.source_import_names(
+                options.all_imports,
+                options.extra_requirements,
+                getattr(options.args, "reqs", False),
+            ),
+            rawlog=options.rawlog,
+        )
+        is False
+    )
 
 
 def test_setup_virtualenv_verifies_every_import_before_reporting_success(
@@ -286,7 +302,12 @@ def test_setup_virtualenv_verifies_every_import_before_reporting_success(
     # record_venv_state probes the venv's real interpreter for installed
     # versions, which this test's fake subprocess.run cannot answer -- it is
     # unrelated to the ordering this test checks, so it is stubbed out too.
-    monkeypatch.setattr(veny, "record_venv_state", lambda opts: None)
+    # It returns the (possibly renamed) venv directory now, which
+    # setup_virtualenv feeds straight to options.set_venv_dir, so the stub
+    # hands back the directory it was given rather than None.
+    monkeypatch.setattr(
+        cache_search, "record_venv_state", lambda venv_dir, **kwargs: venv_dir
+    )
 
     assert veny.setup_virtualenv(options) is True
     # Verification has to happen before the gate that drops the "failed-"

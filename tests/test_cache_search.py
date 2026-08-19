@@ -10,7 +10,7 @@ from pathlib import Path
 import emmykit as ek
 import pytest
 
-from veny import alias_index, last_used, stdlib_index, venv_cache
+from veny import alias_index, cache_search, stdlib_index, venv_cache, verify
 from veny import cli as veny
 from veny.alias_index import ResolvedImport
 
@@ -24,6 +24,47 @@ def an_options(records: set[ResolvedImport]) -> veny.Options:
     options.uninstalled_imports = records
     options.extra_requirements = {}
     return options
+
+
+def candidates(
+    options: veny.Options, folders: list[Path]
+) -> list[cache_search.CacheCandidate]:
+    """cache_candidates wired the way find_match_dir_in_cache wires it.
+
+    cache_candidates takes no Options any more: what this run needs and which
+    interpreter it needs it for are explicit arguments. This keeps an_options
+    above as the single description of the run under test.
+    """
+    return cache_search.cache_candidates(
+        folders,
+        wanted=cache_search.wanted_packages(
+            options.uninstalled_imports, options.extra_requirements
+        ),
+        tag=cache_search.interpreter_tag(options.stdlib),
+        rawlog=options.rawlog,
+    )
+
+
+def check(options: veny.Options, venv_dir: Path) -> bool:
+    """check_venv_dir wired the way find_match_dir_in_cache wires it.
+
+    source_names is computed once by main() now and passed down, rather than
+    rebuilt inside check_venv_dir; this reproduces that one wiring.
+    """
+    return cache_search.check_venv_dir(
+        venv_dir,
+        wanted=cache_search.wanted_packages(
+            options.uninstalled_imports, options.extra_requirements
+        ),
+        tag=cache_search.interpreter_tag(options.stdlib),
+        uninstalled=options.uninstalled_imports,
+        source_names=verify.source_import_names(
+            options.all_imports,
+            options.extra_requirements,
+            getattr(options.args, "reqs", False),
+        ),
+        rawlog=options.rawlog,
+    )
 
 
 def a_cached_venv(
@@ -54,7 +95,7 @@ def test_a_hyphenated_package_does_not_disqualify_its_own_venv(tmp_path: Path) -
         [venv_cache.PackageRecord("ruamel.yaml", "ruamel-yaml", "0.18.6", None)],
     )
     options = an_options({ResolvedImport("ruamel.yaml", "ruamel-yaml")})
-    assert [c.folder for c in veny.cache_candidates(options, [venv_dir])] == [venv_dir]
+    assert [c.folder for c in candidates(options, [venv_dir])] == [venv_dir]
 
 
 def test_a_venv_without_a_manifest_is_skipped(tmp_path: Path) -> None:
@@ -62,7 +103,7 @@ def test_a_venv_without_a_manifest_is_skipped(tmp_path: Path) -> None:
     venv_dir = tmp_path / "myenv-py3.12-20260814-091500-numpy"
     venv_dir.mkdir()
     options = an_options({ResolvedImport("numpy", "numpy")})
-    assert veny.cache_candidates(options, [venv_dir]) == []
+    assert candidates(options, [venv_dir]) == []
 
 
 def test_a_venv_for_another_interpreter_is_skipped(tmp_path: Path) -> None:
@@ -74,7 +115,7 @@ def test_a_venv_for_another_interpreter_is_skipped(tmp_path: Path) -> None:
         tag="3.13",
     )
     options = an_options({ResolvedImport("numpy", "numpy")})
-    assert veny.cache_candidates(options, [venv_dir]) == []
+    assert candidates(options, [venv_dir]) == []
 
 
 def test_a_venv_missing_a_package_is_skipped(tmp_path: Path) -> None:
@@ -87,7 +128,7 @@ def test_a_venv_missing_a_package_is_skipped(tmp_path: Path) -> None:
     options = an_options(
         {ResolvedImport("numpy", "numpy"), ResolvedImport("scipy", "scipy")}
     )
-    assert veny.cache_candidates(options, [venv_dir]) == []
+    assert candidates(options, [venv_dir]) == []
 
 
 def test_a_venv_whose_name_allows_it_but_manifest_disagrees_is_skipped(
@@ -102,7 +143,7 @@ def test_a_venv_whose_name_allows_it_but_manifest_disagrees_is_skipped(
     options = an_options(
         {ResolvedImport("numpy", "numpy"), ResolvedImport("scipy", "scipy")}
     )
-    assert veny.cache_candidates(options, [venv_dir]) == []
+    assert candidates(options, [venv_dir]) == []
 
 
 def test_a_pin_is_checked_against_the_installed_version(tmp_path: Path) -> None:
@@ -114,9 +155,9 @@ def test_a_pin_is_checked_against_the_installed_version(tmp_path: Path) -> None:
     )
     options = an_options({ResolvedImport("numpy", "numpy")})
     options.extra_requirements = {"numpy": ">=1.2"}
-    assert veny.cache_candidates(options, [venv_dir]) == []
+    assert candidates(options, [venv_dir]) == []
     options.extra_requirements = {"numpy": ">=0.9"}
-    assert [c.folder for c in veny.cache_candidates(options, [venv_dir])] == [venv_dir]
+    assert [c.folder for c in candidates(options, [venv_dir])] == [venv_dir]
 
 
 def test_a_folder_that_loses_its_manifest_between_calls_is_dropped_not_raised(
@@ -129,23 +170,27 @@ def test_a_folder_that_loses_its_manifest_between_calls_is_dropped_not_raised(
         [venv_cache.PackageRecord("numpy", "numpy", "2.1.3", None)],
     )
     options = an_options({ResolvedImport("numpy", "numpy")})
-    assert [c.folder for c in veny.cache_candidates(options, [venv_dir])] == [venv_dir]
+    assert [c.folder for c in candidates(options, [venv_dir])] == [venv_dir]
     (venv_dir / venv_cache.MANIFEST_FILENAME).unlink()
-    assert veny.cache_candidates(options, [venv_dir]) == []
+    assert candidates(options, [venv_dir]) == []
 
 
 def test_wanted_packages_carries_the_requested_specs() -> None:
     """A spec dropped here makes every pin invisible to matching."""
     options = an_options({ResolvedImport("numpy", "numpy")})
     options.extra_requirements = {"numpy": ">=1.2"}
-    assert veny.wanted_packages(options) == [venv_cache.Wanted("numpy", ">=1.2")]
+    assert cache_search.wanted_packages(
+        options.uninstalled_imports, options.extra_requirements
+    ) == [venv_cache.Wanted("numpy", ">=1.2")]
 
 
 def test_wanted_packages_finds_a_pin_keyed_by_a_different_spelling() -> None:
     """The record's pip_name and the user's --reqs spelling can differ in case or separators for one project."""
     options = an_options({ResolvedImport("yaml", "pyyaml")})
     options.extra_requirements = {"PyYAML": ">=6.0"}
-    assert veny.wanted_packages(options) == [venv_cache.Wanted("pyyaml", ">=6.0")]
+    assert cache_search.wanted_packages(
+        options.uninstalled_imports, options.extra_requirements
+    ) == [venv_cache.Wanted("pyyaml", ">=6.0")]
 
 
 def test_check_venv_dir_rejects_a_directory_with_no_manifest(tmp_path: Path) -> None:
@@ -153,13 +198,13 @@ def test_check_venv_dir_rejects_a_directory_with_no_manifest(tmp_path: Path) -> 
     venv_dir = tmp_path / "myenv-py3.12-20260814-091500-numpy"
     venv_dir.mkdir()
     options = an_options({ResolvedImport("numpy", "numpy")})
-    assert veny.check_venv_dir(options, venv_dir) is False
+    assert check(options, venv_dir) is False
 
 
 def test_check_venv_dir_rejects_a_missing_directory(tmp_path: Path) -> None:
     """A deleted venv must be a cache miss, not an exception."""
     options = an_options({ResolvedImport("numpy", "numpy")})
-    assert veny.check_venv_dir(options, tmp_path / "gone") is False
+    assert check(options, tmp_path / "gone") is False
 
 
 def test_check_venv_dir_rejects_a_manifest_that_does_not_match(tmp_path: Path) -> None:
@@ -170,7 +215,7 @@ def test_check_venv_dir_rejects_a_manifest_that_does_not_match(tmp_path: Path) -
         [venv_cache.PackageRecord("numpy", "numpy", "2.1.3", None)],
     )
     options = an_options({ResolvedImport("scipy", "scipy")})
-    assert veny.check_venv_dir(options, venv_dir) is False
+    assert check(options, venv_dir) is False
 
 
 def _stub_successful_import_check(
@@ -236,7 +281,54 @@ def test_check_venv_dir_accepts_a_manifest_match_whose_import_actually_imports(
     )
     _stub_successful_import_check(monkeypatch, importable={"thing"})
 
-    assert veny.check_venv_dir(options, venv_dir) is True
+    assert check(options, venv_dir) is True
+
+
+def test_check_venv_dir_checks_the_name_the_user_wrote_not_the_distributions_others(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """source_names must reach check_packages_in_venv, or the check goes fail-open.
+
+    check_venv_dir hands verify.check_packages_in_venv both `uninstalled` and
+    `source_names`. `source_names` has an empty default that is NOT a "work it
+    out yourself" fallback: with it empty, the bulk branch stops requiring the
+    name the user actually wrote and accepts any top-level name the
+    distribution happens to install -- the setuptools/_distutils_hack
+    fail-open its docstring warns about.
+
+    Concrete bug this catches: drop `source_names=source_names` from
+    check_venv_dir's call (leaving verify's empty default). Here the user
+    wrote `import thing`, thing-pkg is installed but provides only `_hack`,
+    and only `_hack` imports. Correctly wired, the venv is rejected because
+    `thing` does not import. Mis-wired, `_hack` imports and the cached venv is
+    handed back to a script that will die on its first import.
+    """
+    venv_dir = a_cached_venv(
+        tmp_path,
+        "myenv-py3.12-20260814-091500-thing-pkg",
+        [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
+    )
+    options = an_options({ResolvedImport("thing", "thing-pkg")})
+    options.all_imports = {"thing"}
+    # thing-pkg installs a top-level `_hack`, not `thing`.
+    monkeypatch.setattr(
+        alias_index,
+        "probe_interpreter",
+        lambda python, timeout=30.0: ("3.12", {"_hack": ["thing-pkg"]}),
+    )
+    _stub_successful_import_check(monkeypatch, importable={"_hack"})
+
+    assert check(options, venv_dir) is False
+
+
+def _never_called() -> ek.Options | None:
+    """A load_last_used the --latest path must never reach.
+
+    --latest short-circuits the last-used pass, so consulting the previous
+    run's JSON there would be a wiring bug: it would let a stale pointer win
+    over the latest matching venv the user explicitly asked for.
+    """
+    raise AssertionError("load_last_used must not be called on the --latest path")
 
 
 def test_find_match_dir_in_cache_returns_a_manifest_match(
@@ -268,11 +360,28 @@ def test_find_match_dir_in_cache_returns_a_manifest_match(
     )
     _stub_successful_import_check(monkeypatch, importable={"thing"})
 
-    assert veny.find_match_dir_in_cache(options) == venv_dir
+    assert (
+        cache_search.find_match_dir_in_cache(
+            options.args,
+            my_dir=options.my_dir,
+            venv_name=options.venv_name,
+            uninstalled=options.uninstalled_imports,
+            extra_requirements=options.extra_requirements,
+            source_names=verify.source_import_names(
+                options.all_imports,
+                options.extra_requirements,
+                getattr(options.args, "reqs", False),
+            ),
+            tag=cache_search.interpreter_tag(options.stdlib),
+            rawlog=options.rawlog,
+            load_last_used=_never_called,
+        )
+        == venv_dir
+    )
 
 
 def test_find_match_dir_in_cache_tolerates_a_last_used_options_without_venv_dir(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    tmp_path: Path,
 ) -> None:
     """A last-used JSON restored as a bare emmykit.Options must be a cache miss, not an AttributeError.
 
@@ -283,16 +392,25 @@ def test_find_match_dir_in_cache_tolerates_a_last_used_options_without_venv_dir(
     """
     options = an_options({ResolvedImport("numpy", "numpy")})
     options.my_dir = tmp_path
-    # Placeholders only: find_match_dir_in_cache asserts these are set
-    # before calling the loader, which this test bypasses entirely via the
-    # monkeypatch below -- the values themselves are never read.
-    options.script_dir = tmp_path
-    options.python_script = tmp_path / "thing.py"
     options.args = argparse.Namespace(
         latest=False, oldest=False, last_used=False, smallest=False
     )
-    monkeypatch.setattr(
-        last_used, "load_last_used_options", lambda *a, **k: ek.Options()
-    )
 
-    assert veny.find_match_dir_in_cache(options) is None
+    assert (
+        cache_search.find_match_dir_in_cache(
+            options.args,
+            my_dir=options.my_dir,
+            venv_name=options.venv_name,
+            uninstalled=options.uninstalled_imports,
+            extra_requirements=options.extra_requirements,
+            source_names=verify.source_import_names(
+                options.all_imports,
+                options.extra_requirements,
+                getattr(options.args, "reqs", False),
+            ),
+            tag=cache_search.interpreter_tag(options.stdlib),
+            rawlog=options.rawlog,
+            load_last_used=lambda: ek.Options(),
+        )
+        is None
+    )
