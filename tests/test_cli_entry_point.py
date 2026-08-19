@@ -158,7 +158,9 @@ def _drive_main(
         ),
     )
     monkeypatch.setattr(pipeline, "build_alias_index", lambda options: _offline_index())
-    monkeypatch.setattr(cli, "dict_of_custom_modules", lambda settings, use_cache: {})
+    monkeypatch.setattr(
+        pipeline, "dict_of_custom_modules", lambda settings, use_cache: {}
+    )
     monkeypatch.setattr(ek, "configure_logging", lambda *a, **k: None)
     monkeypatch.setattr(ek, "print_all_errors", lambda *a, **k: None)
     monkeypatch.setattr(ek, "save_options_to_json", lambda options: None)
@@ -221,8 +223,8 @@ def test_main_describes_the_run_to_the_cache_search(monkeypatch, tmp_path):
         return None
 
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", find_spy)
-    monkeypatch.setattr(cli, "_load_last_used", load_last_used_spy)
-    monkeypatch.setattr(cli, "setup_virtualenv", lambda options: False)
+    monkeypatch.setattr(pipeline, "_load_last_used", load_last_used_spy)
+    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options: False)
     monkeypatch.setattr(ek, "my_critical_error", lambda *a, **k: None)
 
     cli.main()
@@ -274,7 +276,7 @@ def test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs
         all_imports={"thing"},
     )
     (tmp_path / "home" / "veny").mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(cli, "setup_virtualenv", lambda options: False)
+    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options: False)
     monkeypatch.setattr(ek, "my_critical_error", lambda *a, **k: None)
 
     with caplog.at_level(logging.INFO):
@@ -299,7 +301,7 @@ def test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs
         uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
         all_imports={"thing"},
     )
-    monkeypatch.setattr(cli, "setup_virtualenv", lambda options: False)
+    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options: False)
     with caplog.at_level(logging.INFO):
         cli.main()
 
@@ -330,7 +332,7 @@ def test_main_lets_the_feeling_lucky_loader_speak_on_a_run_that_did_not_ask_for_
         all_imports={"thing"},
     )
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", lambda *a, **k: None)
-    monkeypatch.setattr(cli, "setup_virtualenv", lambda options: False)
+    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options: False)
     monkeypatch.setattr(ek, "my_critical_error", lambda *a, **k: None)
 
     with caplog.at_level(logging.INFO):
@@ -347,7 +349,7 @@ def test_main_lets_the_feeling_lucky_loader_speak_on_a_run_that_did_not_ask_for_
         all_imports={"thing"},
     )
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", lambda *a, **k: None)
-    monkeypatch.setattr(cli, "setup_virtualenv", lambda options: False)
+    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options: False)
     with caplog.at_level(logging.INFO):
         cli.main()
 
@@ -393,7 +395,7 @@ def test_main_loads_the_requirements_file_and_keeps_its_names_out_of_the_import_
         return None
 
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", find_spy)
-    monkeypatch.setattr(cli, "setup_virtualenv", lambda options: False)
+    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options: False)
     monkeypatch.setattr(ek, "my_critical_error", lambda *a, **k: None)
 
     cli.main()
@@ -499,7 +501,7 @@ def test_main_drops_the_failed_prefix_from_the_venv_it_just_built(
         options.install_succeeded = True
         return True
 
-    monkeypatch.setattr(cli, "setup_virtualenv", fake_setup)
+    monkeypatch.setattr(pipeline, "setup_virtualenv", fake_setup)
     renamed: list[tuple[Path, str]] = []
 
     def rename_spy(venv_dir, new_name):
@@ -544,7 +546,7 @@ def test_main_asks_the_last_used_loader_about_this_script(monkeypatch, tmp_path)
         return None
 
     monkeypatch.setattr(last_used, "load_last_used_venv_python", spy)
-    monkeypatch.setattr(cli, "setup_virtualenv", lambda options: False)
+    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options: False)
     monkeypatch.setattr(ek, "my_critical_error", lambda *a, **k: None)
     monkeypatch.setattr(
         cache_search, "find_match_dir_in_cache", lambda args, **kwargs: None
@@ -658,7 +660,7 @@ def test_main_builds_an_environment_when_the_cache_misses(monkeypatch, tmp_path)
         options.set_venv_dir(built_dir)
         return True
 
-    monkeypatch.setattr(cli, "setup_virtualenv", fake_setup)
+    monkeypatch.setattr(pipeline, "setup_virtualenv", fake_setup)
 
     status = cli.main()
 
@@ -712,10 +714,9 @@ def test_justprint_runs_no_script_and_exits_zero(monkeypatch, tmp_path):
         all_imports={"os"},
     )
 
-    with pytest.raises(SystemExit) as exit_info:
-        cli.main()
+    status = cli.main()
 
-    assert exit_info.value.code == 0
+    assert status == 0
     assert launched == []
 
 
@@ -768,10 +769,9 @@ def test_blank_slate_deletes_the_state_directory_and_leaves_other_files_alone(
     monkeypatch.setattr(sys, "argv", ["veny", "--blank-slate", "-y"])
     monkeypatch.setattr(ek, "prompt_then_confirm", lambda prompt: True)
 
-    with pytest.raises(SystemExit) as exit_info:
-        cli.main()
+    status = cli.main()
 
-    assert exit_info.value.code == 0
+    assert status == 0
     assert not state_dir.exists()
     assert not (workdir / ".veny-run.out").exists()
     assert not (workdir / ".script.py-veny-last-used-on-20260101-000000.json").exists()

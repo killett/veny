@@ -9,7 +9,15 @@ from pathlib import Path
 
 import pytest
 
-from veny import alias_index, cache_search, cli, environment, stdlib_index, verify
+from veny import (
+    alias_index,
+    cache_search,
+    cli,
+    environment,
+    pipeline,
+    stdlib_index,
+    verify,
+)
 
 
 def test_the_packaged_uv_is_preferred_over_the_one_on_path(monkeypatch):
@@ -92,7 +100,7 @@ def test_setup_virtualenv_builds_the_venv_before_writing_requirements_txt(
         cache_search, "record_venv_state", lambda venv_dir, **kwargs: venv_dir
     )
 
-    assert cli.setup_virtualenv(options) is True
+    assert pipeline.setup_virtualenv(options) is True
 
     assert options.venv_dir is not None
     assert (options.venv_dir / "requirements.txt").read_text() == "thing-pkg\n"
@@ -153,7 +161,7 @@ def test_setup_virtualenv_writes_the_extra_requirements_version_specifiers(
         cache_search, "record_venv_state", lambda venv_dir, **kwargs: venv_dir
     )
 
-    cli.setup_virtualenv(options)
+    pipeline.setup_virtualenv(options)
 
     assert options.venv_dir is not None
     assert (
@@ -293,7 +301,7 @@ def test_the_venv_folder_name_and_build_interpreter_come_from_this_run(
     options = _a_wired_run(tmp_path)
     created = _stub_the_venv_away(monkeypatch)
 
-    assert cli.setup_virtualenv(options) is True
+    assert pipeline.setup_virtualenv(options) is True
 
     assert options.venv_dir is not None
     assert options.venv_dir.name == "failed-wiredenv-py3.12-20260101-010203-thing-pkg"
@@ -332,7 +340,7 @@ def test_verify_and_repair_imports_is_handed_the_whole_description_of_the_run(
 
     monkeypatch.setattr(verify, "verify_and_repair_imports", spy)
 
-    assert cli.setup_virtualenv(options) is True
+    assert pipeline.setup_virtualenv(options) is True
 
     # Literal paths, not options.venv_python / options.requirements_file:
     # setup_virtualenv writes those two fields itself (via set_venv_dir), so
@@ -394,7 +402,7 @@ def test_the_manifest_and_the_final_check_describe_the_venv_after_repair(
     monkeypatch.setattr(cache_search, "record_venv_state", record_spy)
     monkeypatch.setattr(verify, "check_packages_in_venv", check_spy)
 
-    assert cli.setup_virtualenv(options) is True
+    assert pipeline.setup_virtualenv(options) is True
 
     # Literal paths, not options.venv_dir / options.venv_python, for the same
     # reason the sibling test above spells them out: record_spy echoes its

@@ -839,7 +839,7 @@ def _verify_and_repair(
     extra_requirements=None,
     rawlog=False,
 ):
-    """Run verify_and_repair_imports wired the way cli.setup_virtualenv wires it.
+    """Run verify_and_repair_imports wired the way pipeline.setup_virtualenv wires it.
 
     The venv paths match Options.set_venv_dir's documented shape
     (<venv>/bin/python, <venv>/requirements.txt), written out here rather than

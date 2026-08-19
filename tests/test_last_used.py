@@ -31,7 +31,7 @@ from pathlib import Path
 import emmykit as ek
 import pytest
 
-from veny import cli, last_used
+from veny import cli, last_used, pipeline
 
 
 def _write_record(tmp_path: Path, script: Path, stamp: str, **fields: object) -> Path:
@@ -288,7 +288,7 @@ def test_is_virtualenv_reflects_prefix_vs_base_prefix(
 def test_the_last_used_adapter_returns_the_record_this_run_is_entitled_to(
     tmp_path: Path,
 ) -> None:
-    """cli._load_last_used must return the newest record that clears the cutoff.
+    """pipeline._load_last_used must return the newest record that clears the cutoff.
 
     This drives the adapter for real, against two records written into the
     script's own directory: one stamped before options.pathlibcutoff (records
@@ -313,7 +313,7 @@ def test_the_last_used_adapter_returns_the_record_this_run_is_entitled_to(
         tmp_path, script, "20260202-020202", venv_dir=tmp_path / "after-the-cutoff"
     )
 
-    loaded = cli._load_last_used(options)
+    loaded = pipeline._load_last_used(options)
 
     assert loaded is not None
     assert getattr(loaded, "venv_dir", None) == tmp_path / "after-the-cutoff"
@@ -337,7 +337,7 @@ def test_the_last_used_adapter_returns_the_record_this_run_is_entitled_to(
     stale_options.script_dir = stale_only
     stale_options.rawlog = True
 
-    assert cli._load_last_used(stale_options) is None
+    assert pipeline._load_last_used(stale_options) is None
 
 
 def test_the_last_used_adapter_hands_over_this_runs_script_and_cutoff(
@@ -351,7 +351,7 @@ def test_the_last_used_adapter_hands_over_this_runs_script_and_cutoff(
     record) and rawlog, which only decides whether the "no previous JSON
     files" line is logged. Measured by substitution: all five could be
     replaced with a wrong value while all 338 tests stayed green -- nothing
-    drove cli._load_last_used at all.
+    drove pipeline._load_last_used at all.
 
     Concrete bug this catches: a wrong `script_dir` looks in a directory that
     holds no last-used JSON, so the cache search silently falls through to
@@ -370,7 +370,7 @@ def test_the_last_used_adapter_hands_over_this_runs_script_and_cutoff(
 
     monkeypatch.setattr(last_used, "load_last_used_options", spy)
 
-    assert cli._load_last_used(options) is sentinel
+    assert pipeline._load_last_used(options) is sentinel
     assert seen == [
         {
             "options": options,

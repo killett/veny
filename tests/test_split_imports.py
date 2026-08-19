@@ -291,7 +291,7 @@ def test_setup_virtualenv_verifies_every_import_before_reporting_success(
         cache_search, "record_venv_state", lambda venv_dir, **kwargs: venv_dir
     )
 
-    assert veny.setup_virtualenv(options) is True
+    assert pipeline.setup_virtualenv(options) is True
     # Verification has to happen before the gate that drops the "failed-"
     # prefix, or its repairs cannot affect the answer.
     assert calls == ["verify", "check"]
