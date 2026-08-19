@@ -86,31 +86,6 @@ def test_enqueue_top_level_imports_records_stdlib_and_skips_enqueue(tmp_path):
     assert len(modules_to_process) == 0
 
 
-def _index_with(overrides):
-    """Build an AliasIndex that resolves only from the given overrides.
-
-    Args:
-        overrides: import name -> pip name mapping to seed the index with.
-
-    Returns:
-        An offline AliasIndex with an in-memory cache and no seed entries, so
-        resolution is fully determined by the test rather than by whatever
-        happens to sit in the developer's ~/veny directory.
-    """
-    return alias_index.AliasIndex(
-        overrides=dict(overrides),
-        cache=alias_index.AliasCache(
-            path=Path("/nonexistent/alias_cache.json"),
-            interpreter_tag="3.12",
-            entries={},
-            rejections={},
-        ),
-        installed={},
-        pypi=None,
-        seed={},
-    )
-
-
 def test_options_no_longer_carries_an_alias_table():
     # The whole point of the change: the 1,219-line literal is gone, and with
     # it the reverse map whose {v: k} inversion silently dropped every import

@@ -346,7 +346,7 @@ def test_split_imports_copies_back_every_field_it_owns() -> None:
     -- which is how dbf013c survived -- is invisible. So this reads the
     assignments themselves rather than any behaviour.
 
-    The five names are written out rather than derived from Requirements'
+    The four names are written out rather than derived from Requirements'
     fields: the mapping is deliberately not one-to-one (`total_imports` is a
     property, `seen_stdlib` and `extra_requirements` are pass-throughs that
     Options already holds and must not be re-written), so deriving them would
@@ -354,6 +354,13 @@ def test_split_imports_copies_back_every_field_it_owns() -> None:
     targets whose value is the name `options` count -- the local `scan = ...`
     and `result = ...` bindings are names, not attributes, and must not trip
     this guard.
+
+    This proves the copy-back is *total* -- every field split_imports owns
+    gets written -- and nothing more. It does not prove the copy-back is
+    *correct*: `options.bad_imports = set(result.installed)` (the right
+    field name, the wrong source attribute) still writes to `bad_imports` and
+    so still passes this guard. Catching that class of bug needs a
+    behavioural test that reads the value back, not this one.
     """
     tree = ast.parse((SRC / "cli.py").read_text())
     adapters = [
@@ -381,7 +388,6 @@ def test_split_imports_copies_back_every_field_it_owns() -> None:
     assert written == {
         "all_imports",
         "bad_imports",
-        "installed_imports",
         "uninstalled_imports",
         "total_imports",
     }

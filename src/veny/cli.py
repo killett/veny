@@ -78,7 +78,6 @@ class Options(ek.Options):
         # Both sets hold ResolvedImport records, so every consumer can pick the
         # right name instead of guessing which kind of string it was handed.
         self.uninstalled_imports: set[alias_index.ResolvedImport] = set()
-        self.installed_imports: set[alias_index.ResolvedImport] = set()
         self.bad_imports: set[str] = set()
         self.all_imports: set[str] = set()
         self.total_imports: int = 0
@@ -800,7 +799,7 @@ def _probe_venv(options: Options) -> Iterator[Callable[[str], bool]]:
 def split_imports(options: Options) -> None:
     """Adapter: run classification and copy its product back onto Options.
 
-    The copy-back is total -- these five fields are the complete set the old
+    The copy-back is total -- these four fields are the complete set the old
     split_imports wrote. See the plan's "Why the ImportScan bridge is not
     touched" section: classify reads the scan and writes nothing through it,
     so nothing here depends on in-place mutation. Each frozenset becomes a set
@@ -808,7 +807,7 @@ def split_imports(options: Options) -> None:
     still mutate options.uninstalled_imports.
 
     Args:
-        options: Options object; the five classification fields are replaced.
+        options: Options object; the four classification fields are replaced.
     """
     scan = ImportScan(
         all_imports=options.all_imports,
@@ -831,7 +830,6 @@ def split_imports(options: Options) -> None:
     )
     options.all_imports = set(result.all_imports)
     options.bad_imports = set(result.bad)
-    options.installed_imports = set(result.installed)
     options.uninstalled_imports = set(result.uninstalled)
     options.total_imports = result.total_imports
 
@@ -845,7 +843,6 @@ def list_packages(options: Options) -> None:
             - rawlog:                  Boolean indicating if raw logging is enabled.
             - script_dir:              Directory containing the script, used for logging.
             - all_imports:             Set to be populated with all imports found.
-            - installed_imports:       Set to be populated with ResolvedImport records.
             - uninstalled_imports:     Set to be populated with ResolvedImport records.
             - known_bad_imports:       Set of known bad imports to filter out.
             - stdlib:                  StdlibIndex used to skip standard library imports.
