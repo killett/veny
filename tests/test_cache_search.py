@@ -283,6 +283,11 @@ def test_find_match_dir_in_cache_tolerates_a_last_used_options_without_venv_dir(
     """
     options = an_options({ResolvedImport("numpy", "numpy")})
     options.my_dir = tmp_path
+    # Placeholders only: find_match_dir_in_cache asserts these are set
+    # before calling the loader, which this test bypasses entirely via the
+    # monkeypatch below -- the values themselves are never read.
+    options.script_dir = tmp_path
+    options.python_script = tmp_path / "thing.py"
     options.args = argparse.Namespace(
         latest=False, oldest=False, last_used=False, smallest=False
     )

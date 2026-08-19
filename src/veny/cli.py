@@ -1472,10 +1472,12 @@ def find_match_dir_in_cache(options: Options) -> Path | None:
         and not getattr(options.args, "latest", False)
         and not getattr(options.args, "smallest", False)
     ):
+        assert options.script_dir is not None, "options.script_dir must be set"
+        assert options.python_script is not None, "options.python_script must be set"
         options_last_used = last_used.load_last_used_options(
             options,
-            script_dir=options.script_dir,  # type: ignore[arg-type]
-            python_script=options.python_script,  # type: ignore[arg-type]
+            script_dir=options.script_dir,
+            python_script=options.python_script,
             pathlibcutoff=options.pathlibcutoff,
             rawlog=options.rawlog,
         )

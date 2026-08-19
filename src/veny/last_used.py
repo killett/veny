@@ -103,4 +103,7 @@ def load_last_used_venv_python(
                 "Last used venv_python found: %s",
                 os.fspath(last_used_options.venv_python),
             )
+        # Safe: the `is None` and `not ek.safe_is_file(...)` branches above
+        # have already returned, so venv_python is a real, existing Path --
+        # mypy just can't see that through the dynamic attribute access.
         return cast(Path, last_used_options.venv_python)
