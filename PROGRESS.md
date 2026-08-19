@@ -848,7 +848,7 @@ wiring rationale and for two Minors deliberately left unfixed.
   Measured cost per cache hit, unchanged by the review fix: **1
   `read_manifest`, 1 `satisfies`** (it was 2 and 2 before 3d's Task 7),
   pinned by `test_a_cache_hit_reads_and_matches_each_manifest_once`
-  (`tests/test_cache_search.py:440`). The **last-used path
+  (`tests/test_cache_search.py:442`). The **last-used path
   passes nothing and does its own 1 read / 1 satisfies**, and must: it reaches
   the folder from a recorded pointer, not from the scan, so there is no
   `CacheCandidate` and nothing has vouched for the manifest. That asymmetry
@@ -1716,11 +1716,11 @@ wiring rationale and for two Minors deliberately left unfixed.
   manifest and run `satisfies` on it). Measured, per cache hit: **1 `read_manifest`, 1 `satisfies`**, down
   from 2 and 2, pinned by
   `test_a_cache_hit_reads_and_matches_each_manifest_once`
-  (`tests/test_cache_search.py:440`); the last-used side has its own,
+  (`tests/test_cache_search.py:442`); the last-used side has its own,
   `test_a_last_used_hit_still_reads_and_matches_its_own_manifest`
-  (`:596`), and the vanishing-manifest case is
+  (`:674`), and the vanishing-manifest case is
   `test_check_venv_dir_survives_the_manifest_vanishing_after_it_was_already_read`
-  (`:534`). The **last-used path still
+  (`:536`). The **last-used path still
   does its own 1 read / 1 satisfies** and must: it has no `CacheCandidate`,
   because it is reached from a recorded pointer rather than from the scan.
   A folder that loses its manifest between the scan and the check is still
@@ -1973,7 +1973,7 @@ wiring rationale and for two Minors deliberately left unfixed.
     helpers (`_RecordingIndex` at :57, `_CountingIndex` at :558) and two
     probe-stubbing idioms — an artifact of the mandated verbatim migration.
     Consolidate in 3d. **CLOSED by 3d's Task 8 (`e430a37`):** one recording
-    helper (`_RecordingIndex`, now at `tests/test_classify.py:61`), one
+    helper (`_RecordingIndex`, now at `tests/test_classify.py:62`), one
     probe-stubbing idiom. Task 8 also hit something its brief did not
     anticipate — **five live `installed_imports` readers in
     `tests/test_classify.py`**, where the brief expected the chain to be
@@ -2105,7 +2105,7 @@ wiring rationale and for two Minors deliberately left unfixed.
     `my_fopen` has `suppress_errors=True`.
   - `test_no_source_imports_means_no_probe_venv_is_built` (cited as
     `tests/test_classify.py:169`; re-measured at `7debbb3` it is
-    `tests/test_classify.py:201`) is killed by a `ValueError` out of `max()`
+    `tests/test_classify.py:202`) is killed by a `ValueError` out of `max()`
     rather than by its own `created == []` assertion. Still open.
   - `requirement_records` dropping a version specifier — it is called as
     `requirement_records(extra_requirements.keys())`
