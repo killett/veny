@@ -63,6 +63,11 @@ ignore = [
 # the same "the subprocess is the point" case as cli.py, moved here verbatim
 # from it. It carries no asserts, so S101 stays enforced here.
 "src/veny/verify.py" = ["S603"]
+# cache_search.py probes a cached venv's own interpreter for the versions it
+# has installed -- the same "the subprocess is the point" case as verify.py,
+# moved here verbatim from cli.py. It carries no asserts, so S101 stays
+# enforced here.
+"src/veny/cache_search.py" = ["S603"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

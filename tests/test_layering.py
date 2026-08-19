@@ -67,6 +67,14 @@ LAYERS: list[frozenset[str]] = [
     # through the single uv owner is the point, so verify sits one layer
     # above it. It stays below cli because it has never heard of Options.
     frozenset({"verify"}),
+    # cache_search.py picks which cached venv this run gets to reuse. It sits
+    # above verify because a selection is not final until the chosen venv's
+    # imports really import: check_venv_dir confirms every candidate through
+    # verify.check_packages_in_venv rather than trusting the manifest alone.
+    # It is a layer of its own rather than a peer of verify for the same
+    # reason -- the dependency is real and one-way. Like verify, it has never
+    # heard of Options, so it stays below cli.
+    frozenset({"cache_search"}),
     frozenset({"cli"}),
 ]
 
