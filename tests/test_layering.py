@@ -43,6 +43,21 @@ LAYERS: list[frozenset[str]] = [
             "json_types",
         }
     ),
+    # state.py carries the products one stage hands to the next. It sits
+    # above the index layer because Requirements annotates its members with
+    # alias_index.ResolvedImport, and in a layer of its own below classify
+    # because classify -- and, later, verify and cache_search -- all need to
+    # import it without a same-layer exception.
+    frozenset({"state"}),
+    # environment.py is the only module that invokes uv; classify.py decides
+    # which imports are installed, missing or unusable. They are peers: neither
+    # imports the other (classify takes its probe environment as an injected
+    # context manager rather than building one), so each forbids the other by
+    # default. Both sit above the index layer because they need nothing from
+    # each other, and below cli because cli drives them -- and neither has ever
+    # heard of Options, so both can be exercised without building the CLI's
+    # state object.
+    frozenset({"classify", "environment"}),
     frozenset({"cli"}),
 ]
 
@@ -192,6 +207,51 @@ def test_the_guard_covers_every_module_it_should() -> None:
     assert unguarded == [], f"assign a LAYERS group for: {unguarded}"
 
 
+def test_only_environment_py_invokes_uv() -> None:
+    """Phase 3c's whole claim is that environment.py is the only module that
+    invokes uv, and until now nothing but grep enforced it.
+
+    Two signals, both syntactic:
+
+    * a reference to the name `uv_binary` (bare or attribute) anywhere outside
+      environment.py -- the only supported way to obtain the uv executable, so
+      any other module holding it is building its own uv command line;
+    * a list or tuple literal whose first element is the string "uv" -- the one
+      remaining way to spell a uv command line without asking `uv_binary` for
+      the path.
+
+    What it does NOT catch, deliberately: a uv path reached indirectly (stored
+    in a variable, returned by a helper, or found via `shutil.which("uv")`), a
+    shell string handed to `os.system`, or a uv invocation assembled from
+    `argv[0]` at runtime. A module that calls `environment.run_uv_pip` or
+    `environment.create_venv` is not a violation and must not be flagged --
+    routing through environment is exactly the architecture this guards.
+
+    Concrete bug this catches: a later phase, needing "just one quick uv call",
+    adds `subprocess.run([environment.uv_binary(), "pip", "list", ...])` to
+    cache_search.py or pipeline.py. Nothing fails: the call works, the suite
+    stays green, and the single-owner property this phase established is gone
+    with no record of when. PROGRESS records three phase-2 regressions that
+    shipped past a stub-only suite in exactly this territory.
+    """
+    violations = []
+    for path in sorted(SRC.rglob("*.py")):
+        if path.name == "environment.py":
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Name) and node.id == "uv_binary":
+                violations.append(f"{path.relative_to(SRC)}:{node.lineno} uv_binary")
+            elif isinstance(node, ast.Attribute) and node.attr == "uv_binary":
+                violations.append(f"{path.relative_to(SRC)}:{node.lineno} uv_binary")
+            elif isinstance(node, (ast.List, ast.Tuple)) and node.elts:
+                first = node.elts[0]
+                if isinstance(first, ast.Constant) and first.value == "uv":
+                    violations.append(
+                        f"{path.relative_to(SRC)}:{node.lineno} builds a uv command"
+                    )
+    assert violations == [], violations
+
+
 def test_veny_imports_recognizes_every_spelling_of_a_veny_import(
     tmp_path: Path,
 ) -> None:
@@ -255,3 +315,56 @@ def test_analysis_never_rebinds_an_importscan_field() -> None:
                         f"{path.relative_to(SRC)}:{node.lineno} rebinds .{target.attr}"
                     )
     assert violations == [], violations
+
+
+def test_split_imports_copies_back_every_field_it_owns() -> None:
+    """cli.split_imports' copy-back must be total, and only the AST can say so.
+
+    The adapter is the single place a Requirements is written back onto
+    Options, and a copy-back that silently drops one field is exactly
+    dbf013c's class of bug: the run keeps whatever stale value Options was
+    already carrying, so nothing raises, nothing logs, and the whole suite
+    stays green while the dropped field is wrong. Only the tests that happen
+    to read that one field could ever notice, and a field with no such test
+    -- which is how dbf013c survived -- is invisible. So this reads the
+    assignments themselves rather than any behaviour.
+
+    The five names are written out rather than derived from Requirements'
+    fields: the mapping is deliberately not one-to-one (`total_imports` is a
+    property, `seen_stdlib` and `extra_requirements` are pass-throughs that
+    Options already holds and must not be re-written), so deriving them would
+    only restate whatever state.py currently says. Only `ast.Attribute`
+    targets whose value is the name `options` count -- the local `scan = ...`
+    and `result = ...` bindings are names, not attributes, and must not trip
+    this guard.
+    """
+    tree = ast.parse((SRC / "cli.py").read_text())
+    adapters = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "split_imports"
+    ]
+    assert len(adapters) == 1, "expected exactly one cli.split_imports"
+    written = set()
+    for node in ast.walk(adapters[0]):
+        targets: list[ast.expr]
+        if isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+            targets = [node.target]
+        elif isinstance(node, ast.Assign):
+            targets = node.targets
+        else:
+            continue
+        for target in targets:
+            if (
+                isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "options"
+            ):
+                written.add(target.attr)
+    assert written == {
+        "all_imports",
+        "bad_imports",
+        "installed_imports",
+        "uninstalled_imports",
+        "total_imports",
+    }

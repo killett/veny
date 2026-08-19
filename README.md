@@ -104,11 +104,13 @@ src/veny/
     __init__.py     # Version literal.
     __main__.py     # python -m veny.
     cli.py          # Argument parsing, venv build/run orchestration; builds
-                    # the ImportScan/Settings analysis/ works from and copies
-                    # results back onto Options.
+                    # the ImportScan/Settings analysis/ works from and the
+                    # throwaway probe venv classify.py is handed, and copies
+                    # the results of both back onto Options.
     settings.py     # Settings, the frozen per-run invariants analysis/ reads.
     analysis/       # AST analysis: what a script imports, and what it does
                     # with sys.path.
+        __init__.py       # Subpackage docstring only; exports nothing.
         literals.py       # Evaluates the restricted expression subset veny
                           # reads out of source (sys.path literals, a short
                           # os.path allow-list, pathlib construction).
@@ -124,9 +126,15 @@ src/veny/
                           # collecting imports.
     alias_index.py  # Import-name -> pip-name resolution (overrides, cache,
                     # target-interpreter probe, PyPI confirmation chain).
+    classify.py     # Decides which of a run's imports are already installed,
+                    # which must be installed, and which are unusable.
+    environment.py  # The one place veny invokes uv: venv creation, package
+                    # install/uninstall, and the requirements file they read.
     json_types.py   # Registers veny's own types with emmykit's JSON registry.
     pypi_client.py  # Confirms a project provides an import name by reading a
                     # wheel's central directory over an HTTP range request.
+    state.py        # Requirements, the frozen product classification hands
+                    # to the stages after it.
     stdlib_index.py # Standard-library membership for the target interpreter.
     venv_cache.py   # Folder naming, manifests, and matching for cached
                     # virtual environments.

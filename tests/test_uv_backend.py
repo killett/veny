@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from veny import cli
+from veny import cli, environment
 
 
 def test_the_packaged_uv_is_preferred_over_the_one_on_path(monkeypatch):
@@ -15,18 +15,18 @@ def test_the_packaged_uv_is_preferred_over_the_one_on_path(monkeypatch):
     fake.find_uv_bin = lambda: "/packaged/uv"  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "uv", fake)
     monkeypatch.setattr(shutil, "which", lambda _name: "/on/path/uv")
-    cli.uv_binary.cache_clear()
+    environment.uv_binary.cache_clear()
 
-    assert cli.uv_binary() == "/packaged/uv"
+    assert environment.uv_binary() == "/packaged/uv"
 
 
 def test_a_path_uv_is_used_when_the_package_is_missing(monkeypatch, caplog):
     """Without the package, PATH serves -- and veny says the version is unpinned."""
     monkeypatch.setitem(sys.modules, "uv", None)
     monkeypatch.setattr(shutil, "which", lambda _name: "/on/path/uv")
-    cli.uv_binary.cache_clear()
+    environment.uv_binary.cache_clear()
 
-    assert cli.uv_binary() == "/on/path/uv"
+    assert environment.uv_binary() == "/on/path/uv"
     assert "not pinned" in caplog.text
 
 
@@ -34,10 +34,10 @@ def test_no_uv_anywhere_exits_with_an_install_message(monkeypatch):
     """The failure names the command that fixes it, not just a traceback."""
     monkeypatch.setitem(sys.modules, "uv", None)
     monkeypatch.setattr(shutil, "which", lambda _name: None)
-    cli.uv_binary.cache_clear()
+    environment.uv_binary.cache_clear()
 
     with pytest.raises(SystemExit) as caught:
-        cli.uv_binary()
+        environment.uv_binary()
     assert "uv tool install veny" in str(caught.value)
 
 
@@ -66,9 +66,11 @@ def test_setup_virtualenv_builds_the_venv_before_writing_requirements_txt(
         cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")
     }
     monkeypatch.setattr(
-        cli,
+        environment,
         "run_uv_pip",
-        lambda opts, *args: subprocess.CompletedProcess(args=list(args), returncode=0),
+        lambda venv_python, *args: subprocess.CompletedProcess(
+            args=list(args), returncode=0
+        ),
     )
     monkeypatch.setattr(cli, "verify_and_repair_imports", lambda opts: None)
     monkeypatch.setattr(cli, "check_packages_in_venv", lambda opts: True)
@@ -79,6 +81,55 @@ def test_setup_virtualenv_builds_the_venv_before_writing_requirements_txt(
     assert options.venv_dir is not None
     assert (options.venv_dir / "requirements.txt").read_text() == "thing-pkg\n"
     assert (options.venv_dir / "bin" / "python").exists()
+
+
+def test_setup_virtualenv_writes_the_extra_requirements_version_specifiers(
+    monkeypatch, tmp_path
+):
+    """The specifiers parsed out of --reqs must reach the requirements.txt that
+    setup_virtualenv writes, not just the argv `uv pip install -r` is given.
+
+    Phase 3c task 2 turned an implicit `options.extra_requirements` read inside
+    write_requirements_file_with_extras into an explicit argument at this call
+    site, which created a mis-wiring nothing could see: task 5's differential
+    pins `-r requirements.txt` in the uv argv but never that file's contents.
+
+    Concrete bug this catches: pass `{}` (or any other mapping) instead of
+    `options.extra_requirements` here and requirements.txt reads a bare
+    `thing-pkg`. uv then resolves whatever the newest release is, silently
+    discarding the `thing-pkg>=2.0` pin the user wrote in their requirements
+    file -- the one thing --reqs exists to honour. The expected text comes from
+    write_requirements_file_with_extras' contract (sorted pip names, one per
+    line, a specifier appended only where extra_requirements supplies a
+    non-empty one), not from re-running the writer.
+    """
+    options = cli.Options()
+    options.my_dir = tmp_path
+    options.uninstalled_imports = {
+        cli.ResolvedImport(import_name="thing", pip_name="thing-pkg"),
+        cli.ResolvedImport(import_name="zeta", pip_name="zeta-pkg"),
+    }
+    options.extra_requirements = {"thing-pkg": ">=2.0"}
+    # The venv itself is a subprocess boundary and is not what this test is
+    # about; set_venv_dir has already created the directory the file lands in.
+    monkeypatch.setattr(environment, "create_venv", lambda target, python="": None)
+    monkeypatch.setattr(
+        environment,
+        "run_uv_pip",
+        lambda venv_python, *args: subprocess.CompletedProcess(
+            args=list(args), returncode=0
+        ),
+    )
+    monkeypatch.setattr(cli, "verify_and_repair_imports", lambda opts: None)
+    monkeypatch.setattr(cli, "check_packages_in_venv", lambda opts: True)
+    monkeypatch.setattr(cli, "record_venv_state", lambda opts: None)
+
+    cli.setup_virtualenv(options)
+
+    assert options.venv_dir is not None
+    assert (
+        options.venv_dir / "requirements.txt"
+    ).read_text() == "thing-pkg>=2.0\nzeta-pkg\n"
 
 
 def test_create_venv_is_given_a_resolved_interpreter_path_not_a_bare_command(
@@ -105,14 +156,14 @@ def test_create_venv_is_given_a_resolved_interpreter_path_not_a_bare_command(
         "which",
         lambda name: "/resolved/bin/python3" if name == "python3" else None,
     )
-    monkeypatch.setattr(cli, "uv_binary", lambda: "/packaged/uv")
+    monkeypatch.setattr(environment, "uv_binary", lambda: "/packaged/uv")
     captured: list[list[str]] = []
     monkeypatch.setattr(
         subprocess, "check_call", lambda command: captured.append(command)
     )
 
-    python = cli.venv_build_interpreter(options)
-    cli.create_venv(tmp_path / "target", python)
+    python = environment.venv_build_interpreter(options.python_command)
+    environment.create_venv(tmp_path / "target", python)
 
     assert captured == [
         [
