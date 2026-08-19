@@ -78,6 +78,13 @@ LAYERS: list[frozenset[str]] = [
     # reason -- the dependency is real and one-way. Like verify, it has never
     # heard of Options, so it stays below cli.
     frozenset({"cache_search"}),
+    # pipeline.py owns the run's sequencing and is the only module that knows
+    # the order: analyze -> classify -> acquire an environment -> run the
+    # script. It sits directly below cli because it is handed the Options
+    # object cli builds and hands back an exit status, and above everything
+    # 3a-3d extracted because it drives all of them. Phase 4 removes the
+    # Options carrier; the layer position does not change with it.
+    frozenset({"pipeline"}),
     frozenset({"cli"}),
 ]
 
@@ -302,7 +309,7 @@ def test_veny_imports_recognizes_every_spelling_of_a_veny_import(
 
 
 def test_analysis_never_rebinds_an_importscan_field() -> None:
-    """The cli.py bridge hands scan.py the seven live objects options holds
+    """The pipeline.py bridge hands scan.py the seven live objects options holds
     and relies on them being mutated in place, with no copy-back. A rebind
     of one of ImportScan's fields anywhere under analysis/ would silently
     detach the caller's object mid-scan -- a rebind of `all_imports`,
@@ -338,7 +345,7 @@ def test_analysis_never_rebinds_an_importscan_field() -> None:
 
 
 def test_split_imports_copies_back_every_field_it_owns() -> None:
-    """cli.split_imports' copy-back must be total, and only the AST can say so.
+    """pipeline.split_imports' copy-back must be total, and only the AST can say so.
 
     The adapter is the single place a Requirements is written back onto
     Options, and a copy-back that silently drops one field is exactly
@@ -365,13 +372,13 @@ def test_split_imports_copies_back_every_field_it_owns() -> None:
     so still passes this guard. Catching that class of bug needs a
     behavioural test that reads the value back, not this one.
     """
-    tree = ast.parse((SRC / "cli.py").read_text())
+    tree = ast.parse((SRC / "pipeline.py").read_text())
     adapters = [
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef) and node.name == "split_imports"
     ]
-    assert len(adapters) == 1, "expected exactly one cli.split_imports"
+    assert len(adapters) == 1, "expected exactly one pipeline.split_imports"
     written = set()
     for node in ast.walk(adapters[0]):
         targets: list[ast.expr]

@@ -17,6 +17,7 @@ from veny import (
     cli,
     environment,
     last_used,
+    pipeline,
     stdlib_index,
     verify,
 )
@@ -156,7 +157,7 @@ def _drive_main(
             names=frozenset({"os"}), python_version=(3, 12), source="test"
         ),
     )
-    monkeypatch.setattr(cli, "build_alias_index", lambda options: _offline_index())
+    monkeypatch.setattr(pipeline, "build_alias_index", lambda options: _offline_index())
     monkeypatch.setattr(cli, "dict_of_custom_modules", lambda settings, use_cache: {})
     monkeypatch.setattr(ek, "configure_logging", lambda *a, **k: None)
     monkeypatch.setattr(ek, "print_all_errors", lambda *a, **k: None)
@@ -178,7 +179,7 @@ def _drive_main(
             options.set_venv_dir(venv_dir)
         captured.append(options)
 
-    monkeypatch.setattr(cli, "list_packages", fake_list_packages)
+    monkeypatch.setattr(pipeline, "list_packages", fake_list_packages)
     return captured, launched
 
 

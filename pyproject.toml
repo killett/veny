@@ -56,6 +56,11 @@ ignore = [
 # moved to analysis/custom_modules.py in plan 3a, which carries its own
 # inline `# noqa: S301` instead.)
 "src/veny/cli.py" = ["S101", "S603"]
+# pipeline.py carries list_packages' two internal-invariant asserts, moved
+# here verbatim from cli.py under the same reasoning. It invokes no
+# subprocess of its own -- every one of those goes through environment.py --
+# so S603 stays enforced here.
+"src/veny/pipeline.py" = ["S101"]
 # environment.py is the one module that invokes uv: its subprocess calls
 # are its entire purpose. It carries no asserts, so S101 stays enforced here.
 "src/veny/environment.py" = ["S603"]

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from veny import cli
+from veny import cli, pipeline
 
 
 def _scan(script: Path, custom_modules: dict[str, Path]) -> cli.Options:
@@ -23,7 +23,7 @@ def _scan(script: Path, custom_modules: dict[str, Path]) -> cli.Options:
     options.python_script = script
     options.script_dir = script.parent
     options.custom_modules = custom_modules
-    cli.find_imports_in_script(options, script)
+    pipeline.find_imports_in_script(options, script)
     return options
 
 
@@ -32,7 +32,7 @@ def test_the_scan_adapter_lets_the_scanner_name_the_files_it_opens(
 ) -> None:
     """find_imports_in_script builds the Settings the scanner logs through.
 
-    `rawlog` is one of five fields cli.find_imports_in_script copies onto the
+    `rawlog` is one of five fields pipeline.find_imports_in_script copies onto the
     Settings it hands analysis.scan. Measured 2026-08-19 across all 17
     `rawlog=` sites in cli/cache_search/last_used/verify: substituting the
     wrong-but-type-correct `True` left 16 of them with the whole suite green,
@@ -57,7 +57,7 @@ def test_the_scan_adapter_lets_the_scanner_name_the_files_it_opens(
     options.custom_modules = {"helper": helper}
 
     with caplog.at_level(logging.INFO):
-        cli.find_imports_in_script(options, script)
+        pipeline.find_imports_in_script(options, script)
 
     assert options.all_imports == {"numpy"}
     assert f"Processing module: {script}" in caplog.text
@@ -72,7 +72,7 @@ def test_the_scan_adapter_lets_the_scanner_name_the_files_it_opens(
     quiet.custom_modules = {"helper": helper}
 
     with caplog.at_level(logging.INFO):
-        cli.find_imports_in_script(quiet, script)
+        pipeline.find_imports_in_script(quiet, script)
 
     assert "Processing module:" not in caplog.text
 
