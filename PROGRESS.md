@@ -85,7 +85,12 @@ ceiling was 37 through phase 3b, 36 after 3c, and it has **never been this
 low**; the breakdown is `tests/test_verify.py` 15, `src/veny/cli.py` 7,
 `tests/test_split_imports.py` 6, `analysis/imports.py` 3,
 `analysis/literals.py` 1, `analysis/call_graph.py` 1. `pixi run smoke`
-**green**, network was available and nothing was skipped. Line counts
+**green**, network was available and nothing was skipped. Re-measured after
+the whole-branch review's three fixes (2026-08-19): `pixi run test`
+**370 passed** (+11 — one for `check_venv_dir`'s folder check, ten for the
+`rawlog` sweep); `pixi run lint` zero; format clean (**52 files**);
+`pixi run typecheck` **33 errors in 6 files**, the same breakdown — the
+ceiling held. Line counts
 (`wc -l`, 2026-08-18): `src/veny/cli.py` **1,064**, `alias_index.py` 826,
 `cache_search.py` **741**, `analysis/imports.py` 683, `verify.py` **680**,
 `venv_cache.py` 465, `analysis/scan.py` 347, `pypi_client.py` 314,
@@ -1140,6 +1145,20 @@ wiring rationale and for two Minors deliberately left unfixed.
   the index's headline "every one of them kills a named test" now names the
   substitution class it was measured under, because that qualifier is the
   whole difference between the claim being true and being false.
+- **A stub that echoes its argument back turns any assertion against the
+  caller's own field into a tautology.** `tests/test_uv_backend.py`'s
+  `record_spy` returns its `venv_dir` argument, and `setup_virtualenv` does
+  `options.set_venv_dir(record_venv_state(...))` — so
+  `assert recorded == [{"venv_dir": options.venv_dir, ...}]` compares the call
+  site against its own output and cannot fail. Measured 2026-08-19: a wrong
+  `timestamp=` at `setup_virtualenv`'s `build_folder_name` left
+  `test_the_manifest_and_the_final_check_describe_the_venv_after_repair` green
+  while killing its two siblings, which spell the path out as a literal. Spell
+  the expected path out (`tmp_path / "failed-wiredenv-py3.12-…"`) whenever the
+  production code assigns the stub's return value back onto the object under
+  assertion. The sibling test at `tests/test_uv_backend.py:337` had carried a
+  comment forbidding exactly this since 3d's Task 9; the rule now applies to
+  every assertion in that file's `setup_virtualenv` block.
 - **Never `git checkout -- <path>` to undo a deliberate in-place mutation.** It
   reverts the *whole* file to HEAD, discarding every unrelated edit in it, not
   just the mutation you were testing. It cost 3c's Task 4 an entire session's

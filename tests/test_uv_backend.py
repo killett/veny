@@ -396,16 +396,25 @@ def test_the_manifest_and_the_final_check_describe_the_venv_after_repair(
 
     assert cli.setup_virtualenv(options) is True
 
+    # Literal paths, not options.venv_dir / options.venv_python, for the same
+    # reason the sibling test above spells them out: record_spy echoes its
+    # venv_dir argument back and setup_virtualenv assigns that echo to
+    # options.venv_dir (via set_venv_dir), so asserting against options.* here
+    # would compare the call site to its own output and pass however the
+    # folder name was built. Measured: a wrong `timestamp=` at
+    # setup_virtualenv's build_folder_name left this test green before this
+    # was spelled out.
+    built = tmp_path / "failed-wiredenv-py3.12-20260101-010203-thing-pkg"
     assert uv_calls == [
         (
-            options.venv_python,
-            ("install", "-r", os.fspath(options.requirements_file)),
+            built / "bin" / "python",
+            ("install", "-r", os.fspath(built / "requirements.txt")),
         )
     ]
     assert recorded == [
         {
-            "venv_dir": options.venv_dir,
-            "venv_python": options.venv_python,
+            "venv_dir": built,
+            "venv_python": built / "bin" / "python",
             "venv_name": "wiredenv",
             "timestamp": "20260101-010203",
             "run_tag": "3.12",
@@ -417,7 +426,7 @@ def test_the_manifest_and_the_final_check_describe_the_venv_after_repair(
     ]
     assert checked == [
         {
-            "venv_python": environment.venv_python_for(options.venv_dir),
+            "venv_python": built / "bin" / "python",
             "uninstalled": repaired,
             "source_names": {"thing"},
         }
