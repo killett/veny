@@ -78,7 +78,7 @@ explicit argument lists that replaced implicit `options.<field>` reads.
 
 Gates measured on this branch at `7debbb3` (2026-08-18): `pixi run test`
 **359 passed** (was 321 on `main` at the branch point, so 3d is +38 tests —
-+18 through Task 8, then +20 in Task 9 alone, all closing STANDING CHECK
++17 through Task 8, then +21 in Task 9 alone, all closing STANDING CHECK
 holes); `pixi run lint` zero; `pixi run python -m ruff format --check .` all
 **52 files** formatted; `pixi run typecheck` **33 errors in 6 files** — the
 ceiling was 37 through phase 3b, 36 after 3c, and it has **never been this
@@ -834,7 +834,9 @@ wiring rationale and for two Minors deliberately left unfixed.
   must neither re-read nor re-check it. Passing a manifest that came from
   anywhere else silently authorizes a venv that was never matched. Measured
   cost per cache hit after 3d's Task 7: **1 `read_manifest`, 1 `satisfies`**
-  (it was 2 and 2), pinned by a call-counting test. The **last-used path
+  (it was 2 and 2), pinned by
+  `test_a_cache_hit_reads_and_matches_each_manifest_once`
+  (`tests/test_cache_search.py:440`). The **last-used path
   passes `None` and does its own 1 read / 1 satisfies**, and must: it reaches
   the folder from a recorded pointer, not from the scan, so there is no
   `CacheCandidate` and nothing has vouched for the manifest. That asymmetry
@@ -1084,9 +1086,11 @@ wiring rationale and for two Minors deliberately left unfixed.
   branch and each duplicated site is counted separately) — the plan's own
   call-site table had **14 rows**, so more than half the sites the extraction
   created were not even on the list to check. Before: 147 arguments, 43
-  killing a named test, **104 holes**. After: 147 / 147 / **0**, closed by 20
-  new tests (`939856c`, `7debbb3`). Two concentrations account for half the
-  holes and are the transferable lesson:
+  killing a named test, **104 holes**. After: 147 / 147 / **0**. All 104 were
+  closed by the **20** tests in `939856c` (suite 338 → 358, and the
+  before/after table was measured at 358); the fix round `7debbb3` added one
+  more and strengthened three existing ones, taking the suite to 359. Two
+  concentrations account for half the holes and are the transferable lesson:
   - **`cli.main()` alone had 27**, for one reason — *nothing in the suite
     drove `main()` in process at all*. Every argument of the cache search,
     the rename, the in-virtualenv check, `--feeling-lucky` and `--reqs` was
@@ -1584,8 +1588,11 @@ wiring rationale and for two Minors deliberately left unfixed.
      found in `repair_unsatisfied_import` possible in the first place, since a
      handle has no null spelling. (Citation re-measured for 3d: that call has
      left `cli.py` entirely — it is
-     `verify.repair_unsatisfied_import` @ `7debbb3:src/veny/verify.py:513`,
-     `environment.install_into_venv(venv_python, pip_name)`. The old
+     `verify.repair_unsatisfied_import.installer` @
+     `7debbb3:src/veny/verify.py:513` — the call sits in a nested closure
+     (`def installer` @ `:511`) inside `repair_unsatisfied_import`
+     (`def` @ `:467`), not in that function's own body, and the citation
+     names the closure because that is what the reader has to find. The old
      `cli.py:1409` citation is dead.)
 - **Three more design-doc amendments 3d records** (a ninth through eleventh,
   after 3b's three and 3c's five). Each is a consequence of a correct,
@@ -1658,7 +1665,13 @@ wiring rationale and for two Minors deliberately left unfixed.
   trust contract is explicit in the name: *this manifest was read from this
   folder during the scan; do not re-read it and do not re-run `satisfies` on
   it*). Measured, per cache hit: **1 `read_manifest`, 1 `satisfies`**, down
-  from 2 and 2, pinned by a call-counting test. The **last-used path still
+  from 2 and 2, pinned by
+  `test_a_cache_hit_reads_and_matches_each_manifest_once`
+  (`tests/test_cache_search.py:440`); the last-used side has its own,
+  `test_a_last_used_hit_still_reads_and_matches_its_own_manifest`
+  (`:596`), and the vanishing-manifest case is
+  `test_check_venv_dir_survives_the_manifest_vanishing_after_it_was_already_read`
+  (`:534`). The **last-used path still
   does its own 1 read / 1 satisfies** and must: it has no `CacheCandidate`,
   because it is reached from a recorded pointer rather than from the scan.
   A folder that loses its manifest between the scan and the check is still
@@ -1829,8 +1842,20 @@ wiring rationale and for two Minors deliberately left unfixed.
   - `tests/test_manifest_writing.py`'s `manifest_kwargs` helper has no type
     hints. (`f0a1bc4` typed it — **resolved**, listed here only so the ledger
     entry is not lost silently.)
-  - `cache_search.installed_state_in_venv` carries a now-dead
-    `# noqa: S603`; the `pyproject.toml` per-file ignore already silences it.
+  - **Corrected while closing the phase, 2026-08-19.** The per-task ledger
+    recorded a now-dead `# noqa: S603` on
+    `cache_search.installed_state_in_venv`, and an earlier draft of this
+    entry repeated it. Measured at HEAD: `rg 'noqa' src/veny/cache_search.py`
+    returns **nothing** — the comment did not survive the task it was logged
+    in, so there is nothing to remove there. The same redundancy **does**
+    exist one module over and is still open: `src/veny/environment.py:245`
+    carries `# noqa: S603` while `pyproject.toml:61` already grants
+    `"src/veny/environment.py" = ["S603"]`. Measured, not inferred: deleting
+    that comment in place leaves `pixi run lint` reporting `All checks
+    passed!`, and the file was restored from a scratch copy afterwards with
+    `git diff` empty. The two other `# noqa: S603` comments in the tree —
+    `alias_index.py:523` and `stdlib_index.py:117` — are **load-bearing**,
+    because neither module has a per-file ignore; do not sweep them together.
   - `tests/test_classify.py`'s `_capture_split_imports_result` inner wrapper
     takes `*args`/`**kwargs` typed `Any` rather than mirroring
     `classify.split_imports`' signature, so it would not catch a signature
@@ -1918,9 +1943,13 @@ wiring rationale and for two Minors deliberately left unfixed.
   - The copy-back guard proves **totality**, not source correctness:
     rewriting the adapter as `options.bad_imports = set(result.installed)`
     still passes it. (Cited as `tests/test_layering.py:320`; re-measured at
-    `7debbb3` it is `test_split_imports_copy_back_is_total` @
-    `tests/test_layering.py:338`, and 3d's Task 8 narrowed it from five
-    fields to **four** when the write-only `installed_imports` chain went.
+    `7debbb3` it is `test_split_imports_copies_back_every_field_it_owns` @
+    `7debbb3:tests/test_layering.py:337` — name and line both read straight
+    off the file, and confirmed identical at `7debbb3` and at HEAD. 3d's
+    Task 8 narrowed the guard from five fields to **four** when the
+    write-only `installed_imports` chain went; measured at
+    `tests/test_layering.py:388-393`, the asserted set is exactly
+    `{all_imports, bad_imports, uninstalled_imports, total_imports}`.
     Still open.)
   - The three-assert block plus the `pip_name` generator are duplicated at both
     `write_requirements_file_with_extras` call sites in `cli.py`
@@ -1961,7 +1990,7 @@ wiring rationale and for two Minors deliberately left unfixed.
   | `cli.py:3304` | `setup_virtualenv` | `cli.setup_virtualenv` @ `7debbb3:956` |
   | `cli.py:3323` | `create_venv(options.venv_dir, ...)` in `setup_virtualenv` | **left `cli.py`'s ownership**: `environment.create_venv` @ `7debbb3:src/veny/environment.py:62`; the call site is `7debbb3:974` |
   | `cli.py:1005` | `FunctionInfo.ast_node` | **dead twice over** — the *field* was retired by 3b's Task 6 (`5dbcac2`) and the *class* left `cli.py` in 3b too. `FunctionInfo` is now `analysis/call_graph.py` @ `7debbb3:11`, with no `ast_node`. |
-  | `cli.py:1409` | `install_into_venv(options.venv_python, …)` | **left `cli.py`**: `verify.repair_unsatisfied_import` @ `7debbb3:src/veny/verify.py:513` |
+  | `cli.py:1409` | `install_into_venv(options.venv_python, …)` | **left `cli.py`**: `verify.repair_unsatisfied_import.installer` @ `7debbb3:src/veny/verify.py:513` (a nested closure, `def installer` @ `:511`, inside `repair_unsatisfied_import` @ `:467`) |
   | `cli.py:1867` | `cli.load_last_used_venv_dir` | **deleted** by 3d's Task 5 (`0943370`); the symbol exists nowhere in `src/` or `tests/` |
   | `cli.py:1542-1555` / `1748-1761` | the duplicated three-assert block + `pip_name` generator at the two `write_requirements_file_with_extras` call sites | `cli.setup_virtualenv` @ `7debbb3:991-999` (asserts kept — `Options`' fields are still `\| None`) and `verify.verify_and_repair_imports` @ `7debbb3:src/veny/verify.py:675` (no asserts — explicit non-optional arguments) |
   | `cli.py:2197 @ dc1c3c4` | `cli.load_last_used_venv_dir`, historical | **unchanged and still correct** — it was commit-qualified, so the deletion above does not invalidate it |

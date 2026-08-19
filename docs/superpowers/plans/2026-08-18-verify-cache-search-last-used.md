@@ -5,8 +5,9 @@
 > **ANNOTATED IN PLACE BY TASK 10, 2026-08-18 (execution complete, branch
 > `verify-cache-search-last-used` @ `7debbb3`).** Every block below marked
 > **[EXECUTION]** records something this plan's own text got wrong. Phases 3b
-> and 3c both did this and both found real errors; so did this one, seven
-> times. The checkboxes are all marked complete.
+> and 3c both did this and both found real errors; so did this one, **eight**
+> times (the eight `**[EXECUTION]**` blocks below; this banner's own mention
+> of the marker is the ninth occurrence of the string and is not one of them). The checkboxes are all marked complete.
 
 **Goal:** Extract `verify.py`, `cache_search.py` and `last_used.py` out of
 `src/veny/cli.py` — 1,088 measured lines of it (**[EXECUTION]** it removed
