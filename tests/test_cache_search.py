@@ -4,13 +4,21 @@ import argparse
 import contextlib
 import importlib
 import io
+import os
 import subprocess
 from pathlib import Path
 
 import emmykit as ek
 import pytest
 
-from veny import alias_index, cache_search, stdlib_index, venv_cache, verify
+from veny import (
+    alias_index,
+    cache_search,
+    environment,
+    stdlib_index,
+    venv_cache,
+    verify,
+)
 from veny import cli as veny
 from veny.alias_index import ResolvedImport
 
@@ -660,3 +668,217 @@ def test_a_last_used_hit_still_reads_and_matches_its_own_manifest(
     assert result == venv_dir
     assert read_manifest_calls == 1
     assert satisfies_calls == 1
+
+
+def _a_run_with_a_pinned_package(tmp_path: Path) -> tuple[veny.Options, Path]:
+    """Build a run whose four check_venv_dir arguments are all distinguishable.
+
+    Every value the call site has to wire is given a different shape, so a
+    swap between two of them cannot pass: `uninstalled` holds records,
+    `wanted` holds a Wanted carrying the --reqs spec (which only
+    extra_requirements can supply), `source_names` holds an import name that
+    is in neither, and `tag` is the run's own interpreter tag.
+    """
+    folder_name = venv_cache.build_folder_name(
+        venv_name="myenv",
+        interpreter_tag="3.12",
+        timestamp="20260814-091500",
+        pip_names=["thing-pkg"],
+    )
+    venv_dir = a_cached_venv(
+        tmp_path,
+        folder_name,
+        [venv_cache.PackageRecord("thing", "thing-pkg", "2.5.0", None)],
+    )
+    options = an_options({ResolvedImport("thing", "thing-pkg")})
+    options.my_dir = tmp_path
+    options.venv_name = "myenv"
+    options.all_imports = {"thing", "other"}
+    options.extra_requirements = {"thing-pkg": ">=2.0"}
+    options.rawlog = True
+    return options, venv_dir
+
+
+@pytest.mark.parametrize(
+    ("flags", "manifest_is_handed_over"),
+    [
+        (
+            {"latest": False, "oldest": False, "last_used": True, "smallest": False},
+            False,
+        ),
+        (
+            {"latest": True, "oldest": False, "last_used": False, "smallest": False},
+            True,
+        ),
+        (
+            {"latest": False, "oldest": True, "last_used": False, "smallest": False},
+            True,
+        ),
+        (
+            {"latest": False, "oldest": False, "last_used": False, "smallest": True},
+            True,
+        ),
+    ],
+    ids=["last_used", "latest", "oldest", "smallest"],
+)
+def test_every_branch_hands_check_venv_dir_the_same_description_of_the_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    flags: dict[str, bool],
+    manifest_is_handed_over: bool,
+) -> None:
+    """All four selection branches must describe the run to check_venv_dir identically.
+
+    find_match_dir_in_cache calls check_venv_dir from four separate places,
+    each repeating the same six-argument wiring by hand. Nothing before this
+    test read those arguments: measured by substitution, `wanted=[]`,
+    `tag=""`, `uninstalled=frozenset()`, `source_names=frozenset()` and
+    `rawlog=False` could each be written at any of the four sites and all 338
+    tests stayed green. Concrete bug this catches: `wanted=[]` on the --oldest
+    branch accepts any cached venv whose folder name and interpreter tag look
+    right, no matter which packages its manifest actually records, so
+    --oldest silently reuses an environment missing the package the script
+    imports; `source_names=frozenset()` widens the import check to the
+    distribution's whole top-level list, which is the fail-open shape
+    PROGRESS records for the bulk check.
+
+    The expected values are derived from the run's own inputs (the same
+    wanted_packages/source_import_names calls main() makes), not read back
+    off the production call.
+    """
+    options, venv_dir = _a_run_with_a_pinned_package(tmp_path)
+    options.args = argparse.Namespace(**flags)
+    calls: list[dict[str, object]] = []
+
+    def spy(venv_dir_arg, **kwargs):
+        calls.append({"venv_dir": venv_dir_arg, **kwargs})
+        return True
+
+    monkeypatch.setattr(cache_search, "check_venv_dir", spy)
+    last_used_options = ek.Options()
+    last_used_options.venv_dir = venv_dir  # type: ignore[attr-defined]
+
+    result = cache_search.find_match_dir_in_cache(
+        options.args,
+        my_dir=options.my_dir,
+        venv_name=options.venv_name,
+        uninstalled=options.uninstalled_imports,
+        extra_requirements=options.extra_requirements,
+        source_names=verify.source_import_names(
+            options.all_imports,
+            options.extra_requirements,
+            getattr(options.args, "reqs", False),
+        ),
+        tag=cache_search.interpreter_tag(options.stdlib),
+        rawlog=options.rawlog,
+        load_last_used=lambda: last_used_options,
+    )
+
+    assert result == venv_dir
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["venv_dir"] == venv_dir
+    assert call["wanted"] == [venv_cache.Wanted(pip_name="thing-pkg", spec=">=2.0")]
+    assert call["tag"] == "3.12"
+    assert call["uninstalled"] == {ResolvedImport("thing", "thing-pkg")}
+    assert call["source_names"] == {"thing", "other"}
+    assert call["rawlog"] is True
+    if manifest_is_handed_over:
+        assert call["matched_manifest"] == venv_cache.read_manifest(venv_dir)
+    else:
+        assert call.get("matched_manifest") is None
+
+
+def test_the_cache_search_filters_the_folders_against_this_run_not_a_blank_one(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """cache_candidates must be given this run's wanted list and log setting.
+
+    Measured by substitution: `wanted=[]` at that call site left all 338
+    tests green, and it is the argument that decides whether a cached venv's
+    manifest is compared against what the script needs at all -- with an
+    empty list venv_cache.satisfies has nothing to reject, so every
+    name-and-tag-shaped folder in ~/veny becomes a candidate and the first
+    one wins.
+    """
+    options, venv_dir = _a_run_with_a_pinned_package(tmp_path)
+    options.args = argparse.Namespace(
+        latest=True, oldest=False, last_used=False, smallest=False
+    )
+    seen: list[dict[str, object]] = []
+
+    def spy(folders, **kwargs):
+        seen.append({"folders": list(folders), **kwargs})
+        return []
+
+    monkeypatch.setattr(cache_search, "cache_candidates", spy)
+
+    assert (
+        cache_search.find_match_dir_in_cache(
+            options.args,
+            my_dir=options.my_dir,
+            venv_name=options.venv_name,
+            uninstalled=options.uninstalled_imports,
+            extra_requirements=options.extra_requirements,
+            source_names=verify.source_import_names(
+                options.all_imports,
+                options.extra_requirements,
+                getattr(options.args, "reqs", False),
+            ),
+            tag=cache_search.interpreter_tag(options.stdlib),
+            rawlog=options.rawlog,
+            load_last_used=_never_called,
+        )
+        is None
+    )
+
+    assert seen == [
+        {
+            "folders": [venv_dir],
+            "wanted": [venv_cache.Wanted(pip_name="thing-pkg", spec=">=2.0")],
+            "tag": "3.12",
+            "rawlog": True,
+        }
+    ]
+
+
+def test_check_venv_dir_probes_the_interpreter_inside_the_venv_it_was_given(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The import check must run against the candidate venv, not some other interpreter.
+
+    check_venv_dir's own decision is made from `venv_dir`, but the import
+    confirmation it then runs takes a *python path*, built by
+    environment.venv_python_for at that call site. Measured by substitution:
+    hardcoding any other interpreter path there left all 338 tests green,
+    because every test that reaches this line stubs the probe and never looks
+    at which interpreter it was asked about. Concrete bug this catches: the
+    candidate is accepted on evidence gathered from the interpreter running
+    veny (or from a previous candidate), so a venv missing the package is
+    reused whenever veny's own environment happens to provide it.
+    """
+    options, venv_dir = _a_run_with_a_pinned_package(tmp_path)
+    probed: list[str] = []
+
+    def spy(venv_python, **kwargs):
+        probed.append(os.fspath(venv_python))
+        return True
+
+    monkeypatch.setattr(verify, "check_packages_in_venv", spy)
+
+    assert (
+        cache_search.check_venv_dir(
+            venv_dir,
+            wanted=cache_search.wanted_packages(
+                options.uninstalled_imports, options.extra_requirements
+            ),
+            tag="3.12",
+            uninstalled=options.uninstalled_imports,
+            source_names={"thing"},
+            rawlog=True,
+        )
+        is True
+    )
+
+    assert probed == [os.fspath(environment.venv_python_for(venv_dir))]
+    assert probed[0].startswith(os.fspath(venv_dir))

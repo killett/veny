@@ -225,3 +225,48 @@ def test_is_virtualenv_reflects_prefix_vs_base_prefix(
     monkeypatch.setattr(sys, "prefix", "/fake/same")
     monkeypatch.setattr(sys, "base_prefix", "/fake/same")
     assert last_used.is_virtualenv() is False
+
+
+def test_the_last_used_adapter_hands_over_this_runs_script_and_cutoff(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """cli._load_last_used is the only place these five arguments are wired.
+
+    load_last_used_options used to read them off the Options object it was
+    given; the extraction turned four of them into explicit keyword arguments
+    built at this one call site, and measured by substitution all five could
+    be replaced with a wrong value while all 338 tests stayed green -- nothing
+    drove cli._load_last_used at all.
+
+    Concrete bug this catches: a wrong `script_dir` looks in a directory that
+    holds no last-used JSON, so the cache search silently falls through to
+    "latest" on every run and the last-used pointer never wins; a wrong
+    `pathlibcutoff` (say a timestamp in the future) rejects every record ever
+    written, with the same silent effect and no error anywhere.
+    """
+    options = cli.Options()
+    options.script_dir = tmp_path / "scripts"
+    options.python_script = tmp_path / "scripts" / "thing.py"
+    options.rawlog = True
+    seen: list[dict[str, object]] = []
+    sentinel = ek.Options()
+
+    def spy(passed_options, **kwargs):
+        seen.append({"options": passed_options, **kwargs})
+        return sentinel
+
+    monkeypatch.setattr(last_used, "load_last_used_options", spy)
+
+    assert cli._load_last_used(options) is sentinel
+    assert seen == [
+        {
+            "options": options,
+            "script_dir": tmp_path / "scripts",
+            "python_script": tmp_path / "scripts" / "thing.py",
+            "pathlibcutoff": options.pathlibcutoff,
+            "rawlog": True,
+        }
+    ]
+    # The cutoff is the class default, not a literal copied into this test:
+    # a call site substituting any other value fails the equality above.
+    assert options.pathlibcutoff == cli.Options().pathlibcutoff

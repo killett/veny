@@ -389,3 +389,73 @@ def test_an_unreadable_venv_falls_back_to_the_runs_own_tag() -> None:
     """An empty tag means the probe failed, not that the venv has no version."""
     manifest = cache_search.manifest_for(**manifest_kwargs(an_options(), {}, ""))
     assert manifest.interpreter_tag == "3.12"
+
+
+def test_record_venv_state_probes_the_given_venv_and_records_the_runs_own_fields(
+    monkeypatch, tmp_path
+):
+    """record_venv_state's own five call sites must all be wired to its arguments.
+
+    record_venv_state takes nine explicit arguments now and passes seven of
+    them on to manifest_for, one to installed_state_in_venv and four to
+    build_folder_name. Measured by substitution, six of those onward wirings
+    left the whole suite green: `installed_state_in_venv("<other path>")`,
+    `interpreter_tag=venv_tag` (dropping the `or run_tag` fallback), and
+    manifest_for's `extra_requirements={}`, `timestamp=...`,
+    `python_command=""` and `run_tag=...`.
+
+    Concrete bugs this catches: probing the wrong interpreter records
+    another environment's package versions as this venv's, so the next run
+    matches on versions the venv does not have; dropping the `or run_tag`
+    fallback writes a folder named `myenv-py-...` whenever the probe
+    degrades, which parse_folder_name then rejects, retiring the venv from
+    the cache permanently; and `python_command=""` records the interpreter
+    running veny as the one the venv was built with.
+
+    The probe is made to report an empty tag on purpose -- that is the
+    degraded case where the fallback is the only thing supplying a tag.
+    """
+    options = an_options()
+    run_tag = cache_search.interpreter_tag(options.stdlib)
+    stale_name = "failed-" + venv_cache.build_folder_name(
+        venv_name=options.venv_name,
+        interpreter_tag=run_tag,
+        timestamp=options.timestamp,
+        pip_names=["yaml"],
+    )
+    old_dir = tmp_path / stale_name
+    options.set_venv_dir(old_dir)
+    probed: list[Path] = []
+
+    def spy_probe(venv_python):
+        probed.append(Path(venv_python))
+        return ({"pyyaml": "6.0.2", "numpy": "2.1.3"}, "")
+
+    monkeypatch.setattr(cache_search, "installed_state_in_venv", spy_probe)
+
+    recorded = cache_search.record_venv_state(
+        old_dir,
+        venv_python=old_dir / "bin" / "python",
+        venv_name=options.venv_name,
+        timestamp=options.timestamp,
+        run_tag=run_tag,
+        python_command=options.python_command,
+        uninstalled=options.uninstalled_imports,
+        extra_requirements=options.extra_requirements,
+        rawlog=options.rawlog,
+    )
+
+    assert probed == [old_dir / "bin" / "python"]
+    assert recorded.name == "failed-" + venv_cache.build_folder_name(
+        venv_name=options.venv_name,
+        interpreter_tag="3.12",
+        timestamp=options.timestamp,
+        pip_names=["PyYAML", "numpy"],
+    )
+    manifest = venv_cache.read_manifest(recorded)
+    assert manifest is not None
+    assert manifest.interpreter_tag == "3.12"
+    assert manifest.interpreter_path == "/usr/bin/python3.12"
+    assert manifest.created == "20260814-091500"
+    by_pip = {record.pip_name: record for record in manifest.packages}
+    assert by_pip["numpy"].requested_spec == ">=1.2"

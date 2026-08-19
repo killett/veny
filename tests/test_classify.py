@@ -643,3 +643,50 @@ def test_only_genuinely_uninstalled_imports_are_resolved(monkeypatch):
     assert options.uninstalled_imports == {
         ResolvedImport(import_name="missingthing", pip_name="missing-thing-pypi")
     }
+
+
+def test_the_probe_venv_is_asked_about_the_interpreter_it_just_built(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """cli._probe_venv must check imports inside the venv it created, not elsewhere.
+
+    _probe_venv creates a throwaway venv and closes over its directory; the
+    is_importable predicate then builds an interpreter path from that same
+    directory with environment.venv_python_for. Measured by substitution:
+    both halves of that wiring -- the directory handed to create_venv and the
+    interpreter handed to check_packages_in_venv -- could be replaced with a
+    fixed foreign path and all 338 tests stayed green, because every other
+    probe test stubs the check and ignores which interpreter it was given.
+
+    Concrete bug this catches: the probe answers from the interpreter running
+    veny instead of the empty throwaway venv, so every import already
+    installed alongside veny is classified "installed" and never installed
+    into the venv the user's script actually runs in -- the same class of
+    defect as the 3.12/3.13 `cgi` mismatch PROGRESS records, but total rather
+    than version-dependent.
+    """
+    options = cli.Options()
+    options.aliases = _index({})
+    options.all_imports = {"widgetlib"}
+    created: list[Path] = []
+    asked: list[Path] = []
+
+    monkeypatch.setattr(
+        environment,
+        "create_venv",
+        lambda target, python="": created.append(Path(target)),
+    )
+
+    def fake_check(venv_python, *, record=None, **kwargs):
+        assert record is not None, "the probe checks one record at a time"
+        asked.append(Path(venv_python))
+        return False
+
+    monkeypatch.setattr(verify, "check_packages_in_venv", fake_check)
+
+    cli.split_imports(options)
+
+    assert len(created) == 1, "exactly one probe venv is built"
+    # Options.set_venv_dir's documented shape, written out rather than read
+    # back through venv_python_for -- the directory is gone by now.
+    assert asked == [created[0] / "bin" / "python"]

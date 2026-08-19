@@ -831,7 +831,13 @@ def _live_index(tmp_path, **kwargs):
 
 
 def _verify_and_repair(
-    tmp_path, index, records, *, source_names=None, extra_requirements=None
+    tmp_path,
+    index,
+    records,
+    *,
+    source_names=None,
+    extra_requirements=None,
+    rawlog=False,
 ):
     """Run verify_and_repair_imports wired the way cli.setup_virtualenv wires it.
 
@@ -863,7 +869,7 @@ def _verify_and_repair(
         if source_names is None
         else source_names,
         index=index,
-        rawlog=False,
+        rawlog=rawlog,
     )
 
 
@@ -1345,3 +1351,156 @@ def test_the_repair_installer_is_given_the_venvs_own_interpreter(monkeypatch, tm
     _verify_and_repair(tmp_path, index, [record])
 
     assert interpreters == [tmp_path / "venv" / "bin" / "python"]
+
+
+def test_every_venv_facing_call_in_the_repair_pass_addresses_the_same_venv(
+    monkeypatch, tmp_path
+):
+    """verify_and_repair_imports has one venv; all six of its calls must name it.
+
+    verify_and_repair_imports takes `venv_python` as an argument and threads it
+    into six calls: the metadata probe, the bulk import check, the per-record
+    import check, the eager uninstall of the record that did not deliver, the
+    installer closure and the uninstaller closure. Measured by substitution,
+    hardcoding another interpreter path at four of those six left all 338 tests
+    green, because every test that reaches them stubs the callee and never
+    looks at which interpreter it was asked about.
+
+    Concrete bug this catches: the probe reads the *outer* interpreter's
+    installed distributions, so a package that happens to be installed
+    alongside veny is credited with providing the import, and
+    confirm_if_attributable writes that attribution into
+    ~/veny/module_aliases_cache.json, where it outranks every later tier on
+    every later run -- the durable-misinformation failure PROGRESS records.
+
+    The candidate is made `unusable` (installs, declares the import, fails to
+    import here) so the uninstaller closure runs too; the eager uninstall of
+    wrong-pkg and the closure uninstall of right-pkg are both recorded.
+    """
+    index = _live_index(tmp_path, seed={"thing": "right-pkg"})
+    record = ResolvedImport(import_name="thing", pip_name="wrong-pkg")
+    fake = _FakeInstalledVenv(
+        provides={"wrong-pkg": "something-else", "right-pkg": "thing"},
+        installed=["wrong-pkg"],
+        unusable=["right-pkg"],
+    )
+    seen: dict[str, list[object]] = {
+        "probe": [],
+        "bulk_or_record_check": [],
+        "outcome": [],
+        "install": [],
+        "uninstall": [],
+    }
+
+    def recording(channel, inner, positional_is_python=True):
+        def wrapper(python_or_command, *args, **kwargs):
+            seen[channel].append(python_or_command)
+            return inner(python_or_command, *args, **kwargs)
+
+        return wrapper
+
+    monkeypatch.setattr(
+        verify, "check_packages_in_venv", recording("bulk_or_record_check", fake.check)
+    )
+    monkeypatch.setattr(
+        verify, "import_outcome_in_venv", recording("outcome", fake.outcome)
+    )
+    monkeypatch.setattr(
+        alias_index, "probe_interpreter", recording("probe", fake.probe)
+    )
+    monkeypatch.setattr(
+        environment, "install_into_venv", recording("install", fake.install)
+    )
+    monkeypatch.setattr(
+        environment, "uninstall_from_venv", recording("uninstall", fake.uninstall)
+    )
+
+    _verify_and_repair(tmp_path, index, [record])
+
+    expected = tmp_path / "venv" / "bin" / "python"
+    assert fake.attempted == ["right-pkg"], "the repair path must have run"
+    assert seen["uninstall"], "both uninstall sites must have run"
+    for channel, interpreters in seen.items():
+        assert interpreters, f"{channel} was never reached"
+        assert set(interpreters) == {expected}, channel
+
+
+def test_the_repair_pass_names_the_package_that_finally_provided_the_import(
+    monkeypatch, tmp_path, caplog
+):
+    """rawlog must reach repair_unsatisfied_import, or the run goes silent about repairs.
+
+    Measured by substitution: hardcoding `rawlog=True` at the
+    repair_unsatisfied_import call site left all 338 tests green. That is the
+    only line telling the user their import came from a different package than
+    the one veny first installed -- without it a silent substitution happens
+    under a run that asked for normal logging, and the only remaining trace is
+    the alias cache.
+    """
+    index = _live_index(tmp_path, seed={"thing": "right-pkg"})
+    record = ResolvedImport(import_name="thing", pip_name="wrong-pkg")
+    fake = _FakeInstalledVenv(
+        provides={"wrong-pkg": "something-else", "right-pkg": "thing"},
+        installed=["wrong-pkg"],
+    )
+    monkeypatch.setattr(verify, "check_packages_in_venv", fake.check)
+    monkeypatch.setattr(verify, "import_outcome_in_venv", fake.outcome)
+    monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
+    monkeypatch.setattr(environment, "install_into_venv", fake.install)
+    monkeypatch.setattr(environment, "uninstall_from_venv", fake.uninstall)
+
+    with caplog.at_level(logging.INFO):
+        _verify_and_repair(tmp_path, index, [record])
+
+    assert "right-pkg provides the import thing" in caplog.text
+
+    # And the other direction: a run that asked for raw logging must stay
+    # quiet, so a hardcoded `rawlog=False` at that call site is caught too.
+    caplog.clear()
+    quiet_fake = _FakeInstalledVenv(
+        provides={"wrong-pkg": "something-else", "right-pkg": "thing"},
+        installed=["wrong-pkg"],
+    )
+    monkeypatch.setattr(verify, "check_packages_in_venv", quiet_fake.check)
+    monkeypatch.setattr(verify, "import_outcome_in_venv", quiet_fake.outcome)
+    monkeypatch.setattr(alias_index, "probe_interpreter", quiet_fake.probe)
+    monkeypatch.setattr(environment, "install_into_venv", quiet_fake.install)
+    monkeypatch.setattr(environment, "uninstall_from_venv", quiet_fake.uninstall)
+    with caplog.at_level(logging.INFO):
+        _verify_and_repair(tmp_path, index, [record], rawlog=True)
+
+    assert "provides the import" not in caplog.text
+
+
+def test_a_record_that_imports_on_the_repair_pass_is_still_credited_to_its_own_package(
+    monkeypatch, tmp_path
+):
+    """The per-record branch must judge attribution against the venv's real metadata.
+
+    When one record fails the bulk check, every other record is re-checked
+    individually, and the ones that do import are confirmed -- but only if the
+    venv credits *their* distribution with the import. Measured by
+    substitution: passing `{}` as installed_distributions on that branch left
+    all 338 tests green, which silently stops the alias cache ever being
+    written on any run that had a repair in it.
+    """
+    index = _live_index(tmp_path, seed={"thing": "right-pkg"})
+    broken = ResolvedImport(import_name="thing", pip_name="wrong-pkg")
+    working = ResolvedImport(import_name="good", pip_name="good-pkg")
+    fake = _FakeInstalledVenv(
+        provides={
+            "wrong-pkg": "something-else",
+            "right-pkg": "thing",
+            "good-pkg": "good",
+        },
+        installed=["wrong-pkg", "good-pkg"],
+    )
+    monkeypatch.setattr(verify, "check_packages_in_venv", fake.check)
+    monkeypatch.setattr(verify, "import_outcome_in_venv", fake.outcome)
+    monkeypatch.setattr(alias_index, "probe_interpreter", fake.probe)
+    monkeypatch.setattr(environment, "install_into_venv", fake.install)
+    monkeypatch.setattr(environment, "uninstall_from_venv", fake.uninstall)
+
+    _verify_and_repair(tmp_path, index, [broken, working])
+
+    assert index.cache.get("good") == "good-pkg"

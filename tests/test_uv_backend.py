@@ -1,12 +1,15 @@
 """Pin how veny locates the uv binary it drives its environment layer with."""
 
+import argparse
+import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
-from veny import cache_search, cli, environment, verify
+from veny import alias_index, cache_search, cli, environment, stdlib_index, verify
 
 
 def test_the_packaged_uv_is_preferred_over_the_one_on_path(monkeypatch):
@@ -199,4 +202,218 @@ def test_create_venv_is_given_a_resolved_interpreter_path_not_a_bare_command(
             "--python",
             "/resolved/bin/python3",
         ]
+    ]
+
+
+def _a_wired_run(tmp_path):
+    """Build an Options whose every setup_virtualenv argument is distinguishable.
+
+    Each field carries a value no other field could supply -- a venv name, a
+    timestamp, an interpreter tag, a pip name, an import name and a --reqs
+    spelling that are all different strings -- so a call site that reaches for
+    the wrong one cannot produce the expected result by coincidence.
+    """
+    options = cli.Options()
+    options.my_dir = tmp_path
+    options.venv_name = "wiredenv"
+    options.timestamp = "20260101-010203"
+    options.python_command = "python-under-test-not-on-path"
+    options.stdlib = stdlib_index.StdlibIndex(
+        names=frozenset({"os"}), python_version=(3, 12), source="test"
+    )
+    options.uninstalled_imports = {
+        cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")
+    }
+    options.all_imports = {"thing", "extra-pkg"}
+    options.extra_requirements = {"extra-pkg": ">=2.0"}
+    options.args = argparse.Namespace(reqs=True)
+    options.rawlog = True
+    options.aliases = alias_index.AliasIndex(
+        overrides={},
+        cache=alias_index.AliasCache(
+            path=Path("/nonexistent/alias_cache.json"),
+            interpreter_tag="3.12",
+            entries={},
+            rejections={},
+        ),
+        installed={},
+        pypi=None,
+        seed={},
+    )
+    return options
+
+
+def _stub_the_venv_away(monkeypatch, uninstalled_after_repair=None):
+    """Stub every subprocess-backed step of setup_virtualenv, returning the spies."""
+    created: list[tuple[object, str]] = []
+    monkeypatch.setattr(
+        environment,
+        "create_venv",
+        lambda target, python="": created.append((target, python)),
+    )
+    monkeypatch.setattr(
+        environment,
+        "run_uv_pip",
+        lambda venv_python, *args: subprocess.CompletedProcess(
+            args=list(args), returncode=0
+        ),
+    )
+    monkeypatch.setattr(
+        verify,
+        "verify_and_repair_imports",
+        lambda *, uninstalled, **kwargs: frozenset(
+            uninstalled
+            if uninstalled_after_repair is None
+            else uninstalled_after_repair
+        ),
+    )
+    monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: True)
+    monkeypatch.setattr(
+        cache_search, "record_venv_state", lambda venv_dir, **kwargs: venv_dir
+    )
+    return created
+
+
+def test_the_venv_folder_name_and_build_interpreter_come_from_this_run(
+    monkeypatch, tmp_path
+):
+    """The cache prefilter name and the building interpreter are built from this run's own fields.
+
+    Measured by substitution, all five of these left the whole suite green:
+    `interpreter_tag=""` and a hardcoded run_tag at build_folder_name,
+    `venv_name`/`timestamp` replaced by literals, `pip_names=[]`, and
+    `venv_build_interpreter("")` at create_venv. Concrete bugs this catches:
+    a folder name that does not list the packages the venv holds is a
+    prefilter that rejects the venv on the next run (a silent rebuild every
+    time), and an empty python_command makes uv build against the interpreter
+    running veny rather than the one imports were classified against -- the
+    exact defect PROGRESS records from phase 2 task 9, where a script
+    importing `cgi` was classified installed under 3.12 and died under 3.13.
+    """
+    options = _a_wired_run(tmp_path)
+    created = _stub_the_venv_away(monkeypatch)
+
+    assert cli.setup_virtualenv(options) is True
+
+    assert options.venv_dir is not None
+    assert options.venv_dir.name == "failed-wiredenv-py3.12-20260101-010203-thing-pkg"
+    assert created == [
+        (options.venv_dir, environment.venv_build_interpreter(options.python_command))
+    ]
+    # Not sys.executable: an empty python_command would silently resolve to it.
+    assert created[0][1] == "python-under-test-not-on-path"
+
+
+def test_verify_and_repair_imports_is_handed_the_whole_description_of_the_run(
+    monkeypatch, tmp_path
+):
+    """Every one of the seven arguments must come from this run, not a default.
+
+    Measured by substitution: six of the seven (all but `index`) could be
+    replaced with an empty/wrong value and all 338 tests stayed green. This
+    is the call that decides which imports get repaired and what
+    requirements.txt is rewritten to, so `uninstalled=frozenset()` skips
+    repair entirely and reports success on a venv that cannot import what the
+    script needs, and `source_names=frozenset()` makes the bulk check
+    fail-open on the distribution's whole top-level name list (the shape
+    PROGRESS records under "a check that widens what counts as a pass").
+
+    source_names is asserted to be `{"thing"}`: `extra-pkg` is in all_imports
+    but is a --reqs pip spelling, so source_import_names must drop it. That
+    pins the three arguments of the source_import_names call too.
+    """
+    options = _a_wired_run(tmp_path)
+    _stub_the_venv_away(monkeypatch)
+    seen: list[dict[str, object]] = []
+
+    def spy(**kwargs):
+        seen.append(kwargs)
+        return frozenset(kwargs["uninstalled"])
+
+    monkeypatch.setattr(verify, "verify_and_repair_imports", spy)
+
+    assert cli.setup_virtualenv(options) is True
+
+    assert len(seen) == 1
+    assert seen[0] == {
+        "venv_python": options.venv_python,
+        "requirements_file": options.requirements_file,
+        "uninstalled": {cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
+        "extra_requirements": {"extra-pkg": ">=2.0"},
+        "source_names": {"thing"},
+        "index": options.aliases,
+        "rawlog": True,
+    }
+
+
+def test_the_manifest_and_the_final_check_describe_the_venv_after_repair(
+    monkeypatch, tmp_path
+):
+    """record_venv_state, the final import check and uv all get the repaired state.
+
+    verify_and_repair_imports can replace a record whose pip name was wrong,
+    and setup_virtualenv assigns its result back onto
+    options.uninstalled_imports. Everything after it -- the manifest, the
+    folder-name refresh inside record_venv_state, and the check that decides
+    whether this venv drops its "failed-" prefix -- must therefore describe
+    the repaired set, not the set the install was attempted with.
+
+    Measured by substitution: eight of record_venv_state's nine arguments and
+    all three of the final check's could be emptied with all 338 tests green.
+    Concrete bug this catches: `uninstalled=frozenset()` at record_venv_state
+    writes a manifest listing no packages, so the next run reads that
+    manifest, finds nothing it needs, and rebuilds the environment from
+    scratch every single time.
+    """
+    options = _a_wired_run(tmp_path)
+    repaired = {cli.ResolvedImport(import_name="thing", pip_name="repaired-pkg")}
+    _stub_the_venv_away(monkeypatch, uninstalled_after_repair=repaired)
+    recorded: list[dict[str, object]] = []
+    checked: list[dict[str, object]] = []
+    uv_calls: list[tuple[object, tuple[str, ...]]] = []
+
+    def uv_spy(venv_python, *args):
+        uv_calls.append((venv_python, args))
+        return subprocess.CompletedProcess(args=list(args), returncode=0)
+
+    monkeypatch.setattr(environment, "run_uv_pip", uv_spy)
+
+    def record_spy(venv_dir, **kwargs):
+        recorded.append({"venv_dir": venv_dir, **kwargs})
+        return venv_dir
+
+    def check_spy(venv_python, **kwargs):
+        checked.append({"venv_python": venv_python, **kwargs})
+        return True
+
+    monkeypatch.setattr(cache_search, "record_venv_state", record_spy)
+    monkeypatch.setattr(verify, "check_packages_in_venv", check_spy)
+
+    assert cli.setup_virtualenv(options) is True
+
+    assert uv_calls == [
+        (
+            options.venv_python,
+            ("install", "-r", os.fspath(options.requirements_file)),
+        )
+    ]
+    assert recorded == [
+        {
+            "venv_dir": options.venv_dir,
+            "venv_python": options.venv_python,
+            "venv_name": "wiredenv",
+            "timestamp": "20260101-010203",
+            "run_tag": "3.12",
+            "python_command": "python-under-test-not-on-path",
+            "uninstalled": repaired,
+            "extra_requirements": {"extra-pkg": ">=2.0"},
+            "rawlog": True,
+        }
+    ]
+    assert checked == [
+        {
+            "venv_python": environment.venv_python_for(options.venv_dir),
+            "uninstalled": repaired,
+            "source_names": {"thing"},
+        }
     ]

@@ -1,14 +1,25 @@
 """Tests for veny's entry point, identity and retired alias flags."""
 
+import logging
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
+import emmykit as ek
 import pytest
 
 import veny
-from veny import cli
+from veny import (
+    alias_index,
+    cache_search,
+    cli,
+    environment,
+    last_used,
+    stdlib_index,
+    verify,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -90,3 +101,349 @@ def test_module_entry_point_exits_with_mains_return_value():
     )
 
     assert result.returncode == 3, result.stderr
+
+
+def _offline_index():
+    """An AliasIndex that cannot reach PyPI, a seed, or a real cache file."""
+    return alias_index.AliasIndex(
+        overrides={},
+        cache=alias_index.AliasCache(
+            path=Path("/nonexistent/alias_cache.json"),
+            interpreter_tag="3.12",
+            entries={},
+            rejections={},
+        ),
+        installed={},
+        pypi=None,
+        seed={},
+    )
+
+
+def _drive_main(
+    monkeypatch, tmp_path, argv, *, uninstalled, all_imports, venv_dir=None
+):
+    """Run cli.main() in process with every subprocess and scan boundary stubbed.
+
+    main() is 400 lines of sequencing that nothing in the suite drove before
+    this helper: it parses argv, resolves an interpreter, scans the script,
+    classifies its imports, then picks one of four branches. Everything
+    outside the branch under test is replaced -- the interpreter probe, the
+    custom-module scan, the import classification, the alias index, the
+    subprocess that would run the user's script, and emmykit's logging and
+    options-file side effects -- leaving main()'s own wiring as the only live
+    code.
+
+    Returns:
+        A one-element list that receives the Options object main() built, so a
+        test can assert against the very fields main() wired from.
+    """
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    script = tmp_path / "script.py"
+    script.write_text("import thing\n")
+    monkeypatch.setenv("HOME", os.fspath(home))
+    monkeypatch.setattr(sys, "argv", ["veny", *argv, os.fspath(script)])
+    monkeypatch.setattr(ek, "find_preferred_python_version", lambda: "python3")
+    monkeypatch.setattr(
+        stdlib_index,
+        "resolve",
+        lambda command: stdlib_index.StdlibIndex(
+            names=frozenset({"os"}), python_version=(3, 12), source="test"
+        ),
+    )
+    monkeypatch.setattr(cli, "build_alias_index", lambda options: _offline_index())
+    monkeypatch.setattr(cli, "dict_of_custom_modules", lambda settings, use_cache: {})
+    monkeypatch.setattr(ek, "configure_logging", lambda *a, **k: None)
+    monkeypatch.setattr(ek, "print_all_errors", lambda *a, **k: None)
+    monkeypatch.setattr(ek, "save_options_to_json", lambda options: None)
+    monkeypatch.setattr(logging, "shutdown", lambda: None)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(args=[], returncode=0),
+    )
+    captured: list[cli.Options] = []
+
+    def fake_list_packages(options):
+        options.all_imports = set(all_imports)
+        options.uninstalled_imports = set(uninstalled)
+        if venv_dir is not None:
+            options.set_venv_dir(venv_dir)
+        captured.append(options)
+
+    monkeypatch.setattr(cli, "list_packages", fake_list_packages)
+    return captured
+
+
+def test_main_describes_the_run_to_the_cache_search(monkeypatch, tmp_path):
+    """main() is the only place find_match_dir_in_cache's nine arguments are wired.
+
+    The cache search used to read them all off the Options object; the
+    extraction turned every one into an explicit argument built here.
+    Measured by substitution, all nine could be replaced with an empty or
+    wrong value while all 338 tests stayed green -- nothing drove main() at
+    all.
+
+    Concrete bugs this catches: `my_dir=Path(...)` pointing anywhere else
+    searches an empty directory, so every run rebuilds from scratch;
+    `uninstalled=frozenset()` makes venv_cache.satisfies compare against
+    nothing, so the first name-shaped folder in ~/veny is reused whatever it
+    holds; `load_last_used=lambda: None` disables the last-used pointer
+    entirely, silently, since a missing record is a legitimate miss.
+    """
+    captured = _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--rawlog"],
+        uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
+        all_imports={"thing", "other"},
+    )
+    seen: list[dict[str, object]] = []
+    loaded: list[cli.Options] = []
+
+    load_last_used_callbacks: list[Callable[[], object]] = []
+
+    def find_spy(args, *, load_last_used, **kwargs):
+        seen.append({"args": args, **kwargs})
+        load_last_used_callbacks.append(load_last_used)
+        return None
+
+    def load_last_used_spy(options):
+        loaded.append(options)
+        return None
+
+    monkeypatch.setattr(cache_search, "find_match_dir_in_cache", find_spy)
+    monkeypatch.setattr(cli, "_load_last_used", load_last_used_spy)
+    monkeypatch.setattr(cli, "setup_virtualenv", lambda options: False)
+    monkeypatch.setattr(ek, "my_critical_error", lambda *a, **k: None)
+
+    cli.main()
+
+    options = captured[0]
+    assert len(seen) == 1
+    call = seen[0]
+    assert call["args"] is options.args
+    assert call["my_dir"] == tmp_path / "home" / "veny"
+    assert call["venv_name"] == cli.Options().venv_name
+    assert call["uninstalled"] == {
+        cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")
+    }
+    assert call["extra_requirements"] == {}
+    assert call["source_names"] == {"thing", "other"}
+    assert call["tag"] == "3.12"
+    assert call["rawlog"] is True
+    # The callback must reach this run's own last-used loader, not a constant.
+    assert load_last_used_callbacks[0]() is None
+    assert loaded == [options]
+
+
+def test_main_loads_the_requirements_file_and_keeps_its_names_out_of_the_import_check(
+    monkeypatch, tmp_path
+):
+    """--reqs wires two call sites at once, and neither had a test.
+
+    parse_extra_requirements is given the file name and the log setting;
+    what it returns then has to reach both the cache search's
+    extra_requirements and -- by its *absence* -- the source_names the import
+    check is made against, because a --reqs entry is a pip spelling that
+    import_module() can never succeed on.
+
+    Measured by substitution: the file name, the rawlog flag, and all three
+    arguments of the source_import_names call could each be replaced with
+    all 338 tests green. Concrete bug this catches: dropping `use_reqs`
+    leaves `extra-pkg` in source_names, so the venv check demands that
+    `import extra_pkg` works, condemns a perfectly installed distribution,
+    and rebuilds the environment on every run.
+    """
+    captured = _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--rawlog", "--reqs"],
+        uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
+        all_imports={"thing", "extra-pkg"},
+    )
+    parsed: list[dict[str, object]] = []
+    seen: list[dict[str, object]] = []
+
+    def parse_spy(path, *, rawlog):
+        parsed.append({"path": path, "rawlog": rawlog})
+        return {"extra-pkg": ">=2.0"}
+
+    monkeypatch.setattr(environment, "parse_extra_requirements", parse_spy)
+
+    def find_spy(args, **kwargs):
+        seen.append(kwargs)
+        return None
+
+    monkeypatch.setattr(cache_search, "find_match_dir_in_cache", find_spy)
+    monkeypatch.setattr(cli, "setup_virtualenv", lambda options: False)
+    monkeypatch.setattr(ek, "my_critical_error", lambda *a, **k: None)
+
+    cli.main()
+
+    assert parsed == [{"path": cli.Options().extra_requirements_file, "rawlog": True}]
+    assert captured[0].extra_requirements == {"extra-pkg": ">=2.0"}
+    assert seen[0]["extra_requirements"] == {"extra-pkg": ">=2.0"}
+    assert seen[0]["source_names"] == {"thing"}
+
+
+def test_main_checks_the_surrounding_virtualenv_against_this_runs_imports(
+    monkeypatch, tmp_path
+):
+    """Run from inside an activated venv, main() checks that venv, not a default.
+
+    This branch skips the cache entirely and asks whether the environment the
+    user is already in can serve the script. Measured by substitution, all
+    three arguments (and all three of the nested source_import_names call)
+    could be emptied with all 338 tests green.
+
+    Concrete bug this catches: `uninstalled=frozenset()` with
+    `source_names=frozenset()` makes check_packages_in_venv's bulk branch
+    compare nothing at all, so veny reports the surrounding virtualenv is
+    fine and runs the script in it -- and the script dies on the import veny
+    was asked to provide.
+
+    The helper is asked to set options.venv_dir, which a real run reaching
+    this branch does NOT do: nothing between Options() and this line assigns
+    it, so `assert options.venv_dir is not None` fires first and the branch
+    is unreachable in production today. That is pre-existing -- at the phase
+    branch point (313e800) the identical assert lived one frame further in,
+    inside venv_python_for -- and is recorded as a finding rather than fixed
+    here, because this phase is behaviour-preserving. Setting the field is
+    what lets the wiring below be pinned now, so that whoever repairs the
+    branch inherits a test of it.
+    """
+    captured = _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--rawlog", "--reqs"],
+        uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
+        all_imports={"thing", "extra-pkg"},
+        venv_dir=tmp_path / "activated-venv",
+    )
+    # --reqs, so that source_import_names' own use_reqs and extra_requirements
+    # arguments are pinned here as well: extra-pkg is a pip spelling and must
+    # be dropped from the names the venv is import-checked against.
+    monkeypatch.setattr(
+        environment,
+        "parse_extra_requirements",
+        lambda path, *, rawlog: {"extra-pkg": ">=2.0"},
+    )
+    monkeypatch.setattr(last_used, "is_virtualenv", lambda: True)
+    seen: list[dict[str, object]] = []
+
+    def check_spy(venv_python, **kwargs):
+        seen.append({"venv_python": venv_python, **kwargs})
+        return True
+
+    monkeypatch.setattr(verify, "check_packages_in_venv", check_spy)
+
+    assert cli.main() == 0
+
+    options = captured[0]
+    assert options.venv_dir is not None
+    assert seen == [
+        {
+            "venv_python": environment.venv_python_for(options.venv_dir),
+            "uninstalled": {
+                cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")
+            },
+            "source_names": {"thing"},
+        }
+    ]
+
+
+def test_main_drops_the_failed_prefix_from_the_venv_it_just_built(
+    monkeypatch, tmp_path
+):
+    """A venv that worked must lose its "failed-" prefix, under its own name.
+
+    setup_virtualenv builds into `failed-<name>` so an interrupted run leaves
+    an obviously unusable folder behind; main() renames it only once the run
+    has actually succeeded. Measured by substitution: both arguments of that
+    rename_venv call could be replaced with all 338 tests green.
+
+    Concrete bug this catches: a hardcoded new name renames the venv to
+    something parse_folder_name cannot read, which retires it from the cache
+    for good -- every later run rebuilds, and the orphan folder is never
+    reused or cleaned up.
+    """
+    captured = _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--rawlog", "--no-cache"],
+        uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
+        all_imports={"thing"},
+    )
+    built = tmp_path / "home" / "veny" / "failed-myenv-py3.12-20260101-010203-thing-pkg"
+
+    def fake_setup(options):
+        options.set_venv_dir(built)
+        options.install_succeeded = True
+        return True
+
+    monkeypatch.setattr(cli, "setup_virtualenv", fake_setup)
+    renamed: list[tuple[Path, str]] = []
+
+    def rename_spy(venv_dir, new_name):
+        renamed.append((venv_dir, new_name))
+        return venv_dir.parent / new_name
+
+    monkeypatch.setattr(cache_search, "rename_venv", rename_spy)
+
+    assert cli.main() == 0
+
+    assert renamed == [(built, "myenv-py3.12-20260101-010203-thing-pkg")]
+    assert (
+        captured[0].venv_dir == built.parent / "myenv-py3.12-20260101-010203-thing-pkg"
+    )
+
+
+def test_main_asks_the_last_used_loader_about_this_script(monkeypatch, tmp_path):
+    """--feeling-lucky's five arguments are wired in exactly one place.
+
+    The lucky path skips analysis entirely and reruns the script under
+    whichever interpreter the previous run recorded, so its arguments decide
+    which record is consulted. Measured by substitution: all five could be
+    replaced with all 338 tests green.
+
+    Concrete bug this catches: a wrong `python_script` matches another
+    script's last-used JSON in the same directory, and --feeling-lucky runs
+    this script under an environment built for a different one.
+    """
+    _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--rawlog", "--feeling-lucky"],
+        uninstalled=set(),
+        all_imports=set(),
+    )
+    seen: list[dict[str, object]] = []
+    passed_options: list[cli.Options] = []
+
+    def spy(options, **kwargs):
+        seen.append(kwargs)
+        passed_options.append(options)
+        return None
+
+    monkeypatch.setattr(last_used, "load_last_used_venv_python", spy)
+    monkeypatch.setattr(cli, "setup_virtualenv", lambda options: False)
+    monkeypatch.setattr(ek, "my_critical_error", lambda *a, **k: None)
+    monkeypatch.setattr(
+        cache_search, "find_match_dir_in_cache", lambda args, **kwargs: None
+    )
+
+    cli.main()
+
+    script = tmp_path / "script.py"
+    assert len(seen) == 1
+    assert seen[0]["script_dir"] == tmp_path
+    assert seen[0]["python_script"] == script
+    assert seen[0]["pathlibcutoff"] == cli.Options().pathlibcutoff
+    assert seen[0]["rawlog"] is True
+    # The run's own Options, not a fresh one: a fresh emmykit Options carries
+    # an empty Namespace, so --feeling-lucky would read back as False and the
+    # loader would be answering about a different (empty) run.
+    passed = passed_options[0]
+    assert getattr(passed.args, "feeling_lucky", False) is True
+    assert passed.python_script == script
