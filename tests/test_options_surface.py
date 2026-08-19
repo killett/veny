@@ -57,3 +57,19 @@ def test_a_flag_read_before_parsing_is_false_rather_than_raising():
     options = veny.Options()
     assert getattr(options.args, "last_used", False) is False
     assert getattr(options.args, "justprint", False) is False
+
+
+def test_options_lives_in_run_options_and_cli_only_re_exports_it():
+    """cli.Options must be the same class object run_options defines.
+
+    Behaviour under test: the phase-3e move is a re-export, not a copy or a
+    subclass. Concrete bug this catches: defining `class Options(run_options.Options)`
+    in cli.py instead of aliasing it would give the suite and production two
+    different classes -- `isinstance` checks and `ek.save_options_to_json`'s
+    registered-type lookups would then depend on which one built the instance.
+    Expected value obtained from the design decision, not from the code: there
+    is one Options class in this program and phase 4 deletes it.
+    """
+    from veny import cli, run_options
+
+    assert cli.Options is run_options.Options

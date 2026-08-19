@@ -47,8 +47,11 @@ LAYERS: list[frozenset[str]] = [
     # above the index layer because Requirements annotates its members with
     # alias_index.ResolvedImport, and in a layer of its own below classify
     # because classify -- and, later, verify and cache_search -- all need to
-    # import it without a same-layer exception.
-    frozenset({"state"}),
+    # import it without a same-layer exception. run_options.py joins it as a
+    # peer: it is the transitional per-run state object, it imports only
+    # alias_index and stdlib_index from the layer below, and nothing at or
+    # below this layer imports it. Phase 4 deletes it.
+    frozenset({"state", "run_options"}),
     # environment.py is the only module that invokes uv; classify.py decides
     # which imports are installed, missing or unusable. They are peers: neither
     # imports the other (classify takes its probe environment as an injected
