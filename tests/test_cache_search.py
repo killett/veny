@@ -429,38 +429,41 @@ def test_find_match_dir_in_cache_tolerates_a_last_used_options_without_venv_dir(
     )
 
 
-def test_a_cache_hit_reads_each_manifest_once(
+def test_a_cache_hit_reads_and_matches_each_manifest_once(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The winning candidate's manifest is read from disk once, not twice.
+    """The winning candidate's manifest is read from disk once AND satisfies-checked once.
 
-    A bug that would make this fail: dropping the manifest= argument at a
-    selection branch in find_match_dir_in_cache, which restores the second
-    read_manifest call check_venv_dir used to make -- and with it a window
-    where a folder changing on disk between the scan and the check could
-    give the two reads different answers.
+    A bug that would make this fail: dropping the matched_manifest= argument
+    at a selection branch in find_match_dir_in_cache, which restores both the
+    second read_manifest call and the second satisfies call check_venv_dir
+    used to make on the winning folder.
 
     Measured directly (not assumed) with counting spies around
     venv_cache.read_manifest and venv_cache.satisfies, driving
     find_match_dir_in_cache's default ("latest") path against a cache
     holding one matching folder:
 
-    Before this task: 2 read_manifest calls, 2 satisfies calls -- one pair
-    from cache_candidates' scan, one pair from check_venv_dir re-reading and
-    re-checking the same folder.
+    Before ledger item 2 was closed at all: 2 read_manifest calls, 2
+    satisfies calls -- one pair from cache_candidates' scan, one pair from
+    check_venv_dir re-reading and re-checking the same folder.
 
-    After this task: 1 read_manifest call, 2 satisfies calls. read_manifest
-    drops to one because check_venv_dir now receives the manifest
-    cache_candidates already read instead of reading it again. satisfies
-    stays at two -- not one -- because check_venv_dir still calls
-    venv_cache.satisfies itself even when handed a manifest (see its
-    docstring: it is the venv's own authority, checked independently of how
-    the caller found the folder, which is also what keeps the last-used
-    path -- which has no candidate to hand over -- correct). What ledger
-    item 2 closes is the redundant disk *read*, which could race with
-    another process; recomputing satisfies() twice against the identical,
-    already-in-memory manifest object is deterministic and cheap, not the
-    hazard the design ledger named.
+    After the read fix alone (this task's first pass, since corrected): 1
+    read_manifest call, 2 satisfies calls -- check_venv_dir stopped
+    re-reading the manifest but still called venv_cache.satisfies on it a
+    second time, which a design review caught: satisfies() is a pure
+    function of (manifest, wanted, tag), and find_match_dir_in_cache hands
+    both calls the identical wanted/tag objects, so the second call could not
+    possibly return a different answer than the first -- it was pure waste,
+    and it was the specific duplication ledger item 2 is named after, not
+    merely the disk read.
+
+    After closing the item fully: 1 read_manifest call, 1 satisfies call.
+    check_venv_dir's matched_manifest parameter now means what its name says:
+    a manifest already checked against this same wanted/tag by
+    venv_cache.satisfies, so check_venv_dir trusts that and skips its own
+    satisfies call entirely, going straight to the import-level
+    confirmation.
     """
     venv_dir = a_cached_venv(
         tmp_path,
@@ -517,7 +520,7 @@ def test_a_cache_hit_reads_each_manifest_once(
 
     assert result == venv_dir
     assert read_manifest_calls == 1
-    assert satisfies_calls == 2
+    assert satisfies_calls == 1
 
 
 def test_check_venv_dir_survives_the_manifest_vanishing_after_it_was_already_read(
@@ -526,20 +529,21 @@ def test_check_venv_dir_survives_the_manifest_vanishing_after_it_was_already_rea
     """Pins the lost-manifest window this task's change narrows.
 
     Before ledger item 2 was closed, check_venv_dir re-read the manifest
-    from disk, so a manifest deleted between cache_candidates' scan and
-    check_venv_dir's own check was caught there: read_manifest returned
-    None and the folder was rejected. Now that find_match_dir_in_cache hands
-    check_venv_dir the manifest cache_candidates already read, that read
-    never happens, so the same disappearance is invisible to check_venv_dir
-    -- the folder is accepted, based on the manifest already held in memory,
-    provided the import-level check still passes. Only the whole directory
-    vanishing (not just the manifest file inside it) is still caught, by
-    check_venv_dir's is_dir check at the top.
+    from disk and re-ran satisfies on what it read, so a manifest deleted
+    between cache_candidates' scan and check_venv_dir's own check was caught
+    there: read_manifest returned None and the folder was rejected. Now that
+    find_match_dir_in_cache hands check_venv_dir a matched_manifest --
+    cache_candidates' own already-satisfies-checked manifest -- neither the
+    read nor the satisfies call happens again, so the same disappearance is
+    invisible to check_venv_dir: the folder is accepted on the strength of
+    the caller's earlier check, provided the import-level check still
+    passes. Only the whole directory vanishing (not just the manifest file
+    inside it) is still caught, by check_venv_dir's is_dir check at the top.
 
-    A bug that would make this fail: restoring the manifest=None default at
-    a call site (as in the read-count test above) would make this venv
-    rejected instead of accepted, since check_venv_dir would then try to
-    read the now-missing manifest itself.
+    A bug that would make this fail: restoring the matched_manifest=None
+    default at a call site (as in the read/satisfies-count test above) would
+    make this venv rejected instead of accepted, since check_venv_dir would
+    then try to read the now-missing manifest itself.
     """
     venv_dir = a_cached_venv(
         tmp_path,
@@ -550,7 +554,7 @@ def test_check_venv_dir_survives_the_manifest_vanishing_after_it_was_already_rea
     options.all_imports = {"thing"}
     found = candidates(options, [venv_dir])
     assert [c.folder for c in found] == [venv_dir]
-    manifest_already_read = found[0].manifest
+    manifest_already_matched = found[0].manifest
 
     (venv_dir / venv_cache.MANIFEST_FILENAME).unlink()
 
@@ -575,7 +579,84 @@ def test_check_venv_dir_survives_the_manifest_vanishing_after_it_was_already_rea
                 getattr(options.args, "reqs", False),
             ),
             rawlog=options.rawlog,
-            manifest=manifest_already_read,
+            matched_manifest=manifest_already_matched,
         )
         is True
     )
+
+
+def test_a_last_used_hit_still_reads_and_matches_its_own_manifest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The satisfies skip must not leak into the last-used path.
+
+    The last-used path has no CacheCandidate -- the folder comes from a
+    previous run's options JSON, not from cache_candidates' scan -- so it has
+    no manifest that has already passed venv_cache.satisfies. It must keep
+    reading its own manifest and keep calling satisfies on it, exactly as
+    before matched_manifest existed.
+
+    A bug that would make this fail: find_match_dir_in_cache's last-used
+    branch passing matched_manifest from somewhere (there is nothing correct
+    it could pass), which would skip the match check entirely and hand back
+    a venv never confirmed against what this run wants.
+    """
+    venv_dir = a_cached_venv(
+        tmp_path,
+        "myenv-py3.12-20260814-091500-thing-pkg",
+        [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
+    )
+    options = an_options({ResolvedImport("thing", "thing-pkg")})
+    options.all_imports = {"thing"}
+    options.my_dir = tmp_path
+    options.venv_name = "myenv"
+    options.args = argparse.Namespace(
+        latest=False, oldest=False, last_used=True, smallest=False
+    )
+    monkeypatch.setattr(
+        alias_index,
+        "probe_interpreter",
+        lambda python, timeout=30.0: ("3.12", {"thing": ["thing-pkg"]}),
+    )
+    _stub_successful_import_check(monkeypatch, importable={"thing"})
+
+    read_manifest_calls = 0
+    satisfies_calls = 0
+    orig_read_manifest = venv_cache.read_manifest
+    orig_satisfies = venv_cache.satisfies
+
+    def counting_read_manifest(venv_dir):
+        nonlocal read_manifest_calls
+        read_manifest_calls += 1
+        return orig_read_manifest(venv_dir)
+
+    def counting_satisfies(*args, **kwargs):
+        nonlocal satisfies_calls
+        satisfies_calls += 1
+        return orig_satisfies(*args, **kwargs)
+
+    monkeypatch.setattr(venv_cache, "read_manifest", counting_read_manifest)
+    monkeypatch.setattr(venv_cache, "satisfies", counting_satisfies)
+
+    last_used_options = ek.Options()
+    last_used_options.venv_dir = venv_dir  # type: ignore[attr-defined]
+
+    result = cache_search.find_match_dir_in_cache(
+        options.args,
+        my_dir=options.my_dir,
+        venv_name=options.venv_name,
+        uninstalled=options.uninstalled_imports,
+        extra_requirements=options.extra_requirements,
+        source_names=verify.source_import_names(
+            options.all_imports,
+            options.extra_requirements,
+            getattr(options.args, "reqs", False),
+        ),
+        tag=cache_search.interpreter_tag(options.stdlib),
+        rawlog=options.rawlog,
+        load_last_used=lambda: last_used_options,
+    )
+
+    assert result == venv_dir
+    assert read_manifest_calls == 1
+    assert satisfies_calls == 1

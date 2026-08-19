@@ -457,7 +457,7 @@ def check_venv_dir(
     uninstalled: AbstractSet[ResolvedImport],
     source_names: AbstractSet[str],
     rawlog: bool,
-    manifest: venv_cache.Manifest | None = None,
+    matched_manifest: venv_cache.Manifest | None = None,
 ) -> bool:
     """Check whether a cached venv directory can serve this run.
 
@@ -468,14 +468,29 @@ def check_venv_dir(
     every candidate, last-used or not, through one comparison.
 
     Args:
-        venv_dir:     The cached virtual environment directory.
-        wanted:       What this run needs, from wanted_packages.
-        tag:          The run's "major.minor" interpreter tag.
-        uninstalled:  The records whose imports must really import.
-        source_names: The import names actually written in the user's source.
-        rawlog:       Whether informational logging is suppressed.
-        manifest:     The venv's manifest when the caller has already read it;
-                      read from the directory when None.
+        venv_dir:         The cached virtual environment directory.
+        wanted:           What this run needs, from wanted_packages.
+        tag:              The run's "major.minor" interpreter tag.
+        uninstalled:      The records whose imports must really import.
+        source_names:     The import names actually written in the user's
+                          source.
+        rawlog:           Whether informational logging is suppressed.
+        matched_manifest: The venv's manifest, ALREADY read and ALREADY
+                          checked against this same wanted/tag by
+                          venv_cache.satisfies -- as cache_candidates does for
+                          every folder it returns. When given, this call
+                          trusts that check and goes straight to the
+                          import-level confirmation: it neither re-reads the
+                          manifest from disk nor calls satisfies again.
+                          Passing a manifest that has NOT already passed that
+                          same check (for instance one read directly from
+                          disk without matching it first) silently skips the
+                          match check entirely -- do not do that. Callers
+                          with no such pre-matched manifest, such as the
+                          last-used path, which has no CacheCandidate to hand
+                          over, must leave this None; the manifest is then
+                          read from venv_dir and checked with satisfies here,
+                          exactly as when this parameter did not exist.
 
     Returns:
         True if the venv holds what this run needs, for the right interpreter,
@@ -488,27 +503,32 @@ def check_venv_dir(
                 "The cached venv directory %s is no longer there.", os.fspath(venv_dir)
             )
         return False
-    manifest = manifest if manifest is not None else venv_cache.read_manifest(venv_dir)
-    if manifest is None:
-        if not rawlog:
-            logging.info(
-                "The cached venv directory %s has no readable manifest.",
-                os.fspath(venv_dir),
-            )
-        return False
-    result = venv_cache.satisfies(manifest, wanted, tag)
-    if not result.matched:
-        if not rawlog:
-            logging.info(
-                "The cached venv directory %s cannot be used because %s.",
-                os.fspath(venv_dir),
-                result.reason,
-            )
-        return False
-    # The manifest says the packages are there; this confirms the imports
-    # really import. source_names is now always passed explicitly: verify's
-    # empty default cannot work it out for itself, and an empty set here would
-    # silently widen every check to the distribution's whole top-level list.
+    if matched_manifest is None:
+        manifest = venv_cache.read_manifest(venv_dir)
+        if manifest is None:
+            if not rawlog:
+                logging.info(
+                    "The cached venv directory %s has no readable manifest.",
+                    os.fspath(venv_dir),
+                )
+            return False
+        result = venv_cache.satisfies(manifest, wanted, tag)
+        if not result.matched:
+            if not rawlog:
+                logging.info(
+                    "The cached venv directory %s cannot be used because %s.",
+                    os.fspath(venv_dir),
+                    result.reason,
+                )
+            return False
+    # The manifest match is confirmed either just above, or already by the
+    # caller's own satisfies() check when matched_manifest was supplied (see
+    # the docstring -- that trust is the whole point of the parameter: it is
+    # what lets the winning candidate's manifest be checked once, not twice).
+    # This is the import-level confirmation: source_names is now always
+    # passed explicitly, since verify's empty default cannot work it out for
+    # itself, and an empty set here would silently widen every check to the
+    # distribution's whole top-level list.
     if verify.check_packages_in_venv(
         environment.venv_python_for(venv_dir),
         uninstalled=uninstalled,
@@ -644,7 +664,7 @@ def find_match_dir_in_cache(
                 uninstalled=uninstalled,
                 source_names=source_names,
                 rawlog=rawlog,
-                manifest=candidates_by_folder[latest_venv_folder].manifest,
+                matched_manifest=candidates_by_folder[latest_venv_folder].manifest,
             ):
                 return latest_venv_folder
             if not rawlog:
@@ -673,7 +693,7 @@ def find_match_dir_in_cache(
                 uninstalled=uninstalled,
                 source_names=source_names,
                 rawlog=rawlog,
-                manifest=candidates_by_folder[oldest_venv_folder].manifest,
+                matched_manifest=candidates_by_folder[oldest_venv_folder].manifest,
             ):
                 return oldest_venv_folder
             if not rawlog:
@@ -702,7 +722,7 @@ def find_match_dir_in_cache(
                 uninstalled=uninstalled,
                 source_names=source_names,
                 rawlog=rawlog,
-                manifest=candidates_by_folder[smallest_venv_folder].manifest,
+                matched_manifest=candidates_by_folder[smallest_venv_folder].manifest,
             ):
                 return smallest_venv_folder
             if not rawlog:
