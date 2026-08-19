@@ -28,13 +28,12 @@ gotchas ledger.
   | **3a** `docs/superpowers/plans/2026-08-16-analysis-foundation.md` (executed, complete) | `analysis/literals.py`, `analysis/custom_modules.py`, `settings.py` | 430 |
   | **3b** `docs/superpowers/plans/2026-08-16-analysis-imports-and-call-graph.md` (executed, complete on branch `analysis-imports-call-graph`) | `analysis/imports.py`, `analysis/call_graph.py`, `analysis/scan.py`, plus `analysis/scan_state.py` (a fourth module the plan added beyond the design's original three) | 1,100 |
   | **3c** `docs/superpowers/plans/2026-08-18-classify-and-environment.md` (executed, complete on branch `classify-and-environment`) | `classify.py`, `environment.py`, plus `state.py` (a third module the plan added, carrying `Requirements`) | 600 |
-  | **3d** `docs/superpowers/plans/2026-08-18-verify-cache-search-last-used.md` (executed, complete on branch `verify-cache-search-last-used`) | `verify.py`, `cache_search.py`, `last_used.py` | 1,100 |
+  | **3d** `docs/superpowers/plans/2026-08-18-verify-cache-search-last-used.md` (executed, complete, merged at `73cf588`) | `verify.py`, `cache_search.py`, `last_used.py` | 1,100 |
   | 3e (not written) | `pipeline.py`, `cli.py` slimming, `--full` deletion, final `Options` drain | 450 |
 
   Phases 1 and 2 are complete and merged to `main`.
 
-**Next action:** run the whole-branch review of `verify-cache-search-last-used`
-(3d) and merge it `--no-ff`, then write and execute plan 3e, the last in the
+**Next action:** write and execute plan 3e, the last in the
 phase-3 sequence — `pipeline.py`, the final `cli.py` slimming, the `--full`
 deletion and the final `Options` drain, ~450 lines. **Plan 3e is not written
 yet and no branch exists for it**; the next session writes it first, gets it
@@ -50,9 +49,10 @@ stayed green. Read that entry before writing 3e; 3e's extraction is the same
 shape and will produce the same class of holes.
 
 Plan 3d, `docs/superpowers/plans/2026-08-18-verify-cache-search-last-used.md`,
-is complete on branch `verify-cache-search-last-used`, off `main` @ `313e800`.
-**Not merged**: the whole-branch review runs before the merge, which will be
-`--no-ff` like 3b's and 3c's. Ten tasks; **twenty commits**, tests before moves
+is complete and **merged to `main` at `73cf588`** (a `--no-ff` merge; branch
+`verify-cache-search-last-used`, off `main` @ `313e800`, deleted after
+merging -- it was at `b072025`). Ten tasks; **twenty commits** before the
+whole-branch review, tests before moves
 as planned: `23e1fd0` (the plan itself), `fb83800` (Task 1, `tests/wheels.py`,
 the shared wheel builder), `238fd5a`/`f526d28` (Task 2, `tests/test_verify.py`,
 the verification boundary characterized live before it moved, plus its fix
@@ -67,6 +67,26 @@ fix round that restored the assert-before-crash at the cache-search call site),
 (Task 8, the dead-symbol sweep and the `rename_venv` mypy block), and
 `939856c`/`32a12f7`/`7debbb3` (Task 9, the STANDING CHECK, the committed
 differential driver, and the review's three findings). Task 10 is this entry.
+
+The whole-branch review then ran on the twenty-eight-commit branch and found
+two Important issues and one Minor, all fixed in one wave --
+`3bc82ea`/`bff13ff`/`02d0afb`: `check_venv_dir` now takes a `CacheCandidate`
+rather than a bare `Manifest`, so "this manifest was already matched, and for
+this folder" is carried by the type instead of a docstring (the old parameter
+read only its own None-ness, and phase 3e moves this decision into
+`pipeline.py`, where a new caller could have passed an unmatched manifest and
+accepted a venv on the folder-name prefilter alone); the wiring index's claim
+that every argument kills a named test was falsified for `rawlog` -- 12 of its
+17 sites are now pinned by `caplog` tests and the remaining **5 are marked
+OPEN HOLE in the index**, two of them unpinned in both substitution
+directions; and three tautological assertions in `tests/test_uv_backend.py`
+were replaced with literal paths. The re-review verdicted all three addressed
+and found a fourth: five `PROGRESS.md` citations the wave itself had shifted,
+corrected in `854ee89`, with the last two rewritten as symbol names rather
+than bare line numbers in `b072025`. Gates on `main` after the merge
+(2026-08-19): `pixi run test` **370 passed**, `pixi run lint` zero,
+`ruff format --check .` all **52 files** formatted, `pixi run typecheck`
+**33 errors in 6 files**, `pixi run smoke` green.
 
 Three modules landed, and `cli.py` **more than halved**: 2,296 → **1,064
 lines**. `verify.py` is 680, `cache_search.py` 741, `last_used.py` 109 — 1,530
