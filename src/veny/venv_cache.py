@@ -413,7 +413,7 @@ def satisfies(
     not part of this key: "does this venv hold the right distributions" is a
     question about distributions, and "does this venv work for this script" is
     answered afterwards by actually importing the names, in
-    veny.check_packages_in_venv.
+    veny.verify.check_packages_in_venv.
 
     A venv holding packages beyond those wanted still matches; extras are what
     the --smallest flag exists to discriminate between.

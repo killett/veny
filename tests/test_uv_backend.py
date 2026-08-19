@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from veny import cli, environment
+from veny import cli, environment, verify
 
 
 def test_the_packaged_uv_is_preferred_over_the_one_on_path(monkeypatch):
@@ -72,8 +72,15 @@ def test_setup_virtualenv_builds_the_venv_before_writing_requirements_txt(
             args=list(args), returncode=0
         ),
     )
-    monkeypatch.setattr(cli, "verify_and_repair_imports", lambda opts: None)
-    monkeypatch.setattr(cli, "check_packages_in_venv", lambda opts: True)
+    # verify_and_repair_imports now returns the final records instead of
+    # writing them back onto options, so the no-op stub has to hand back what
+    # it was given -- setup_virtualenv assigns the result.
+    monkeypatch.setattr(
+        verify,
+        "verify_and_repair_imports",
+        lambda *, uninstalled, **kwargs: frozenset(uninstalled),
+    )
+    monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: True)
     monkeypatch.setattr(cli, "record_venv_state", lambda opts: None)
 
     assert cli.setup_virtualenv(options) is True
@@ -120,8 +127,15 @@ def test_setup_virtualenv_writes_the_extra_requirements_version_specifiers(
             args=list(args), returncode=0
         ),
     )
-    monkeypatch.setattr(cli, "verify_and_repair_imports", lambda opts: None)
-    monkeypatch.setattr(cli, "check_packages_in_venv", lambda opts: True)
+    # verify_and_repair_imports now returns the final records instead of
+    # writing them back onto options, so the no-op stub has to hand back what
+    # it was given -- setup_virtualenv assigns the result.
+    monkeypatch.setattr(
+        verify,
+        "verify_and_repair_imports",
+        lambda *, uninstalled, **kwargs: frozenset(uninstalled),
+    )
+    monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: True)
     monkeypatch.setattr(cli, "record_venv_state", lambda opts: None)
 
     cli.setup_virtualenv(options)

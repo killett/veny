@@ -10,7 +10,7 @@ never by reading it and predicting an answer.
 
 The probe venv is stubbed in every test: ``environment.create_venv`` and
 ``environment.venv_build_interpreter`` (the module that owns every ``uv``
-call since phase 3c task 2) and ``cli.check_packages_in_venv``. Nothing here
+call since phase 3c task 2) and ``verify.check_packages_in_venv``. Nothing here
 builds an environment, runs a subprocess, or touches the network -- the alias
 indexes below are constructed with ``pypi=None`` and an unreachable cache
 path, so resolution is fully determined by the test. The tests migrated from
@@ -29,7 +29,7 @@ from typing import cast
 
 import pytest
 
-from veny import alias_index, classify, cli, environment, stdlib_index
+from veny import alias_index, classify, cli, environment, stdlib_index, verify
 from veny.alias_index import ResolvedImport
 
 
@@ -114,10 +114,11 @@ def _stub_probe(
         created.append((str(target), python))
 
     def fake_check(
-        options: cli.Options,
+        venv_python: object,
+        *,
         record: ResolvedImport | None = None,
-        venv_dir: object = None,
-        source_names: object = None,
+        uninstalled: object = frozenset(),
+        source_names: object = frozenset(),
     ) -> bool:
         assert record is not None
         probed.append(record.import_name)
@@ -127,7 +128,7 @@ def _stub_probe(
     monkeypatch.setattr(
         environment, "venv_build_interpreter", lambda command: "/fake/python"
     )
-    monkeypatch.setattr(cli, "check_packages_in_venv", fake_check)
+    monkeypatch.setattr(verify, "check_packages_in_venv", fake_check)
     return created, probed
 
 
@@ -523,7 +524,7 @@ def test_split_imports_stores_both_names_on_the_record(monkeypatch):
     options.aliases = _index({"widgetlib": "widget-lib-pypi"})
     options.all_imports = {"widgetlib"}
     monkeypatch.setattr(environment, "create_venv", lambda *a, **k: None)
-    monkeypatch.setattr(cli, "check_packages_in_venv", lambda *a, **k: False)
+    monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: False)
 
     cli.split_imports(options)
 
@@ -540,7 +541,7 @@ def test_split_imports_falls_back_to_the_import_name_when_nothing_resolves(monke
     options.aliases = _index({})
     options.all_imports = {"mysterylib"}
     monkeypatch.setattr(environment, "create_venv", lambda *a, **k: None)
-    monkeypatch.setattr(cli, "check_packages_in_venv", lambda *a, **k: False)
+    monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: False)
 
     cli.split_imports(options)
 
@@ -578,7 +579,7 @@ def test_split_imports_probe_venv_is_given_the_classified_interpreter(monkeypatc
     monkeypatch.setattr(
         subprocess, "check_call", lambda command: captured.append(command)
     )
-    monkeypatch.setattr(cli, "check_packages_in_venv", lambda *a, **k: False)
+    monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: False)
 
     cli.split_imports(options)
 
@@ -618,9 +619,11 @@ def test_only_genuinely_uninstalled_imports_are_resolved(monkeypatch):
     options.custom_modules = {"mycustom": Path("/nowhere/mycustom.py")}
     monkeypatch.setattr(environment, "create_venv", lambda *a, **k: None)
     monkeypatch.setattr(
-        cli,
+        verify,
         "check_packages_in_venv",
-        lambda opts, record=None, venv_dir=None: record.import_name == "alreadyhere",
+        lambda venv_python, *, record=None, **kwargs: (
+            record.import_name == "alreadyhere"
+        ),
     )
 
     cli.split_imports(options)
