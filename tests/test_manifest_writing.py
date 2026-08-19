@@ -2,7 +2,10 @@
 
 import json
 import subprocess
+from collections.abc import Mapping
+from collections.abc import Set as AbstractSet
 from pathlib import Path
+from typing import TypedDict
 
 from veny import cache_search, stdlib_index, venv_cache
 from veny import cli as veny
@@ -25,13 +28,43 @@ def an_options() -> veny.Options:
     return options
 
 
-def manifest_kwargs(options, versions, venv_tag=""):
+class ManifestKwargs(TypedDict):
+    """Keyword arguments cache_search.manifest_for takes, mirrored for the splat.
+
+    A plain ``dict[str, object]`` return type would type-check the literal
+    fine but make every ``**manifest_kwargs(...)`` call site an error --
+    mypy cannot see through ``object`` to the specific parameter types
+    ``manifest_for`` declares. A TypedDict is what mypy understands as a
+    valid ``**kwargs`` source, so this is the annotation manifest_kwargs
+    needs to stay both typed and splattable.
+    """
+
+    uninstalled: AbstractSet[ResolvedImport]
+    extra_requirements: Mapping[str, str | None]
+    timestamp: str
+    python_command: str
+    run_tag: str
+    versions: dict[str, str]
+    venv_tag: str
+
+
+def manifest_kwargs(
+    options: veny.Options, versions: dict[str, str], venv_tag: str = ""
+) -> ManifestKwargs:
     """The arguments cli.py hands cache_search.manifest_for, read off an Options.
 
     manifest_for takes no Options any more -- every field it used to reach for
     is an explicit argument now. This mirrors setup_virtualenv's call so the
     fixture above stays the single description of the run under test; it is
     not a second implementation of anything manifest_for does.
+
+    Args:
+        options:  The run's Options, read for the fields manifest_for wants.
+        versions: Installed versions, keyed by normalized pip name.
+        venv_tag: The venv's own "major.minor", or "" if it could not be probed.
+
+    Returns:
+        Keyword arguments ready to splat into cache_search.manifest_for.
     """
     return {
         "uninstalled": options.uninstalled_imports,

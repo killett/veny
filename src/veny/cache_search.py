@@ -70,7 +70,7 @@ def installed_state_in_venv(
         result = subprocess.run(
             command,
             capture_output=True,
-            text=True,  # noqa: S603
+            text=True,
             check=False,
             timeout=60,
         )

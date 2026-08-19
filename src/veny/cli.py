@@ -660,6 +660,7 @@ def main() -> int:
                 if result.returncode != 0 and not options.rawlog:
                     logging.error("Script exited with status %d", result.returncode)
                 script_exit_code = result.returncode
+            assert options.venv_dir is not None, "options.venv_dir must be set"
             if (
                 options.venv_dir.name.startswith("failed-")
                 and options.install_succeeded
@@ -1019,6 +1020,9 @@ def setup_virtualenv(options: Options) -> bool:
         options.extra_requirements,
         getattr(options.args, "reqs", False),
     )
+    # Re-narrows: mypy loses the narrowing established above across the
+    # intervening environment.run_uv_pip / logging / verify.source_import_names
+    # calls, so this looks redundant but is load-bearing.
     assert options.requirements_file is not None, (
         "options.requirements_file must be set"
     )
