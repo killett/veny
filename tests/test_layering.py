@@ -58,6 +58,13 @@ LAYERS: list[frozenset[str]] = [
     # heard of Options, so both can be exercised without building the CLI's
     # state object.
     frozenset({"classify", "environment"}),
+    # verify.py proves what a venv really provides and repairs what it does
+    # not. It is NOT a peer of environment: it installs candidates,
+    # uninstalls rejected ones and rewrites requirements.txt, and every one
+    # of those goes through environment (design amendment 10) -- routing
+    # through the single uv owner is the point, so verify sits one layer
+    # above it. It stays below cli because it has never heard of Options.
+    frozenset({"verify"}),
     frozenset({"cli"}),
 ]
 

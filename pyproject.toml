@@ -59,6 +59,10 @@ ignore = [
 # environment.py is the one module that invokes uv: its subprocess calls
 # are its entire purpose. It carries no asserts, so S101 stays enforced here.
 "src/veny/environment.py" = ["S603"]
+# verify.py runs the venv's own interpreter to prove what it can import --
+# the same "the subprocess is the point" case as cli.py, moved here verbatim
+# from it. It carries no asserts, so S101 stays enforced here.
+"src/veny/verify.py" = ["S603"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
