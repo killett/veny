@@ -58,6 +58,9 @@ def test_source_import_names_returns_all_imports_when_reqs_is_off():
     A bug that would make this fail: dropping the `getattr(options.args,
     "reqs", False)` guard, which would subtract requirement spellings from a
     run that never asked for them and stop those imports being verified.
+
+    Expected value obtained by running cli.source_import_names against these
+    exact inputs, which returned {"yaml", "requests"} unchanged.
     """
     options = cli.Options()
     options.all_imports = {"yaml", "requests"}
@@ -71,6 +74,9 @@ def test_source_import_names_subtracts_requirement_spellings_under_reqs():
     A bug that would make this fail: subtracting the wrong dict (keys vs
     values), which would leave a pip spelling in the set that import_module()
     can never satisfy, condemning a package that installed perfectly well.
+
+    Expected value obtained by running cli.source_import_names against these
+    exact inputs, which returned {"yaml"}.
     """
     options = cli.Options()
     options.all_imports = {"yaml", "opencv-python"}
@@ -85,6 +91,9 @@ def test_source_import_names_leaves_non_overlapping_requirements_alone():
     A bug that would make this fail: replacing the set difference with an
     intersection or an assignment, which would empty the result and skip
     verification entirely.
+
+    Expected value obtained by running cli.source_import_names against these
+    exact inputs, which returned {"yaml"} unchanged.
     """
     options = cli.Options()
     options.all_imports = {"yaml"}
@@ -106,18 +115,17 @@ def test_the_bulk_branch_checks_a_source_name_under_that_name_alone(monkeypatch)
     Expected value obtained by running the current implementation and printing
     the `alternatives` list it builds: [["cv2"]], because "cv2" is in
     source_names and so is checked under its own name rather than under the
-    distribution's full top-level list.
-
-    Measured mutation caveat: because this fixture's top_levels
-    (frozenset({"cv2", "cv"})) also contains "cv2", forcing source_names to
-    empty alone does not change the outcome -- the condition's second
-    disjunct (`top_levels and entry.import_name in top_levels`) still holds
-    and produces the same ["cv2"], confirmed by running that exact mutation.
-    The mutation that actually kills this test, and the one that faithfully
-    realizes "falls through to the distribution's whole top-level list", is
-    disabling the whole `if` condition (both disjuncts) so execution reaches
-    `elif top_levels: alternatives.append(sorted(top_levels))`, producing
-    ["cv", "cv2"] instead of ["cv2"]. Confirmed by running that mutation.
+    distribution's full top-level list. top_levels deliberately does NOT
+    contain "cv2" (only its sibling "cv"), so the condition's second disjunct
+    (`top_levels and entry.import_name in top_levels`) cannot itself supply a
+    match -- only source_names can put "cv2" in scope. That was necessary:
+    with top_levels containing "cv2" too (tried first, and measured), an
+    emptied source_names is masked by that disjunct and the assertion cannot
+    tell the two apart. Confirmed by running the literal mutation named
+    above (source_names=set() at this test's own call site, standing in for
+    the mis-wiring a caller elsewhere could introduce): with this fixture it
+    changes `seen` to [[["cv"]]], failing this test's assertion, whereas the
+    unmutated call with source_names={"cv2"} produces [[["cv2"]]] and passes.
     """
     seen: list[list[list[str]]] = []
 
@@ -134,7 +142,7 @@ def test_the_bulk_branch_checks_a_source_name_under_that_name_alone(monkeypatch)
     monkeypatch.setattr(
         alias_index,
         "import_names_by_distribution",
-        lambda _d: {"opencv-python": frozenset({"cv2", "cv"})},
+        lambda _d: {"opencv-python": frozenset({"cv"})},
     )
 
     options = cli.Options()
