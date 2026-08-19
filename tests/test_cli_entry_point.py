@@ -626,13 +626,21 @@ def test_main_runs_the_script_under_the_cached_venvs_interpreter_on_a_cache_hit(
 
 
 def test_main_builds_an_environment_when_the_cache_misses(monkeypatch, tmp_path):
-    """A cache miss calls setup_virtualenv and runs under what it built.
+    """A cache miss builds an environment and runs the script under it.
 
-    Behaviour under test: the same branch's other side. Concrete bug this
-    catches: taking options.venv_dir instead of the builder's result would
-    silently run the script under a stale directory from an earlier run of
-    the same process. Expected value obtained by construction: the fake
-    builder is the only thing that sets venv_dir, and it sets it to built_dir.
+    Behaviour under test: the same branch's other side -- the cache search
+    returns nothing, so an environment has to be built before anything can
+    run. Concrete bug this catches: launching under sys.executable after a
+    successful build -- which the all-installed branch above legitimately
+    does -- would run the user's script in veny's own environment, where the
+    packages just installed are not importable, while main() still returns 0;
+    the user sees an ImportError for a package veny reported installing. The
+    same assertion also fails if a successful build leaves match_dir unset,
+    because then nothing is launched at all and veny still reports success.
+    Expected value obtained by construction, not by reading the branch: the
+    fake builder is the only thing in this test that sets venv_dir, and
+    set_venv_dir puts the interpreter at <venv>/bin/python, so
+    built_dir/bin/python is the only interpreter path a correct run can use.
     """
     built_dir = tmp_path / "home" / "veny" / "myenv-py3.12-20260819-111111-thing"
     built_dir.mkdir(parents=True)
