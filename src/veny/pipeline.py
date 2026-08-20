@@ -262,12 +262,6 @@ def list_packages(options: run_options.Options) -> None:
     """
     assert options.python_script is not None, "options.python_script must be set"
     assert options.script_dir is not None, "options.script_dir must be set"
-    if getattr(options.args, "full", False):
-        if not options.rawlog:
-            logging.info(
-                "Building a virtual environment that can run every python script in %s",
-                os.fspath(options.script_dir),
-            )
 
     if isinstance(options.python_script, (str, Path)):
         options.python_script = ek.ensure_path(options.python_script)
@@ -744,19 +738,15 @@ def run(options: run_options.Options, *, start_time: dt.datetime | None = None) 
             )
         options.my_dir.mkdir(parents=True, exist_ok=True)
 
-    if getattr(options.args, "full", False) and options.python_script:
-        ek.my_critical_error("Full mode is not supported with a script argument.")
-    elif options.python_script:
+    if options.python_script:
         pass  # If a script was provided as an argument, skip the rest of these checks.
     elif getattr(options.args, "blank_slate", False):
         return blank_slate(options)
-    elif getattr(
-        options.args, "full", False
-    ):  # implied by now: and not options.python_script:
-        options.python_script = options.cwd
     else:
-        logging.info(
-            "You must specify either a script to run or one of these arguments: --full, --blank-slate (be careful using --blank-slate because it deletes all cached virtual environments, among other things!)."
+        raise UsageError(
+            "You must specify either a script to run or --blank-slate (be "
+            "careful using --blank-slate because it deletes all cached virtual "
+            "environments, among other things!)."
         )
 
     if getattr(options.args, "reqs", False):
@@ -871,7 +861,6 @@ def run(options: run_options.Options, *, start_time: dt.datetime | None = None) 
                 )
             if setup_virtualenv(options):
                 match_dir = options.venv_dir
-                created_new_venv = True
             else:
                 ek.my_critical_error(
                     "Failed to create a virtual environment.", choose_breakpoint=True
@@ -880,7 +869,6 @@ def run(options: run_options.Options, *, start_time: dt.datetime | None = None) 
         else:
             if not options.rawlog:
                 logging.info("Using existing virtual environment: %s", match_dir)
-            created_new_venv = False
 
         if match_dir:
             options.set_venv_dir(match_dir)
@@ -888,23 +876,22 @@ def run(options: run_options.Options, *, start_time: dt.datetime | None = None) 
             elapsed_time = start_venv_time - start_time
             if not options.rawlog:
                 logging.info("Elapsed time: %s", elapsed_time)
-            if not getattr(options.args, "full", False):
-                script_exit_code = run_script(
-                    options.venv_python,
-                    options.python_script,
-                    options.script_args,
-                    rawlog=options.rawlog,
-                    announce=True,
+            script_exit_code = run_script(
+                options.venv_python,
+                options.python_script,
+                options.script_args,
+                rawlog=options.rawlog,
+                announce=True,
+            )
+            end_time = dt.datetime.now()
+            elapsed_time = end_time - start_venv_time
+            if not options.rawlog:
+                logging.info(
+                    "Elapsed time since activating virtual environment: %s",
+                    elapsed_time,
                 )
-                end_time = dt.datetime.now()
-                elapsed_time = end_time - start_venv_time
-                if not options.rawlog:
-                    logging.info(
-                        "Elapsed time since activating virtual environment: %s",
-                        elapsed_time,
-                    )
-                if script_exit_code != 0 and not options.rawlog:
-                    logging.error("Script exited with status %d", script_exit_code)
+            if script_exit_code != 0 and not options.rawlog:
+                logging.error("Script exited with status %d", script_exit_code)
             assert options.venv_dir is not None, "options.venv_dir must be set"
             if (
                 options.venv_dir.name.startswith("failed-")
@@ -919,15 +906,5 @@ def run(options: run_options.Options, *, start_time: dt.datetime | None = None) 
                 )
 
             ek.save_options_to_json(options)
-
-            if getattr(options.args, "full", False):
-                built_or_found = "built" if created_new_venv else "found"
-                logging.info(
-                    "Successfully %s a virtual environment that can run all python scripts in %s.\n"
-                    "Use this virtual environment:\n%s",
-                    built_or_found,
-                    options.script_dir,
-                    options.venv_dir,
-                )
 
     return script_exit_code

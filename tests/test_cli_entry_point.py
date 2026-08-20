@@ -777,3 +777,47 @@ def test_blank_slate_deletes_the_state_directory_and_leaves_other_files_alone(
     assert not (workdir / ".veny-run.out").exists()
     assert not (workdir / ".script.py-veny-last-used-on-20260101-000000.json").exists()
     assert (workdir / "keep.json").exists()
+
+
+def test_the_full_flag_is_gone(monkeypatch, tmp_path):
+    """--full is rejected by argparse, not silently accepted.
+
+    Behaviour under test: ledger item 3's resolution. Concrete bug this
+    catches: deleting the branches but leaving the parser.add_argument call
+    would leave a flag that parses, does nothing, and reports success -- worse
+    than the broken flag it replaced. Expected value obtained from argparse's
+    documented behaviour: an unrecognized option is a usage error, status 2.
+    """
+    script = tmp_path / "script.py"
+    script.write_text("import os\n")
+    monkeypatch.setattr(sys, "argv", ["veny", "--full", os.fspath(script)])
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli.parse_arguments(cli.Options())
+
+    assert exit_info.value.code == 2
+
+
+def test_a_run_with_no_script_is_a_usage_error(monkeypatch, tmp_path, caplog):
+    """No script and no --blank-slate returns 2 and says what is missing.
+
+    Behaviour under test: the first of the two pre-existing AssertionError
+    crashes. Concrete bug this catches: the old fall-through reached
+    `assert options.python_script is not None` inside list_packages and died
+    with a traceback, so `veny -y` looked like a veny bug rather than a
+    mistyped command. Expected value obtained from the design's exit table:
+    2 is a usage error.
+    """
+    # _drive_main stubs the interpreter probe, the alias index and the scan,
+    # then appends a script path to argv; this run must have no script, so
+    # argv is replaced afterwards. Everything else it stubs is still needed --
+    # the usage check sits after the alias index build, not before it.
+    _drive_main(monkeypatch, tmp_path, ["-y"], uninstalled=set(), all_imports=set())
+    monkeypatch.setattr(sys, "argv", ["veny", "-y"])
+
+    with caplog.at_level(logging.INFO):
+        status = cli.main()
+
+    assert status == 2
+    assert "--blank-slate" in caplog.text
+    assert "--full" not in caplog.text

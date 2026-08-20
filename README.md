@@ -74,7 +74,7 @@ pixi run veny my_script.py [script args...]
 veny inspects `my_script.py`'s imports, finds or builds a virtual
 environment with the packages it needs, and runs the script in it. Pass
 `--justprint` to see the resolved package list without running anything, or
-`--help` for the full flag set (`--full`, `--no-cache`, `--latest`,
+`--help` for the full flag set (`--no-cache`, `--latest`,
 `--reqs`, and others).
 
 ## Virtual environment cache

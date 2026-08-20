@@ -83,11 +83,6 @@ def parse_arguments(options: Options) -> None:
         help=f"Delete ~/{options.my_name}/ and all {options.my_name} .out and .err and .json and .pkl files in the current directory.",
     )
     parser.add_argument(
-        "--full",
-        action="store_true",
-        help="Build a virtual environment (venv) that can run every python script in the current directory. Cannot be used with a python script argument.",
-    )
-    parser.add_argument(
         "-y",
         "--yes",
         action="store_true",
