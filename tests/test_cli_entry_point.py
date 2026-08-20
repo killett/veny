@@ -1,5 +1,6 @@
 """Tests for veny's entry point, identity and retired alias flags."""
 
+import argparse
 import logging
 import os
 import pickle
@@ -777,11 +778,25 @@ def test_blank_slate_deletes_the_state_directory_and_leaves_other_files_alone(
         all_imports=set(),
     )
     monkeypatch.setattr(sys, "argv", ["veny", "--blank-slate", "-y"])
-    monkeypatch.setattr(ek, "prompt_then_confirm", lambda prompt: True)
+    prompts: list[str] = []
+
+    def confirm_spy(prompt):
+        prompts.append(prompt)
+        return True
+
+    monkeypatch.setattr(ek, "prompt_then_confirm", confirm_spy)
 
     status = cli.main()
 
     assert status == 0
+    # The prompt must name what is about to be deleted, in this run's own
+    # terms: measured 2026-08-19, replacing it with any other string left the
+    # whole suite green, and a prompt that does not say what it will destroy
+    # is a prompt nobody can answer responsibly.
+    assert prompts == [
+        "Are you sure you want to delete everything in ~/veny/ and all veny"
+        " .json files in the current directory? (y/n) "
+    ]
     assert not state_dir.exists()
     assert not (workdir / ".veny-run.out").exists()
     assert not (workdir / ".script.py-veny-last-used-on-20260101-000000.json").exists()
@@ -1418,3 +1433,136 @@ def test_the_run_reports_the_imports_it_decided_are_missing(
         cli.main()
 
     assert "Uninstalled imports: ['thing']" in caplog.text
+
+
+def test_no_cache_skips_the_cache_search_entirely(monkeypatch, tmp_path):
+    """--no-cache must stop the cache being searched, not merely ignored.
+
+    Behaviour under test: the flag read that chooses between searching the
+    cache and going straight to a build. Measured by substitution: reading
+    any other attribute name off the parsed arguments there left the whole
+    suite green, because every test that reaches this branch either stubs the
+    cache search to return None or never passes --no-cache.
+
+    Concrete bug this catches: a misread flag makes --no-cache search the
+    cache anyway and reuse whatever it finds, which is the exact opposite of
+    what the user asked for -- and invisible, because a reused environment
+    that happens to work looks like a successful run.
+    """
+    built = tmp_path / "home" / "veny" / "myenv-py3.12-20260101-000000-thing"
+    built.mkdir(parents=True)
+    _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--rawlog", "--no-cache"],
+        uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing")},
+        all_imports={"thing"},
+    )
+    searched: list[object] = []
+
+    def find_spy(args, **kwargs):
+        searched.append(args)
+        return built
+
+    monkeypatch.setattr(cache_search, "find_match_dir_in_cache", find_spy)
+
+    def fake_setup(options):
+        options.set_venv_dir(built)
+        return True
+
+    monkeypatch.setattr(pipeline, "setup_virtualenv", fake_setup)
+
+    assert cli.main() == 0
+    assert searched == []
+
+
+def test_the_state_directory_is_only_announced_when_it_has_to_be_created(
+    monkeypatch, tmp_path, caplog
+):
+    """The "does not exist yet" line must be about veny's own directory.
+
+    Behaviour under test: the existence check that decides whether to create
+    ~/veny and say so. Measured by substitution: asking about any other path
+    left the whole suite green, because no test that reaches this line runs
+    with ~/veny already there.
+
+    Concrete bug this catches: checking the wrong path makes veny announce
+    that it is creating its state directory on every single run, including
+    the thousands where the directory has been there for months -- noise that
+    trains users to ignore the one run where it is true, which is the run
+    where their cache has just been deleted.
+    """
+    (tmp_path / "home" / "veny").mkdir(parents=True)
+    _drive_main(monkeypatch, tmp_path, [], uninstalled=set(), all_imports={"os"})
+
+    with caplog.at_level(logging.INFO):
+        cli.main()
+
+    assert "does not exist yet" not in caplog.text
+
+
+def test_blank_slate_with_no_state_directory_still_completes(monkeypatch, tmp_path):
+    """--blank-slate on a machine that has never run veny must not blow up.
+
+    Behaviour under test: --blank-slate on a machine with no ~/veny at all,
+    which the only other --blank-slate test cannot reach because it creates
+    the directory first.
+
+    Concrete bug this catches: any first-ever --blank-slate that fails --
+    a traceback, or a non-zero status, for a request that was already
+    satisfied before it was made. It does not pin `ignore_errors=True` on the
+    removal itself: pipeline.run creates options.my_dir a few lines before it
+    reaches this branch, so the removal never sees a missing directory. The
+    wiring index records that as an open hole with this as its reason.
+    """
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+    _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--blank-slate", "-y"],
+        uninstalled=set(),
+        all_imports=set(),
+    )
+    monkeypatch.setattr(sys, "argv", ["veny", "--blank-slate", "-y"])
+    monkeypatch.setattr(ek, "prompt_then_confirm", lambda prompt: True)
+    assert not (tmp_path / "home" / "veny").exists()
+
+    assert cli.main() == 0
+
+
+def test_build_alias_index_reads_this_runs_own_directory_and_interpreter(
+    tmp_path, monkeypatch
+):
+    """The alias index must be built from this run's my_dir and target interpreter.
+
+    Behaviour under test: the two positional arguments of the alias_index.build
+    call. Measured by substitution: both could be replaced with a wrong string
+    or a wrong path and the whole suite stayed green -- every test that drives
+    the run replaces build_alias_index wholesale, and the one test of the
+    `offline` argument spies on the call rather than on what comes back.
+
+    Concrete bugs this catches: a wrong my_dir puts the alias cache and the
+    user's own override file somewhere veny never reads again, so every run
+    re-resolves every import name from scratch and hand-written overrides are
+    silently ignored; a wrong interpreter tags the cache with the wrong
+    Python, which is what lets an entry recorded under one version
+    short-circuit resolution for a target on another. Expected values are
+    read off the returned index rather than from a spy: the cache's own path
+    and the tag the probe produced.
+    """
+    options = cli.Options()
+    options.my_dir = tmp_path
+    options.python_command = sys.executable
+    options.args = argparse.Namespace(offline=True)
+
+    index = pipeline.build_alias_index(options)
+
+    assert index.cache.path == tmp_path / "module_aliases_cache.json"
+    # The probe really ran against the interpreter named above, so it knows
+    # both that interpreter's version and what is installed in it.
+    assert index.cache.interpreter_tag == (
+        f"{sys.version_info[0]}.{sys.version_info[1]}"
+    )
+    assert "pytest" in index.installed

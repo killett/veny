@@ -300,3 +300,46 @@ def test_report_warns_about_a_standard_library_import_that_needs_a_system_packag
         pipeline.report(options)
 
     assert "tkinter is in the standard library but needs the" in caplog.text
+
+
+def test_the_scan_records_the_local_files_folders_and_sys_path_it_followed(
+    tmp_path: Path,
+) -> None:
+    """The scan's three bookkeeping fields must be the run's own objects, not fresh ones.
+
+    Behaviour under test: three of the seven fields
+    pipeline.find_imports_in_script hands the scanner as its ImportScan.
+    Measured by substitution: replacing samedir_files, subfolders or
+    sys_path_hints with a fresh empty container left the whole suite green --
+    every scan test asserted on all_imports and nothing else, so the scanner
+    happily wrote its findings into an object the run then threw away.
+
+    Concrete bug this catches: the accumulation those three fields exist for.
+    get_all_imports calls this function once per file in a folder scan and
+    relies on all seven fields carrying across calls; a fresh container per
+    call resets them, so a module already resolved is resolved again -- and
+    the report at the end of the run lists none of the local files or package
+    folders the scan actually followed, which is the only place a user sees
+    that veny read their own code rather than just their imports.
+    """
+    project = tmp_path / "proj"
+    package = project / "pkg"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    (project / "beside.py").write_text("import requests\n")
+    hint_dir = tmp_path / "hinted"
+    hint_dir.mkdir()
+    script = project / "s.py"
+    script.write_text(
+        "import sys\n"
+        f"sys.path.append({str(hint_dir)!r})\n"
+        "import beside\n"
+        "import pkg\n\n"
+        "print(beside, pkg)\n"
+    )
+
+    options = _scan(script, {})
+
+    assert options.samedir_files == [project / "beside.py"]
+    assert options.subfolders == ["pkg"]
+    assert hint_dir in options.sys_path_hints
