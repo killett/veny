@@ -2,6 +2,7 @@
 
 import logging
 import os
+import pickle
 import subprocess
 import sys
 from collections.abc import Callable
@@ -24,6 +25,12 @@ from veny import (
 from veny.analysis import custom_modules
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Captured before any test can monkeypatch it, so a test that needs the real
+# custom-module discovery (rather than the stub _drive_main installs) can put
+# it back. Phase 3d left the Settings handed to this function unpinned
+# precisely because nothing ever ran the real one.
+_REAL_DICT_OF_CUSTOM_MODULES = custom_modules.dict_of_custom_modules
 
 
 def run_module(*args):
@@ -936,3 +943,218 @@ def test_a_failed_build_reports_at_critical_and_returns_one_without_a_debugger(
         and record.getMessage() == "Failed to create a virtual environment."
     ]
     assert len(critical) == 1, caplog.text
+
+
+def test_configure_logging_is_told_this_runs_name_level_and_raw_output_choice(
+    monkeypatch, tmp_path
+):
+    """cli.main hands ek.configure_logging this run's own name, level and rawlog.
+
+    Behaviour under test: the last of phase 3d's five open `rawlog` holes, and
+    the one that stays in cli.py. Concrete bug this catches: a hardcoded
+    `rawlog=False` here restores timestamps and INFO prefixes to every
+    --rawlog run, which is the entire point of the flag; a hardcoded name
+    sends veny's log file somewhere other than the program's own name; a
+    hardcoded level ignores --debug. None of the three could be seen by any
+    existing test, because the effect is inside emmykit's handler
+    configuration rather than in veny's own output.
+
+    This is the one site in the phase pinned by an argument spy rather than by
+    a log record, and the index says so: the effect lives in emmykit, so
+    there is no veny-visible record to read. Expected values come from the
+    flags' contracts -- Options.my_name is fixed at "veny", no --debug means
+    logging.INFO, --rawlog means rawlog=True.
+    """
+    seen: list[tuple[str, int, bool]] = []
+    _drive_main(
+        monkeypatch, tmp_path, ["--rawlog"], uninstalled=set(), all_imports={"os"}
+    )
+    monkeypatch.setattr(
+        ek,
+        "configure_logging",
+        lambda name, *, log_level, rawlog: seen.append((name, log_level, rawlog)),
+    )
+
+    cli.main()
+
+    assert seen == [("veny", logging.INFO, True)]
+
+
+def test_configure_logging_is_told_when_the_run_wants_normal_output_and_debug(
+    monkeypatch, tmp_path
+):
+    """The same site driven the other way: no --rawlog, and --debug raises the level.
+
+    Behaviour under test: the second half of the substitution pair, plus the
+    only consumer of parse_arguments' `--debug` handling. Concrete bug this
+    catches: a hardcoded `rawlog=True` strips timestamps and INFO prefixes
+    from every ordinary run and suppresses veny's own commentary -- the exact
+    inverse failure, invisible to a test that only ever drives --rawlog. A
+    second bug it catches: parse_arguments reading the wrong flag name (or
+    defaulting to True) when it decides whether to raise options.log_mode to
+    DEBUG, which would either silence --debug entirely or make every run
+    debug-verbose. Expected values come from Options.rawlog's default (False)
+    and from --debug's contract (logging.DEBUG).
+    """
+    seen: list[tuple[str, int, bool]] = []
+    _drive_main(monkeypatch, tmp_path, ["-d"], uninstalled=set(), all_imports={"os"})
+    monkeypatch.setattr(
+        ek,
+        "configure_logging",
+        lambda name, *, log_level, rawlog: seen.append((name, log_level, rawlog)),
+    )
+
+    cli.main()
+
+    assert seen == [("veny", logging.DEBUG, False)]
+
+
+def test_main_lets_the_requirements_reader_explain_a_missing_file(
+    monkeypatch, tmp_path, caplog
+):
+    """--reqs must carry this run's rawlog into the reader that opens the file.
+
+    Behaviour under test: the second of phase 3d's five open `rawlog` holes,
+    which moved from cli.py into pipeline.run. 3d could not close it because
+    the only test driving --reqs stubs parse_extra_requirements out and
+    asserts the value the spy was handed -- `rawlog=True` at the call site
+    hands that spy exactly what it asserts. This drives the real reader
+    instead and reads its effect: emmykit's my_fopen logs "File does not
+    exist" at INFO when, and only when, rawlog is False.
+
+    Concrete bug this catches: `rawlog=True` hardcoded here silences the one
+    line telling a user who typed --reqs that there is no
+    extra_requirements.txt where veny looked, so the run continues with no
+    extra requirements and no explanation of why the pins they wrote were
+    ignored. Expected message obtained from emmykit's my_fopen, which is the
+    reader parse_extra_requirements calls with suppress_errors=True.
+    """
+    _drive_main(
+        monkeypatch, tmp_path, ["--reqs"], uninstalled=set(), all_imports={"os"}
+    )
+    monkeypatch.chdir(tmp_path)
+    assert not (tmp_path / "extra_requirements.txt").exists()
+
+    with caplog.at_level(logging.INFO):
+        cli.main()
+
+    assert (
+        f"File does not exist: {os.fspath(tmp_path / 'extra_requirements.txt')}"
+        in caplog.text
+    )
+
+    # The other direction: --rawlog must reach the reader too, so a hardcoded
+    # rawlog=False at this call site is caught as well.
+    caplog.clear()
+    _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--reqs", "--rawlog"],
+        uninstalled=set(),
+        all_imports={"os"},
+    )
+    monkeypatch.chdir(tmp_path)
+
+    with caplog.at_level(logging.INFO):
+        cli.main()
+
+    assert "File does not exist" not in caplog.text
+
+
+def _run_with_the_real_custom_module_scan(monkeypatch, tmp_path, workdir, argv):
+    """Drive cli.main() with the real dict_of_custom_modules, in its own directory.
+
+    Each case gets a fresh working directory because the real scan writes a
+    pickle into the one it runs in: reusing a directory would let the previous
+    case's cache decide which branch the next one takes. sys.path is narrowed
+    to that directory so the walk is bounded to it.
+    """
+    workdir.mkdir(parents=True, exist_ok=True)
+    _drive_main(monkeypatch, tmp_path, argv, uninstalled=set(), all_imports={"os"})
+    monkeypatch.setattr(
+        custom_modules, "dict_of_custom_modules", _REAL_DICT_OF_CUSTOM_MODULES
+    )
+    monkeypatch.chdir(workdir)
+    monkeypatch.setattr(sys, "path", [os.fspath(workdir)])
+    cli.main()
+
+
+def test_main_lets_the_custom_module_scan_explain_an_empty_cache(
+    monkeypatch, tmp_path, caplog
+):
+    """The Settings pipeline.run builds must carry this run's own name, cwd, rawlog and cache choice.
+
+    Behaviour under test: the third of phase 3d's five open `rawlog` holes --
+    the `Settings(...)` handed to dict_of_custom_modules -- together with the
+    `use_cache` argument built beside it from --rc and --no-cache. 3d could
+    not close it because every test that drives the run stubs
+    dict_of_custom_modules out entirely. This one runs the real discovery and
+    reads its effect, in four directions.
+
+    Concrete bugs this catches: `rawlog=True` in that Settings silences the
+    line explaining that no custom-module cache was found, so a user whose
+    run is slow because it rescans sys.path every time is told nothing;
+    `use_cache=False`, or reading the wrong flag for --no-cache, skips the
+    cache lookup altogether, which is the same slowdown with the same
+    silence; `use_cache=True` ignores --no-cache (or --rc) and reuses a stale
+    cache the user explicitly asked veny to rebuild; a wrong `my_name` looks for
+    pickles under a prefix veny never writes, so the cache is never found and
+    every run rescans; a wrong `cwd` looks for them in the wrong directory,
+    with the same result. Expected messages obtained from custom_modules,
+    which logs them on the cache-lookup branch only.
+    """
+    with caplog.at_level(logging.INFO):
+        _run_with_the_real_custom_module_scan(
+            monkeypatch, tmp_path, tmp_path / "plain", []
+        )
+
+    assert (
+        "No existing custom modules pickle files found in the current directory."
+        in caplog.text
+    )
+
+    # --rawlog silences it, so a hardcoded rawlog=False in that Settings dies too.
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        _run_with_the_real_custom_module_scan(
+            monkeypatch, tmp_path, tmp_path / "raw", ["--rawlog"]
+        )
+
+    assert "No existing custom modules pickle files" not in caplog.text
+
+    # --no-cache turns the whole cache lookup off, which silences the same
+    # line for a different reason: it pins the use_cache argument, not rawlog.
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        _run_with_the_real_custom_module_scan(
+            monkeypatch, tmp_path, tmp_path / "nocache", ["--no-cache"]
+        )
+
+    assert "No existing custom modules pickle files" not in caplog.text
+
+    # --rc means "refresh the custom modules cache", which turns the lookup
+    # off by the other flag: it pins the second half of the use_cache
+    # expression, which --no-cache alone cannot distinguish.
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        _run_with_the_real_custom_module_scan(
+            monkeypatch, tmp_path, tmp_path / "rc", ["--rc"]
+        )
+
+    assert "No existing custom modules pickle files" not in caplog.text
+
+    # A cache written under veny's own name, in the directory veny was run
+    # from, is found and loaded: that pins the my_name and cwd arguments,
+    # which the three cases above cannot see because none of them has a
+    # pickle to find.
+    caplog.clear()
+    cached = tmp_path / "cached"
+    cached.mkdir()
+    planted = cached / f".veny_custom_modules_{ek.COMPUTER_NAME}_20260101-010203.pkl"
+    planted.write_bytes(pickle.dumps({}))
+    with caplog.at_level(logging.INFO):
+        _run_with_the_real_custom_module_scan(monkeypatch, tmp_path, cached, [])
+
+    assert f"Loading custom modules from most recent pickle file: {planted}" in (
+        caplog.text
+    )

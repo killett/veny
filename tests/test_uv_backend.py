@@ -524,3 +524,164 @@ def test_the_manifest_and_the_final_check_describe_the_venv_after_repair(
             "source_names": {"thing"},
         }
     ]
+
+
+def _a_repair_that_succeeds(monkeypatch):
+    """Wire setup_virtualenv so the real repair pass runs and finds a winner.
+
+    Only the subprocess boundaries are replaced: the bulk import check fails
+    (so the per-record repair branch is entered), the venv's metadata knows
+    nothing (so the failed candidate is treated as never installed), the
+    per-record import check fails, and the ranked search hands back a winner.
+    verify_and_repair_imports and repair_unsatisfied_import themselves --
+    including the line that names the winner -- are the real ones.
+    """
+    monkeypatch.setattr(environment, "create_venv", lambda target, python="": True)
+    monkeypatch.setattr(
+        environment,
+        "run_uv_pip",
+        lambda venv_python, *args: subprocess.CompletedProcess(
+            args=list(args), returncode=0
+        ),
+    )
+    monkeypatch.setattr(
+        cache_search, "record_venv_state", lambda venv_dir, **kwargs: venv_dir
+    )
+    monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: False)
+    monkeypatch.setattr(alias_index, "probe_interpreter", lambda venv_python: ({}, {}))
+    monkeypatch.setattr(
+        verify,
+        "import_outcome_in_venv",
+        lambda venv_python, import_name: verify.ImportOutcome(
+            imported=False,
+            rejection_kind="import_failed",
+            detail="No module named thing",
+            providers=frozenset(),
+        ),
+    )
+    monkeypatch.setattr(
+        verify,
+        "resolve_and_verify",
+        lambda resolution, index, **kwargs: alias_index.Candidate(
+            pip_name="repaired-pkg",
+            source=alias_index.Source.SEED,
+            evidence="the seed named it",
+        ),
+    )
+
+
+def test_setup_virtualenv_lets_the_repair_pass_name_the_package_it_settled_on(
+    monkeypatch, tmp_path, caplog
+):
+    """setup_virtualenv must carry this run's rawlog into verify_and_repair_imports.
+
+    Behaviour under test: the fourth of phase 3d's five open `rawlog` holes,
+    which moved from cli.py into pipeline.setup_virtualenv. 3d left it open
+    because the line rawlog controls fires only when a repair happens, and
+    every existing setup_virtualenv driver stubs the repair pass out and then
+    asserts the `rawlog` value the stub was handed -- which a hardcoded
+    `rawlog=True` supplies for free. This drives the real pass and reads the
+    record instead.
+
+    Concrete bug this catches: `rawlog=True` hardcoded at this call site
+    silences the only line telling the user that the package veny installed
+    was not the one that provided their import. The substitution happens
+    anyway; the requirements.txt in the venv changes underneath them; and the
+    sole surviving trace is an entry in the alias cache they never see.
+    Expected message obtained from repair_unsatisfied_import's contract:
+    "<pip name> provides the import <import name> (<evidence>)".
+    """
+    options = _a_wired_run(tmp_path)
+    options.rawlog = False
+    _a_repair_that_succeeds(monkeypatch)
+
+    with caplog.at_level(logging.INFO):
+        pipeline.setup_virtualenv(options)
+
+    assert "repaired-pkg provides the import thing (the seed named it)" in caplog.text
+
+    # The other direction: a --rawlog run must stay quiet, so a hardcoded
+    # rawlog=False at this call site dies too.
+    caplog.clear()
+    quiet = _a_wired_run(tmp_path)
+    quiet.rawlog = True
+    _a_repair_that_succeeds(monkeypatch)
+
+    with caplog.at_level(logging.INFO):
+        pipeline.setup_virtualenv(quiet)
+
+    assert "provides the import" not in caplog.text
+
+
+def _a_manifest_pass_that_renames(monkeypatch, tmp_path, repaired):
+    """Wire setup_virtualenv so the real record_venv_state runs and renames.
+
+    The repair replaces the pip name the folder was named after, so the name
+    record_venv_state computes no longer matches the folder on disk and the
+    rename branch -- the one carrying the rawlog-guarded line -- is taken.
+    Only the venv probe is replaced; record_venv_state, rename_venv and the
+    manifest write are the real ones, against a real directory.
+    """
+    monkeypatch.setattr(environment, "create_venv", lambda target, python="": True)
+    monkeypatch.setattr(
+        environment,
+        "run_uv_pip",
+        lambda venv_python, *args: subprocess.CompletedProcess(
+            args=list(args), returncode=0
+        ),
+    )
+    monkeypatch.setattr(
+        verify,
+        "verify_and_repair_imports",
+        lambda **kwargs: frozenset(repaired),
+    )
+    monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: True)
+    monkeypatch.setattr(
+        cache_search, "installed_state_in_venv", lambda venv_python: ({}, "3.12")
+    )
+
+
+def test_setup_virtualenv_lets_the_manifest_pass_explain_a_rename(
+    monkeypatch, tmp_path, caplog
+):
+    """setup_virtualenv must carry this run's rawlog into record_venv_state.
+
+    Behaviour under test: the fifth of phase 3d's five open `rawlog` holes,
+    which moved from cli.py into pipeline.setup_virtualenv. 3d left it open
+    because the line rawlog controls fires only when the venv's folder name
+    has drifted from what its contents warrant, and every existing driver
+    stubs record_venv_state out. Here the repair pass returns a record with a
+    different pip name, which is exactly what makes the folder name drift, so
+    the real record_venv_state takes its rename branch.
+
+    Concrete bug this catches: `rawlog=True` hardcoded at this call site
+    silences the only notice that veny renamed the directory the user's
+    environment lives in. The folder they were told about a moment earlier no
+    longer exists under that name, and nothing on a normal run says so.
+    Expected message obtained from record_venv_state's contract: it names the
+    folder it is renaming to.
+    """
+    repaired = {cli.ResolvedImport(import_name="thing", pip_name="repaired-pkg")}
+    options = _a_wired_run(tmp_path / "normal")
+    options.rawlog = False
+    _a_manifest_pass_that_renames(monkeypatch, tmp_path, repaired)
+
+    with caplog.at_level(logging.INFO):
+        pipeline.setup_virtualenv(options)
+
+    assert (
+        "renaming it to failed-wiredenv-py3.12-20260101-010203-repaired-pkg"
+        in caplog.text
+    )
+
+    # The other direction: --rawlog must reach it, so a hardcoded rawlog=False
+    # at this call site dies too.
+    caplog.clear()
+    quiet = _a_wired_run(tmp_path / "raw")
+    quiet.rawlog = True
+    _a_manifest_pass_that_renames(monkeypatch, tmp_path, repaired)
+
+    with caplog.at_level(logging.INFO):
+        pipeline.setup_virtualenv(quiet)
+
+    assert "renaming it to" not in caplog.text
