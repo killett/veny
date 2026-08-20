@@ -856,3 +856,44 @@ def test_main_maps_a_missing_uv_to_status_one(monkeypatch, tmp_path, capsys):
 
     assert status == 1
     assert "Reinstall veny with:  uv tool install veny" in capsys.readouterr().err
+
+
+def test_main_maps_a_failed_venv_build_to_status_one(monkeypatch, tmp_path, caplog):
+    """VenvBuildFailed reaches cli.main and becomes exit 1 with its message.
+
+    Behaviour under test: the third arm of main()'s status mapping. Nothing
+    raised VenvBuildFailed before phase 3e task 7 gave _probe_venv its guard,
+    so the handler was unreachable and untested. Concrete bug this catches:
+    deleting the `except pipeline.VenvBuildFailed` clause -- which nothing else
+    in the suite would notice -- turns a refused probe build into a traceback
+    out of main(), which reads as a veny crash, and leaves
+    ek.print_all_errors and logging.shutdown unrun.
+
+    pipeline.run is stubbed rather than driven into the real probe path
+    because _drive_main already replaces pipeline.list_packages, which is
+    where the probe venv is built: this test is about main()'s mapping, and
+    tests/test_classify.py pins that _probe_venv is what raises. Expected
+    value obtained from the design's exit table: 1 means veny could not build
+    or find an environment.
+    """
+    _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--rawlog"],
+        uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing")},
+        all_imports={"thing"},
+    )
+
+    def refused(options, start_time=None):
+        raise pipeline.VenvBuildFailed(
+            "Could not build the throwaway environment used to check which "
+            "imports are already available."
+        )
+
+    monkeypatch.setattr(pipeline, "run", refused)
+
+    with caplog.at_level(logging.ERROR):
+        status = cli.main()
+
+    assert status == 1
+    assert "Could not build the throwaway environment" in caplog.text

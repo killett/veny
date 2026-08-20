@@ -697,6 +697,39 @@ def test_only_genuinely_uninstalled_imports_are_resolved(monkeypatch):
     }
 
 
+def test_a_refused_probe_venv_stops_classification_instead_of_probing_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """create_venv returning False makes _probe_venv raise VenvBuildFailed.
+
+    Behaviour under test: the second consumer of phase 3e task 7's bool
+    contract. Concrete bug this catches: leaving the call as a bare
+    `environment.create_venv(...)` means a refused probe build is never
+    noticed, and the predicate goes on asking check_packages_in_venv about an
+    interpreter path inside a directory that holds no environment.
+    check_packages_in_venv does not catch OSError, so its subprocess.run dies
+    with `FileNotFoundError: .../bin/python` -- measured by reverting this
+    guard, which is exactly how this test fails -- and the user gets a
+    traceback naming a temporary directory instead of a sentence naming the
+    problem. Expected value obtained from the design's error handling: the
+    probe has no fallback, so it raises the exception cli.main maps to 1
+    rather than dying inside the predicate.
+
+    check_packages_in_venv is deliberately left unstubbed: reaching it at all
+    would mean the guard did not stop the probe, and the assertion below would
+    not be what failed.
+    """
+    options = cli.Options()
+    options.aliases = _index({})
+    options.all_imports = {"widgetlib"}
+    monkeypatch.setattr(environment, "create_venv", lambda target, python="": False)
+
+    with pytest.raises(pipeline.VenvBuildFailed) as caught:
+        pipeline.split_imports(options)
+
+    assert "throwaway environment" in str(caught.value)
+
+
 def test_the_probe_venv_is_asked_about_the_interpreter_it_just_built(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

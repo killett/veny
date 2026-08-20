@@ -1,6 +1,7 @@
 """Pin how veny locates the uv binary it drives its environment layer with."""
 
 import argparse
+import logging
 import os
 import shutil
 import subprocess
@@ -213,6 +214,42 @@ def test_setup_virtualenv_writes_the_extra_requirements_version_specifiers(
     assert (
         options.venv_dir / "requirements.txt"
     ).read_text() == "thing-pkg>=2.0\nzeta-pkg\n"
+
+
+def test_setup_virtualenv_reports_failure_when_uv_refuses_to_build(
+    monkeypatch, tmp_path, caplog
+):
+    """A create_venv that returns False stops setup_virtualenv, which says so.
+
+    Behaviour under test: the consuming half of phase 3e task 7's contract --
+    create_venv reports rather than raises, which is only an improvement if
+    its caller reads the report. Concrete bug this catches: leaving the call
+    as a bare `environment.create_venv(...)` (its shape before this task)
+    makes a refused build invisible. setup_virtualenv would carry on writing
+    requirements.txt into a directory holding no environment, `uv pip install
+    --python <venv>/bin/python` would fail against an interpreter that does
+    not exist, and setup_virtualenv would still return True -- so
+    pipeline.run's "Failed to create a virtual environment" path never runs
+    and veny reports success for a run that built nothing. Expected values
+    obtained from the new contract: False means "no environment", and the
+    message names the directory so the user can see which build was refused.
+    """
+    options = _a_wired_run(tmp_path)
+    _stub_the_venv_away(monkeypatch)
+    monkeypatch.setattr(environment, "create_venv", lambda target, python="": False)
+
+    with caplog.at_level(logging.ERROR):
+        built = pipeline.setup_virtualenv(options)
+
+    assert built is False
+    assert options.venv_dir is not None
+    assert (
+        f"uv could not create the virtual environment at {options.venv_dir}."
+        in caplog.text
+    )
+    # The early return has to happen *before* the requirements file is written:
+    # writing it would leave a directory that looks like a half-built venv.
+    assert not (options.venv_dir / "requirements.txt").exists()
 
 
 def test_create_venv_is_given_a_resolved_interpreter_path_not_a_bare_command(
