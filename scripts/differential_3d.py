@@ -7,6 +7,11 @@ regression in that kind of move, because the tests move with the code. This
 driver runs the *same* three observable behaviours against two source trees and
 prints them in a fixed, sorted form, so ``diff`` is the whole verdict.
 
+HISTORICAL: this driver compares trees at or before 08622a8. Phase 3e
+moved list_packages, setup_virtualenv and _load_last_used to pipeline.py,
+so it does not run against a tree after that commit. scripts/differential_3e.py
+supersedes it.
+
 How to run it, and against what base::
 
     git archive 313e800 src/veny | tar -x -C /tmp/old-veny

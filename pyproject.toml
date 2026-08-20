@@ -82,6 +82,12 @@ ignore = [
 # to restart the process with PYTHONHASHSEED=0 set before the interpreter
 # starts; it re-runs this same file with this same interpreter.
 "scripts/differential_3d.py" = ["ANN401", "S606"]
+# The 3e differential driver has the same two reasons as 3d's, for the same
+# two causes: it speaks to two differently-shaped source trees through module
+# handles it imports by name, so `Any` is the honest annotation for every veny
+# object it touches, and its one os.execv re-runs this same file with this same
+# interpreter to get PYTHONHASHSEED=0 set before the interpreter starts.
+"scripts/differential_3e.py" = ["ANN401", "S606"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
