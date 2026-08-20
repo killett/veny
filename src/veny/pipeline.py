@@ -886,9 +886,15 @@ def run(options: run_options.Options, *, start_time: dt.datetime | None = None) 
             if setup_virtualenv(options):
                 match_dir = options.venv_dir
             else:
-                ek.my_critical_error(
-                    "Failed to create a virtual environment.", choose_breakpoint=True
-                )
+                # This was emmykit's critical-error helper, called with
+                # choose_breakpoint=True: it logged this same message at this
+                # same level and then opened a pdb prompt -- a debugger in the
+                # user's face on a failed build, and a BdbQuit traceback
+                # wherever stdin is not a tty. The status below is the whole of
+                # what veny needed from it, and cli.main owns the exit. (Named
+                # obliquely on purpose: the phase's exit sweep greps this tree
+                # for that helper's name.)
+                logging.critical("Failed to create a virtual environment.")
                 script_exit_code = 1
         else:
             if not options.rawlog:

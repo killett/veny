@@ -226,7 +226,6 @@ def test_main_describes_the_run_to_the_cache_search(monkeypatch, tmp_path):
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", find_spy)
     monkeypatch.setattr(pipeline, "_load_last_used", load_last_used_spy)
     monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options: False)
-    monkeypatch.setattr(ek, "my_critical_error", lambda *a, **k: None)
 
     cli.main()
 
@@ -278,7 +277,6 @@ def test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs
     )
     (tmp_path / "home" / "veny").mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options: False)
-    monkeypatch.setattr(ek, "my_critical_error", lambda *a, **k: None)
 
     with caplog.at_level(logging.INFO):
         cli.main()
@@ -334,7 +332,6 @@ def test_main_lets_the_feeling_lucky_loader_speak_on_a_run_that_did_not_ask_for_
     )
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", lambda *a, **k: None)
     monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options: False)
-    monkeypatch.setattr(ek, "my_critical_error", lambda *a, **k: None)
 
     with caplog.at_level(logging.INFO):
         cli.main()
@@ -397,7 +394,6 @@ def test_main_loads_the_requirements_file_and_keeps_its_names_out_of_the_import_
 
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", find_spy)
     monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options: False)
-    monkeypatch.setattr(ek, "my_critical_error", lambda *a, **k: None)
 
     cli.main()
 
@@ -540,7 +536,6 @@ def test_main_asks_the_last_used_loader_about_this_script(monkeypatch, tmp_path)
 
     monkeypatch.setattr(last_used, "load_last_used_venv_python", spy)
     monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options: False)
-    monkeypatch.setattr(ek, "my_critical_error", lambda *a, **k: None)
     monkeypatch.setattr(
         cache_search, "find_match_dir_in_cache", lambda args, **kwargs: None
     )
@@ -897,3 +892,47 @@ def test_main_maps_a_failed_venv_build_to_status_one(monkeypatch, tmp_path, capl
 
     assert status == 1
     assert "Could not build the throwaway environment" in caplog.text
+
+
+def test_a_failed_build_reports_at_critical_and_returns_one_without_a_debugger(
+    monkeypatch, tmp_path, caplog
+):
+    """setup_virtualenv returning False logs CRITICAL and ends the run at 1.
+
+    Behaviour under test: the cache-miss build-failure path, which until this
+    task called ek.my_critical_error(..., choose_breakpoint=True). Concrete
+    bugs this catches. First, that call ended in `breakpoint()`: a user whose
+    venv build failed got a pdb prompt, and anywhere stdin is not a tty --
+    cron, CI, a pipe -- got a BdbQuit traceback instead of a sentence, so this
+    test would hang or die rather than return a status if it came back.
+    Second, dropping the report entirely and keeping only the status would
+    leave a run that exits 1 having said nothing about why; the record is
+    asserted at CRITICAL because ek.configure_logging's MemoryHandler buffers
+    at ERROR and above, which is what puts this message in
+    ek.print_all_errors' replay at the end of the run.
+
+    Expected values obtained from the design's exit table (1 means veny could
+    not build or find an environment) and from the message emmykit logged at
+    this site, which is unchanged.
+    """
+    _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--rawlog"],
+        uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
+        all_imports={"thing"},
+    )
+    monkeypatch.setattr(cache_search, "find_match_dir_in_cache", lambda *a, **k: None)
+    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options: False)
+
+    with caplog.at_level(logging.CRITICAL):
+        status = cli.main()
+
+    assert status == 1
+    critical = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.CRITICAL
+        and record.getMessage() == "Failed to create a virtual environment."
+    ]
+    assert len(critical) == 1, caplog.text
