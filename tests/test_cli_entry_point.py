@@ -1,6 +1,7 @@
 """Tests for veny's entry point, identity and retired alias flags."""
 
 import argparse
+import datetime as dt
 import logging
 import os
 import pickle
@@ -1566,3 +1567,37 @@ def test_build_alias_index_reads_this_runs_own_directory_and_interpreter(
         f"{sys.version_info[0]}.{sys.version_info[1]}"
     )
     assert "pytest" in index.installed
+
+
+def test_the_run_is_timed_from_the_moment_veny_started(monkeypatch, tmp_path, caplog):
+    """cli.main must hand pipeline.run the start it took before argparse.
+
+    Behaviour under test: the `start_time` argument, which is the only reason
+    `pipeline.run` takes one at all -- it defaults to "now", so a call site
+    that forgets it still produces a plausible-looking number. Measured by
+    substitution: replacing it with a fixed past datetime left the whole
+    suite green.
+
+    Concrete bug this catches: an elapsed time that is not this run's. The
+    substitution recorded in the wiring index, `dt.datetime(2000, 1, 1)`,
+    makes both "Elapsed time" lines report about nine thousand *days*; the
+    mirror-image bug, a start taken after the work rather than before it,
+    reports a negative delta. Either way the two lines a user reads to decide
+    whether veny or their own script is the slow part become fiction. This
+    asserts the shape of the delta -- non-negative and under a minute -- not
+    a measured duration, so it pins the wiring without pinning a clock.
+    """
+    _drive_main(monkeypatch, tmp_path, [], uninstalled=set(), all_imports={"os"})
+
+    with caplog.at_level(logging.INFO):
+        cli.main()
+
+    reported = [
+        record.args[0]
+        for record in caplog.records
+        if record.getMessage().startswith("Elapsed time:")
+    ]
+    assert reported, caplog.text
+    assert all(
+        dt.timedelta(0) <= elapsed < dt.timedelta(minutes=1) for elapsed in reported
+    ), reported
