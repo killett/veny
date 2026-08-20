@@ -103,10 +103,11 @@ and a script installing into it is working against that.
 src/veny/
     __init__.py     # Version literal.
     __main__.py     # python -m veny.
-    cli.py          # Argument parsing, venv build/run orchestration; builds
-                    # the ImportScan/Settings analysis/ works from and the
-                    # throwaway probe venv classify.py is handed, and copies
-                    # the results of both back onto Options.
+    cli.py          # Argument parsing and exit-status policy. Nothing else:
+                    # the run itself belongs to pipeline.py.
+    pipeline.py     # The run: analyze -> classify -> acquire an environment
+                    # -> run the script. The only module that knows the order.
+    run_options.py  # The transitional per-run state object, on its way out.
     cache_search.py # Picks a cached virtual environment for this run
                     # (last-used / latest / oldest / smallest), confirms it
                     # by import-checking it, and records the state of a
@@ -150,6 +151,7 @@ src/veny/
                     # resolution, attributable confirmation).
 scripts/            # smoke-install.sh: wheel + console-script verification.
                     # differential_3d.py: the phase-3d old-vs-new differential.
+                    # differential_3e.py: the phase-3e old-vs-new differential.
 tests/              # pytest test suite; wheels.py builds the wheel the live
                     # environment/verify tests install.
 docs/               # Design docs and implementation plans.

@@ -4,13 +4,13 @@
     {
       "id": 1,
       "subject": "Task 1: Move Options into run_options.py",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** `Options` lives in a module `pipeline.py` is allowed to import, with every existing `cli.Options` reference still working.\n\n**Files:**\n- Create: `src/veny/run_options.py`\n- Modify: `src/veny/cli.py:62-181` (delete the class, add the re-export)\n- Modify: `tests/test_layering.py` (add `run_options` to the `state` layer)\n- Test: `tests/test_layering.py`, `tests/test_options_surface.py`\n\n**Acceptance Criteria:**\n- [ ] `src/veny/run_options.py` holds the `Options` class, byte-identical in body to `cli.py:62-181` apart from its new module docstring and imports.\n- [ ] `cli.Options is run_options.Options` — a re-export, not a subclass or a copy.\n- [ ] `tests/test_layering.py` passes with `run_options` in the `state` layer and NO new `SANCTIONED_EXCEPTIONS` entry.\n- [ ] All 370 existing tests still pass, with no test file repointed.\n\n**Verify:** `pixi run test` → 371 passed; `pixi run typecheck` ≤ 33 errors\n\nFull steps, code and rationale: docs/superpowers/plans/2026-08-19-pipeline-and-cli-slimming.md, Task 1.\n\n```json:metadata\n{\"files\": [\"src/veny/run_options.py\", \"src/veny/cli.py\", \"tests/test_layering.py\", \"tests/test_options_surface.py\"], \"verifyCommand\": \"pixi run test && pixi run lint && pixi run typecheck\", \"acceptanceCriteria\": [\"run_options.py holds the Options class verbatim\", \"cli.Options is run_options.Options\", \"test_layering passes with no new sanctioned exception\", \"371 tests pass\"], \"modelTier\": \"standard\"}\n```"
     },
     {
       "id": 2,
       "subject": "Task 2: Drive every branch of main() before it moves",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         1
       ],
@@ -19,7 +19,7 @@
     {
       "id": 3,
       "subject": "Task 3: Extract the analysis driver into pipeline.py",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         1,
         2
@@ -29,7 +29,7 @@
     {
       "id": 4,
       "subject": "Task 4: Move the run itself into pipeline.py",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         3
       ],
@@ -38,7 +38,7 @@
     {
       "id": 5,
       "subject": "Task 5: Delete --full and make a scriptless run exit 2",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         4
       ],
@@ -47,7 +47,7 @@
     {
       "id": 6,
       "subject": "Task 6: Check the virtualenv veny is running inside",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         4
       ],
@@ -56,7 +56,7 @@
     {
       "id": 7,
       "subject": "Task 7: Take exit ownership back into cli.py",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         4
       ],
@@ -65,7 +65,7 @@
     {
       "id": 8,
       "subject": "Task 8: STANDING CHECK and the wiring index",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         5,
         6,
@@ -76,7 +76,7 @@
     {
       "id": 9,
       "subject": "Task 9: Write scripts/differential_3e.py",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         5,
         6,

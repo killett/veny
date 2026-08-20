@@ -135,6 +135,18 @@ Read before starting, in this order:
 Six behaviour-visible decisions. Each is deliberate, each has a task, and each
 becomes a `PROGRESS.md` entry at Task 10.
 
+**[EXECUTION]** **There were seven, not six.** A seventh sanctioned deviation
+was added mid-phase by an explicit user ruling during Task 7's second fix
+round (`183bdcc`): veny's last `ek.my_critical_error` call, on the
+failed-venv-build path with `choose_breakpoint=True`. emmykit's helper calls
+`breakpoint()` in that mode, so a refused `uv venv` dropped the user into a
+`pdb` prompt — or died with a `BdbQuit` traceback under a non-tty — from an
+ordinary operational outcome. It is now
+`logging.critical("Failed to create a virtual environment.")`, with the
+existing `script_exit_code = 1` carrying the status out through `cli.main`.
+veny now has **no** `ek.my_critical_error` call anywhere. All seven are
+recorded in `PROGRESS.md`.
+
 1. **`Options` gets its own module before it dies.** The design goes straight
    from "`Options` carries everything" to "frozen dataclasses". It does not say
    where the class lives while `pipeline.py` exists and `Options` still does
@@ -144,6 +156,19 @@ becomes a `PROGRESS.md` entry at Task 10.
    `cli.py` keeps `Options = run_options.Options` as a re-export so the 42
    existing `cli.Options` references in the suite keep working. Phase 4 deletes
    both the module and the re-export. **This is design amendment 12.**
+
+   **[EXECUTION]** **"42 `cli.Options` references" was both slightly wrong and
+   substantially incomplete.** Measured at the branch point `08622a8`: there
+   are **41** literal `cli.Options` references, not 42 — and a further **28**
+   that reach the same class as `veny.Options`, through
+   `from veny import cli as veny` in **six** test files
+   (`test_options_surface.py`, `test_split_imports.py`, `test_venv_naming.py`,
+   `test_cache_search.py`, `test_manifest_writing.py`,
+   `test_rename_venv.py`). The real figure is **69 across two spellings**. The
+   re-export made the miscount harmless here, but it is the same blind spot
+   that broke Task 3's symbol sweep — see the `[EXECUTION]` note there — and
+   phase 4, which must repoint every one of them when it deletes the
+   re-export, should start from 69 and from both spellings.
 
 2. **`blank_slate` is `pipeline.py`'s, not `cli.py`'s.** The design says
    `cli.py` owns "argparse and exit status and nothing else", and the
@@ -274,7 +299,22 @@ and `setup_virtualenv`. Phase 4 deletes all of it, at which point the module
 lands where the design put it. Do **not** pre-emptively split the module to
 hit the estimate.
 
+**[EXECUTION]** Measured at `a874f3d`: `pipeline.py` is **940** lines, not
+"roughly 700" — a 34% under-prediction. The guidance stands and was followed
+(nothing was split to hit the number), but the estimate was not close. The
+overshoot is not the `Options` bridge alone; the moved code also gained
+docstrings and explicit argument lists, the same effect 3d measured when its
+1,232 removed lines became 1,530 new ones.
+
 ### Staying in `cli.py` (about 300 lines when this plan is done)
+
+**[EXECUTION]** `cli.py` finished at **206** lines, comfortably under the
+~300 estimate, and `cli.main`'s CLI surface is close to the predicted ~90.
+`run_options.py` is **139** lines against the "measured span, 120 lines"
+below — the 19-line difference is the new module docstring and import block,
+which the span could not include. The phase's own total, `pipeline.py` +
+`run_options.py` = **1,079** lines, is well over the ~450 that `PROGRESS.md`
+carried for 3e before the plan was written.
 
 | Symbol | Current span | Notes |
 |---|---|---|
@@ -339,6 +379,19 @@ mechanical sweep found 40 sites. Task 8 derives the real list with `rg` over
 the finished `pipeline.py` and `cli.py` and records every row it finds in the
 wiring index, including the ones this table missed.
 
+**[EXECUTION]** **The warning was right and still understated the gap by an
+order of magnitude.** The mechanical sweep found **99 call-site groups**
+carrying **236 measured arguments**, inside a file total of **221 call
+expressions with at least one argument, carrying 458 arguments** — against
+this table's **15** rows. That is a 6.6× miss on sites, after 3d's 2.9× miss
+on the same prediction. The structural claim above ("`pipeline`'s entry points
+take the `Options` object itself, so argument lists move *with* their call
+sites") did hold and is worth keeping — it is why 3e's *hole rate* was 42%
+where 3d's was 71% — but it says nothing about the number of sites, and it was
+read as though it did. **Rule for the next plan: do not put a predicted
+call-site table in a plan at all. Put the derivation command and a budget for
+a whole task.**
+
 ---
 
 ## Task 1: Move `Options` into `src/veny/run_options.py`
@@ -353,19 +406,19 @@ every existing `cli.Options` reference still working.
 - Test: `tests/test_layering.py`, `tests/test_options_surface.py`
 
 **Acceptance Criteria:**
-- [ ] `src/veny/run_options.py` holds the `Options` class, byte-identical in
+- [x] `src/veny/run_options.py` holds the `Options` class, byte-identical in
       body to `cli.py:62-181` apart from its new module docstring and imports.
-- [ ] `cli.Options is run_options.Options` — a re-export, not a subclass or a
+- [x] `cli.Options is run_options.Options` — a re-export, not a subclass or a
       copy.
-- [ ] `tests/test_layering.py` passes with `run_options` in the `state` layer
+- [x] `tests/test_layering.py` passes with `run_options` in the `state` layer
       and **no** new `SANCTIONED_EXCEPTIONS` entry.
-- [ ] All 370 existing tests still pass, with no test file repointed.
+- [x] All 370 existing tests still pass, with no test file repointed.
 
 **Verify:** `pixi run test` → 370 passed (plus the new test below → 371)
 
 **Steps:**
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `tests/test_options_surface.py`:
 
@@ -386,12 +439,12 @@ def test_options_lives_in_run_options_and_cli_only_re_exports_it():
     assert cli.Options is run_options.Options
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `pixi run python -m pytest tests/test_options_surface.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'veny.run_options'`
 
-- [ ] **Step 3: Create the module**
+- [x] **Step 3: Create the module**
 
 `src/veny/run_options.py`:
 
@@ -422,7 +475,7 @@ including `set_venv_dir` — under those imports **verbatim**. Do not reformat,
 do not re-word a comment, do not reorder an attribute. A diff of the class body
 against `git show HEAD:src/veny/cli.py` must be empty.
 
-- [ ] **Step 4: Re-export from `cli.py`**
+- [x] **Step 4: Re-export from `cli.py`**
 
 Delete `cli.py:62-181` and put this in its place (after the existing
 `json_types.register_types()` call):
@@ -436,7 +489,7 @@ Options = run_options.Options
 
 Add `run_options` to the existing `from . import (...)` block in `cli.py`.
 
-- [ ] **Step 5: Add the layer entry**
+- [x] **Step 5: Add the layer entry**
 
 In `tests/test_layering.py`, change the `state` layer to:
 
@@ -452,7 +505,7 @@ In `tests/test_layering.py`, change the `state` layer to:
     frozenset({"state", "run_options"}),
 ```
 
-- [ ] **Step 6: Run the gates**
+- [x] **Step 6: Run the gates**
 
 ```bash
 pixi run test
@@ -465,7 +518,7 @@ Expected: 371 passed; lint clean; 53 files formatted; **≤ 33** mypy errors.
 `cli.py`'s 7 mypy errors may move to `run_options.py` — that is fine, the
 ceiling is a total.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 pixi run pre-commit run --files src/veny/run_options.py \
@@ -493,14 +546,14 @@ against an **effect**, so the move in Tasks 3–4 has something that can fail.
 - Test: `tests/test_cli_entry_point.py`
 
 **Acceptance Criteria:**
-- [ ] `main()`'s four post-classification branches are each driven in process:
+- [x] `main()`'s four post-classification branches are each driven in process:
       all-installed, in-virtualenv, cache-hit, cache-miss-then-build.
-- [ ] `--justprint` and `--blank-slate` are each driven in process and asserted
+- [x] `--justprint` and `--blank-slate` are each driven in process and asserted
       on their effect (no script subprocess ran; the directory tree was
       removed), not on a spy's own argument.
-- [ ] Every new test names, in its docstring, the concrete bug that makes it
+- [x] Every new test names, in its docstring, the concrete bug that makes it
       fail — per the `test-design` skill and the design's per-test protocol.
-- [ ] The tests pass **before** any code moves, and are what Tasks 3–4 are
+- [x] The tests pass **before** any code moves, and are what Tasks 3–4 are
       judged against.
 
 **Verify:** `pixi run python -m pytest tests/test_cli_entry_point.py -v` → all
@@ -508,7 +561,7 @@ pass, 6 added
 
 **Steps:**
 
-- [ ] **Step 1: Read the existing harness**
+- [x] **Step 1: Read the existing harness**
 
 `tests/test_cli_entry_point.py:121-176` defines `_drive_main`, which stubs the
 interpreter probe, the custom-module scan, the alias index, `subprocess.run`,
@@ -516,7 +569,7 @@ emmykit's logging and options-file side effects, and `cli.list_packages`. Six
 of the eleven existing tests use it. Every new test below extends it rather
 than building a second harness.
 
-- [ ] **Step 2: Add a script-launch recorder to `_drive_main`**
+- [x] **Step 2: Add a script-launch recorder to `_drive_main`**
 
 The existing harness stubs `subprocess.run` with a lambda that discards its
 arguments, so no current test can see *which interpreter ran the script*.
@@ -537,7 +590,7 @@ two values. This is the change that makes the branch tests below able to
 distinguish "ran under the venv's interpreter" from "ran under `sys.executable`",
 which is the whole difference between two of `main()`'s branches.
 
-- [ ] **Step 3: Write the four branch tests**
+- [x] **Step 3: Write the four branch tests**
 
 ```python
 def test_main_runs_the_script_under_the_running_interpreter_when_nothing_is_missing(
@@ -667,7 +720,7 @@ Task 6 deletes that assert and this test changes with it — that is expected an
 called out there. Write it against today's behaviour now, so that Task 6's
 change is visible as a diff rather than as a new test appearing from nowhere.
 
-- [ ] **Step 4: Write the two mode tests**
+- [x] **Step 4: Write the two mode tests**
 
 ```python
 def test_justprint_runs_no_script_and_exits_zero(monkeypatch, tmp_path):
@@ -739,7 +792,7 @@ instead. If `Options.cwd` (resolved at construction time) does not follow
 before `_drive_main` runs and chdir there first. Measure which is needed —
 do not guess.
 
-- [ ] **Step 5: Run the tests, then prove each can fail**
+- [x] **Step 5: Run the tests, then prove each can fail**
 
 Run: `pixi run python -m pytest tests/test_cli_entry_point.py -v`
 Expected: all pass, including the six new ones.
@@ -760,7 +813,7 @@ Record which test died for each mutation in the commit message. A mutation
 that leaves the suite green means the test is decorative and must be fixed
 before this task closes.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 pixi run pre-commit run --files tests/test_cli_entry_point.py
@@ -784,25 +837,25 @@ git commit -m "test: drive every branch of main() in process before it moves"
 - Test: the repointed files, plus `tests/test_layering.py`
 
 **Acceptance Criteria:**
-- [ ] `pipeline.py` holds `build_alias_index`, `find_imports_in_script`,
+- [x] `pipeline.py` holds `build_alias_index`, `find_imports_in_script`,
       `warn_about_system_packages`, `_probe_venv`, `split_imports`,
       `list_packages`, `stayed_out_dir` and `get_all_imports`, with bodies
       unchanged apart from the `Options` annotation now reading
       `run_options.Options`.
-- [ ] `cli.py` contains none of those names.
-- [ ] The 25 `cli.split_imports`, 4 `cli.find_imports_in_script`, 2
+- [x] `cli.py` contains none of those names.
+- [x] The 25 `cli.split_imports`, 4 `cli.find_imports_in_script`, 2
       `cli._probe_venv` and 1 `cli.list_packages` references in the suite and
       in `scripts/differential_3d.py` are accounted for: test references
       repointed to `pipeline.*`; `scripts/differential_3d.py` is **not**
       updated (Task 9 explains why).
-- [ ] `tests/test_layering.py` passes with `pipeline` between `cache_search`
+- [x] `tests/test_layering.py` passes with `pipeline` between `cache_search`
       and `cli`, no new sanctioned exception.
 
 **Verify:** `pixi run test` → 371 passed
 
 **Steps:**
 
-- [ ] **Step 1: Create the module with its docstring**
+- [x] **Step 1: Create the module with its docstring**
 
 `src/veny/pipeline.py`:
 
@@ -827,7 +880,7 @@ is what lets a test replace one boundary without rebuilding the world.
 """
 ```
 
-- [ ] **Step 2: Move the eight symbols verbatim**
+- [x] **Step 2: Move the eight symbols verbatim**
 
 Move `cli.py:300-324` (`build_alias_index`) and `cli.py:699-955`
 (`find_imports_in_script` through `get_all_imports`, which is contiguous) into
@@ -850,7 +903,7 @@ particular the 20-line comment in `find_imports_in_script` explaining why the
 seven scan fields are passed by reference, which is the only written record of
 why that bridge works.
 
-- [ ] **Step 3: Delete the moved spans from `cli.py`**
+- [x] **Step 3: Delete the moved spans from `cli.py`**
 
 After the deletions `cli.py` still imports `cache_search`, `classify`,
 `environment`, `last_used`, `venv_cache`, `verify`, `analysis_scan`,
@@ -859,13 +912,13 @@ After the deletions `cli.py` still imports `cache_search`, `classify`,
 `ruff` reports as unused; **run `pixi run lint` and let it tell you which** —
 do not delete by eye.
 
-- [ ] **Step 4: Add the layer entry**
+- [x] **Step 4: Add the layer entry**
 
 In `tests/test_layering.py`, insert between the `cache_search` and `cli`
 entries the `frozenset({"pipeline"})` block given in the File Structure
 section above, comment included.
 
-- [ ] **Step 5: Repoint the tests**
+- [x] **Step 5: Repoint the tests**
 
 ```bash
 rg -n 'cli\.(split_imports|find_imports_in_script|_probe_venv|list_packages|build_alias_index|stayed_out_dir|get_all_imports|warn_about_system_packages)' tests/
@@ -879,7 +932,27 @@ files that gain one. Expected counts, measured on `08622a8`:
 If a count differs, find out why before changing anything — a count that moved
 means the tree moved.
 
-- [ ] **Step 6: Run the gates**
+**[EXECUTION]** **This sweep names one spelling; the suite uses three, and the
+third was found by the tests failing rather than by `rg`.** The counts above
+all matched (32 hits, 31 repointed, 1 deliberately left in
+`scripts/differential_3d.py`, which is pinned to two historical trees). But
+`cli.<name>` is only the first form. The second is
+`monkeypatch.setattr(cli, "<name>", …)` — 13 hits at `f98a775`, 2 of them
+naming symbols this task moved. The third is `from veny import cli as veny`,
+which spells references as `veny.<name>` and matches **neither** pattern: four
+hits in `tests/test_split_imports.py` (`veny.warn_about_system_packages` ×2,
+`veny.build_alias_index` ×2), caught only by four test failures. Task 3 also
+had to touch `tests/test_split_imports.py`, which the brief's file list did not
+mention, for exactly this reason. **Any future sweep over a moved symbol must
+run all three:**
+
+```bash
+rg -n 'cli\.(<names>)' tests/
+rg -n 'setattr\(\s*cli\s*,' tests/
+rg -n 'import cli as (\w+)' tests/     # then sweep <alias>.<names> too
+```
+
+- [x] **Step 6: Run the gates**
 
 ```bash
 pixi run test
@@ -890,7 +963,7 @@ pixi run typecheck
 
 Expected: 371 passed; lint clean; 54 files formatted; ≤ 33 mypy errors.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 pixi run pre-commit run --files src/veny/pipeline.py src/veny/cli.py \
@@ -919,22 +992,22 @@ owns the sequence.
 - Test: all of the above
 
 **Acceptance Criteria:**
-- [ ] `cli.main` is under 100 lines and contains no `logging.info` about the
+- [x] `cli.main` is under 100 lines and contains no `logging.info` about the
       run, no `subprocess.run`, no cache search and no venv handling.
-- [ ] `pipeline.run(options) -> int` returns the status; the three
+- [x] `pipeline.run(options) -> int` returns the status; the three
       `subprocess.run` script launches are one function, `run_script`.
-- [ ] `--justprint` and `--blank-slate` return 0 through `main()` rather than
+- [x] `--justprint` and `--blank-slate` return 0 through `main()` rather than
       calling `sys.exit(0)` inside the run.
-- [ ] The six tests from Task 2 pass unchanged except for the stub targets
+- [x] The six tests from Task 2 pass unchanged except for the stub targets
       moving from `cli.*` to `pipeline.*`.
-- [ ] The negative-status normalization (`128 - status` for a signal-killed
+- [x] The negative-status normalization (`128 - status` for a signal-killed
       child) stays in `cli.main`.
 
 **Verify:** `pixi run test` → 371 passed
 
 **Steps:**
 
-- [ ] **Step 1: Move `setup_virtualenv` and `_load_last_used`**
+- [x] **Step 1: Move `setup_virtualenv` and `_load_last_used`**
 
 Move `cli.py:956-1064` and `cli.py:325-352` into `pipeline.py` verbatim, with
 the same annotation change as Task 3. While `setup_virtualenv` is open,
@@ -943,7 +1016,7 @@ None` survived the move — it is the "Re-narrows: mypy loses the narrowing
 established above" block, and 3d's ledger listed its absence as a deferred
 minor before it was added.
 
-- [ ] **Step 2: Add the two exception types**
+- [x] **Step 2: Add the two exception types**
 
 At the top of `pipeline.py`, under the imports:
 
@@ -967,7 +1040,7 @@ class VenvBuildFailed(Exception):
     """
 ```
 
-- [ ] **Step 3: Write `run_script`, the one script launch**
+- [x] **Step 3: Write `run_script`, the one script launch**
 
 `main()` launches the user's script in four places today — `cli.py:392-397`
 (`--feeling-lucky`), `cli.py:561-568` (nothing missing), `cli.py:582-589`
@@ -1012,7 +1085,7 @@ The `announce=True` default belongs **only** to the acquired-venv launch, which
 is the one that logs `Running command:` today. Do not add the announcement to
 the other two — that would be a visible output change nobody asked for.
 
-- [ ] **Step 4: Write `resolve_target`, `feeling_lucky`, `blank_slate`, `report`**
+- [x] **Step 4: Write `resolve_target`, `feeling_lucky`, `blank_slate`, `report`**
 
 Each is a lift of a contiguous block of `main()`, with its `sys.exit(...)`
 turned into a return value:
@@ -1040,7 +1113,7 @@ def resolve_target(options: run_options.Options) -> None:
   logging plus the `warn_about_system_packages` call, the whole block already
   guarded by `if not options.rawlog:`.
 
-- [ ] **Step 5: Write `run`**
+- [x] **Step 5: Write `run`**
 
 `pipeline.run(options)` is `main()`'s remaining body in order:
 `find_preferred_python_version` → `stdlib_index.resolve` → `build_alias_index`
@@ -1072,7 +1145,7 @@ def run(options: run_options.Options) -> int:
 `cli.main`, which is why the deviation in "What this plan settles" item 6
 exists.
 
-- [ ] **Step 6: Rewrite `cli.main`**
+- [x] **Step 6: Rewrite `cli.main`**
 
 ```python
 def main() -> int:
@@ -1119,12 +1192,30 @@ def main() -> int:
     return script_exit_code
 ```
 
+**[EXECUTION]** **Two errors in the "verbatim" body above. Do not copy it.**
+
+1. **It omits `start_time`.** The real `main()` at `08622a8` takes its elapsed-
+   time baseline *before* `parse_arguments`, and `pipeline.run` needs it. The
+   body above has no `start_time = …` line and calls `pipeline.run(options)`
+   with one argument. Task 4 followed it, which silently moved the baseline;
+   it took a **user ruling** and a fix round (`6b35844`, "fix: time the run
+   from before argparse …") to restore it. The correct shape is
+   `start_time = dt.datetime.now()` as the first statement of `main`, and
+   `pipeline.run(options, start_time)`. This is now pinned by
+   `test_the_run_is_timed_from_the_moment_veny_started`, and the wiring index
+   confirms the `start_time` argument kills exactly that test.
+2. **It names `environment.UvUnavailable` three tasks before that class
+   exists.** The `except environment.UvUnavailable as exc:` clause above is
+   Task 7's work; at Task 4 the class is not defined and `environment.py` still
+   calls `sys.exit`. Transcribing the body as written makes Task 4 fail to
+   import. Task 4 must omit that clause and Task 7 must add it.
+
 **Ordering note that matters:** `feeling_lucky` runs *before*
 `ek.configure_logging`, exactly as today — that branch prints with `print()`
 rather than logging, and moving the logging setup earlier would change what a
 `--feeling-lucky` run emits.
 
-- [ ] **Step 7: Repoint the tests and adjust the two mode tests**
+- [x] **Step 7: Repoint the tests and adjust the two mode tests**
 
 The Task 2 tests for `--justprint` and `--blank-slate` used
 `pytest.raises(SystemExit)`. Both now return through `main()`:
@@ -1141,7 +1232,7 @@ Repoint stub targets: `cli.list_packages` → `pipeline.list_packages`,
 `tests/test_uv_backend.py` (5), `tests/test_verify.py` (1),
 `tests/test_last_used.py` (5).
 
-- [ ] **Step 8: Run the gates and commit**
+- [x] **Step 8: Run the gates and commit**
 
 ```bash
 pixi run test
@@ -1164,6 +1255,26 @@ git commit -m "refactor: give pipeline.py the run, leaving cli.py argv and exit 
 mention and all five of its branches are gone — and the fall-through it left
 behind is a clean exit 2.
 
+**[EXECUTION]** **Two errors in this task, both about counting and citing.**
+
+1. **There are six branches, not five.** This goal says five; Step 2 below
+   lists six numbered items and all six were deleted or replaced. Task 9's
+   differential likewise reports "the six deleted branches". Read "six"
+   everywhere in this task.
+2. **Every `cli.py:NNN` citation in this task is stale, because Task 4 already
+   moved the code.** The file list names `cli.py:220-224` for the
+   `--full` argparse block and Step 2 cites `cli.py:445-446`, `492-495`,
+   `496-499`, `642`, `678-686` and `864-870` for the branches. By the time
+   Task 5 runs, `cli.py` is **202 lines** and five of those six branches live
+   in `src/veny/pipeline.py`; only the `parser.add_argument("--full", …)` call
+   is still in `cli.py`, and not at line 220. The spans are taken from
+   `08622a8`, which was correct when the plan was written and wrong by Task 5.
+   Task 5 located them with `rg -n 'full' src/veny/` instead — **which is what
+   any task after a move must do.** The same rot applies to Task 6 and Task 7,
+   which avoided it only by citing symbols rather than lines. **Rule: a plan
+   whose early tasks move code must cite the later tasks' targets by symbol,
+   never by line.**
+
 **Files:**
 - Modify: `src/veny/cli.py` (the `--full` argument, `cli.py:220-224`)
 - Modify: `src/veny/pipeline.py` (five `getattr(options.args, "full", False)`
@@ -1172,19 +1283,19 @@ behind is a clean exit 2.
 - Test: `tests/test_cli_entry_point.py`
 
 **Acceptance Criteria:**
-- [ ] `rg -n -- '--full|"full"' src/ tests/ README.md` returns nothing.
-- [ ] `veny --full` exits 2 with argparse's own "unrecognized arguments"
+- [x] `rg -n -- '--full|"full"' src/ tests/ README.md` returns nothing.
+- [x] `veny --full` exits 2 with argparse's own "unrecognized arguments"
       error — the flag is gone, not merely ignored.
-- [ ] `veny` with no script and no `--blank-slate` logs a message naming only
+- [x] `veny` with no script and no `--blank-slate` logs a message naming only
       flags that exist, and returns 2.
-- [ ] `get_all_imports` and the directory branch of `list_packages` **stay** —
+- [x] `get_all_imports` and the directory branch of `list_packages` **stay** —
       a directory is still reachable as a positional argument.
 
 **Verify:** `pixi run python -m pytest tests/test_cli_entry_point.py -v`
 
 **Steps:**
 
-- [ ] **Step 1: Write the two failing tests**
+- [x] **Step 1: Write the two failing tests**
 
 ```python
 def test_the_full_flag_is_gone(monkeypatch, tmp_path):
@@ -1233,17 +1344,17 @@ def test_a_run_with_no_script_is_a_usage_error(monkeypatch, tmp_path, caplog):
     assert "--full" not in caplog.text
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 Run: `pixi run python -m pytest tests/test_cli_entry_point.py -k "full or usage" -v`
 Expected: the first FAILs (argparse accepts `--full` today, so no `SystemExit`);
 the second FAILs with `AssertionError: options.python_script must be set`.
 
-- [ ] **Step 3: Delete the flag**
+- [x] **Step 3: Delete the flag**
 
 Remove `cli.py:220-224` — the whole `parser.add_argument("--full", …)` call.
 
-- [ ] **Step 4: Delete the five branches in `pipeline.py`**
+- [x] **Step 4: Delete the five branches in `pipeline.py`**
 
 By their original `cli.py` line numbers, so they can be found after the move:
 
@@ -1271,7 +1382,7 @@ By their original `cli.py` line numbers, so they can be found after the move:
    python script in …". Delete the branch, keep the directory-scan path under
    it.
 
-- [ ] **Step 5: Update the README**
+- [x] **Step 5: Update the README**
 
 `README.md:77` reads:
 
@@ -1280,7 +1391,7 @@ By their original `cli.py` line numbers, so they can be found after the move:
 Drop `--full` from that list. Check the surrounding sentence still reads
 correctly — `rg -n -B3 -A3 -- '--no-cache' README.md`.
 
-- [ ] **Step 6: Run the gates and commit**
+- [x] **Step 6: Run the gates and commit**
 
 ```bash
 pixi run test
@@ -1307,10 +1418,10 @@ environment instead of raising `AssertionError`.
 - Test: `tests/test_last_used.py`, `tests/test_cli_entry_point.py`
 
 **Acceptance Criteria:**
-- [ ] `last_used.active_virtualenv_dir()` returns `$VIRTUAL_ENV` when set and
+- [x] `last_used.active_virtualenv_dir()` returns `$VIRTUAL_ENV` when set and
       `sys.prefix` otherwise, as a `Path`.
-- [ ] The branch no longer contains `assert options.venv_dir is not None`.
-- [ ] A run inside a virtualenv that satisfies the imports runs the script and
+- [x] The branch no longer contains `assert options.venv_dir is not None`.
+- [x] A run inside a virtualenv that satisfies the imports runs the script and
       returns its status; one that does not returns 1 with today's two log
       lines unchanged.
 
@@ -1318,7 +1429,7 @@ environment instead of raising `AssertionError`.
 
 **Steps:**
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/test_last_used.py`:
 
@@ -1393,13 +1504,13 @@ def test_main_checks_the_virtualenv_it_is_running_inside(monkeypatch, tmp_path):
     assert launched == []
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 Expected: the two `last_used` tests fail with
 `AttributeError: module 'veny.last_used' has no attribute 'active_virtualenv_dir'`;
 the `main()` test fails with `AssertionError: options.venv_dir must be set`.
 
-- [ ] **Step 3: Add `active_virtualenv_dir`**
+- [x] **Step 3: Add `active_virtualenv_dir`**
 
 In `src/veny/last_used.py`, directly under `is_virtualenv`:
 
@@ -1422,7 +1533,7 @@ def active_virtualenv_dir() -> Path:
     return Path(sys.prefix)
 ```
 
-- [ ] **Step 4: Rewrite the branch in `pipeline.run`**
+- [x] **Step 4: Rewrite the branch in `pipeline.run`**
 
 ```python
     elif last_used.is_virtualenv():
@@ -1443,7 +1554,7 @@ def active_virtualenv_dir() -> Path:
 Everything below that — the script launch under `sys.executable`, the runtime
 logging, the two error lines and `script_exit_code = 1` — is unchanged.
 
-- [ ] **Step 5: Run the gates and commit**
+- [x] **Step 5: Run the gates and commit**
 
 ```bash
 pixi run test
@@ -1472,14 +1583,28 @@ exception escape; design amendment 4 and ledger item 4 are closed.
   `tests/test_cli_entry_point.py`
 
 **Acceptance Criteria:**
-- [ ] `rg -n 'SystemExit|sys\.exit|my_critical_error' src/veny/ --glob '!cli.py'`
+- [x] `rg -n 'SystemExit|sys\.exit|my_critical_error' src/veny/ --glob '!cli.py'`
       returns nothing outside `__main__.py`'s `sys.exit(main())`.
-- [ ] `environment.create_venv` returns `bool` and its docstring no longer has
+
+      **[EXECUTION]** **This criterion is unsatisfiable as literally written,
+      and was met in substance rather than by the grep.** Re-run at
+      `a874f3d` it returns four hits: `__main__.py:10` (sanctioned) and
+      `verify.py:327`, `:330`, `:333`. The three in `verify.py` are inside a
+      **Python source string literal** that veny hands to the *target*
+      interpreter as `-c` — they are the probe script's own exit statuses,
+      executed in the venv being checked, and have nothing to do with veny's
+      process. Substantively the criterion passed: `rg -n 'my_critical_error'
+      src/` returns nothing (the last call went in `183bdcc`, the seventh
+      sanctioned deviation), and veny's own process exits only through
+      `cli.main`'s return value. A text search cannot distinguish code from a
+      string that looks like code; state the criterion as "veny's own process
+      exits only through `cli.main`" and use the grep as a hint.
+- [x] `environment.create_venv` returns `bool` and its docstring no longer has
       a `Raises:` section.
-- [ ] A missing uv exits 1 with the current message text, on stderr.
-- [ ] A failed venv creation on the build path exits 1 with a logged message,
+- [x] A missing uv exits 1 with the current message text, on stderr.
+- [x] A failed venv creation on the build path exits 1 with a logged message,
       not a `CalledProcessError` traceback.
-- [ ] `src/veny/environment.py:245`'s redundant `# noqa: S603` is gone and
+- [x] `src/veny/environment.py:245`'s redundant `# noqa: S603` is gone and
       `pixi run lint` still reports `All checks passed!`.
 
 **Verify:** `pixi run python -m pytest tests/test_environment.py tests/test_uv_backend.py -v`
@@ -1487,7 +1612,7 @@ and `pixi run smoke`
 
 **Steps:**
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/test_environment.py`:
 
@@ -1563,13 +1688,13 @@ def test_main_maps_a_missing_uv_to_status_one(monkeypatch, tmp_path, capsys):
     assert "uv tool install veny" in capsys.readouterr().err
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 Expected: `AttributeError: module 'veny.environment' has no attribute
 'UvUnavailable'` for the first and third; `CalledProcessError` propagating out
 of the second.
 
-- [ ] **Step 3: Change `environment.py`**
+- [x] **Step 3: Change `environment.py`**
 
 Add above `uv_binary`:
 
@@ -1622,7 +1747,7 @@ Delete the redundant `# noqa: S603` at `src/veny/environment.py:245`
 `pixi run lint` before committing, and leave the ones in `alias_index.py:523`
 and `stdlib_index.py:117` alone — neither module has a per-file ignore.
 
-- [ ] **Step 4: Consume the return value at both call sites**
+- [x] **Step 4: Consume the return value at both call sites**
 
 In `pipeline.setup_virtualenv`:
 
@@ -1651,7 +1776,7 @@ In `pipeline._probe_venv`:
 `pipeline.run`, which already sets `script_exit_code = 1`. Leave that call
 where it is: `my_critical_error` reports, and `cli.main` still owns the status.
 
-- [ ] **Step 5: Run the gates, including smoke**
+- [x] **Step 5: Run the gates, including smoke**
 
 ```bash
 pixi run test
@@ -1665,7 +1790,7 @@ pixi run smoke
 in the task report** rather than recording the task as verified — 3d's ledger
 records network availability for exactly this reason.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 pixi run pre-commit run --files src/veny/environment.py src/veny/pipeline.py \
@@ -1684,6 +1809,21 @@ git commit -m "refactor: give cli.py sole ownership of veny's exit statuses"
 **Goal:** Every argument at every call site this phase created kills a named
 test, measured mechanically — including the five `rawlog` holes 3d left open.
 
+**[EXECUTION]** **The goal as stated is unreachable, and saying so is the
+task's most useful output.** Of 278 substitutions, **215 kill a named test, 16
+are identity substitutions that cannot kill anything, and 47 kill nothing** —
+of which **17 are DEAD ARGUMENTS** (values the callee never reads: unpinnable
+by construction, deletion candidates for phase 4) and **30 are genuine OPEN
+HOLEs**, each named with its reason in the index. The acceptance criteria below
+anticipated this with their "or each remaining one is marked **OPEN HOLE**"
+escape hatch, and that is the honest form; the goal line is not. 3d's index
+claimed the strong form and its whole-branch review falsified it. **State the
+headline with its qualifier, and split findings out from gaps.** All five
+`rawlog` holes were closed, four by `caplog` effect-reading tests as required;
+the fifth (`ek.configure_logging`) has no veny-visible effect and is pinned by
+an argument spy, which the index labels as the weaker pin rather than letting
+it pass as an equal one.
+
 > **USER-ORDERED GATE — NON-SKIPPABLE.** This task was requested by the user in
 > the current conversation. It MUST NOT be closed by walking around it, by
 > declaring it "verified inline", or by substituting a cheaper check. Close only
@@ -1695,14 +1835,14 @@ test, measured mechanically — including the five `rawlog` holes 3d left open.
 - Modify: whichever test files the holes require
 
 **Acceptance Criteria:**
-- [ ] The wiring index lists **every** call site in `pipeline.py` and `cli.py`
+- [x] The wiring index lists **every** call site in `pipeline.py` and `cli.py`
       that this phase created or moved, derived with `rg`, not from the
       predicted table in this plan.
-- [ ] For each argument: the substitution used, whether a named test died, and
+- [x] For each argument: the substitution used, whether a named test died, and
       that test's name. Booleans appear **twice**, once per value.
-- [ ] Zero open holes at the end, or each remaining one is marked **OPEN HOLE**
+- [x] Zero open holes at the end, or each remaining one is marked **OPEN HOLE**
       with the reason it cannot be closed.
-- [ ] The five `rawlog` sites 3d marked OPEN HOLE are closed by tests that read
+- [x] The five `rawlog` sites 3d marked OPEN HOLE are closed by tests that read
       an **effect** (a `caplog` record present or absent), never by a spy
       asserting the value it was handed.
 
@@ -1710,7 +1850,7 @@ test, measured mechanically — including the five `rawlog` holes 3d left open.
 
 **Steps:**
 
-- [ ] **Step 1: Derive the real call-site list**
+- [x] **Step 1: Derive the real call-site list**
 
 ```bash
 rg -n '^\s+\w+\.\w+\(' src/veny/pipeline.py src/veny/cli.py
@@ -1722,7 +1862,7 @@ Record both numbers in the index's header — 3d's plan predicted 14 sites and
 the sweep found 40, so a prediction that matches exactly is itself suspicious
 and should be re-derived.
 
-- [ ] **Step 2: Substitute, one argument at a time**
+- [x] **Step 2: Substitute, one argument at a time**
 
 For each argument: copy the file to the scratch directory, substitute in
 place, run `pixi run test`, record which named test failed, restore from the
@@ -1736,7 +1876,7 @@ copy. Substitution rules, both learned the hard way and both mandatory:
 - an argument whose substitution leaves the suite green is an **open hole**,
   and closing it means adding a test that reads the effect
 
-- [ ] **Step 3: Close the five inherited `rawlog` holes**
+- [x] **Step 3: Close the five inherited `rawlog` holes**
 
 Each of these is pinned by asserting on log records, in both directions —
 a specific `logging.INFO` record present when `rawlog=False`, absent when
@@ -1804,7 +1944,7 @@ other four. For the other four (`parse_extra_requirements`, `Settings` →
 `dict_of_custom_modules`, `verify_and_repair_imports`, `record_venv_state`),
 drive the path with `caplog` and assert a specific record.
 
-- [ ] **Step 4: Write the index**
+- [x] **Step 4: Write the index**
 
 Same shape as
 `docs/superpowers/plans/2026-08-18-verify-cache-search-last-used-wiring-index.md`:
@@ -1813,7 +1953,7 @@ measured before/after counts, and an explicit statement of the substitution
 class the claim was measured under. That qualifier is what made 3d's headline
 claim false when it was omitted.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 pixi run pre-commit run --files <every test file touched> \
@@ -1843,17 +1983,17 @@ unpinned.
 - Modify: `pyproject.toml` (per-file ignores, if the new script needs them)
 
 **Acceptance Criteria:**
-- [ ] The driver takes a tree root as an argument, sets `PYTHONHASHSEED=0`
+- [x] The driver takes a tree root as an argument, sets `PYTHONHASHSEED=0`
       inside itself, sets `sys.dont_write_bytecode`, purges `__pycache__`
       before the first import, redirects `HOME`, and prints
       `veny.cli.__file__` first.
-- [ ] Diagnostics go to **stderr**; only compared state goes to stdout.
-- [ ] It drives `cli.main()` end to end for at least three argv shapes:
+- [x] Diagnostics go to **stderr**; only compared state goes to stdout.
+- [x] It drives `cli.main()` end to end for at least three argv shapes:
       a run with nothing missing, a run that hits the cache, and
       `--justprint`.
-- [ ] The comparison is empty apart from the deviations this plan sanctioned,
+- [x] The comparison is empty apart from the deviations this plan sanctioned,
       each named in the script's docstring.
-- [ ] The check is proved able to fail — at least four deliberate mutations,
+- [x] The check is proved able to fail — at least four deliberate mutations,
       each recorded with the diff it produced.
 
 **Verify:**
@@ -1866,13 +2006,13 @@ diff /tmp/old.txt /tmp/new.txt
 
 **Steps:**
 
-- [ ] **Step 1: Copy the scaffolding, not the layers**
+- [x] **Step 1: Copy the scaffolding, not the layers**
 
 `scripts/differential_3d.py:83-152` holds `reexec_with_fixed_hash_seed`,
 `purge_pycache` and the `Tree` loader. Reuse them verbatim. The three *layers*
 are 3d's and do not carry over — 3e's comparison is at `main()`.
 
-- [ ] **Step 2: Write the three layers**
+- [x] **Step 2: Write the three layers**
 
 1. **A run with nothing missing.** Corpus: one script importing only `os`.
    Capture: `main()`'s return value, the argv of every `subprocess.run`, and
@@ -1887,7 +2027,7 @@ are 3d's and do not carry over — 3e's comparison is at `main()`.
 3. **`--justprint`.** Capture: the return value and the full log output.
    This is the layer that shows the sanctioned tail-order deviation.
 
-- [ ] **Step 3: Name the expected diff in the docstring**
+- [x] **Step 3: Name the expected diff in the docstring**
 
 The comparison is **not** expected to be empty. State, in the module
 docstring, exactly which hunks are sanctioned:
@@ -1899,7 +2039,7 @@ docstring, exactly which hunks are sanctioned:
 An unexplained hunk is a regression, and the docstring is what lets the next
 reader tell the difference.
 
-- [ ] **Step 4: Prove it can fail**
+- [x] **Step 4: Prove it can fail**
 
 Four mutations, minimum, each applied to the new tree only, each restored from
 a scratch copy:
@@ -1912,7 +2052,7 @@ a scratch copy:
 Record the diff each one produced. A mutation that produces no diff means the
 layer does not reach that code and must be said so in the report.
 
-- [ ] **Step 5: Add the banner to 3d's driver**
+- [x] **Step 5: Add the banner to 3d's driver**
 
 `scripts/differential_3d.py` reads `cli.Options`, `cli.list_packages`,
 `cli.setup_virtualenv` and `cli._load_last_used`, three of which moved to
@@ -1927,7 +2067,7 @@ destroy that. Add one line under its docstring's first paragraph:
     supersedes it.
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 pixi run pre-commit run --files scripts/differential_3e.py \
@@ -1956,20 +2096,26 @@ and nothing about it is inferred.
   (annotate in place)
 
 **Acceptance Criteria:**
-- [ ] `README.md`'s project structure lists `pipeline.py` and
+- [x] `README.md`'s project structure lists `pipeline.py` and
       `run_options.py`, and `cli.py`'s description is rewritten — it currently
       claims `cli.py` builds the `ImportScan` and the probe venv, which after
       this phase it does not.
-- [ ] Every gate is **measured** and the number recorded: test count, lint,
+- [x] Every gate is **measured** and the number recorded: test count, lint,
       format file count, mypy errors *with the per-file breakdown*, smoke.
-- [ ] `wc -l` line counts recorded for every module.
-- [ ] Two live runs, as 3d did: `pixi run veny --no-cache` on a throwaway
+- [x] `wc -l` line counts recorded for every module.
+- [x] Two live runs, as 3d did: `pixi run veny --no-cache` on a throwaway
       script importing a real third-party package, then the same script with
       no flag, which must reuse the folder the first run built.
-- [ ] `PROGRESS.md` records design amendments 12, 13 and 14, the six
+- [x] `PROGRESS.md` records design amendments 12, 13 and 14, the six
       sanctioned deviations, what 3e declined and who owns it, and the
       residual risks this phase's differential still cannot see.
-- [ ] This plan is annotated in place with `**[EXECUTION]**` blocks wherever
+
+      **[EXECUTION]** Recorded as **seven** deviations — see the `[EXECUTION]`
+      note under "What this plan settles that the design did not" — and as
+      **twenty-one** residual risks: Task 9's report listed twenty and its
+      review added a twenty-first (layers 1 and 7 sort their log records, so
+      message ordering is uncompared there).
+- [x] This plan is annotated in place with `**[EXECUTION]**` blocks wherever
       its own text was wrong. 3b, 3c and 3d each found real errors this way;
       assume this one has some too.
 
@@ -1977,7 +2123,7 @@ and nothing about it is inferred.
 
 **Steps:**
 
-- [ ] **Step 1: Measure every gate and write the numbers down**
+- [x] **Step 1: Measure every gate and write the numbers down**
 
 ```bash
 pixi run test
@@ -1992,7 +2138,15 @@ Record the mypy per-file breakdown, not just the total. The ceiling is 33 and
 has fallen twice unplanned before; if it falls again, say by how much and
 where.
 
-- [ ] **Step 2: The two live runs**
+**[EXECUTION]** It fell again, by **4**: 33 → **29**, the third unplanned fall
+and the lowest it has ever been. All four came out of one file: `cli.py`
+carried **7** on `main` at `08622a8` and carries **1** at `a874f3d`, with
+`pipeline.py` picking up **2** — so the extraction net-deleted four rather than
+relocating them. Per the ledger, Task 4 dropped one and Task 5 dropped three.
+The file count rose 6 → 7 only because `cli.py` split in two. Full breakdown in
+`PROGRESS.md`.
+
+- [x] **Step 2: The two live runs**
 
 ```bash
 cat > /tmp/veny-3e-check.py <<'PY'
@@ -2004,12 +2158,24 @@ pixi run veny /tmp/veny-3e-check.py
 ```
 
 The first must build a `~/veny/myenv-py…-pyyaml` folder with no `failed-`
-prefix and print the dict. The second must log `Using existing virtual
+prefix and print the dict.
+
+**[EXECUTION]** **"No `failed-` prefix" is a statement about the folder on disk
+when the run ends, not about the log — the log shows the prefix and that is
+correct.** `uv venv` creates the folder as
+`failed-myenv-py…-pyyaml` and the script is launched from that path; the
+prefix is stripped by the rename only *after* verification succeeds. Verify
+with `ls ~/veny/` after the run. Measured 2026-08-19: run 1's build log names
+`failed-myenv-py3.13-20260819-220857-pyyaml` and the folder on disk afterwards
+is `myenv-py3.13-20260819-220857-pyyaml`. Run 2 logged
+`Using existing virtual environment:
+/home/claudeuser/veny/myenv-py3.13-20260819-220857-pyyaml` — the identical
+folder — and both runs printed `{'phase': '3e', 'closed': True}` and exited 0. The second must log `Using existing virtual
 environment:` naming **the same folder** and print the same dict. Record both
 folder names verbatim — if they differ, the cache path regressed and the phase
 is not closed.
 
-- [ ] **Step 3: Rewrite the README structure block**
+- [x] **Step 3: Rewrite the README structure block**
 
 `README.md:106-109` currently describes `cli.py` as doing the analysis
 bridging. Replace with:
@@ -2024,7 +2190,7 @@ bridging. Replace with:
 
 and add `differential_3e.py` to the `scripts/` line.
 
-- [ ] **Step 4: Update `PROGRESS.md`**
+- [x] **Step 4: Update `PROGRESS.md`**
 
 - **Current work**: rewrite the phase-3 table's 3e row as executed, with the
   branch, the commit range, the measured gates and the line counts. Set the
@@ -2039,13 +2205,13 @@ and add `differential_3e.py` to the `scripts/` line.
   that number is worth recording — 3d's 104-of-147 is the most quoted line in
   the ledger precisely because it was measured rather than estimated.
 
-- [ ] **Step 5: Annotate this plan in place**
+- [x] **Step 5: Annotate this plan in place**
 
 Add `**[EXECUTION]**` blocks wherever the plan's own text was wrong — a
 measured span that was off, a call-site count that did not match, a test that
 could not be written as specified. Then mark every checkbox.
 
-- [ ] **Step 6: Commit and merge**
+- [x] **Step 6: Commit and merge**
 
 ```bash
 pixi run pre-commit run --files README.md PROGRESS.md \
@@ -2056,6 +2222,13 @@ git commit -m "docs: close phase 3e with measured gates and its ledger"
 git switch main
 git merge --no-ff pipeline-and-cli-slimming
 ```
+
+**[EXECUTION]** **The merge was NOT performed, by explicit user instruction.**
+Task 10 stops at the commit. The whole-branch review runs first and its
+findings are settled before `pipeline-and-cli-slimming` reaches `main` —
+merging here would merge unreviewed work, which is the opposite of what the
+paragraph below asks for. The two commands after `git commit` are deferred to
+whoever closes the review.
 
 Then request a whole-branch review before deleting the branch. 3b, 3c and 3d
 each had one and each found Important issues that per-task review had missed —
