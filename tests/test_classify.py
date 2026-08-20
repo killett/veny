@@ -120,8 +120,9 @@ def _stub_probe(
     created: list[tuple[str, str]] = []
     probed: list[str] = []
 
-    def fake_create_venv(target: object, python: str = "") -> None:
+    def fake_create_venv(target: object, python: str = "") -> bool:
         created.append((str(target), python))
+        return True
 
     def fake_check(
         venv_python: object,
@@ -722,11 +723,12 @@ def test_the_probe_venv_is_asked_about_the_interpreter_it_just_built(
     created: list[Path] = []
     asked: list[Path] = []
 
-    monkeypatch.setattr(
-        environment,
-        "create_venv",
-        lambda target, python="": created.append(Path(target)),
-    )
+    def fake_create_venv(target: object, python: str = "") -> bool:
+        """Record the probe venv's directory and report the build succeeded."""
+        created.append(Path(str(target)))
+        return True
+
+    monkeypatch.setattr(environment, "create_venv", fake_create_venv)
 
     def fake_check(venv_python, *, record=None, **kwargs):
         assert record is not None, "the probe checks one record at a time"

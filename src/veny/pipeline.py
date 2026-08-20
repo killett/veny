@@ -173,11 +173,19 @@ def _probe_venv(options: run_options.Options) -> Iterator[Callable[[str], bool]]
 
     Yields:
         A predicate answering whether one import name imports in the venv.
+
+    Raises:
+        VenvBuildFailed: uv refused to build the throwaway environment, so
+            there is no environment to answer the question in at all.
     """
     with tempfile.TemporaryDirectory() as venv_dir:
-        environment.create_venv(
+        if not environment.create_venv(
             venv_dir, environment.venv_build_interpreter(options.python_command)
-        )
+        ):
+            raise VenvBuildFailed(
+                "Could not build the throwaway environment used to check which "
+                "imports are already available."
+            )
 
         def is_importable(import_name: str) -> bool:
             """Report whether one import name imports in the probe venv.
@@ -571,7 +579,16 @@ def _load_last_used(options: run_options.Options) -> ek.Options | None:
 
 
 def setup_virtualenv(options: run_options.Options) -> bool:
-    """Setup a virtual environment and install packages."""
+    """Setup a virtual environment and install packages.
+
+    Args:
+        options: The run's state; the venv it builds is recorded on it.
+
+    Returns:
+        True if the environment was built and every requirement installed and
+        verified. False if uv refused to build it, or a requirement could not
+        be made importable in it -- `pipeline.run` reports that and returns 1.
+    """
     # The folder name is a cheap prefilter for the cache search; veny_manifest.json
     # inside the venv is the authority. venv_cache owns the encoding so a
     # hyphenated pip name cannot be mistaken for a field separator.
@@ -588,9 +605,13 @@ def setup_virtualenv(options: run_options.Options) -> bool:
     if not options.rawlog:
         logging.info("Creating virtual environment...")
     assert options.venv_dir is not None, "options.venv_dir must be set"
-    environment.create_venv(
+    if not environment.create_venv(
         options.venv_dir, environment.venv_build_interpreter(options.python_command)
-    )
+    ):
+        logging.error(
+            "uv could not create the virtual environment at %s.", options.venv_dir
+        )
+        return False
     if not options.rawlog:
         logging.info("Virtual environment created.")
 
@@ -698,6 +719,9 @@ def run(options: run_options.Options, *, start_time: dt.datetime | None = None) 
     Raises:
         UsageError: The command line asked for something veny cannot act on.
         VenvBuildFailed: A virtual environment could not be created.
+        environment.UvUnavailable: veny has no uv to build an environment
+            with. Raised below this layer and left to travel: `cli.main` owns
+            what it costs.
     """
     start_time = start_time or dt.datetime.now()
     script_exit_code = 0

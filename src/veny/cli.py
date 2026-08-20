@@ -25,7 +25,7 @@ if not hasattr(ek, "register_json_type"):
         f"veny requires emmykit >= 0.4.0; found {getattr(ek, '__version__', 'unknown')}.\n"
         f"Upgrade it with:  pip install -U 'emmykit>=0.4.0'"
     )
-from . import json_types, pipeline, run_options
+from . import environment, json_types, pipeline, run_options
 
 # An import name paired with the pip package that provides it. Defined in
 # alias_index, which imports nothing of veny's, and re-exported here because
@@ -187,6 +187,13 @@ def main() -> int:
         return 2
     except pipeline.VenvBuildFailed as exc:
         logging.error("%s", exc)
+        return 1
+    except environment.UvUnavailable as exc:
+        # Printed rather than logged: uv can be missing before
+        # ek.configure_logging has run, and this is the message veny's
+        # SystemExit used to put on stderr. It stays byte-identical, and so
+        # does the status -- users have both in their shell history.
+        print(str(exc), file=sys.stderr)
         return 1
     ek.print_all_errors(memory_handler, options.rawlog)
     logging.shutdown()

@@ -41,15 +41,61 @@ def test_a_path_uv_is_used_when_the_package_is_missing(monkeypatch, caplog):
     assert "not pinned" in caplog.text
 
 
-def test_no_uv_anywhere_exits_with_an_install_message(monkeypatch):
-    """The failure names the command that fixes it, not just a traceback."""
+def test_uv_binary_raises_a_veny_error_rather_than_exiting(monkeypatch):
+    """With no uv anywhere, uv_binary raises UvUnavailable, not SystemExit.
+
+    Behaviour under test: design amendment 4's resolution. Concrete bug this
+    catches: SystemExit from a library module cannot be handled by a caller
+    that wants to report and continue, and it bypasses cli.main's status
+    mapping entirely -- the design's exit table is unenforceable while any
+    module below cli can exit on its own. Expected message obtained from the
+    current text, which must not change: users have it in their shell history.
+
+    The failure names the command that fixes it, not just a traceback. uv_binary
+    is functools.cache'd and this call raises, so nothing is memoized: the cache
+    is left empty (the state cache_clear itself produces) for the tests after
+    this one.
+    """
     monkeypatch.setitem(sys.modules, "uv", None)
     monkeypatch.setattr(shutil, "which", lambda _name: None)
     environment.uv_binary.cache_clear()
 
-    with pytest.raises(SystemExit) as caught:
+    with pytest.raises(environment.UvUnavailable) as caught:
         environment.uv_binary()
     assert "uv tool install veny" in str(caught.value)
+
+
+def test_create_venv_reports_failure_instead_of_raising(monkeypatch, tmp_path):
+    """A uv that exits non-zero makes create_venv return False.
+
+    Concrete bug this catches: letting CalledProcessError escape means a
+    failed build reaches the user as a traceback, and setup_virtualenv's
+    "Failed to create a virtual environment" path -- which exists and is
+    tested -- is unreachable. Expected value obtained from the new contract:
+    False means "no environment", the same shape run_uv_pip already uses.
+    """
+    monkeypatch.setattr(environment, "uv_binary", lambda: "/packaged/uv")
+
+    def failing_check_call(command):
+        raise subprocess.CalledProcessError(returncode=1, cmd=command)
+
+    monkeypatch.setattr(subprocess, "check_call", failing_check_call)
+
+    assert environment.create_venv(tmp_path / "venv") is False
+
+
+def test_create_venv_reports_success_when_uv_returns_zero(monkeypatch, tmp_path):
+    """The success half of the same contract: a uv that exits 0 gives True.
+
+    Concrete bug this catches: a create_venv that returned False (or None)
+    unconditionally would satisfy the failure test above while making every
+    build path report "Failed to create a virtual environment" -- both call
+    sites now branch on this value, so the true answer has to be pinned too.
+    """
+    monkeypatch.setattr(environment, "uv_binary", lambda: "/packaged/uv")
+    monkeypatch.setattr(subprocess, "check_call", lambda command: 0)
+
+    assert environment.create_venv(tmp_path / "venv") is True
 
 
 def test_setup_virtualenv_builds_the_venv_before_writing_requirements_txt(
@@ -136,7 +182,7 @@ def test_setup_virtualenv_writes_the_extra_requirements_version_specifiers(
     options.extra_requirements = {"thing-pkg": ">=2.0"}
     # The venv itself is a subprocess boundary and is not what this test is
     # about; set_venv_dir has already created the directory the file lands in.
-    monkeypatch.setattr(environment, "create_venv", lambda target, python="": None)
+    monkeypatch.setattr(environment, "create_venv", lambda target, python="": True)
     monkeypatch.setattr(
         environment,
         "run_uv_pip",
@@ -254,11 +300,13 @@ def _a_wired_run(tmp_path):
 def _stub_the_venv_away(monkeypatch, uninstalled_after_repair=None):
     """Stub every subprocess-backed step of setup_virtualenv, returning the spies."""
     created: list[tuple[object, str]] = []
-    monkeypatch.setattr(
-        environment,
-        "create_venv",
-        lambda target, python="": created.append((target, python)),
-    )
+
+    def fake_create_venv(target: object, python: str = "") -> bool:
+        """Record the build request and report the success uv would report."""
+        created.append((target, python))
+        return True
+
+    monkeypatch.setattr(environment, "create_venv", fake_create_venv)
     monkeypatch.setattr(
         environment,
         "run_uv_pip",

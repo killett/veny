@@ -24,6 +24,16 @@ from pathlib import Path
 import emmykit as ek
 
 
+class UvUnavailable(Exception):
+    """veny cannot find a uv to drive its environment layer with.
+
+    Raised rather than exited: `cli.py` owns every exit status (see the
+    re-architecture design's error-handling section), so the module that
+    discovers the problem reports it and the module that owns the process
+    decides what it costs.
+    """
+
+
 @functools.cache
 def uv_binary() -> str:
     """Return the uv executable veny drives its environment layer with.
@@ -37,7 +47,7 @@ def uv_binary() -> str:
         A path or command name to invoke uv with.
 
     Raises:
-        SystemExit: If neither the packaged binary nor PATH yields a uv.
+        UvUnavailable: If neither the packaged binary nor PATH yields a uv.
     """
     try:
         import uv
@@ -53,13 +63,13 @@ def uv_binary() -> str:
             on_path,
         )
         return on_path
-    raise SystemExit(
+    raise UvUnavailable(
         "veny requires uv, which is not installed and is not on PATH.\n"
         "Reinstall veny with:  uv tool install veny"
     )
 
 
-def create_venv(target: str | os.PathLike[str], python: str = "") -> None:
+def create_venv(target: str | os.PathLike[str], python: str = "") -> bool:
     """Create a virtual environment at target using uv.
 
     No pip is seeded: veny drives installs through uv, and a script that
@@ -69,8 +79,9 @@ def create_venv(target: str | os.PathLike[str], python: str = "") -> None:
         target: Directory to create the environment in.
         python: Interpreter for uv to build against. Empty means uv chooses.
 
-    Raises:
-        subprocess.CalledProcessError: If uv could not create the environment.
+    Returns:
+        True if the environment was created. False means uv refused, and uv
+        has already said why on stderr.
     """
     command = [uv_binary(), "venv", os.fspath(target)]
     if python:
@@ -79,7 +90,11 @@ def create_venv(target: str | os.PathLike[str], python: str = "") -> None:
         logging.debug(
             "Creating venv: %s", " ".join(shlex.quote(str(arg)) for arg in command)
         )
-    subprocess.check_call(command)
+    try:
+        subprocess.check_call(command)
+    except subprocess.CalledProcessError:
+        return False
+    return True
 
 
 def venv_python_for(venv_dir: str | os.PathLike[str]) -> Path:
@@ -242,7 +257,7 @@ def run_uv_pip(
         return subprocess.run(
             the_command,
             capture_output=True,
-            text=True,  # noqa: S603
+            text=True,
             check=False,
         )
     except OSError:

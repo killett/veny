@@ -822,3 +822,37 @@ def test_a_run_with_no_script_is_a_usage_error(monkeypatch, tmp_path, caplog):
     assert status == 2
     assert "--blank-slate" in caplog.text
     assert "--full" not in caplog.text
+
+
+def test_main_maps_a_missing_uv_to_status_one(monkeypatch, tmp_path, capsys):
+    """UvUnavailable reaches cli.main and becomes exit 1 with its message.
+
+    Behaviour under test: the other half of exit ownership -- raising is only
+    correct if someone catches. Concrete bug this catches: an uncaught
+    UvUnavailable would surface as a traceback and a status of 1 anyway,
+    making the failure look like a veny crash rather than a missing
+    dependency. Expected value obtained from the design's exit table: 1 means
+    veny could not build or find an environment. The message is the exact text
+    environment.uv_binary raises, which is the exact text its SystemExit used
+    to carry: it must still reach stderr, where SystemExit put it.
+    """
+    _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--rawlog"],
+        uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing")},
+        all_imports={"thing"},
+    )
+
+    def unavailable(options, start_time=None):
+        raise environment.UvUnavailable(
+            "veny requires uv, which is not installed and is not on PATH.\n"
+            "Reinstall veny with:  uv tool install veny"
+        )
+
+    monkeypatch.setattr(pipeline, "run", unavailable)
+
+    status = cli.main()
+
+    assert status == 1
+    assert "Reinstall veny with:  uv tool install veny" in capsys.readouterr().err
