@@ -50,7 +50,18 @@ gotchas ledger.
      `run_options.py` and deliberately introduced no frozen dataclass. The
      `Settings` that already exists is still constructed twice in the moved
      code. `cli.Options = run_options.Options` is a re-export kept alive
-     only for the suite; phase 4 deletes the module and the re-export.
+     only for the suite; phase 4 deletes the module and the re-export — and
+     when it does, it must repoint **69 references in two spellings**, not the
+     42 the plan predicted. Measured at `08622a8`: **41** literal
+     `cli.Options`, plus **28** more spelled `veny.Options` because seven test
+     files do `from veny import cli as veny` — `test_split_imports.py` 11,
+     `test_cache_search.py` 6, `test_options_surface.py` 4,
+     `test_manifest_writing.py` 3, `test_venv_naming.py` 2,
+     `test_rename_venv.py` 1, `test_json_types.py` 1. The alias spelling
+     matches neither `cli\.Options` nor `setattr(cli, …)`, which is the same
+     blind spot that broke Task 3's symbol sweep; re-derive with
+     `rg -c '\bveny\.Options\b' tests/*.py` and check for other aliases with
+     `rg -n 'import cli as (\w+)' tests/` rather than trusting this list.
    - **Design amendment 9** — `cache_search.find_match_dir_in_cache` still
      takes and mutates the `argparse.Namespace`, because its selection-policy
      writes reach disk through `ek.save_options_to_json`. That is the
@@ -88,6 +99,20 @@ two fix rounds — the second is the seventh sanctioned deviation below),
 STANDING CHECK in four test batches, then the wiring index and its fix round),
 and `a874f3d` (Task 9, `scripts/differential_3e.py`). Task 10 is this entry.
 
+**On the two resume paths, and which one wins.** This project's CLAUDE.md
+tells a resuming session to *prefer* the Superpowers tracker
+(`<plan>.md.tasks.json`) over reading this **Current work** block by hand. That
+is fine, with one caveat learned here: the tracker is **regenerated state
+derived from the plan**, not an independent record, and it can drift from what
+is actually committed. 3e's Task 10 closed with the tracker still saying
+`"status": "pending"` for task 10 while this entry said the phase was done —
+so the *recommended* resume path was the one that would have re-run a
+completed task. It was corrected in the same commit that recorded this
+paragraph. **When the two disagree, git and this file win; fix the tracker to
+match, do not re-do the work.** The tracker also covers only task state — the
+Deferred items, cross-cutting decisions, Gotchas and open questions below live
+nowhere else and must be read either way.
+
 **Gates measured on this branch at `a874f3d`, 2026-08-19 — every number below
 was measured in the closing session, not copied from a task report.**
 `pixi run test` **408 passed, 1 warning in 14.54s**; `pixi run lint`
@@ -109,9 +134,34 @@ lowest it has ever been.** The full breakdown, measured: `tests/test_verify.py`
 one file: `cli.py`
 carried **7** on `main` at `08622a8` and now carries **1**, with `pipeline.py`
 picking up **2** — so the extraction net-deleted four errors rather than moving
-them. Per the ledger, Task 4 dropped one and Task 5 dropped three; the
-33 → 29 total and the per-file split above are this session's own measurement.
-The file count rose 6 → 7 only because `cli.py` split in two.
+them. Per the ledger, Task 4 dropped one and Task 5 dropped three. The file
+count rose 6 → 7 only because `cli.py` split in two.
+
+**Both ends of that 33 → 29 were measured first-hand, and the baseline needed
+a trick worth reusing.** The 29 is a plain `pixi run typecheck` on this branch.
+The **33** was re-measured at Task 10 in a throwaway
+`git worktree add /tmp/veny-main-baseline 08622a8`, run as
+`MYPY_CACHE_DIR=… /workspace/.pixi/envs/default/bin/python -m mypy .
+--no-incremental` **with the worktree as cwd**, then
+`git worktree remove --force`. It reported **33 errors in 6 files**:
+`tests/test_verify.py` 15, `src/veny/cli.py` **7**,
+`tests/test_split_imports.py` 6, `analysis/imports.py` 3,
+`analysis/literals.py` 1, `analysis/call_graph.py` 1 — confirming the recorded
+figure exactly, and confirming `cli.py`'s 7 directly rather than by subtraction.
+
+**The trick is proving which tree the tool actually read**, because the
+`pixi-activation-overwrites-pythonpath` trap means an editable install can
+silently redirect a baseline run at `/workspace/src` and report a false pass.
+Four independent tells say this run read the worktree: it names **no**
+`pipeline.py` or `run_options.py` (which exist only on this branch, and whose
+two errors are absent); its `src/veny/cli.py` errors are at lines **409, 555,
+563, 584, 644, 645, 688**, every one past the 206-line end of this branch's
+`cli.py` and possible only in a 1,064-line file; it "checked **49** source
+files" against this branch's 52, a difference of exactly the three files 3e
+added; and its `tests/test_split_imports.py` errors sit at 64/65/122/136/145
+where this branch's are at 71/72/129/143/152, the shift Task 3 introduced.
+**Never accept a baseline number without a tell like these** — a version-
+dependent line number or a file that exists in only one of the two trees.
 
 Line counts (`wc -l`, 2026-08-19, measured this session): **`src/veny/cli.py`
 1,064 → 206** — an 858-line drop, **81%**, and the end of the file the whole
@@ -888,6 +938,13 @@ wiring rationale and for two Minors deliberately left unfixed.
   satisfy, only a check to scope manually:
   use `mypy <files>` on what you touched, and confirm the whole-repo count has
   not risen.
+  **Count updated 2026-08-19 (3e's Task 10): it is now 29 across seven
+  files**, not 46 across two — see the phase-3e gates block in Current work
+  for the breakdown. The *mechanism* described above is unchanged and is why
+  `.git/hooks/pre-commit` is deliberately **not** installed (its own entry
+  below): installing it would make `mypy .` run on every commit and block all
+  of them. **Do not "fix" that by running `pre-commit install`** — the
+  supported workflow is `pixi run pre-commit run --files <paths>` by hand.
 - **`ruff format` also formats Python code blocks inside Markdown** in this
   version. A bare `ruff format .` rewrote 696 lines across eight design docs
   and plans, whose code blocks are a record of what the code looked like at
@@ -934,6 +991,12 @@ wiring rationale and for two Minors deliberately left unfixed.
   tree can sign off on a hunk it never actually saw.
 - `.git/hooks/pre-commit` is not installed, so `git commit` does not run the
   hooks. Run `pixi run pre-commit run --files <paths>` by hand.
+  **Re-confirmed 2026-08-19 (3e's Task 10):** `.git/hooks/` still holds only
+  `*.sample` files and no `core.hooksPath` is set. This is **deliberate, not
+  an oversight** — see the `pixi run typecheck` entry above: the `mypy` hook is
+  `mypy .` with `pass_filenames: false`, so with the repo's standing errors an
+  installed hook would refuse every commit. Anyone who "discovers" this and
+  reaches for `pre-commit install` will break the workflow for everyone.
 - veny's standard-library skips are silent for top-level imports: the
   `Skipping standard library import` debug line only fires inside
   `process_import`, which top-level imports bypass (`_enqueue_top_level_imports`
@@ -2184,6 +2247,24 @@ wiring rationale and for two Minors deliberately left unfixed.
     `logging.shutdown`. `_drive_main`'s docstring is stale ("main() is 400
     lines of sequencing") and its `venv_dir=` keyword is now dead — no caller
     passes it.
+  - **`test_a_run_with_no_script_is_a_usage_error`'s docstring
+    (`tests/test_cli_entry_point.py:826-834`) names a crash site that no
+    longer exists.** It says the old fall-through "reached `assert
+    options.python_script is not None` inside `list_packages` and died with a
+    traceback". That was true at `08622a8`, but Task 4 had already moved the
+    run, and the pre-fix failure Task 5 actually observed before deleting the
+    branches was a **`TypeError: expected str, bytes or os.PathLike object,
+    not NoneType` inside `run_script`** — the fall-through no longer even
+    reached `list_packages`. This is a stale-docstring defect **in a committed
+    test**, which is precisely the kind nobody re-derives: the test passes, so
+    nothing ever forces a reader to check the claim. Fix the docstring to name
+    the `TypeError` in `run_script`, or name both with their commits.
+  - **Task 5's report overstated its `VenvBuildFailed` symmetry argument** —
+    it compared handlers as though they logged at the same level, when one is
+    **ERROR** and the other **INFO**. The conclusion it drew is still correct;
+    only the supporting argument was wrong. Recorded so that anyone reusing
+    that reasoning to justify a further change re-derives it rather than
+    inheriting the flaw.
   - `cli.main`'s `UvUnavailable` handler prints but does not log, so the
     common raise site (after `configure_logging`) misses `print_all_errors`.
     `environment.create_venv` catches `CalledProcessError` but not `OSError`,

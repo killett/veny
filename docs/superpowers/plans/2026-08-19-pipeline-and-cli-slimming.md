@@ -161,14 +161,28 @@ recorded in `PROGRESS.md`.
    substantially incomplete.** Measured at the branch point `08622a8`: there
    are **41** literal `cli.Options` references, not 42 — and a further **28**
    that reach the same class as `veny.Options`, through
-   `from veny import cli as veny` in **six** test files
-   (`test_options_surface.py`, `test_split_imports.py`, `test_venv_naming.py`,
-   `test_cache_search.py`, `test_manifest_writing.py`,
-   `test_rename_venv.py`). The real figure is **69 across two spellings**. The
-   re-export made the miscount harmless here, but it is the same blind spot
-   that broke Task 3's symbol sweep — see the `[EXECUTION]` note there — and
-   phase 4, which must repoint every one of them when it deletes the
-   re-export, should start from 69 and from both spellings.
+   `from veny import cli as veny` in **seven** test files. The real figure is
+   **69 across two spellings**. This list is the phase-4 hand-off, so it is
+   given per file and re-measured rather than summarised:
+
+   | File | `veny.Options` |
+   |---|---|
+   | `tests/test_split_imports.py` | 11 |
+   | `tests/test_cache_search.py` | 6 |
+   | `tests/test_options_surface.py` | 4 |
+   | `tests/test_manifest_writing.py` | 3 |
+   | `tests/test_venv_naming.py` | 2 |
+   | `tests/test_rename_venv.py` | 1 |
+   | `tests/test_json_types.py` | 1 |
+   | **total** | **28** |
+
+   Derive it, do not copy it: `rg -c '\bveny\.Options\b' tests/*.py`, and
+   `rg -n 'import cli as (\w+)' tests/` first in case a file adopts a
+   different alias. The re-export made the original miscount harmless, but
+   this is the same blind spot that broke Task 3's symbol sweep — see the
+   `[EXECUTION]` note there — and phase 4, which must repoint every one of
+   these when it deletes the re-export, should start from 69, both spellings
+   and all seven files. A sweep driven by a short list leaves a file broken.
 
 2. **`blank_slate` is `pipeline.py`'s, not `cli.py`'s.** The design says
    `cli.py` owns "argparse and exit status and nothing else", and the
