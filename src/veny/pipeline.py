@@ -45,8 +45,8 @@ from . import (
     venv_cache,
     verify,
 )
+from .analysis import custom_modules
 from .analysis import scan as analysis_scan
-from .analysis.custom_modules import dict_of_custom_modules
 from .analysis.scan_state import ImportScan
 from .settings import Settings
 
@@ -687,11 +687,15 @@ def setup_virtualenv(options: run_options.Options) -> bool:
     )
 
 
-def run(options: run_options.Options) -> int:
+def run(options: run_options.Options, *, start_time: dt.datetime | None = None) -> int:
     """Execute the run described by options and return the script's status.
 
     Args:
         options: The run's state, with argv already parsed onto it.
+        start_time: What the two "Elapsed time" lines are measured from.
+            `cli.main` takes it before argparse, which is where the whole run
+            has always been timed from; the default keeps `run` callable on
+            its own, timing only itself.
 
     Returns:
         The wrapped script's exit status, or 0 when nothing was meant to run,
@@ -701,7 +705,7 @@ def run(options: run_options.Options) -> int:
         UsageError: The command line asked for something veny cannot act on.
         VenvBuildFailed: A virtual environment could not be created.
     """
-    start_time = dt.datetime.now()
+    start_time = start_time or dt.datetime.now()
     script_exit_code = 0
 
     options.python_command = ek.find_preferred_python_version()
@@ -774,7 +778,7 @@ def run(options: run_options.Options) -> int:
         search_above_this_dir=options.search_above_this_dir,
         rawlog=options.rawlog,
     )
-    options.custom_modules = dict_of_custom_modules(
+    options.custom_modules = custom_modules.dict_of_custom_modules(
         settings,
         use_cache=not getattr(options.args, "rc", False)
         and not getattr(options.args, "no_cache", False),

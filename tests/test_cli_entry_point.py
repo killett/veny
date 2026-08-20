@@ -21,6 +21,7 @@ from veny import (
     stdlib_index,
     verify,
 )
+from veny.analysis import custom_modules
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -159,7 +160,7 @@ def _drive_main(
     )
     monkeypatch.setattr(pipeline, "build_alias_index", lambda options: _offline_index())
     monkeypatch.setattr(
-        pipeline, "dict_of_custom_modules", lambda settings, use_cache: {}
+        custom_modules, "dict_of_custom_modules", lambda settings, use_cache: {}
     )
     monkeypatch.setattr(ek, "configure_logging", lambda *a, **k: None)
     monkeypatch.setattr(ek, "print_all_errors", lambda *a, **k: None)

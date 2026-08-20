@@ -6,6 +6,7 @@ from __future__ import (
 )  # For Python 3.7+ compatibility with type annotations
 
 import argparse
+import datetime as dt
 import logging
 import sys
 
@@ -171,6 +172,7 @@ def main() -> int:
         reported as 128 + signal rather than as a negative status, which the
         shell would wrap around to the wrong number.
     """
+    start_time = dt.datetime.now()
     options = Options()
     parse_arguments(options)
     options.script_args = getattr(options.args, "script_args", [])
@@ -184,7 +186,7 @@ def main() -> int:
         memory_handler = ek.configure_logging(
             options.my_name, log_level=options.log_mode, rawlog=options.rawlog
         )
-        script_exit_code = pipeline.run(options)
+        script_exit_code = pipeline.run(options, start_time=start_time)
     except pipeline.UsageError as exc:
         logging.info("%s", exc)
         return 2
