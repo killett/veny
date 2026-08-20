@@ -1385,3 +1385,36 @@ def test_feeling_lucky_launches_the_interpreter_the_loader_named(monkeypatch, tm
 
     assert status == 0
     assert launched == [[os.fspath(lucky_python), os.fspath(tmp_path / "script.py")]]
+
+
+def test_the_run_reports_the_imports_it_decided_are_missing(
+    monkeypatch, tmp_path, caplog
+):
+    """pipeline.run must hand the report this run's own findings.
+
+    Behaviour under test: the one call between classification and the branch
+    that acquires an environment. Measured by substitution: handing `report`
+    a throwaway Options left the whole suite green -- every test that drives
+    the run either passes --rawlog, which silences the report entirely, or
+    never looks at what was logged.
+
+    Concrete bug this catches: the report describing anything other than this
+    run, which removes the only line naming the packages veny is about to
+    spend a build installing. A user watching a slow run has nothing to
+    check the decision against, and a wrong classification -- the failure the
+    line exists to make visible -- becomes silent.
+    """
+    _drive_main(
+        monkeypatch,
+        tmp_path,
+        [],
+        uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
+        all_imports={"thing"},
+    )
+    monkeypatch.setattr(cache_search, "find_match_dir_in_cache", lambda *a, **k: None)
+    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options: False)
+
+    with caplog.at_level(logging.INFO):
+        cli.main()
+
+    assert "Uninstalled imports: ['thing']" in caplog.text
