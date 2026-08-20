@@ -421,25 +421,19 @@ def test_main_checks_the_surrounding_virtualenv_against_this_runs_imports(
     `source_names=frozenset()` makes check_packages_in_venv's bulk branch
     compare nothing at all, so veny reports the surrounding virtualenv is
     fine and runs the script in it -- and the script dies on the import veny
-    was asked to provide.
-
-    The helper is asked to set options.venv_dir, which a real run reaching
-    this branch does NOT do: nothing between Options() and this line assigns
-    it, so `assert options.venv_dir is not None` fires first and the branch
-    is unreachable in production today. That is pre-existing -- at the phase
-    branch point (313e800) the identical assert lived one frame further in,
-    inside venv_python_for -- and is recorded as a finding rather than fixed
-    here, because this phase is behaviour-preserving. Setting the field is
-    what lets the wiring below be pinned now, so that whoever repairs the
-    branch inherits a test of it.
+    was asked to provide. A second bug this catches: checking some venv other
+    than the one VIRTUAL_ENV names -- e.g. sys.prefix, which under pytest is
+    veny's own environment, not the one the run activated.
     """
-    captured, _ = _drive_main(
+    active = tmp_path / "activated-venv"
+    active.mkdir()
+    monkeypatch.setenv("VIRTUAL_ENV", os.fspath(active))
+    _drive_main(
         monkeypatch,
         tmp_path,
         ["--rawlog", "--reqs"],
         uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
         all_imports={"thing", "extra-pkg"},
-        venv_dir=tmp_path / "activated-venv",
     )
     # --reqs, so that source_import_names' own use_reqs and extra_requirements
     # arguments are pinned here as well: extra-pkg is a pip spelling and must
@@ -460,11 +454,9 @@ def test_main_checks_the_surrounding_virtualenv_against_this_runs_imports(
 
     assert cli.main() == 0
 
-    options = captured[0]
-    assert options.venv_dir is not None
     assert seen == [
         {
-            "venv_python": environment.venv_python_for(options.venv_dir),
+            "venv_python": environment.venv_python_for(active),
             "uninstalled": {
                 cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")
             },
@@ -671,30 +663,39 @@ def test_main_builds_an_environment_when_the_cache_misses(monkeypatch, tmp_path)
     ]
 
 
-def test_main_reports_failure_when_the_surrounding_virtualenv_is_short_a_package(
-    monkeypatch, tmp_path
-):
-    """Inside a virtualenv that cannot satisfy the imports, main() returns 1.
+def test_main_checks_the_virtualenv_it_is_running_inside(monkeypatch, tmp_path):
+    """Inside a virtualenv, main() import-checks that environment's python.
 
-    Behaviour under test: the third branch's failure side. Concrete bug this
-    catches: returning 0 here would tell a shell script that the run
-    succeeded when veny never ran anything. Expected value obtained from the
-    design's exit table: 1 means veny could not build or find an environment.
+    Behaviour under test: the branch phase 3e made reachable. Concrete bug
+    this catches: the old code asserted options.venv_dir, which nothing sets
+    on this path, so the branch could only ever raise AssertionError --
+    veny was unusable from inside an activated environment. Expected value
+    obtained by construction: environment.venv_python_for puts the
+    interpreter at <venv>/bin/python.
     """
+    active = tmp_path / "activated"
+    active.mkdir()
+    monkeypatch.setenv("VIRTUAL_ENV", os.fspath(active))
     captured, launched = _drive_main(
         monkeypatch,
         tmp_path,
         ["--rawlog"],
         uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing")},
         all_imports={"thing"},
-        venv_dir=tmp_path / "active",
     )
     monkeypatch.setattr(last_used, "is_virtualenv", lambda: True)
-    monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: False)
+    checked: list[object] = []
+
+    def check_spy(interpreter, **kwargs):
+        checked.append(os.fspath(interpreter))
+        return False
+
+    monkeypatch.setattr(verify, "check_packages_in_venv", check_spy)
 
     status = cli.main()
 
     assert status == 1
+    assert checked == [os.fspath(active / "bin" / "python")]
     assert launched == []
 
 

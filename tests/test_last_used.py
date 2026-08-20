@@ -25,6 +25,7 @@ which satisfies both of ``load_last_used_options``'s filters: the
 """
 
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -283,6 +284,35 @@ def test_is_virtualenv_reflects_prefix_vs_base_prefix(
     monkeypatch.setattr(sys, "prefix", "/fake/same")
     monkeypatch.setattr(sys, "base_prefix", "/fake/same")
     assert last_used.is_virtualenv() is False
+
+
+def test_active_virtualenv_dir_prefers_the_environment_variable(monkeypatch, tmp_path):
+    """VIRTUAL_ENV names the environment the user activated.
+
+    Behaviour under test: which directory veny checks when it is run from
+    inside a virtualenv. Concrete bug this catches: reading sys.prefix first
+    would report veny's *own* environment when veny is installed as a uv tool
+    and invoked from inside a different activated venv -- veny would then
+    check the wrong environment's packages and report a confident, wrong
+    answer. Expected value obtained from the virtualenv activation contract:
+    the activate script exports VIRTUAL_ENV.
+    """
+    monkeypatch.setenv("VIRTUAL_ENV", os.fspath(tmp_path / "activated"))
+
+    assert last_used.active_virtualenv_dir() == tmp_path / "activated"
+
+
+def test_active_virtualenv_dir_falls_back_to_sys_prefix(monkeypatch):
+    """With no VIRTUAL_ENV, sys.prefix is the environment in use.
+
+    Concrete bug this catches: returning None (or raising) here would put the
+    branch straight back to the crash phase 3e is removing -- is_virtualenv()
+    is true whenever sys.prefix differs from sys.base_prefix, including for
+    environments activated without the activate script.
+    """
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+
+    assert last_used.active_virtualenv_dir() == Path(sys.prefix)
 
 
 def test_the_last_used_adapter_returns_the_record_this_run_is_entitled_to(

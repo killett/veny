@@ -806,9 +806,9 @@ def run(options: run_options.Options, *, start_time: dt.datetime | None = None) 
     elif last_used.is_virtualenv():
         if not options.rawlog:
             logging.info("Already in a virtual environment.")
-        assert options.venv_dir is not None, "options.venv_dir must be set"
+        active_venv = last_used.active_virtualenv_dir()
         if verify.check_packages_in_venv(
-            environment.venv_python_for(options.venv_dir),
+            environment.venv_python_for(active_venv),
             uninstalled=options.uninstalled_imports,
             source_names=verify.source_import_names(
                 options.all_imports,
