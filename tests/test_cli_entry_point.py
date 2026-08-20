@@ -129,18 +129,26 @@ def _offline_index():
 
 
 def _drive_main(
-    monkeypatch, tmp_path, argv, *, uninstalled, all_imports, venv_dir=None
+    monkeypatch, tmp_path, argv, *, uninstalled, all_imports, script_args=()
 ):
     """Run cli.main() in process with every subprocess and scan boundary stubbed.
 
-    main() is 400 lines of sequencing that nothing in the suite drove before
-    this helper: it parses argv, resolves an interpreter, scans the script,
-    classifies its imports, then picks one of four branches. Everything
-    outside the branch under test is replaced -- the interpreter probe, the
-    custom-module scan, the import classification, the alias index, the
-    subprocess that would run the user's script, and emmykit's logging and
-    options-file side effects -- leaving main()'s own wiring as the only live
-    code.
+    Phase 3e split the sequencing this helper drives out of main() and into
+    pipeline.run; main() is now argv, four exception handlers and an exit
+    status. The helper still drives the whole run through cli.main, because
+    that is the wiring under test: it parses argv, resolves an interpreter,
+    scans the script, classifies its imports, then picks one of four
+    branches. Everything outside the branch under test is replaced -- the
+    interpreter probe, the custom-module scan, the import classification, the
+    alias index, the subprocess that would run the user's script, and
+    emmykit's logging and options-file side effects -- leaving the wiring as
+    the only live code.
+
+    Args:
+        script_args: Everything the user typed after the script itself.
+            argparse collects these with REMAINDER, so they have to come
+            after the script path on the command line, which is why they are
+            a separate argument rather than part of `argv`.
 
     Returns:
         A pair: the one-element list that receives the Options object main()
@@ -156,7 +164,7 @@ def _drive_main(
     script = tmp_path / "script.py"
     script.write_text("import thing\n")
     monkeypatch.setenv("HOME", os.fspath(home))
-    monkeypatch.setattr(sys, "argv", ["veny", *argv, os.fspath(script)])
+    monkeypatch.setattr(sys, "argv", ["veny", *argv, os.fspath(script), *script_args])
     monkeypatch.setattr(ek, "find_preferred_python_version", lambda: "python3")
     monkeypatch.setattr(
         stdlib_index,
@@ -185,8 +193,6 @@ def _drive_main(
     def fake_list_packages(options):
         options.all_imports = set(all_imports)
         options.uninstalled_imports = set(uninstalled)
-        if venv_dir is not None:
-            options.set_venv_dir(venv_dir)
         captured.append(options)
 
     monkeypatch.setattr(pipeline, "list_packages", fake_list_packages)
@@ -1158,3 +1164,224 @@ def test_main_lets_the_custom_module_scan_explain_an_empty_cache(
     assert f"Loading custom modules from most recent pickle file: {planted}" in (
         caplog.text
     )
+
+
+def _a_cache_hit(monkeypatch, tmp_path, argv, script_args=()):
+    """Drive a run that finds a cached venv and launches the script from it."""
+    venv_dir = tmp_path / "home" / "veny" / "myenv-py3.12-20260819-000000-thing"
+    venv_dir.mkdir(parents=True, exist_ok=True)
+    _, launched = _drive_main(
+        monkeypatch,
+        tmp_path,
+        argv,
+        uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing")},
+        all_imports={"thing"},
+        script_args=script_args,
+    )
+    monkeypatch.setattr(
+        cache_search, "find_match_dir_in_cache", lambda *a, **k: venv_dir
+    )
+    return venv_dir, launched
+
+
+def _an_active_virtualenv_that_satisfies_the_run(
+    monkeypatch, tmp_path, argv, script_args=()
+):
+    """Drive a run from inside an activated venv that has everything needed."""
+    active = tmp_path / "activated"
+    active.mkdir(exist_ok=True)
+    monkeypatch.setenv("VIRTUAL_ENV", os.fspath(active))
+    _, launched = _drive_main(
+        monkeypatch,
+        tmp_path,
+        argv,
+        uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing")},
+        all_imports={"thing"},
+        script_args=script_args,
+    )
+    monkeypatch.setattr(last_used, "is_virtualenv", lambda: True)
+    monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: True)
+    return launched
+
+
+def _a_lucky_run(monkeypatch, tmp_path, argv, script_args=()):
+    """Drive --feeling-lucky with a last-used interpreter that exists."""
+    lucky_python = tmp_path / "lucky-venv" / "bin" / "python"
+    lucky_python.parent.mkdir(parents=True, exist_ok=True)
+    _, launched = _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--feeling-lucky", *argv],
+        uninstalled=set(),
+        all_imports=set(),
+        script_args=script_args,
+    )
+    monkeypatch.setattr(
+        last_used, "load_last_used_venv_python", lambda options, **kwargs: lucky_python
+    )
+    return lucky_python, launched
+
+
+def test_only_the_venv_launch_announces_the_command_it_is_about_to_run(
+    monkeypatch, tmp_path, caplog
+):
+    """`announce` is set at exactly one of run_script's four call sites.
+
+    Behaviour under test: which launches log "Running command: ...". The venv
+    launch has always announced itself; the three bare-interpreter launches
+    never have, and run_script's `announce` argument is what preserves that
+    difference now that all four go through one function.
+
+    Measured by substitution: adding `announce=True` at any of the other
+    three sites, and removing it from the venv site, left the whole suite
+    green -- the driver records the argv a launch produced, not the lines it
+    logged. Concrete bug this catches: `announce=True` everywhere prints a
+    command line before every run, including the one that needed no
+    environment at all, which is exactly the noise --rawlog exists to remove
+    and which veny has never emitted on those paths; dropping it from the
+    venv site removes the only record of which interpreter a cached
+    environment actually launched, which is the first thing anyone debugging
+    a wrong-venv run looks for.
+    """
+    venv_dir, _ = _a_cache_hit(monkeypatch, tmp_path, [])
+
+    with caplog.at_level(logging.INFO):
+        cli.main()
+
+    expected = (
+        f"Running command: {os.fspath(venv_dir / 'bin' / 'python')} "
+        f"{os.fspath(tmp_path / 'script.py')}"
+    )
+    assert expected in caplog.text
+
+    # --rawlog silences it: run_script's rawlog argument must be this run's own.
+    caplog.clear()
+    _a_cache_hit(monkeypatch, tmp_path, ["--rawlog"])
+    with caplog.at_level(logging.INFO):
+        cli.main()
+
+    assert "Running command" not in caplog.text
+
+    # The three launches that must stay quiet, each on a run that did not ask
+    # for raw logs -- so silence is the announce argument, not the flag.
+    caplog.clear()
+    _drive_main(monkeypatch, tmp_path, [], uninstalled=set(), all_imports={"os"})
+    with caplog.at_level(logging.INFO):
+        cli.main()
+
+    assert "Running command" not in caplog.text
+
+    caplog.clear()
+    _an_active_virtualenv_that_satisfies_the_run(monkeypatch, tmp_path, [])
+    with caplog.at_level(logging.INFO):
+        cli.main()
+
+    assert "Running command" not in caplog.text
+
+    caplog.clear()
+    _a_lucky_run(monkeypatch, tmp_path, [])
+    with caplog.at_level(logging.INFO):
+        cli.main()
+
+    assert "Running command" not in caplog.text
+
+
+def test_every_launch_path_passes_the_scripts_own_arguments_through(
+    monkeypatch, tmp_path
+):
+    """Everything the user typed after the script must reach the script.
+
+    Behaviour under test: options.script_args, which cli.main reads off the
+    parsed namespace and which all four run_script call sites forward.
+    Measured by substitution: replacing that argument with `[]` at every one
+    of the four sites left the whole suite green -- no test had ever put an
+    argument after the script name.
+
+    Concrete bug this catches: veny silently swallowing the script's own
+    command line. `veny train.py --epochs 50` would run train.py with no
+    arguments at all, and the script would either use its defaults or fail
+    on a missing required argument, with nothing in veny's output to say the
+    arguments were dropped. Expected values obtained from argparse's
+    REMAINDER contract: everything after the script is the script's.
+    """
+    script = os.fspath(tmp_path / "script.py")
+    passed = ["--epochs", "50"]
+
+    venv_dir, launched = _a_cache_hit(monkeypatch, tmp_path, [], script_args=passed)
+    cli.main()
+    assert launched == [
+        [os.fspath(venv_dir / "bin" / "python"), script, "--epochs", "50"]
+    ]
+
+    _, launched = _drive_main(
+        monkeypatch,
+        tmp_path,
+        [],
+        uninstalled=set(),
+        all_imports={"os"},
+        script_args=passed,
+    )
+    cli.main()
+    assert launched == [[sys.executable, script, "--epochs", "50"]]
+
+    launched = _an_active_virtualenv_that_satisfies_the_run(
+        monkeypatch, tmp_path, [], script_args=passed
+    )
+    cli.main()
+    assert launched == [[sys.executable, script, "--epochs", "50"]]
+
+    lucky_python, launched = _a_lucky_run(monkeypatch, tmp_path, [], script_args=passed)
+    cli.main()
+    assert launched == [[os.fspath(lucky_python), script, "--epochs", "50"]]
+
+
+def test_a_satisfied_surrounding_virtualenv_runs_the_script_under_it(
+    monkeypatch, tmp_path
+):
+    """The in-a-virtualenv branch's success side must launch something, and the right thing.
+
+    Behaviour under test: the half of the branch phase 3e made reachable that
+    no test looked at -- the existing pair assert the import check's
+    arguments and the failure status, never that a script ran or under which
+    interpreter. Measured by substitution: the interpreter and the script
+    handed to run_script here could both be replaced with a wrong path and
+    the whole suite stayed green.
+
+    Concrete bug this catches: launching the venv veny would have built (or
+    None) instead of the interpreter veny is running under, on the one branch
+    where no environment was acquired at all -- so a run from inside a
+    perfectly good activated environment either crashes on a None path or
+    runs the user's script somewhere else entirely. Expected value obtained
+    from the branch's contract: the surrounding environment already has the
+    packages, so sys.executable is the interpreter that has them.
+    """
+    launched = _an_active_virtualenv_that_satisfies_the_run(monkeypatch, tmp_path, [])
+
+    status = cli.main()
+
+    assert status == 0
+    assert launched == [[sys.executable, os.fspath(tmp_path / "script.py")]]
+
+
+def test_feeling_lucky_launches_the_interpreter_the_loader_named(monkeypatch, tmp_path):
+    """--feeling-lucky must run the script under the last-used interpreter it found.
+
+    Behaviour under test: the lucky path's launch, which the existing lucky
+    test never reaches -- its loader stub returns None, so nothing is
+    launched. Measured by substitution: the interpreter, the script and the
+    script's arguments at this call site could all be replaced with wrong
+    values and the whole suite stayed green.
+
+    Concrete bug this catches: launching sys.executable here instead of the
+    recorded interpreter, which makes --feeling-lucky mean "run the script in
+    veny's own environment" -- it would fail on the very imports the recorded
+    environment exists to provide, while veny reports the lucky path
+    succeeded. Expected value obtained by construction: the loader is the
+    only thing in this test that names an interpreter.
+    """
+    lucky_python, launched = _a_lucky_run(monkeypatch, tmp_path, [])
+
+    status = cli.main()
+
+    assert status == 0
+    assert launched == [[os.fspath(lucky_python), os.fspath(tmp_path / "script.py")]]
