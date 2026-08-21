@@ -1,6 +1,7 @@
 """Pin how veny locates the uv binary it drives its environment layer with."""
 
 import argparse
+import logging
 import os
 import shutil
 import subprocess
@@ -9,7 +10,15 @@ from pathlib import Path
 
 import pytest
 
-from veny import alias_index, cache_search, cli, environment, stdlib_index, verify
+from veny import (
+    alias_index,
+    cache_search,
+    cli,
+    environment,
+    pipeline,
+    stdlib_index,
+    verify,
+)
 
 
 def test_the_packaged_uv_is_preferred_over_the_one_on_path(monkeypatch):
@@ -33,15 +42,61 @@ def test_a_path_uv_is_used_when_the_package_is_missing(monkeypatch, caplog):
     assert "not pinned" in caplog.text
 
 
-def test_no_uv_anywhere_exits_with_an_install_message(monkeypatch):
-    """The failure names the command that fixes it, not just a traceback."""
+def test_uv_binary_raises_a_veny_error_rather_than_exiting(monkeypatch):
+    """With no uv anywhere, uv_binary raises UvUnavailable, not SystemExit.
+
+    Behaviour under test: design amendment 4's resolution. Concrete bug this
+    catches: SystemExit from a library module cannot be handled by a caller
+    that wants to report and continue, and it bypasses cli.main's status
+    mapping entirely -- the design's exit table is unenforceable while any
+    module below cli can exit on its own. Expected message obtained from the
+    current text, which must not change: users have it in their shell history.
+
+    The failure names the command that fixes it, not just a traceback. uv_binary
+    is functools.cache'd and this call raises, so nothing is memoized: the cache
+    is left empty (the state cache_clear itself produces) for the tests after
+    this one.
+    """
     monkeypatch.setitem(sys.modules, "uv", None)
     monkeypatch.setattr(shutil, "which", lambda _name: None)
     environment.uv_binary.cache_clear()
 
-    with pytest.raises(SystemExit) as caught:
+    with pytest.raises(environment.UvUnavailable) as caught:
         environment.uv_binary()
     assert "uv tool install veny" in str(caught.value)
+
+
+def test_create_venv_reports_failure_instead_of_raising(monkeypatch, tmp_path):
+    """A uv that exits non-zero makes create_venv return False.
+
+    Concrete bug this catches: letting CalledProcessError escape means a
+    failed build reaches the user as a traceback, and setup_virtualenv's
+    "Failed to create a virtual environment" path -- which exists and is
+    tested -- is unreachable. Expected value obtained from the new contract:
+    False means "no environment", the same shape run_uv_pip already uses.
+    """
+    monkeypatch.setattr(environment, "uv_binary", lambda: "/packaged/uv")
+
+    def failing_check_call(command):
+        raise subprocess.CalledProcessError(returncode=1, cmd=command)
+
+    monkeypatch.setattr(subprocess, "check_call", failing_check_call)
+
+    assert environment.create_venv(tmp_path / "venv") is False
+
+
+def test_create_venv_reports_success_when_uv_returns_zero(monkeypatch, tmp_path):
+    """The success half of the same contract: a uv that exits 0 gives True.
+
+    Concrete bug this catches: a create_venv that returned False (or None)
+    unconditionally would satisfy the failure test above while making every
+    build path report "Failed to create a virtual environment" -- both call
+    sites now branch on this value, so the true answer has to be pinned too.
+    """
+    monkeypatch.setattr(environment, "uv_binary", lambda: "/packaged/uv")
+    monkeypatch.setattr(subprocess, "check_call", lambda command: 0)
+
+    assert environment.create_venv(tmp_path / "venv") is True
 
 
 def test_setup_virtualenv_builds_the_venv_before_writing_requirements_txt(
@@ -92,7 +147,7 @@ def test_setup_virtualenv_builds_the_venv_before_writing_requirements_txt(
         cache_search, "record_venv_state", lambda venv_dir, **kwargs: venv_dir
     )
 
-    assert cli.setup_virtualenv(options) is True
+    assert pipeline.setup_virtualenv(options) is True
 
     assert options.venv_dir is not None
     assert (options.venv_dir / "requirements.txt").read_text() == "thing-pkg\n"
@@ -128,7 +183,7 @@ def test_setup_virtualenv_writes_the_extra_requirements_version_specifiers(
     options.extra_requirements = {"thing-pkg": ">=2.0"}
     # The venv itself is a subprocess boundary and is not what this test is
     # about; set_venv_dir has already created the directory the file lands in.
-    monkeypatch.setattr(environment, "create_venv", lambda target, python="": None)
+    monkeypatch.setattr(environment, "create_venv", lambda target, python="": True)
     monkeypatch.setattr(
         environment,
         "run_uv_pip",
@@ -153,12 +208,48 @@ def test_setup_virtualenv_writes_the_extra_requirements_version_specifiers(
         cache_search, "record_venv_state", lambda venv_dir, **kwargs: venv_dir
     )
 
-    cli.setup_virtualenv(options)
+    pipeline.setup_virtualenv(options)
 
     assert options.venv_dir is not None
     assert (
         options.venv_dir / "requirements.txt"
     ).read_text() == "thing-pkg>=2.0\nzeta-pkg\n"
+
+
+def test_setup_virtualenv_reports_failure_when_uv_refuses_to_build(
+    monkeypatch, tmp_path, caplog
+):
+    """A create_venv that returns False stops setup_virtualenv, which says so.
+
+    Behaviour under test: the consuming half of phase 3e task 7's contract --
+    create_venv reports rather than raises, which is only an improvement if
+    its caller reads the report. Concrete bug this catches: leaving the call
+    as a bare `environment.create_venv(...)` (its shape before this task)
+    makes a refused build invisible. setup_virtualenv would carry on writing
+    requirements.txt into a directory holding no environment, `uv pip install
+    --python <venv>/bin/python` would fail against an interpreter that does
+    not exist, and setup_virtualenv would still return True -- so
+    pipeline.run's "Failed to create a virtual environment" path never runs
+    and veny reports success for a run that built nothing. Expected values
+    obtained from the new contract: False means "no environment", and the
+    message names the directory so the user can see which build was refused.
+    """
+    options = _a_wired_run(tmp_path)
+    _stub_the_venv_away(monkeypatch)
+    monkeypatch.setattr(environment, "create_venv", lambda target, python="": False)
+
+    with caplog.at_level(logging.ERROR):
+        built = pipeline.setup_virtualenv(options)
+
+    assert built is False
+    assert options.venv_dir is not None
+    assert (
+        f"uv could not create the virtual environment at {options.venv_dir}."
+        in caplog.text
+    )
+    # The early return has to happen *before* the requirements file is written:
+    # writing it would leave a directory that looks like a half-built venv.
+    assert not (options.venv_dir / "requirements.txt").exists()
 
 
 def test_create_venv_is_given_a_resolved_interpreter_path_not_a_bare_command(
@@ -246,11 +337,13 @@ def _a_wired_run(tmp_path):
 def _stub_the_venv_away(monkeypatch, uninstalled_after_repair=None):
     """Stub every subprocess-backed step of setup_virtualenv, returning the spies."""
     created: list[tuple[object, str]] = []
-    monkeypatch.setattr(
-        environment,
-        "create_venv",
-        lambda target, python="": created.append((target, python)),
-    )
+
+    def fake_create_venv(target: object, python: str = "") -> bool:
+        """Record the build request and report the success uv would report."""
+        created.append((target, python))
+        return True
+
+    monkeypatch.setattr(environment, "create_venv", fake_create_venv)
     monkeypatch.setattr(
         environment,
         "run_uv_pip",
@@ -293,7 +386,7 @@ def test_the_venv_folder_name_and_build_interpreter_come_from_this_run(
     options = _a_wired_run(tmp_path)
     created = _stub_the_venv_away(monkeypatch)
 
-    assert cli.setup_virtualenv(options) is True
+    assert pipeline.setup_virtualenv(options) is True
 
     assert options.venv_dir is not None
     assert options.venv_dir.name == "failed-wiredenv-py3.12-20260101-010203-thing-pkg"
@@ -332,7 +425,7 @@ def test_verify_and_repair_imports_is_handed_the_whole_description_of_the_run(
 
     monkeypatch.setattr(verify, "verify_and_repair_imports", spy)
 
-    assert cli.setup_virtualenv(options) is True
+    assert pipeline.setup_virtualenv(options) is True
 
     # Literal paths, not options.venv_python / options.requirements_file:
     # setup_virtualenv writes those two fields itself (via set_venv_dir), so
@@ -394,7 +487,7 @@ def test_the_manifest_and_the_final_check_describe_the_venv_after_repair(
     monkeypatch.setattr(cache_search, "record_venv_state", record_spy)
     monkeypatch.setattr(verify, "check_packages_in_venv", check_spy)
 
-    assert cli.setup_virtualenv(options) is True
+    assert pipeline.setup_virtualenv(options) is True
 
     # Literal paths, not options.venv_dir / options.venv_python, for the same
     # reason the sibling test above spells them out: record_spy echoes its
@@ -431,3 +524,164 @@ def test_the_manifest_and_the_final_check_describe_the_venv_after_repair(
             "source_names": {"thing"},
         }
     ]
+
+
+def _a_repair_that_succeeds(monkeypatch):
+    """Wire setup_virtualenv so the real repair pass runs and finds a winner.
+
+    Only the subprocess boundaries are replaced: the bulk import check fails
+    (so the per-record repair branch is entered), the venv's metadata knows
+    nothing (so the failed candidate is treated as never installed), the
+    per-record import check fails, and the ranked search hands back a winner.
+    verify_and_repair_imports and repair_unsatisfied_import themselves --
+    including the line that names the winner -- are the real ones.
+    """
+    monkeypatch.setattr(environment, "create_venv", lambda target, python="": True)
+    monkeypatch.setattr(
+        environment,
+        "run_uv_pip",
+        lambda venv_python, *args: subprocess.CompletedProcess(
+            args=list(args), returncode=0
+        ),
+    )
+    monkeypatch.setattr(
+        cache_search, "record_venv_state", lambda venv_dir, **kwargs: venv_dir
+    )
+    monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: False)
+    monkeypatch.setattr(alias_index, "probe_interpreter", lambda venv_python: ({}, {}))
+    monkeypatch.setattr(
+        verify,
+        "import_outcome_in_venv",
+        lambda venv_python, import_name: verify.ImportOutcome(
+            imported=False,
+            rejection_kind="import_failed",
+            detail="No module named thing",
+            providers=frozenset(),
+        ),
+    )
+    monkeypatch.setattr(
+        verify,
+        "resolve_and_verify",
+        lambda resolution, index, **kwargs: alias_index.Candidate(
+            pip_name="repaired-pkg",
+            source=alias_index.Source.SEED,
+            evidence="the seed named it",
+        ),
+    )
+
+
+def test_setup_virtualenv_lets_the_repair_pass_name_the_package_it_settled_on(
+    monkeypatch, tmp_path, caplog
+):
+    """setup_virtualenv must carry this run's rawlog into verify_and_repair_imports.
+
+    Behaviour under test: the fourth of phase 3d's five open `rawlog` holes,
+    which moved from cli.py into pipeline.setup_virtualenv. 3d left it open
+    because the line rawlog controls fires only when a repair happens, and
+    every existing setup_virtualenv driver stubs the repair pass out and then
+    asserts the `rawlog` value the stub was handed -- which a hardcoded
+    `rawlog=True` supplies for free. This drives the real pass and reads the
+    record instead.
+
+    Concrete bug this catches: `rawlog=True` hardcoded at this call site
+    silences the only line telling the user that the package veny installed
+    was not the one that provided their import. The substitution happens
+    anyway; the requirements.txt in the venv changes underneath them; and the
+    sole surviving trace is an entry in the alias cache they never see.
+    Expected message obtained from repair_unsatisfied_import's contract:
+    "<pip name> provides the import <import name> (<evidence>)".
+    """
+    options = _a_wired_run(tmp_path)
+    options.rawlog = False
+    _a_repair_that_succeeds(monkeypatch)
+
+    with caplog.at_level(logging.INFO):
+        pipeline.setup_virtualenv(options)
+
+    assert "repaired-pkg provides the import thing (the seed named it)" in caplog.text
+
+    # The other direction: a --rawlog run must stay quiet, so a hardcoded
+    # rawlog=False at this call site dies too.
+    caplog.clear()
+    quiet = _a_wired_run(tmp_path)
+    quiet.rawlog = True
+    _a_repair_that_succeeds(monkeypatch)
+
+    with caplog.at_level(logging.INFO):
+        pipeline.setup_virtualenv(quiet)
+
+    assert "provides the import" not in caplog.text
+
+
+def _a_manifest_pass_that_renames(monkeypatch, tmp_path, repaired):
+    """Wire setup_virtualenv so the real record_venv_state runs and renames.
+
+    The repair replaces the pip name the folder was named after, so the name
+    record_venv_state computes no longer matches the folder on disk and the
+    rename branch -- the one carrying the rawlog-guarded line -- is taken.
+    Only the venv probe is replaced; record_venv_state, rename_venv and the
+    manifest write are the real ones, against a real directory.
+    """
+    monkeypatch.setattr(environment, "create_venv", lambda target, python="": True)
+    monkeypatch.setattr(
+        environment,
+        "run_uv_pip",
+        lambda venv_python, *args: subprocess.CompletedProcess(
+            args=list(args), returncode=0
+        ),
+    )
+    monkeypatch.setattr(
+        verify,
+        "verify_and_repair_imports",
+        lambda **kwargs: frozenset(repaired),
+    )
+    monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: True)
+    monkeypatch.setattr(
+        cache_search, "installed_state_in_venv", lambda venv_python: ({}, "3.12")
+    )
+
+
+def test_setup_virtualenv_lets_the_manifest_pass_explain_a_rename(
+    monkeypatch, tmp_path, caplog
+):
+    """setup_virtualenv must carry this run's rawlog into record_venv_state.
+
+    Behaviour under test: the fifth of phase 3d's five open `rawlog` holes,
+    which moved from cli.py into pipeline.setup_virtualenv. 3d left it open
+    because the line rawlog controls fires only when the venv's folder name
+    has drifted from what its contents warrant, and every existing driver
+    stubs record_venv_state out. Here the repair pass returns a record with a
+    different pip name, which is exactly what makes the folder name drift, so
+    the real record_venv_state takes its rename branch.
+
+    Concrete bug this catches: `rawlog=True` hardcoded at this call site
+    silences the only notice that veny renamed the directory the user's
+    environment lives in. The folder they were told about a moment earlier no
+    longer exists under that name, and nothing on a normal run says so.
+    Expected message obtained from record_venv_state's contract: it names the
+    folder it is renaming to.
+    """
+    repaired = {cli.ResolvedImport(import_name="thing", pip_name="repaired-pkg")}
+    options = _a_wired_run(tmp_path / "normal")
+    options.rawlog = False
+    _a_manifest_pass_that_renames(monkeypatch, tmp_path, repaired)
+
+    with caplog.at_level(logging.INFO):
+        pipeline.setup_virtualenv(options)
+
+    assert (
+        "renaming it to failed-wiredenv-py3.12-20260101-010203-repaired-pkg"
+        in caplog.text
+    )
+
+    # The other direction: --rawlog must reach it, so a hardcoded rawlog=False
+    # at this call site dies too.
+    caplog.clear()
+    quiet = _a_wired_run(tmp_path / "raw")
+    quiet.rawlog = True
+    _a_manifest_pass_that_renames(monkeypatch, tmp_path, repaired)
+
+    with caplog.at_level(logging.INFO):
+        pipeline.setup_virtualenv(quiet)
+
+    assert "renaming it to" not in caplog.text

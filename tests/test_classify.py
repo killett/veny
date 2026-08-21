@@ -1,6 +1,6 @@
 """Characterization tests for veny's import classification, before it moves.
 
-These pin what ``cli.split_imports`` and ``classify.add_dependencies`` do
+These pin what ``pipeline.split_imports`` and ``classify.add_dependencies`` do
 *today*, so the extraction of ``veny/classify.py`` is a move rather than a
 rewrite. (They were written against ``cli.add_dependencies``, which task 4
 left with no production callers; the whole-branch review deleted that adapter
@@ -30,7 +30,15 @@ from typing import Any
 
 import pytest
 
-from veny import alias_index, classify, cli, environment, stdlib_index, verify
+from veny import (
+    alias_index,
+    classify,
+    cli,
+    environment,
+    pipeline,
+    stdlib_index,
+    verify,
+)
 from veny.alias_index import ResolvedImport
 from veny.state import Requirements
 
@@ -112,8 +120,9 @@ def _stub_probe(
     created: list[tuple[str, str]] = []
     probed: list[str] = []
 
-    def fake_create_venv(target: object, python: str = "") -> None:
+    def fake_create_venv(target: object, python: str = "") -> bool:
         created.append((str(target), python))
+        return True
 
     def fake_check(
         venv_python: object,
@@ -139,11 +148,11 @@ def _capture_split_imports_result(
 ) -> list[Requirements]:
     """Record every Requirements that classify.split_imports returns.
 
-    cli.split_imports no longer copies ``result.installed`` onto Options --
+    pipeline.split_imports no longer copies ``result.installed`` onto Options --
     phase 3d task 8 deleted that write-only mirror -- so a test that needs to
     see which imports were classified as installed has to read it off the
     Requirements classify.split_imports itself produces, captured here as
-    cli.split_imports calls it internally.
+    pipeline.split_imports calls it internally.
 
     Args:
         monkeypatch: pytest's monkeypatch fixture.
@@ -183,7 +192,7 @@ def test_a_custom_module_is_classified_as_neither_installed_nor_uninstalled(
     created, probed = _stub_probe(monkeypatch, installed=frozenset({"inst"}))
     results = _capture_split_imports_result(monkeypatch)
 
-    cli.split_imports(options)
+    pipeline.split_imports(options)
 
     assert results[-1].installed == {
         ResolvedImport(import_name="inst", pip_name="inst")
@@ -216,7 +225,7 @@ def test_no_source_imports_means_no_probe_venv_is_built(
     created, probed = _stub_probe(monkeypatch)
     results = _capture_split_imports_result(monkeypatch)
 
-    cli.split_imports(options)
+    pipeline.split_imports(options)
 
     assert created == []
     assert probed == []
@@ -240,7 +249,7 @@ def test_a_run_whose_every_import_is_bad_builds_no_probe_venv(
     options.all_imports = {"httplib", "DQN"}
     created, probed = _stub_probe(monkeypatch)
 
-    cli.split_imports(options)
+    pipeline.split_imports(options)
 
     assert options.bad_imports == {"httplib", "DQN"}
     assert options.all_imports == set()
@@ -265,7 +274,7 @@ def test_bad_imports_never_reach_the_probe_venv_or_the_resolver(
     options.all_imports = {"httplib", "_private", "DQN", "widgetlib"}
     created, probed = _stub_probe(monkeypatch)
 
-    cli.split_imports(options)
+    pipeline.split_imports(options)
 
     assert options.bad_imports == {"httplib", "_private", "DQN"}
     assert options.all_imports == {"widgetlib"}
@@ -296,7 +305,7 @@ def test_reqs_requirements_are_counted_before_the_zero_import_early_return(
     options.args = argparse.Namespace(reqs=True)
     created, probed = _stub_probe(monkeypatch)
 
-    cli.split_imports(options)
+    pipeline.split_imports(options)
 
     assert options.all_imports == {"requests", "rich"}
     assert options.total_imports == 2
@@ -326,7 +335,7 @@ def test_reqs_records_are_unioned_in_after_the_loop_with_import_name_as_pip_name
     options.args = argparse.Namespace(reqs=True)
     _stub_probe(monkeypatch)
 
-    cli.split_imports(options)
+    pipeline.split_imports(options)
 
     assert options.uninstalled_imports == {
         ResolvedImport(import_name="widgetlib", pip_name="widget-lib-pypi"),
@@ -354,7 +363,7 @@ def test_a_requirement_already_importable_in_the_probe_is_recorded_in_both_sets(
     _stub_probe(monkeypatch, installed=frozenset({"reqonly"}))
     results = _capture_split_imports_result(monkeypatch)
 
-    cli.split_imports(options)
+    pipeline.split_imports(options)
 
     assert results[-1].installed == {
         ResolvedImport(import_name="reqonly", pip_name="reqonly")
@@ -385,7 +394,7 @@ def test_total_imports_equals_the_size_of_all_imports_when_split_imports_returns
     _stub_probe(monkeypatch, installed=frozenset({"inst"}))
     results = _capture_split_imports_result(monkeypatch)
 
-    cli.split_imports(options)
+    pipeline.split_imports(options)
 
     assert options.all_imports == {"mymod", "inst", "uninst", "reqpkg"}
     assert options.total_imports == 4
@@ -471,19 +480,20 @@ def test_add_dependencies_matches_also_needs_on_the_import_name_not_the_pip_name
 def test_split_imports_expands_also_needs_onto_the_uninstalled_records(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The run's also_needs table reaches classification through cli.split_imports.
+    """The run's also_needs table reaches classification through pipeline.split_imports.
 
     The three tests above drive ``classify.add_dependencies`` directly, so
     none of them touches the wiring that hands it ``options.also_needs``.
     This one goes the whole way through the adapter production uses.
 
     Concrete bug this catches: pass ``also_needs={}`` (or drop the argument)
-    at ``cli.split_imports``' call into ``classify.split_imports`` and every
+    at ``pipeline.split_imports``' call into ``classify.split_imports`` and every
     dependency veny's shipped table declares silently stops being installed --
     the venv is reported complete while the package that makes ``uninst``
-    usable is absent. The chain is nested on purpose: no entry in cli.py's own
-    also_needs table is, so the ``while added`` fixed point is otherwise never
-    exercised on the path a user takes.
+    usable is absent. The chain is nested on purpose: no entry in veny's own
+    shipped also_needs table (``run_options.Options.__init__``) is, so the
+    ``while added`` fixed point is otherwise never exercised on the path a
+    user takes.
     """
     options = cli.Options()
     options.aliases = _index({"uninst": "uninst-pypi", "deepdep": "deep-dep-pypi"})
@@ -491,7 +501,7 @@ def test_split_imports_expands_also_needs_onto_the_uninstalled_records(
     options.also_needs = {"uninst": ["depmod"], "depmod": ["deepdep"]}
     _stub_probe(monkeypatch)
 
-    cli.split_imports(options)
+    pipeline.split_imports(options)
 
     assert options.uninstalled_imports == {
         ResolvedImport(import_name="uninst", pip_name="uninst-pypi"),
@@ -509,7 +519,7 @@ def test_split_imports_expands_also_needs_onto_the_uninstalled_records(
 # copy of the function, and the three that patched the *stdlib* venv.create
 # -- which production stopped calling when task 2 extracted environment.py,
 # so they had been building a real uv venv on every run -- now patch
-# environment.create_venv, the function cli._probe_venv actually calls.
+# environment.create_venv, the function pipeline._probe_venv actually calls.
 
 
 def test_python2_name_is_classified_bad():
@@ -546,7 +556,7 @@ def test_seaborn_tkinter_and_msvcrt_are_no_longer_blocked():
 def test_split_imports_wires_python2_table_end_to_end():
     options = cli.Options()
     options.all_imports = {"httplib", "_private_thing"}
-    cli.split_imports(options)
+    pipeline.split_imports(options)
     assert options.bad_imports == {"httplib", "_private_thing"}
     assert options.all_imports == set()
 
@@ -561,7 +571,7 @@ def test_split_imports_stores_both_names_on_the_record(monkeypatch):
     _stub_probe(monkeypatch)
     results = _capture_split_imports_result(monkeypatch)
 
-    cli.split_imports(options)
+    pipeline.split_imports(options)
 
     assert options.uninstalled_imports == {
         ResolvedImport(import_name="widgetlib", pip_name="widget-lib-pypi")
@@ -577,7 +587,7 @@ def test_split_imports_falls_back_to_the_import_name_when_nothing_resolves(monke
     options.all_imports = {"mysterylib"}
     _stub_probe(monkeypatch)
 
-    cli.split_imports(options)
+    pipeline.split_imports(options)
 
     assert options.uninstalled_imports == {
         ResolvedImport(import_name="mysterylib", pip_name="mysterylib")
@@ -615,7 +625,7 @@ def test_split_imports_probe_venv_is_given_the_classified_interpreter(monkeypatc
     )
     monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: False)
 
-    cli.split_imports(options)
+    pipeline.split_imports(options)
 
     assert len(captured) == 1, "expected exactly one probe venv build"
     probe_command = captured[0]
@@ -627,7 +637,7 @@ def test_split_imports_probe_venv_is_given_the_classified_interpreter(monkeypatc
 def test_the_classification_adapter_lets_classify_report_each_import(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """cli.split_imports must hand classify this run's rawlog, not a constant.
+    """pipeline.split_imports must hand classify this run's rawlog, not a constant.
 
     Measured 2026-08-19 across all 17 `rawlog=` sites in
     cli/cache_search/last_used/verify: substituting the wrong-but-type-correct
@@ -648,7 +658,7 @@ def test_the_classification_adapter_lets_classify_report_each_import(
     _stub_probe(monkeypatch)
 
     with caplog.at_level(logging.INFO):
-        cli.split_imports(options)
+        pipeline.split_imports(options)
 
     assert "Checking import uninst" in caplog.text
 
@@ -661,7 +671,7 @@ def test_the_classification_adapter_lets_classify_report_each_import(
     quiet.all_imports = {"uninst"}
 
     with caplog.at_level(logging.INFO):
-        cli.split_imports(quiet)
+        pipeline.split_imports(quiet)
 
     assert "Checking import" not in caplog.text
 
@@ -680,7 +690,7 @@ def test_only_genuinely_uninstalled_imports_are_resolved(monkeypatch):
     options.custom_modules = {"mycustom": Path("/nowhere/mycustom.py")}
     _stub_probe(monkeypatch, installed=frozenset({"alreadyhere"}))
 
-    cli.split_imports(options)
+    pipeline.split_imports(options)
 
     assert index.resolved == ["missingthing"]
     assert options.uninstalled_imports == {
@@ -688,10 +698,43 @@ def test_only_genuinely_uninstalled_imports_are_resolved(monkeypatch):
     }
 
 
+def test_a_refused_probe_venv_stops_classification_instead_of_probing_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """create_venv returning False makes _probe_venv raise VenvBuildFailed.
+
+    Behaviour under test: the second consumer of phase 3e task 7's bool
+    contract. Concrete bug this catches: leaving the call as a bare
+    `environment.create_venv(...)` means a refused probe build is never
+    noticed, and the predicate goes on asking check_packages_in_venv about an
+    interpreter path inside a directory that holds no environment.
+    check_packages_in_venv does not catch OSError, so its subprocess.run dies
+    with `FileNotFoundError: .../bin/python` -- measured by reverting this
+    guard, which is exactly how this test fails -- and the user gets a
+    traceback naming a temporary directory instead of a sentence naming the
+    problem. Expected value obtained from the design's error handling: the
+    probe has no fallback, so it raises the exception cli.main maps to 1
+    rather than dying inside the predicate.
+
+    check_packages_in_venv is deliberately left unstubbed: reaching it at all
+    would mean the guard did not stop the probe, and the assertion below would
+    not be what failed.
+    """
+    options = cli.Options()
+    options.aliases = _index({})
+    options.all_imports = {"widgetlib"}
+    monkeypatch.setattr(environment, "create_venv", lambda target, python="": False)
+
+    with pytest.raises(pipeline.VenvBuildFailed) as caught:
+        pipeline.split_imports(options)
+
+    assert "throwaway environment" in str(caught.value)
+
+
 def test_the_probe_venv_is_asked_about_the_interpreter_it_just_built(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """cli._probe_venv must check imports inside the venv it created, not elsewhere.
+    """pipeline._probe_venv must check imports inside the venv it created, not elsewhere.
 
     _probe_venv creates a throwaway venv and closes over its directory; the
     is_importable predicate then builds an interpreter path from that same
@@ -714,11 +757,12 @@ def test_the_probe_venv_is_asked_about_the_interpreter_it_just_built(
     created: list[Path] = []
     asked: list[Path] = []
 
-    monkeypatch.setattr(
-        environment,
-        "create_venv",
-        lambda target, python="": created.append(Path(target)),
-    )
+    def fake_create_venv(target: object, python: str = "") -> bool:
+        """Record the probe venv's directory and report the build succeeded."""
+        created.append(Path(str(target)))
+        return True
+
+    monkeypatch.setattr(environment, "create_venv", fake_create_venv)
 
     def fake_check(venv_python, *, record=None, **kwargs):
         assert record is not None, "the probe checks one record at a time"
@@ -727,7 +771,7 @@ def test_the_probe_venv_is_asked_about_the_interpreter_it_just_built(
 
     monkeypatch.setattr(verify, "check_packages_in_venv", fake_check)
 
-    cli.split_imports(options)
+    pipeline.split_imports(options)
 
     assert len(created) == 1, "exactly one probe venv is built"
     # Options.set_venv_dir's documented shape, written out rather than read

@@ -25,13 +25,14 @@ which satisfies both of ``load_last_used_options``'s filters: the
 """
 
 import logging
+import os
 import sys
 from pathlib import Path
 
 import emmykit as ek
 import pytest
 
-from veny import cli, last_used
+from veny import cli, last_used, pipeline
 
 
 def _write_record(tmp_path: Path, script: Path, stamp: str, **fields: object) -> Path:
@@ -285,10 +286,39 @@ def test_is_virtualenv_reflects_prefix_vs_base_prefix(
     assert last_used.is_virtualenv() is False
 
 
+def test_active_virtualenv_dir_prefers_the_environment_variable(monkeypatch, tmp_path):
+    """VIRTUAL_ENV names the environment the user activated.
+
+    Behaviour under test: which directory veny checks when it is run from
+    inside a virtualenv. Concrete bug this catches: reading sys.prefix first
+    would report veny's *own* environment when veny is installed as a uv tool
+    and invoked from inside a different activated venv -- veny would then
+    check the wrong environment's packages and report a confident, wrong
+    answer. Expected value obtained from the virtualenv activation contract:
+    the activate script exports VIRTUAL_ENV.
+    """
+    monkeypatch.setenv("VIRTUAL_ENV", os.fspath(tmp_path / "activated"))
+
+    assert last_used.active_virtualenv_dir() == tmp_path / "activated"
+
+
+def test_active_virtualenv_dir_falls_back_to_sys_prefix(monkeypatch):
+    """With no VIRTUAL_ENV, sys.prefix is the environment in use.
+
+    Concrete bug this catches: returning None (or raising) here would put the
+    branch straight back to the crash phase 3e is removing -- is_virtualenv()
+    is true whenever sys.prefix differs from sys.base_prefix, including for
+    environments activated without the activate script.
+    """
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+
+    assert last_used.active_virtualenv_dir() == Path(sys.prefix)
+
+
 def test_the_last_used_adapter_returns_the_record_this_run_is_entitled_to(
     tmp_path: Path,
 ) -> None:
-    """cli._load_last_used must return the newest record that clears the cutoff.
+    """pipeline._load_last_used must return the newest record that clears the cutoff.
 
     This drives the adapter for real, against two records written into the
     script's own directory: one stamped before options.pathlibcutoff (records
@@ -313,7 +343,7 @@ def test_the_last_used_adapter_returns_the_record_this_run_is_entitled_to(
         tmp_path, script, "20260202-020202", venv_dir=tmp_path / "after-the-cutoff"
     )
 
-    loaded = cli._load_last_used(options)
+    loaded = pipeline._load_last_used(options)
 
     assert loaded is not None
     assert getattr(loaded, "venv_dir", None) == tmp_path / "after-the-cutoff"
@@ -337,7 +367,7 @@ def test_the_last_used_adapter_returns_the_record_this_run_is_entitled_to(
     stale_options.script_dir = stale_only
     stale_options.rawlog = True
 
-    assert cli._load_last_used(stale_options) is None
+    assert pipeline._load_last_used(stale_options) is None
 
 
 def test_the_last_used_adapter_hands_over_this_runs_script_and_cutoff(
@@ -351,7 +381,7 @@ def test_the_last_used_adapter_hands_over_this_runs_script_and_cutoff(
     record) and rawlog, which only decides whether the "no previous JSON
     files" line is logged. Measured by substitution: all five could be
     replaced with a wrong value while all 338 tests stayed green -- nothing
-    drove cli._load_last_used at all.
+    drove pipeline._load_last_used at all.
 
     Concrete bug this catches: a wrong `script_dir` looks in a directory that
     holds no last-used JSON, so the cache search silently falls through to
@@ -370,7 +400,7 @@ def test_the_last_used_adapter_hands_over_this_runs_script_and_cutoff(
 
     monkeypatch.setattr(last_used, "load_last_used_options", spy)
 
-    assert cli._load_last_used(options) is sentinel
+    assert pipeline._load_last_used(options) is sentinel
     assert seen == [
         {
             "options": options,

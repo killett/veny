@@ -18,6 +18,24 @@ def is_virtualenv() -> bool:
     return sys.prefix != sys.base_prefix
 
 
+def active_virtualenv_dir() -> Path:
+    """Return the virtual environment this process is running inside.
+
+    is_virtualenv() answers *whether*; this answers *which*. VIRTUAL_ENV is
+    what an activate script exports and is the user's own statement of which
+    environment they meant; sys.prefix is the fallback for an environment
+    entered by running its interpreter directly, where no activation happened.
+
+    Returns:
+        The environment's root directory. Meaningful only when
+        is_virtualenv() is true.
+    """
+    declared = os.environ.get("VIRTUAL_ENV")
+    if declared:
+        return ek.ensure_path(declared)
+    return Path(sys.prefix)
+
+
 def load_last_used_options(
     options: ek.Options,
     *,

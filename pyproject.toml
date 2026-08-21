@@ -56,6 +56,12 @@ ignore = [
 # moved to analysis/custom_modules.py in plan 3a, which carries its own
 # inline `# noqa: S301` instead.)
 "src/veny/cli.py" = ["S101", "S603"]
+# pipeline.py carries the asserts and the subprocess call moved out of
+# cli.py: list_packages' and setup_virtualenv's internal-invariant asserts,
+# and run_script's launch of the user's own script -- which is the whole
+# point of the program, the same reasoning cli.py's entry carried. Scoped to
+# this one file so a genuinely unsafe call elsewhere still gets flagged.
+"src/veny/pipeline.py" = ["S101", "S603"]
 # environment.py is the one module that invokes uv: its subprocess calls
 # are its entire purpose. It carries no asserts, so S101 stays enforced here.
 "src/veny/environment.py" = ["S603"]
@@ -76,6 +82,12 @@ ignore = [
 # to restart the process with PYTHONHASHSEED=0 set before the interpreter
 # starts; it re-runs this same file with this same interpreter.
 "scripts/differential_3d.py" = ["ANN401", "S606"]
+# The 3e differential driver has the same two reasons as 3d's, for the same
+# two causes: it speaks to two differently-shaped source trees through module
+# handles it imports by name, so `Any` is the honest annotation for every veny
+# object it touches, and its one os.execv re-runs this same file with this same
+# interpreter to get PYTHONHASHSEED=0 set before the interpreter starts.
+"scripts/differential_3e.py" = ["ANN401", "S606"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

@@ -5,7 +5,14 @@ from pathlib import Path
 
 import emmykit as ek
 
-from veny import alias_index, cache_search, environment, venv_cache, verify
+from veny import (
+    alias_index,
+    cache_search,
+    environment,
+    pipeline,
+    venv_cache,
+    verify,
+)
 from veny import cli as veny
 from veny.analysis.imports import process_import
 from veny.analysis.scan import _enqueue_top_level_imports
@@ -16,7 +23,7 @@ def test_tkinter_produces_one_system_package_warning(caplog):
     options = veny.Options()
     options.seen_stdlib_imports = {"tkinter", "os"}
     with caplog.at_level(logging.WARNING):
-        veny.warn_about_system_packages(options)
+        pipeline.warn_about_system_packages(options)
     messages = [record.getMessage() for record in caplog.records]
     assert len(messages) == 1
     assert "tkinter" in messages[0]
@@ -27,7 +34,7 @@ def test_no_warning_when_no_hint_module_was_seen(caplog):
     options = veny.Options()
     options.seen_stdlib_imports = {"os", "sys"}
     with caplog.at_level(logging.WARNING):
-        veny.warn_about_system_packages(options)
+        pipeline.warn_about_system_packages(options)
     assert caplog.records == []
 
 
@@ -125,7 +132,7 @@ def test_the_offline_argument_keeps_the_index_off_the_network(monkeypatch, tmp_p
     veny.parse_arguments(options)
 
     assert options.args.offline is True
-    assert veny.build_alias_index(options).pypi is None
+    assert pipeline.build_alias_index(options).pypi is None
 
 
 def test_the_index_reaches_pypi_by_default(monkeypatch, tmp_path):
@@ -139,7 +146,7 @@ def test_the_index_reaches_pypi_by_default(monkeypatch, tmp_path):
     veny.parse_arguments(options)
 
     assert options.args.offline is False
-    assert veny.build_alias_index(options).pypi is not None
+    assert pipeline.build_alias_index(options).pypi is not None
 
 
 def _run_check_against_fake_venv(monkeypatch, importable: set[str], errors=None):
@@ -284,7 +291,7 @@ def test_setup_virtualenv_verifies_every_import_before_reporting_success(
         cache_search, "record_venv_state", lambda venv_dir, **kwargs: venv_dir
     )
 
-    assert veny.setup_virtualenv(options) is True
+    assert pipeline.setup_virtualenv(options) is True
     # Verification has to happen before the gate that drops the "failed-"
     # prefix, or its repairs cannot affect the answer.
     assert calls == ["verify", "check"]
