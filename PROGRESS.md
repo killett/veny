@@ -31,9 +31,25 @@ gotchas ledger.
   | **3d** `docs/superpowers/plans/2026-08-18-verify-cache-search-last-used.md` (executed, complete, merged at `73cf588`) | `verify.py`, `cache_search.py`, `last_used.py` | 1,100 |
   | **3e** `docs/superpowers/plans/2026-08-19-pipeline-and-cli-slimming.md` (executed, complete, merged at `4d1846c`) | `pipeline.py`, `run_options.py`, `cli.py` slimming, `--full` deletion. The final `Options` drain was **not** attempted; it stayed phase 4's | 1,079 |
 
-  Phases 1 and 2 are complete and merged to `main`.
+  Phases 1 and 2 are complete and merged to `main`. Phase 3 is complete and
+  merged to `main` at `4d1846c`.
 
-**Next action:** write and execute phase 4 — the state model.
+- **Phase 4 is three plans, not one** (user ruling, 2026-08-21). The `Options`
+  drain, the persistence change and two behaviour changes are more than one
+  plan can specify without placeholders, the same way phase 3 was:
+
+  | Plan | Scope |
+  |---|---|
+  | **4a** `docs/superpowers/plans/2026-08-21-state-model-values.md` (written 2026-08-21, branch `state-model-values`) | The value objects: `Target`, the widened `Settings`, `ImportScan` as a returned product, `Requirements` as a returned product, `VenvHandle` replacing `set_venv_dir`. Also deletes folder scanning (user ruling) and makes a directory or missing script a usage error. |
+  | **4b** (not yet written) | The `LastUsed` persistence change (design amendment 9), which breaks the `ek.Options` coupling and deletes `run_options.py`, the `cli.Options` re-export, `pathlibcutoff` and its two readers, and the test references in both spellings. |
+  | **4c** (not yet written) | The remaining behaviour changes: the in-virtualenv guard (USER RULING 2026-08-20), `--feeling-lucky`'s missing signal normalization, latent defects 1 and 3, and the residual dead arguments. |
+
+**Next action:** execute plan 4a,
+`docs/superpowers/plans/2026-08-21-state-model-values.md`, on branch
+`state-model-values` (branched off `main` @ `b59cfa8`). Ten tasks, tracked in
+`docs/superpowers/plans/2026-08-21-state-model-values.md.tasks.json`; task 1 is
+the first unchecked one. The plan's own preamble carries the two user rulings
+of 2026-08-21 and the five design amendments it records.
 
 Phase 3 is **finished**. `pipeline-and-cli-slimming` was merged to `main` at
 `4d1846c` (a `--no-ff` merge; branch deleted after merging — it was at
