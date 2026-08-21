@@ -214,7 +214,8 @@ not gaps). The index is `docs/superpowers/plans/2026-08-19-pipeline-and-cli-slim
 
 The whole-branch review then ran on the twenty-one-commit branch (2026-08-20)
 and found **three Important issues and five Minors**, all settled in one wave
-— `36bda31`/`0691352` plus this entry. Neither Important issue was a
+of four commits — `36bda31` (the test fixes), `0691352` (one docstring in
+`cli.py`), this entry, and the citation re-cite that closes it. Neither Important issue was a
 regression 3e introduced, and by user ruling neither was fixed here; both are
 now phase-4 decisions in Deferred items. **Important 1:** deleting `--full`
 (Task 5) also deleted the only production writer of a *directory* into
@@ -241,7 +242,18 @@ correct and the `TypeError` it was told to name was a stubbed-harness
 artifact, and `pipeline.run`'s `Raises:` section documents two exceptions that
 really do come out of it; and two test call sites discarded
 `environment.create_venv`'s post-Task-7 `bool`. Five recorded deferred minors
-were re-checked and closed or corrected. Gates re-measured after the wave:
+were re-checked and closed or corrected. One citation *was* shifted by the wave and is re-cited rather than
+renumbered: `0691352` lengthened `cli.main`'s docstring by five lines, so the
+**eight wiring-index rows inside `main`** (`cli.py:172`, `:173`, `:174`,
+`:177`, `:178`, `:181`, `:184`, `:198`) are at `+5` in any tree from `7975316`
+on. The index keeps its measured numbers — it is the record of a sweep at
+`183bdcc`, and renumbering would detach it from that — and now carries the
+mapping explicitly, plus the reminder that the function name in each row's
+`Site` column is the durable half of the citation. Nothing else moved:
+`pipeline.py` is untouched by the wave, `cli.py:156` is above the docstring,
+and no file anywhere in the repo cites `PROGRESS.md` or either plan by line
+number (checked with `rg`), so this file's own ~+160-line growth broke
+nothing. Gates re-measured after the wave:
 `pixi run test` **408 passed**, `pixi run lint` zero,
 `ruff format --check .` **55 files**, `pixi run typecheck` **29 errors in 7
 files** — every number identical to `0f6b315`.

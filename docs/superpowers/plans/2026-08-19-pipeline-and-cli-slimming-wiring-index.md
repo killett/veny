@@ -268,7 +268,19 @@ Task 5's fourth acceptance criterion.
 28 rows sweep 1 never measured. Test names are abbreviated:
 `test_cli_entry_point::x` means `tests/test_cli_entry_point.py::x`. Where more
 than three named tests die, the first three are listed with a count of the rest.
-Line numbers are as of `183bdcc` and did not move: task 8 added tests only.
+Line numbers are as of `183bdcc`. They did not move through task 10 — task 8
+added tests only — but **`cli.py`'s did move by `+5` after that**, in
+`0691352` (the whole-branch review's fix wave, 2026-08-20), which lengthened
+`main`'s docstring by five lines and shifted every statement in `main` down.
+So the eight `cli.py` rows below that sit inside `main` — `:172`, `:173`,
+`:174`, `:177`, `:178`, `:181`, `:184` and `:198` — are at `:177`, `:178`,
+`:179`, `:182`, `:183`, `:186`, `:189` and `:203` in any tree at `0691352` or
+later. The rows are **deliberately left at their measured numbers**, because
+this table is the record of a sweep run at `183bdcc` and renumbering it would
+detach it from the measurement it documents; the function name in each row's
+`Site` column is the durable half of the citation. `cli.py:156`
+(`parse_arguments`) and every `pipeline.py` row are unaffected —
+`pipeline.py` has not been touched since the sweep.
 
 | Site | Argument | Substituted with | Test that died | Sweep 1 |
 |---|---|---|---|---|
