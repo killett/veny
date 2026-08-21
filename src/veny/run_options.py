@@ -9,7 +9,6 @@ nothing new should be added here in the meantime.
 
 from __future__ import annotations
 
-import datetime as dt
 import logging
 import os
 from pathlib import Path
@@ -32,7 +31,6 @@ class Options(ek.Options):
         # The "my_dir" is NOT the directory where this script is located.
         # Instead, it's the directory where this script will store its virtual environments and packages.
         self.my_dir: Path = self.home / self.my_name
-        self.python_command: str = ""
         self.cwd: Path = Path.cwd().expanduser().resolve(strict=True)
         self.venv_name: str = "myenv"  # Can NOT include dashes ("-")
         # Both sets hold ResolvedImport records, so every consumer can pick the
@@ -47,12 +45,16 @@ class Options(ek.Options):
         self.subfolders: list[str] = []
         self.samedir_files: list[Path] = []
         self.loaded_custom_modules: set[str] = set()
-        self.timestamp: str = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
         self.sys_path_hints: set[Path] = set()  # Filled by SysPathVisitor
+        # The three fields ek.save_options_to_json builds its filename from,
+        # alongside my_name. Target owns them for the run; pipeline.run copies
+        # them across just before the save, because emmykit's writer is typed
+        # against ek.Options rather than against a payload. Phase 4b drops the
+        # coupling -- veny writes its own LastUsed record -- and these go with
+        # it. Nothing else may read them.
         self.python_script: Path | None = None
-        self.script_name: str = ""  # python_script without the .py extension
         self.script_dir: Path | None = None
-        self.script_args: list[str] = []
+        self.timestamp: str = ""
         self.options_json_filepath: Path | None = None
         # Before 2025-08-10 at 22:49:00, paths were stored as strings. After that date, they were stored as pathlib.Path objects. Any .pkl files created before that date have their paths converted to pathlib.Path objects when loaded. Any .json files created before that date are ignored when loading last-used options.
         self.pathlibcutoff: str = "20250810-224900"
@@ -79,7 +81,7 @@ class Options(ek.Options):
             # Add more packages and their dependencies here
         }
         # Standard-library membership is derived from a real interpreter, never hardcoded.
-        # Replaced in main() once options.python_command is known, so that truth comes from
+        # Replaced in run() once the target's python_command is known, so that truth comes from
         # the interpreter that will actually run the user's script. See
         # docs/superpowers/specs/2026-08-12-stdlib-index-design.md
         self.stdlib: stdlib_index.StdlibIndex = stdlib_index.for_running_interpreter()
@@ -87,7 +89,7 @@ class Options(ek.Options):
             set()
         )  # Standard-library imports that were skipped
         # Import-name-to-pip-name resolution. Replaced in main() once
-        # options.python_command is known, so the resolver probes the
+        # the target's python_command is known, so the resolver probes the
         # interpreter that will actually run the user's script. empty()
         # rather than build() here: Options() is constructed before
         # python_command is known and in every test, and build() spawns a

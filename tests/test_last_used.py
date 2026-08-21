@@ -34,6 +34,8 @@ import pytest
 
 from veny import cli, last_used, pipeline
 
+from .test_state_values import a_target as _target
+
 
 def _write_record(tmp_path: Path, script: Path, stamp: str, **fields: object) -> Path:
     """Write one last-used options JSON the loader will recognise.
@@ -343,7 +345,12 @@ def test_the_last_used_adapter_returns_the_record_this_run_is_entitled_to(
         tmp_path, script, "20260202-020202", venv_dir=tmp_path / "after-the-cutoff"
     )
 
-    loaded = pipeline._load_last_used(options)
+    loaded = pipeline._load_last_used(
+        options,
+        _target(python_script=script, script_dir=tmp_path),
+        pathlibcutoff=options.pathlibcutoff,
+        rawlog=options.rawlog,
+    )
 
     assert loaded is not None
     assert getattr(loaded, "venv_dir", None) == tmp_path / "after-the-cutoff"
@@ -363,11 +370,17 @@ def test_the_last_used_adapter_returns_the_record_this_run_is_entitled_to(
         venv_dir=stale_only / "before-the-cutoff",
     )
     stale_options = cli.Options()
-    stale_options.python_script = stale_script
-    stale_options.script_dir = stale_only
     stale_options.rawlog = True
 
-    assert pipeline._load_last_used(stale_options) is None
+    assert (
+        pipeline._load_last_used(
+            stale_options,
+            _target(python_script=stale_script, script_dir=stale_only),
+            pathlibcutoff=stale_options.pathlibcutoff,
+            rawlog=stale_options.rawlog,
+        )
+        is None
+    )
 
 
 def test_the_last_used_adapter_hands_over_this_runs_script_and_cutoff(
@@ -388,9 +401,11 @@ def test_the_last_used_adapter_hands_over_this_runs_script_and_cutoff(
     "latest" on every run and the last-used pointer never wins.
     """
     options = cli.Options()
-    options.script_dir = tmp_path / "scripts"
-    options.python_script = tmp_path / "scripts" / "thing.py"
     options.rawlog = True
+    target = _target(
+        python_script=tmp_path / "scripts" / "thing.py",
+        script_dir=tmp_path / "scripts",
+    )
     seen: list[dict[str, object]] = []
     sentinel = ek.Options()
 
@@ -400,7 +415,15 @@ def test_the_last_used_adapter_hands_over_this_runs_script_and_cutoff(
 
     monkeypatch.setattr(last_used, "load_last_used_options", spy)
 
-    assert pipeline._load_last_used(options) is sentinel
+    assert (
+        pipeline._load_last_used(
+            options,
+            target,
+            pathlibcutoff=options.pathlibcutoff,
+            rawlog=options.rawlog,
+        )
+        is sentinel
+    )
     assert seen == [
         {
             "options": options,

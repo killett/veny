@@ -21,6 +21,7 @@ from veny import (
     environment,
     last_used,
     pipeline,
+    state,
     stdlib_index,
     verify,
 )
@@ -130,6 +131,18 @@ def _offline_index():
     )
 
 
+class _CapturedRun(list):  # type: ignore[type-arg]
+    """The Options main() built, with the Target it built alongside them.
+
+    A list subclass rather than a third return value from _drive_main: every
+    existing caller unpacks two values, and the Target is only needed by the
+    handful of tests that assert on the script, its arguments or the run
+    stamp -- all three of which moved off Options in phase 4a.
+    """
+
+    targets: list[state.Target]
+
+
 def _drive_main(
     monkeypatch, tmp_path, argv, *, uninstalled, all_imports, script_args=()
 ):
@@ -175,7 +188,9 @@ def _drive_main(
             names=frozenset({"os"}), python_version=(3, 12), source="test"
         ),
     )
-    monkeypatch.setattr(pipeline, "build_alias_index", lambda options: _offline_index())
+    monkeypatch.setattr(
+        pipeline, "build_alias_index", lambda options, python_command: _offline_index()
+    )
     monkeypatch.setattr(
         custom_modules, "dict_of_custom_modules", lambda settings, use_cache: {}
     )
@@ -190,14 +205,22 @@ def _drive_main(
         return subprocess.CompletedProcess(args=command, returncode=0)
 
     monkeypatch.setattr(subprocess, "run", record_run)
-    captured: list[cli.Options] = []
+    captured = _CapturedRun()
+    # The Target main() built, alongside the Options -- the two together are
+    # what a branch test needs now that the script, its arguments and the run
+    # stamp live on the Target rather than on Options. Kept as an attribute
+    # of the captured list rather than a third return value, so the ~20
+    # existing `captured, _ = _drive_main(...)` call sites keep working.
+    targets: list[state.Target] = []
 
-    def fake_list_packages(options):
+    def fake_list_packages(options, target):
         options.all_imports = set(all_imports)
         options.uninstalled_imports = set(uninstalled)
         captured.append(options)
+        targets.append(target)
 
     monkeypatch.setattr(pipeline, "list_packages", fake_list_packages)
+    captured.targets = targets
     return captured, launched
 
 
@@ -234,13 +257,13 @@ def test_main_describes_the_run_to_the_cache_search(monkeypatch, tmp_path):
         load_last_used_callbacks.append(load_last_used)
         return None
 
-    def load_last_used_spy(options):
+    def load_last_used_spy(options, target, **kwargs):
         loaded.append(options)
         return None
 
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", find_spy)
     monkeypatch.setattr(pipeline, "_load_last_used", load_last_used_spy)
-    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options: False)
+    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options, target: False)
 
     cli.main()
 
@@ -291,7 +314,7 @@ def test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs
         all_imports={"thing"},
     )
     (tmp_path / "home" / "veny").mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options: False)
+    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options, target: False)
 
     with caplog.at_level(logging.INFO):
         cli.main()
@@ -315,7 +338,7 @@ def test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs
         uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
         all_imports={"thing"},
     )
-    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options: False)
+    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options, target: False)
     with caplog.at_level(logging.INFO):
         cli.main()
 
@@ -346,7 +369,7 @@ def test_main_lets_the_feeling_lucky_loader_speak_on_a_run_that_did_not_ask_for_
         all_imports={"thing"},
     )
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", lambda *a, **k: None)
-    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options: False)
+    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options, target: False)
 
     with caplog.at_level(logging.INFO):
         cli.main()
@@ -362,7 +385,7 @@ def test_main_lets_the_feeling_lucky_loader_speak_on_a_run_that_did_not_ask_for_
         all_imports={"thing"},
     )
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", lambda *a, **k: None)
-    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options: False)
+    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options, target: False)
     with caplog.at_level(logging.INFO):
         cli.main()
 
@@ -408,7 +431,7 @@ def test_main_loads_the_requirements_file_and_keeps_its_names_out_of_the_import_
         return None
 
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", find_spy)
-    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options: False)
+    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options, target: False)
 
     cli.main()
 
@@ -500,7 +523,7 @@ def test_main_drops_the_failed_prefix_from_the_venv_it_just_built(
     )
     built = tmp_path / "home" / "veny" / "failed-myenv-py3.12-20260101-010203-thing-pkg"
 
-    def fake_setup(options):
+    def fake_setup(options, target):
         options.set_venv_dir(built)
         options.install_succeeded = True
         return True
@@ -550,7 +573,7 @@ def test_main_asks_the_last_used_loader_about_this_script(monkeypatch, tmp_path)
         return None
 
     monkeypatch.setattr(last_used, "load_last_used_venv_python", spy)
-    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options: False)
+    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options, target: False)
     monkeypatch.setattr(
         cache_search, "find_match_dir_in_cache", lambda args, **kwargs: None
     )
@@ -565,10 +588,13 @@ def test_main_asks_the_last_used_loader_about_this_script(monkeypatch, tmp_path)
     assert seen[0]["rawlog"] is True
     # The run's own Options, not a fresh one: a fresh emmykit Options carries
     # an empty Namespace, so --feeling-lucky would read back as False and the
-    # loader would be answering about a different (empty) run.
+    # loader would be answering about a different (empty) run. The script
+    # itself is checked through seen[0] above rather than off the Options --
+    # phase 4a moved it onto the Target, and Options only receives it again
+    # at the save, which this run never reaches.
     passed = passed_options[0]
     assert getattr(passed.args, "feeling_lucky", False) is True
-    assert passed.python_script == script
+    assert passed.rawlog is True
 
 
 def test_main_runs_the_script_under_the_running_interpreter_when_nothing_is_missing(
@@ -659,7 +685,7 @@ def test_main_builds_an_environment_when_the_cache_misses(monkeypatch, tmp_path)
     )
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", lambda *a, **k: None)
 
-    def fake_setup(options):
+    def fake_setup(options, target):
         options.set_venv_dir(built_dir)
         return True
 
@@ -868,7 +894,7 @@ def test_main_maps_a_missing_uv_to_status_one(monkeypatch, tmp_path, capsys):
         all_imports={"thing"},
     )
 
-    def unavailable(options, start_time=None):
+    def unavailable(options, target, start_time=None):
         raise environment.UvUnavailable(
             "veny requires uv, which is not installed and is not on PATH.\n"
             "Reinstall veny with:  uv tool install veny"
@@ -908,7 +934,7 @@ def test_main_maps_a_failed_venv_build_to_status_one(monkeypatch, tmp_path, capl
         all_imports={"thing"},
     )
 
-    def refused(options, start_time=None):
+    def refused(options, target, start_time=None):
         raise pipeline.VenvBuildFailed(
             "Could not build the throwaway environment used to check which "
             "imports are already available."
@@ -952,7 +978,7 @@ def test_a_failed_build_reports_at_critical_and_returns_one_without_a_debugger(
         all_imports={"thing"},
     )
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", lambda *a, **k: None)
-    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options: False)
+    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options, target: False)
 
     with caplog.at_level(logging.CRITICAL):
         status = cli.main()
@@ -1307,7 +1333,7 @@ def test_every_launch_path_passes_the_scripts_own_arguments_through(
 ):
     """Everything the user typed after the script must reach the script.
 
-    Behaviour under test: options.script_args, which cli.main reads off the
+    Behaviour under test: Target.script_args, which resolve_target reads off the
     parsed namespace and which all four run_script call sites forward.
     Measured by substitution: replacing that argument with `[]` at every one
     of the four sites left the whole suite green -- no test had ever put an
@@ -1428,7 +1454,7 @@ def test_the_run_reports_the_imports_it_decided_are_missing(
         all_imports={"thing"},
     )
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", lambda *a, **k: None)
-    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options: False)
+    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options, target: False)
 
     with caplog.at_level(logging.INFO):
         cli.main()
@@ -1467,7 +1493,7 @@ def test_no_cache_skips_the_cache_search_entirely(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", find_spy)
 
-    def fake_setup(options):
+    def fake_setup(options, target):
         options.set_venv_dir(built)
         return True
 
@@ -1555,10 +1581,9 @@ def test_build_alias_index_reads_this_runs_own_directory_and_interpreter(
     """
     options = cli.Options()
     options.my_dir = tmp_path
-    options.python_command = sys.executable
     options.args = argparse.Namespace(offline=True)
 
-    index = pipeline.build_alias_index(options)
+    index = pipeline.build_alias_index(options, sys.executable)
 
     assert index.cache.path == tmp_path / "module_aliases_cache.json"
     # The probe really ran against the interpreter named above, so it knows
@@ -1607,9 +1632,9 @@ def test_the_run_is_timed_from_the_moment_veny_started(monkeypatch, tmp_path, ca
     handed: list[dt.datetime | None] = []
     real_run = pipeline.run
 
-    def run_spy(options, start_time=None):
+    def run_spy(options, target, start_time=None):
         handed.append(start_time)
-        return real_run(options, start_time=start_time)
+        return real_run(options, target, start_time=start_time)
 
     monkeypatch.setattr(pipeline, "run", run_spy)
 

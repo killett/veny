@@ -2,8 +2,41 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
 from .alias_index import ResolvedImport
+
+
+@dataclass(frozen=True)
+class Target:
+    """What this run is being asked to run.
+
+    Frozen because the target is decided once, at the argparse boundary, and
+    only read after that. `python_command` is the one field discovered later:
+    `pipeline.run` rebinds the whole value with dataclasses.replace once
+    ek.find_preferred_python_version() has answered, rather than leaving a
+    mutable hole in an otherwise fixed value.
+
+    script_args is a tuple rather than a list so that the run's own copy of
+    the user's arguments cannot be appended to by a later stage. The launch
+    paths call list(...) on it at the subprocess boundary.
+
+    Attributes:
+        python_script:  The script itself, resolved strictly.
+        script_dir:     Its parent -- the directory later stages search for
+                        custom modules and last-used records.
+        script_args:    Everything after the script on veny's command line.
+        python_command: The interpreter veny will build the venv against;
+                        "" until `run` resolves it.
+        timestamp:      The run's stamp, in the YYYYmmdd-HHMMSS format
+                        venv_cache builds and parses cached folder names with.
+    """
+
+    python_script: Path
+    script_dir: Path
+    script_args: tuple[str, ...]
+    python_command: str
+    timestamp: str
 
 
 @dataclass(frozen=True)

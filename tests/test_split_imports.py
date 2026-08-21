@@ -18,6 +18,8 @@ from veny.analysis.imports import process_import
 from veny.analysis.scan import _enqueue_top_level_imports
 from veny.analysis.scan_state import ImportScan
 
+from .test_state_values import a_target as _target
+
 
 def test_tkinter_produces_one_system_package_warning(caplog):
     options = veny.Options()
@@ -126,13 +128,12 @@ def test_the_offline_argument_keeps_the_index_off_the_network(monkeypatch, tmp_p
     # on a plane, behind a blocked index, or in a sandbox without egress.
     options = veny.Options()
     options.my_dir = tmp_path
-    options.python_command = None
     monkeypatch.setattr(sys, "argv", ["veny.py", "--offline", "script.py"])
 
     veny.parse_arguments(options)
 
     assert options.args.offline is True
-    assert pipeline.build_alias_index(options).pypi is None
+    assert pipeline.build_alias_index(options, "").pypi is None
 
 
 def test_the_index_reaches_pypi_by_default(monkeypatch, tmp_path):
@@ -140,13 +141,12 @@ def test_the_index_reaches_pypi_by_default(monkeypatch, tmp_path):
     # only tier that can resolve a name veny has never seen before.
     options = veny.Options()
     options.my_dir = tmp_path
-    options.python_command = None
     monkeypatch.setattr(sys, "argv", ["veny.py", "script.py"])
 
     veny.parse_arguments(options)
 
     assert options.args.offline is False
-    assert pipeline.build_alias_index(options).pypi is not None
+    assert pipeline.build_alias_index(options, "").pypi is not None
 
 
 def _run_check_against_fake_venv(monkeypatch, importable: set[str], errors=None):
@@ -291,7 +291,7 @@ def test_setup_virtualenv_verifies_every_import_before_reporting_success(
         cache_search, "record_venv_state", lambda venv_dir, **kwargs: venv_dir
     )
 
-    assert pipeline.setup_virtualenv(options) is True
+    assert pipeline.setup_virtualenv(options, _target()) is True
     # Verification has to happen before the gate that drops the "failed-"
     # prefix, or its repairs cannot affect the answer.
     assert calls == ["verify", "check"]

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from veny import alias_index, cli, pipeline
+from veny import alias_index, cli, pipeline, state
 
 
 def _scan(script: Path, custom_modules: dict[str, Path]) -> cli.Options:
@@ -23,8 +23,6 @@ def _scan(script: Path, custom_modules: dict[str, Path]) -> cli.Options:
     """
     options = cli.Options()
     options.rawlog = True
-    options.python_script = script
-    options.script_dir = script.parent
     options.custom_modules = custom_modules
     pipeline.find_imports_in_script(options, script)
     return options
@@ -55,8 +53,6 @@ def test_the_scan_adapter_lets_the_scanner_name_the_files_it_opens(
     script.write_text("import helper\n\nhelper\n")
     options = cli.Options()
     options.rawlog = False
-    options.python_script = script
-    options.script_dir = tmp_path
     options.custom_modules = {"helper": helper}
 
     with caplog.at_level(logging.INFO):
@@ -207,12 +203,17 @@ def test_list_packages_scans_one_script_and_classifies_what_it_found(
     script = project / "s.py"
     script.write_text("import requests\n")
     options = _a_run_that_can_classify(tmp_path, monkeypatch)
-    options.python_script = script
-    options.script_dir = project
     options.extra_requirements = {"extra-pkg": ">=2.0"}
+    target = state.Target(
+        python_script=script,
+        script_dir=project,
+        script_args=(),
+        python_command="",
+        timestamp="20260821-120000",
+    )
 
     with caplog.at_level(logging.INFO):
-        pipeline.list_packages(options)
+        pipeline.list_packages(options, target)
 
     assert f"Processing a single Python script: {script}" in caplog.text
     # Exactly {"requests"}: extra-pkg is an extra requirement, and without
@@ -246,9 +247,14 @@ def test_report_warns_about_a_standard_library_import_that_needs_a_system_packag
     script = project / "s.py"
     script.write_text("import tkinter\n")
     options = _a_run_that_can_classify(tmp_path, monkeypatch)
-    options.python_script = script
-    options.script_dir = project
-    pipeline.list_packages(options)
+    target = state.Target(
+        python_script=script,
+        script_dir=project,
+        script_args=(),
+        python_command="",
+        timestamp="20260821-120000",
+    )
+    pipeline.list_packages(options, target)
 
     with caplog.at_level(logging.INFO):
         pipeline.report(options)
@@ -312,11 +318,10 @@ def test_a_directory_argument_is_a_usage_error_not_a_traceback(tmp_path: Path) -
     status. Folder scanning was the only thing that ever made a directory
     meaningful here, and 3e's deletion of --full removed its only producer.
     """
-    options = cli.Options()
-    options.args = argparse.Namespace(script=str(tmp_path), script_args=[])
+    args = argparse.Namespace(script=str(tmp_path), script_args=[])
 
     with pytest.raises(pipeline.UsageError) as excinfo:
-        pipeline.resolve_target(options)
+        pipeline.resolve_target(args)
 
     assert str(tmp_path) in str(excinfo.value)
 
@@ -332,12 +337,11 @@ def test_a_missing_script_is_a_usage_error_not_a_traceback(tmp_path: Path) -> No
     `veny /no/such/script.py` printed a traceback instead of a message.
     Recorded as latent defect 2 in PROGRESS.md; this closes it.
     """
-    options = cli.Options()
     missing = tmp_path / "no_such_script.py"
-    options.args = argparse.Namespace(script=str(missing), script_args=[])
+    args = argparse.Namespace(script=str(missing), script_args=[])
 
     with pytest.raises(pipeline.UsageError) as excinfo:
-        pipeline.resolve_target(options)
+        pipeline.resolve_target(args)
 
     assert "no_such_script.py" in str(excinfo.value)
 

@@ -11,11 +11,15 @@ from veny import cache_search, stdlib_index, venv_cache
 from veny import cli as veny
 from veny.alias_index import ResolvedImport
 
+# The interpreter the manifest records. Phase 4a moved python_command off
+# Options and onto the Target, and manifest_for takes it as an explicit
+# argument, so these tests name it here rather than staging it on an Options.
+PYTHON_COMMAND = "/usr/bin/python3.12"
+
 
 def an_options() -> veny.Options:
     """Build an Options carrying the fields manifest_for reads."""
     options = veny.Options()
-    options.python_command = "/usr/bin/python3.12"
     options.stdlib = stdlib_index.StdlibIndex(
         names=frozenset({"os"}), python_version=(3, 12), source="test"
     )
@@ -70,7 +74,7 @@ def manifest_kwargs(
         "uninstalled": options.uninstalled_imports,
         "extra_requirements": options.extra_requirements,
         "timestamp": options.timestamp,
-        "python_command": options.python_command,
+        "python_command": PYTHON_COMMAND,
         "run_tag": cache_search.interpreter_tag(options.stdlib),
         "versions": versions,
         "venv_tag": venv_tag,
@@ -177,7 +181,7 @@ def test_record_venv_state_renames_before_writing_the_manifest(monkeypatch, tmp_
         venv_name=options.venv_name,
         timestamp=options.timestamp,
         run_tag=run_tag,
-        python_command=options.python_command,
+        python_command=PYTHON_COMMAND,
         uninstalled=options.uninstalled_imports,
         extra_requirements=options.extra_requirements,
         rawlog=options.rawlog,
@@ -252,7 +256,7 @@ def test_record_venv_state_renames_into_agreement_when_the_venvs_tag_differs_fro
         venv_name=options.venv_name,
         timestamp=options.timestamp,
         run_tag=run_tag,
-        python_command=options.python_command,
+        python_command=PYTHON_COMMAND,
         uninstalled=options.uninstalled_imports,
         extra_requirements=options.extra_requirements,
         rawlog=options.rawlog,
@@ -439,7 +443,7 @@ def test_record_venv_state_probes_the_given_venv_and_records_the_runs_own_fields
         venv_name=options.venv_name,
         timestamp=options.timestamp,
         run_tag=run_tag,
-        python_command=options.python_command,
+        python_command=PYTHON_COMMAND,
         uninstalled=options.uninstalled_imports,
         extra_requirements=options.extra_requirements,
         rawlog=options.rawlog,

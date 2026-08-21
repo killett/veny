@@ -175,18 +175,23 @@ def main() -> int:
     start_time = dt.datetime.now()
     options = Options()
     parse_arguments(options)
-    options.script_args = getattr(options.args, "script_args", [])
     options.rawlog = getattr(options.args, "rawlog", False)
     memory_handler = None
     try:
-        pipeline.resolve_target(options)
-        lucky_status = pipeline.feeling_lucky(options)
+        target = pipeline.resolve_target(options.args)
+        lucky_status = pipeline.feeling_lucky(
+            options.args,
+            target,
+            options=options,
+            pathlibcutoff=options.pathlibcutoff,
+            rawlog=options.rawlog,
+        )
         if lucky_status is not None:
             return lucky_status
         memory_handler = ek.configure_logging(
             options.my_name, log_level=options.log_mode, rawlog=options.rawlog
         )
-        script_exit_code = pipeline.run(options, start_time=start_time)
+        script_exit_code = pipeline.run(options, target, start_time=start_time)
     except pipeline.UsageError as exc:
         logging.info("%s", exc)
         return 2

@@ -19,7 +19,9 @@ is what lets a test replace one boundary without rebuilding the world.
 
 from __future__ import annotations
 
+import argparse
 import contextlib
+import dataclasses
 import datetime as dt
 import logging
 import os
@@ -40,6 +42,7 @@ from . import (
     environment,
     last_used,
     run_options,
+    state,
     stdlib_index,
     venv_cache,
     verify,
@@ -69,7 +72,9 @@ class VenvBuildFailed(Exception):
     """
 
 
-def build_alias_index(options: run_options.Options) -> alias_index.AliasIndex:
+def build_alias_index(
+    options: run_options.Options, python_command: str
+) -> alias_index.AliasIndex:
     """Rebuild the alias index against the interpreter that will run the user's script.
 
     Options() seeds it with alias_index.empty(), whose cache is tagged with
@@ -78,7 +83,8 @@ def build_alias_index(options: run_options.Options) -> alias_index.AliasIndex:
     target on another.
 
     Args:
-        options: Options object; reads options.python_command, options.my_dir
+        options: Options object; reads options.my_dir
+        python_command: The interpreter the resolver probes
                  and the --offline flag.
 
     Returns:
@@ -88,7 +94,7 @@ def build_alias_index(options: run_options.Options) -> alias_index.AliasIndex:
         AliasOverrideError: If the override file exists but cannot be read.
     """
     return alias_index.build(
-        options.python_command,
+        python_command,
         options.my_dir,
         offline=getattr(options.args, "offline", False),
     )
@@ -164,7 +170,7 @@ def warn_about_system_packages(options: run_options.Options) -> None:
 
 
 @contextlib.contextmanager
-def _probe_venv(options: run_options.Options) -> Iterator[Callable[[str], bool]]:
+def _probe_venv(target: state.Target) -> Iterator[Callable[[str], bool]]:
     """Build a throwaway venv and yield a predicate that imports names in it.
 
     A context manager, not a plain callable, because classification must only
@@ -172,7 +178,7 @@ def _probe_venv(options: run_options.Options) -> Iterator[Callable[[str], bool]]
     with no imports leaves this unentered and builds nothing.
 
     Args:
-        options: Options object; reads options.python_command.
+        target: The run's Target; reads python_command.
 
     Yields:
         A predicate answering whether one import name imports in the venv.
@@ -183,7 +189,7 @@ def _probe_venv(options: run_options.Options) -> Iterator[Callable[[str], bool]]
     """
     with tempfile.TemporaryDirectory() as venv_dir:
         if not environment.create_venv(
-            venv_dir, environment.venv_build_interpreter(options.python_command)
+            venv_dir, environment.venv_build_interpreter(target.python_command)
         ):
             raise VenvBuildFailed(
                 "Could not build the throwaway environment used to check which "
@@ -209,7 +215,7 @@ def _probe_venv(options: run_options.Options) -> Iterator[Callable[[str], bool]]
         yield is_importable
 
 
-def split_imports(options: run_options.Options) -> None:
+def split_imports(options: run_options.Options, target: state.Target) -> None:
     """Adapter: run classification and copy its product back onto Options.
 
     The copy-back is total -- these four fields are the complete set the old
@@ -221,6 +227,8 @@ def split_imports(options: run_options.Options) -> None:
 
     Args:
         options: Options object; the four classification fields are replaced.
+        target: The run's Target; the probe environment is built against its
+            python_command.
     """
     scan = ImportScan(
         all_imports=options.all_imports,
@@ -238,7 +246,7 @@ def split_imports(options: run_options.Options) -> None:
         also_needs=options.also_needs,
         extra_requirements=options.extra_requirements,
         use_reqs=getattr(options.args, "reqs", False),
-        probe=_probe_venv(options),
+        probe=_probe_venv(target),
         rawlog=options.rawlog,
     )
     options.all_imports = set(result.all_imports)
@@ -247,19 +255,19 @@ def split_imports(options: run_options.Options) -> None:
     options.total_imports = result.total_imports
 
 
-def list_packages(options: run_options.Options) -> None:
+def list_packages(options: run_options.Options, target: state.Target) -> None:
     """Scan the target script for imports, then classify them.
 
     Folder scanning was deleted here on 2026-08-21 (user ruling). It had been
-    unreachable since 3e deleted --full: options.python_script is written in
-    exactly one production place, resolve_target, and that write goes through
+    unreachable since 3e deleted --full: the script path is produced in
+    exactly one production place, resolve_target, and that goes through
     ek.ensure_file, which refuses a directory. The only test that reached the
-    directory arms did so by assigning options.python_script directly.
+    directory arms did so by writing the script path onto Options directly.
 
     Args:
         options: Options object containing command line arguments and settings.
-            Reads python_script and rawlog; the scan and classification fields
-            are replaced.
+            Reads rawlog; the scan and classification fields are replaced.
+        target: The run's Target; supplies the script to scan.
 
     Returns:
         None - modifies options to include all imports found in the script.
@@ -267,14 +275,11 @@ def list_packages(options: run_options.Options) -> None:
     Raises:
         UsageError: The target is not a Python script veny can read.
     """
-    assert options.python_script is not None, "options.python_script must be set"
-
-    python_file = ek.ensure_path(options.python_script)
+    python_file = target.python_script
     if not ek.safe_is_file(python_file) or not ek.is_python_script(python_file):
         raise UsageError(f"'{os.fspath(python_file)}' is not a valid Python script.")
     if not options.rawlog:
         logging.info("Processing a single Python script: %s", os.fspath(python_file))
-    options.python_script = python_file
     options.loaded_custom_modules = set()
     options.all_imports = set()
     find_imports_in_script(options, python_file)
@@ -284,7 +289,7 @@ def list_packages(options: run_options.Options) -> None:
         imp for imp in options.all_imports if re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", imp)
     }
 
-    split_imports(options)
+    split_imports(options, target)
 
 
 def run_script(
@@ -320,39 +325,38 @@ def run_script(
     return result.returncode
 
 
-def resolve_target(options: run_options.Options) -> None:
-    """Resolve the script argument onto options.
+def resolve_target(args: argparse.Namespace) -> state.Target | None:
+    """Resolve the script argument into a Target.
 
-    Lifted from main(). The script path is resolved strictly, so a name that
-    does not exist fails here rather than three stages later, and its parent
-    becomes options.script_dir -- the directory every later stage searches for
-    custom modules and last-used records.
-
-    A run with no script leaves options.python_script as None; whether that is
-    an error depends on the mode flags, which `run` decides.
+    The script path is resolved strictly, so a name that does not exist fails
+    here rather than three stages later. Its parent becomes script_dir -- the
+    directory every later stage searches for custom modules and last-used
+    records.
 
     Args:
-        options: The run's Options; options.python_script and
-                 options.script_dir are set from options.args.script.
+        args: The parsed command line. Reads `script` and `script_args`.
+
+    Returns:
+        The run's Target, or None when no script was named. A scriptless run
+        is not an error here; `run` decides whether the mode flags allow it.
 
     Raises:
         UsageError: The positional argument is a directory, or is not a file
             veny can read. Both used to travel out of main() as tracebacks.
     """
-    script_string = getattr(options.args, "script", None)
+    script_string = getattr(args, "script", None)
     if script_string is None:
-        options.python_script = None
-        return
+        return None
     try:
-        options.python_script = ek.ensure_file(
-            script_string, raise_on_empty=True
-        ).resolve(strict=True)
+        python_script = ek.ensure_file(script_string, raise_on_empty=True).resolve(
+            strict=True
+        )
     except IsADirectoryError as exc:
-        # veny runs a script, not a tree. Folder scanning was deleted with
-        # this change (user ruling, 2026-08-21): --full was its only producer
-        # of a directory, and 3e's deletion of --full made every directory
-        # arm below unreachable. IsADirectoryError is a subclass of OSError,
-        # so this clause must stay above the next one.
+        # veny runs a script, not a tree. Folder scanning was deleted in
+        # phase 4a (user ruling, 2026-08-21): --full was its only producer of
+        # a directory, and 3e's deletion of --full made every directory arm
+        # unreachable. IsADirectoryError is a subclass of OSError, so this
+        # clause must stay above the next one.
         raise UsageError(
             f"{script_string} is a directory. veny runs a single Python "
             f"script; name the script itself."
@@ -360,17 +364,30 @@ def resolve_target(options: run_options.Options) -> None:
     except (OSError, ValueError) as exc:
         # ek.ensure_file raises FileNotFoundError for a missing path and
         # ValueError for a symlink or an empty file. All three reached the
-        # user as a traceback before this change.
+        # user as a traceback before phase 4a.
         raise UsageError(f"{script_string} is not a file veny can run.") from exc
-    options.script_dir = options.python_script.parent.absolute()
+    script_dir = python_script.parent.absolute()
     if logging.getLogger().isEnabledFor(logging.DEBUG):
         logging.debug(
-            "Directory where the script to run is located: %s",
-            os.fspath(options.script_dir),
+            "Directory where the script to run is located: %s", os.fspath(script_dir)
         )
+    return state.Target(
+        python_script=python_script,
+        script_dir=script_dir,
+        script_args=tuple(getattr(args, "script_args", []) or []),
+        python_command="",
+        timestamp=dt.datetime.now().strftime("%Y%m%d-%H%M%S"),
+    )
 
 
-def feeling_lucky(options: run_options.Options) -> int | None:
+def feeling_lucky(
+    args: argparse.Namespace,
+    target: state.Target | None,
+    *,
+    options: run_options.Options,
+    pathlibcutoff: str,
+    rawlog: bool,
+) -> int | None:
     """Try the previous run's virtual environment without analyzing anything.
 
     This runs before logging is configured, which is why it reports with
@@ -378,39 +395,41 @@ def feeling_lucky(options: run_options.Options) -> int | None:
     the user's script with as little of veny in the way as possible.
 
     Args:
-        options: The run's Options; reads the --feeling-lucky flag,
-                 options.python_script, options.script_dir,
-                 options.pathlibcutoff, options.script_args and
-                 options.rawlog.
+        args: The parsed command line; reads the --feeling-lucky flag.
+        target: The run's Target, or None for a scriptless run.
+        options: The template ek.Options load_last_used_venv_python fills in.
+            Still an Options because emmykit's loader is typed against one;
+            phase 4b replaces it with a LastUsed record.
+        pathlibcutoff: JSON files stamped before this are ignored.
+        rawlog: True suppresses veny's own commentary.
 
     Returns:
         The script's exit status if the lucky path ran it, or None meaning
         "no luck, carry on with the normal run".
     """
-    if getattr(options.args, "feeling_lucky", False) and options.python_script:
-        assert options.script_dir is not None, "options.script_dir must be set"
-        last_used_venv_python = last_used.load_last_used_venv_python(
-            options,
-            script_dir=options.script_dir,
-            python_script=options.python_script,
-            pathlibcutoff=options.pathlibcutoff,
-            rawlog=options.rawlog,
+    if not getattr(args, "feeling_lucky", False) or target is None:
+        return None
+    last_used_venv_python = last_used.load_last_used_venv_python(
+        options,
+        script_dir=target.script_dir,
+        python_script=target.python_script,
+        pathlibcutoff=pathlibcutoff,
+        rawlog=rawlog,
+    )
+    if last_used_venv_python:
+        returncode = run_script(
+            last_used_venv_python,
+            target.python_script,
+            list(target.script_args),
+            rawlog=rawlog,
         )
-        if last_used_venv_python:
-            returncode = run_script(
-                last_used_venv_python,
-                options.python_script,
-                options.script_args,
-                rawlog=options.rawlog,
-            )
-            if returncode != 0 and not options.rawlog:
-                print(f"Script exited with status {returncode}")
-            return returncode
-        else:
-            if not options.rawlog:
-                print(
-                    "No luck: no last used virtual environment found. Running the script as normal."
-                )
+        if returncode != 0 and not rawlog:
+            print(f"Script exited with status {returncode}")
+        return returncode
+    if not rawlog:
+        print(
+            "No luck: no last used virtual environment found. Running the script as normal."
+        )
     return None
 
 
@@ -499,39 +518,48 @@ def report(options: run_options.Options) -> None:
             logging.info("Imported subfolders: %s", options.subfolders)
 
 
-def _load_last_used(options: run_options.Options) -> ek.Options | None:
+def _load_last_used(
+    options: run_options.Options,
+    target: state.Target,
+    *,
+    pathlibcutoff: str,
+    rawlog: bool,
+) -> ek.Options | None:
     """Load the previous run's options JSON, for the cache search's last-used pass.
 
     find_match_dir_in_cache takes this as an injected callable rather than
     reaching for last_used itself, so nothing below pipeline has to know what
-    an Options is. The two asserts stay on this side of the injection and still
-    fire only when the loader is actually called -- that is, only on the
-    last-used branch, exactly where find_match_dir_in_cache used to carry them.
+    an Options is.
+
+    The two asserts this carried before phase 4a are gone: Target's fields are
+    non-optional, so there is nothing left to assert.
 
     Args:
-        options: Options object; reads options.script_dir, options.python_script,
-                 options.pathlibcutoff and options.rawlog.
+        options: The template ek.Options the loader fills in. Phase 4b
+            replaces it with a LastUsed record.
+        target: The run's Target; supplies script_dir and python_script.
+        pathlibcutoff: JSON files stamped before this are ignored.
+        rawlog: True suppresses veny's own commentary.
 
     Returns:
         The previous run's options, or None when there is no usable last-used
         JSON in the script's directory.
     """
-    assert options.script_dir is not None, "options.script_dir must be set"
-    assert options.python_script is not None, "options.python_script must be set"
     return last_used.load_last_used_options(
         options,
-        script_dir=options.script_dir,
-        python_script=options.python_script,
-        pathlibcutoff=options.pathlibcutoff,
-        rawlog=options.rawlog,
+        script_dir=target.script_dir,
+        python_script=target.python_script,
+        pathlibcutoff=pathlibcutoff,
+        rawlog=rawlog,
     )
 
 
-def setup_virtualenv(options: run_options.Options) -> bool:
+def setup_virtualenv(options: run_options.Options, target: state.Target) -> bool:
     """Setup a virtual environment and install packages.
 
     Args:
         options: The run's state; the venv it builds is recorded on it.
+        target: The run's Target; supplies python_command and timestamp.
 
     Returns:
         True if the environment was built and every requirement installed and
@@ -545,7 +573,7 @@ def setup_virtualenv(options: run_options.Options) -> bool:
     folder_name = venv_cache.build_folder_name(
         venv_name=options.venv_name,
         interpreter_tag=run_tag,
-        timestamp=options.timestamp,
+        timestamp=target.timestamp,
         pip_names=[record.pip_name for record in options.uninstalled_imports],
     )
     # Create a virtual environment directory that starts with "failed" in case the process fails. Only remove the "failed" part if this process completes successfully.
@@ -555,7 +583,7 @@ def setup_virtualenv(options: run_options.Options) -> bool:
         logging.info("Creating virtual environment...")
     assert options.venv_dir is not None, "options.venv_dir must be set"
     if not environment.create_venv(
-        options.venv_dir, environment.venv_build_interpreter(options.python_command)
+        options.venv_dir, environment.venv_build_interpreter(target.python_command)
     ):
         logging.error(
             "uv could not create the virtual environment at %s.", options.venv_dir
@@ -634,9 +662,9 @@ def setup_virtualenv(options: run_options.Options) -> bool:
             options.venv_dir,
             venv_python=options.venv_python,
             venv_name=options.venv_name,
-            timestamp=options.timestamp,
+            timestamp=target.timestamp,
             run_tag=run_tag,
-            python_command=options.python_command,
+            python_command=target.python_command,
             uninstalled=options.uninstalled_imports,
             extra_requirements=options.extra_requirements,
             rawlog=options.rawlog,
@@ -651,11 +679,18 @@ def setup_virtualenv(options: run_options.Options) -> bool:
     )
 
 
-def run(options: run_options.Options, *, start_time: dt.datetime | None = None) -> int:
+def run(
+    options: run_options.Options,
+    target: state.Target | None,
+    *,
+    start_time: dt.datetime | None = None,
+) -> int:
     """Execute the run described by options and return the script's status.
 
     Args:
         options: The run's state, with argv already parsed onto it.
+        target: What is being run, or None for a scriptless invocation --
+            which only --blank-slate excuses.
         start_time: What the two "Elapsed time" lines are measured from.
             `cli.main` takes it before argparse, which is where the whole run
             has always been timed from; the default keeps `run` callable on
@@ -675,16 +710,22 @@ def run(options: run_options.Options, *, start_time: dt.datetime | None = None) 
     start_time = start_time or dt.datetime.now()
     script_exit_code = 0
 
-    options.python_command = ek.find_preferred_python_version()
-    if options.python_command:
+    # emmykit annotates this as str | None while documenting "" for "absent";
+    # `or ""` pins the documented spelling at the two boundaries that are
+    # typed str, and stdlib_index.resolve below still gets the raw value,
+    # because it maps None and the running interpreter to the same index.
+    python_command = ek.find_preferred_python_version()
+    if target is not None:
+        target = dataclasses.replace(target, python_command=python_command or "")
+    if python_command:
         if logging.getLogger().isEnabledFor(logging.DEBUG):
             logging.debug(
-                "Python %s is available at: %s", ek.PY_VERSION, options.python_command
+                "Python %s is available at: %s", ek.PY_VERSION, python_command
             )
     else:
         if logging.getLogger().isEnabledFor(logging.DEBUG):
             logging.debug("Python %s is not available.", ek.PY_VERSION)
-    options.stdlib = stdlib_index.resolve(options.python_command)
+    options.stdlib = stdlib_index.resolve(python_command)
     if logging.getLogger().isEnabledFor(logging.DEBUG):
         logging.debug(
             "Standard library index: %d names from Python %d.%d (source: %s)",
@@ -694,7 +735,7 @@ def run(options: run_options.Options, *, start_time: dt.datetime | None = None) 
             options.stdlib.source,
         )
     # This must happen before anything resolves, i.e. before list_packages() below.
-    options.aliases = build_alias_index(options)
+    options.aliases = build_alias_index(options, python_command or "")
     if logging.getLogger().isEnabledFor(logging.DEBUG):
         logging.debug(
             "Alias index: %d overrides, %d cached names, tagged %s",
@@ -711,7 +752,7 @@ def run(options: run_options.Options, *, start_time: dt.datetime | None = None) 
             )
         options.my_dir.mkdir(parents=True, exist_ok=True)
 
-    if options.python_script:
+    if target is not None:
         pass  # If a script was provided as an argument, skip the rest of these checks.
     elif getattr(options.args, "blank_slate", False):
         return blank_slate(options)
@@ -756,7 +797,7 @@ def run(options: run_options.Options, *, start_time: dt.datetime | None = None) 
     if not options.rawlog:
         logging.info("Elapsed time: %s", elapsed_time)
 
-    list_packages(options)
+    list_packages(options, target)
 
     report(options)
 
@@ -769,8 +810,8 @@ def run(options: run_options.Options, *, start_time: dt.datetime | None = None) 
         start_raw_time = dt.datetime.now()
         script_exit_code = run_script(
             sys.executable,
-            options.python_script,
-            options.script_args,
+            target.python_script,
+            list(target.script_args),
             rawlog=options.rawlog,
         )
         elapsed_raw_time = dt.datetime.now() - start_raw_time
@@ -792,8 +833,8 @@ def run(options: run_options.Options, *, start_time: dt.datetime | None = None) 
             start_raw_time = dt.datetime.now()
             script_exit_code = run_script(
                 sys.executable,
-                options.python_script,
-                options.script_args,
+                target.python_script,
+                list(target.script_args),
                 rawlog=options.rawlog,
             )
             elapsed_raw_time = dt.datetime.now() - start_raw_time
@@ -825,14 +866,19 @@ def run(options: run_options.Options, *, start_time: dt.datetime | None = None) 
                 ),
                 tag=cache_search.interpreter_tag(options.stdlib),
                 rawlog=options.rawlog,
-                load_last_used=lambda: _load_last_used(options),
+                load_last_used=lambda: _load_last_used(
+                    options,
+                    target,
+                    pathlibcutoff=options.pathlibcutoff,
+                    rawlog=options.rawlog,
+                ),
             )
         if match_dir is None:
             if not options.rawlog:
                 logging.info(
                     "Creating new virtual environment '%s'...", options.venv_name
                 )
-            if setup_virtualenv(options):
+            if setup_virtualenv(options, target):
                 match_dir = options.venv_dir
             else:
                 # This was emmykit's critical-error helper, called with
@@ -857,8 +903,8 @@ def run(options: run_options.Options, *, start_time: dt.datetime | None = None) 
                 logging.info("Elapsed time: %s", elapsed_time)
             script_exit_code = run_script(
                 options.venv_python,
-                options.python_script,
-                options.script_args,
+                target.python_script,
+                list(target.script_args),
                 rawlog=options.rawlog,
                 announce=True,
             )
@@ -884,6 +930,13 @@ def run(options: run_options.Options, *, start_time: dt.datetime | None = None) 
                     )
                 )
 
+            # emmykit's writer builds its filename off the Options, not off a
+            # payload, so the Target's three naming fields are copied across
+            # here -- at the save, not carried on Options for the whole run.
+            # Phase 4b replaces this with veny's own LastUsed record.
+            options.python_script = target.python_script
+            options.script_dir = target.script_dir
+            options.timestamp = target.timestamp
             ek.save_options_to_json(options)
 
     return script_exit_code
