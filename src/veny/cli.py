@@ -163,9 +163,14 @@ def main() -> int:
     Returns:
         The wrapped script's exit status; 0 when nothing was meant to run
         (--justprint, --blank-slate); 1 when veny could not find or build an
-        environment; 2 for a usage error. A child killed by a signal is
-        reported as 128 + signal rather than as a negative status, which the
-        shell would wrap around to the wrong number.
+        environment; 2 for a usage error. On the ordinary path -- the one that
+        goes through pipeline.run -- a child killed by a signal is reported as
+        128 + signal rather than as a negative status, which the shell would
+        wrap around to the wrong number. --feeling-lucky does NOT get that
+        normalization: it returns pipeline.feeling_lucky's status directly, so
+        a lucky run killed by SIGKILL still returns -9. That asymmetry is
+        pre-existing behaviour, unchanged by phase 3e and deliberately left
+        alone by its whole-branch review; see PROGRESS.md's deferred items.
     """
     start_time = dt.datetime.now()
     options = Options()
