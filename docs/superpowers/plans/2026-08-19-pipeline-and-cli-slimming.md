@@ -1305,6 +1305,29 @@ behind is a clean exit 2.
 - [x] `get_all_imports` and the directory branch of `list_packages` **stay** —
       a directory is still reachable as a positional argument.
 
+      **[EXECUTION]** **The code stayed, but the justification is false: a
+      directory is NOT reachable as a positional argument, and deleting
+      `--full` is what made the branch dead.** Found by the whole-branch
+      review, 2026-08-20. `options.python_script` is written in exactly one
+      production place, `pipeline.resolve_target`, and that write goes through
+      `ek.ensure_file(...)` — emmykit's `ensure_file` **raises
+      `IsADirectoryError`** when the path is a directory (verified against the
+      installed emmykit: `if safe_is_dir(p): raise IsADirectoryError(f"Expected
+      a file, got directory: …")`). At `08622a8` the directory branch was
+      reachable only because the `--full` arm assigned
+      `options.python_script = options.cwd` (`cli.py:495` at that commit).
+      This task deleted that arm, so the `elif ek.safe_is_dir(...)` branch, the
+      `else: raise FileNotFoundError` arm, `stayed_out_dir` and
+      `get_all_imports` — about 55 lines — are now unreachable from any
+      production entry point. **Keeping the code was still the right call for
+      this phase** (deleting it is a behaviour change, and 3e is
+      behaviour-preserving), but the criterion must not be read as evidence
+      that folder scanning still works. Phase 4 owes the decision: either make
+      `resolve_target` accept a directory, restoring folder scanning as a real
+      feature, or delete the branch. Recorded in `PROGRESS.md`'s deferred
+      items, and in the wiring index, where 16 kill rows cite a test that
+      reaches this code only by assigning `options.python_script` directly.
+
 **Verify:** `pixi run python -m pytest tests/test_cli_entry_point.py -v`
 
 **Steps:**

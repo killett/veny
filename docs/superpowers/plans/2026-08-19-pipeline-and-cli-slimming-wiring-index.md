@@ -239,6 +239,29 @@ because this phase is behaviour-preserving:
   travelling out of `main` uncaught, so pinning `strict=True` would mean
   asserting a traceback as the contract.
 
+**Sixteen kill rows pin code no production run reaches** — added by the
+whole-branch review of phase 3e, 2026-08-20, and stated here because a kill row
+looks like coverage. The rows are the sixteen whose *only* named killing test is
+`test_import_discovery::test_list_packages_walks_a_folder_and_stays_out_of_the_named_directories`:
+every row for `pipeline.py:291` (`ek.safe_is_dir`), `:297` (`get_all_imports`),
+`:317`/`:318` (`stayed_out_dir`) and `:326`–`:346` (`get_all_imports`' body).
+They are genuine kills — the substitutions really do fail that test — but the
+directory branch of `list_packages` is **dead in production**:
+`options.python_script` is written in exactly one production place,
+`pipeline.resolve_target`, through `ek.ensure_file(...)`, and emmykit's
+`ensure_file` raises `IsADirectoryError` for a directory. Before phase 3e's Task
+5 the branch was reachable only via `--full`, which assigned
+`options.python_script = options.cwd`; deleting `--full` deleted the only
+producer of a directory. The killing test (`tests/test_import_discovery.py:224`) reaches the
+code by assigning `options.python_script` directly — `options.python_script =
+project` at `tests/test_import_discovery.py:254` — which bypasses
+`resolve_target` entirely. So these sixteen rows pin a *move*, not a live path.
+Phase 4 owes the decision — teach `resolve_target` to accept a directory, or
+delete the branch — and whichever it picks, these rows go with it. Not counted
+among the 47 unpinned rows: they are pinned, just not by anything a user can
+run. Recorded in `PROGRESS.md`'s deferred items and as an `[EXECUTION]` block on
+Task 5's fourth acceptance criterion.
+
 ## Every argument, measured
 
 `Sweep 1` marks the rows that were holes at `183bdcc`, and `*not reached*` the

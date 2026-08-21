@@ -35,14 +35,13 @@ gotchas ledger.
 
 **Next action:** two things, in this order.
 
-1. **A whole-branch review of `pipeline-and-cli-slimming`, then the merge.**
-   Phase 3e is executed and its Task 10 (this entry) is committed, but the
-   branch is **deliberately not merged**. 3b, 3c and 3d each had a
-   whole-branch review after their closing task and each found Important
-   issues per-task review had missed — in 3c's case a defect living in the
-   *seam between two individually correct tasks*, which is exactly the
-   failure mode a sequencing extraction invites, and 3e is a sequencing
-   extraction. Review first, settle the findings, then
+1. **Merge `pipeline-and-cli-slimming`.** The whole-branch review has now
+   **run and its fix wave has landed** (2026-08-20; see the 3e entry below for
+   what it found). As with 3b, 3c and 3d, it found Important issues per-task
+   review had missed — 3e's were two behaviour questions deliberately left for
+   phase 4 and one test that could not fail on its own bug. Nothing is
+   outstanding on the branch. The merge was **not** performed by the fix wave,
+   by explicit user instruction; run
    `git switch main && git merge --no-ff pipeline-and-cli-slimming`.
 2. **Write and execute phase 4 — the state model.** It inherits, all in
    Deferred items below:
@@ -212,6 +211,40 @@ green, and closed **67** of them (suite 388 → 408). What is left is stated
 with its qualifier this time — **215 kills, 16 identity, 47 killing nothing**,
 of which **30 are genuine OPEN HOLEs and 17 are DEAD ARGUMENTS** (findings,
 not gaps). The index is `docs/superpowers/plans/2026-08-19-pipeline-and-cli-slimming-wiring-index.md`.
+
+The whole-branch review then ran on the twenty-one-commit branch (2026-08-20)
+and found **three Important issues and five Minors**, all settled in one wave
+— `36bda31`/`0691352` plus this entry. Neither Important issue was a
+regression 3e introduced, and by user ruling neither was fixed here; both are
+now phase-4 decisions in Deferred items. **Important 1:** deleting `--full`
+(Task 5) also deleted the only production writer of a *directory* into
+`options.python_script`, so `get_all_imports`, `stayed_out_dir` and the
+directory branch of `list_packages` — about 55 lines — are dead code, and Task
+5's fourth acceptance criterion asserts the opposite in writing ("a directory
+is still reachable as a positional argument"; it now carries an `[EXECUTION]`
+correction). The sting is in the index: **16 wiring-index rows** are killed
+only by a test that reaches that code by assigning `options.python_script`
+directly, so 16 real kills pin a path no user can take — noted in the index
+itself. **Important 2:** `last_used.is_virtualenv()` is `sys.prefix !=
+sys.base_prefix`, a fact about **veny's own interpreter**, so under the
+`uv tool install veny` shape veny's own README prescribes it is always True
+and every run with a missing import exits 1 without ever building; amendment
+14 and deviation 3 now carry that qualifier, and both closing live runs used
+`pixi run veny` — a conda env, the one shape where the guard is False — so
+the phase's end-to-end evidence was blind to it. **Important 3** was fixed:
+the timing test could not fail on the bug it is named for. The Minors: `main`'s
+docstring over-promised the signal normalization (`--feeling-lucky` skips it);
+the `pre-commit install` gotcha above overstated its scope; **two transcribed
+deferred minors were themselves wrong and would have made the tree worse if
+applied** — `test_a_run_with_no_script_is_a_usage_error`'s docstring is
+correct and the `TypeError` it was told to name was a stubbed-harness
+artifact, and `pipeline.run`'s `Raises:` section documents two exceptions that
+really do come out of it; and two test call sites discarded
+`environment.create_venv`'s post-Task-7 `bool`. Five recorded deferred minors
+were re-checked and closed or corrected. Gates re-measured after the wave:
+`pixi run test` **408 passed**, `pixi run lint` zero,
+`ruff format --check .` **55 files**, `pixi run typecheck` **29 errors in 7
+files** — every number identical to `0f6b315`.
 
 Plan 3d, `docs/superpowers/plans/2026-08-18-verify-cache-search-last-used.md`,
 is complete and **merged to `main` at `73cf588`** (a `--no-ff` merge; branch
@@ -995,7 +1028,12 @@ wiring rationale and for two Minors deliberately left unfixed.
   `*.sample` files and no `core.hooksPath` is set. This is **deliberate, not
   an oversight** — see the `pixi run typecheck` entry above: the `mypy` hook is
   `mypy .` with `pass_filenames: false`, so with the repo's standing errors an
-  installed hook would refuse every commit. Anyone who "discovers" this and
+  installed hook would refuse every commit **that stages a Python file**.
+  (Scope corrected by 3e's whole-branch review, 2026-08-20: the hook also
+  carries `types: [python]`, so pre-commit skips it entirely when nothing
+  Python is staged — a docs-only commit would pass. The conclusion is
+  unchanged, because `mypy .` type-checks the whole tree the moment any `.py`
+  is staged, which is most commits here.) Anyone who "discovers" this and
   reaches for `pre-commit install` will break the workflow for everyone.
 - veny's standard-library skips are silent for top-level imports: the
   `Skipping standard library import` debug line only fires inside
@@ -1792,13 +1830,17 @@ wiring rationale and for two Minors deliberately left unfixed.
   the script's own status (**7**). The design predicted exactly this — it
   listed both as out of scope but expected them to be "addressed incidentally
   when `cli.py` and `pipeline.py` take ownership of control flow" — and it was
-  right. One residual shortfall, recorded honestly: the in-virtualenv
-  **success** side asserts the status only, never `launched`, so *which
-  interpreter* runs the script on that branch is still unpinned, and the
-  differential's layer 6 shows the new tree verifying `venv_python_for(active)`
-  while launching `sys.executable` (the same interpreter in production — an
-  artifact of the stub, not a defect). Nothing else in the crash ledger was
-  fixed.
+  right. One residual shortfall was recorded here — that the in-virtualenv
+  **success** side asserted the status only, never `launched`, leaving *which
+  interpreter* runs the script on that branch unpinned. **CLOSED on the branch,
+  verified 2026-08-20:** `test_a_satisfied_surrounding_virtualenv_runs_the_script_under_it`
+  (`tests/test_cli_entry_point.py:1354`) asserts
+  `launched == [[sys.executable, os.fspath(tmp_path / "script.py")]]`, so both
+  the interpreter and the script are pinned. Still true and still only an
+  artifact: the differential's layer 6 shows the new tree verifying
+  `venv_python_for(active)` while launching `sys.executable` (the same
+  interpreter in production — an artifact of the stub, not a defect). Nothing
+  else in the crash ledger was fixed.
 - `src/veny/cli.py`'s script-failure log lines read `result.returncode` as of
   2026-08-15; they previously read `result.stderr`, which was always `None`
   because none of the three script-running `subprocess.run` calls capture
@@ -2014,6 +2056,28 @@ wiring rationale and for two Minors deliberately left unfixed.
       flow". The design was right about that; it is recorded as an amendment
       because a behaviour change, even a repair, is not a move.
 
+      **The crash is closed but the branch's precondition is still wrong —
+      found by the whole-branch review, 2026-08-20, USER RULING: record now,
+      fix in phase 4.** `last_used.is_virtualenv()` is `sys.prefix !=
+      sys.base_prefix`, which is a statement about **veny's own interpreter**,
+      not about the user's shell. `README.md:16` and `environment.py`'s
+      `UvUnavailable` message both tell users to install with `uv tool install
+      veny`, which puts veny in a venv, and `scripts/smoke-install.sh:33-34`
+      does the same with `python -m venv`. In **any** such install
+      `is_virtualenv()` is always True, so every run with a non-empty
+      `uninstalled_imports` takes the middle branch (`pipeline.py:830-861`),
+      import-checks **veny's own tool venv** — which of course lacks the
+      user's script's packages — logs "Please deactivate the current virtual
+      environment and run the script again." and returns 1. The concrete
+      consequence: `uv tool install veny` plus a script with a missing import
+      ⇒ **exit 1, never a build**, with the cache search and
+      `setup_virtualenv` below it unreachable. This is **not a regression** —
+      at `08622a8` the same input hit `assert options.venv_dir is not None`
+      and crashed — so amendment 14 traded a crash for a wrong answer, which
+      is an improvement; but it did not make the branch correct, and this
+      entry previously read as though it had. See Deferred items for the
+      phase-4 question and the minimal fix.
+
 - **3e's seven sanctioned deviations — behaviour that visibly changed, each
   deliberate.** The plan carried six; **the seventh was added mid-phase by an
   explicit user ruling** during Task 7's second fix round. All seven are
@@ -2030,7 +2094,22 @@ wiring rationale and for two Minors deliberately left unfixed.
      `cli.main` and returned as **exit 2**. First of the two pre-existing
      crashes; the second is amendment 14.
   3. **The in-virtualenv branch runs instead of crashing** — amendment 14,
-     restated here because it is user-visible.
+     restated here because it is user-visible. **Qualifier added by the
+     whole-branch review, 2026-08-20:** it now runs, but it still asks about
+     the wrong process. `last_used.is_virtualenv()` tests **veny's own**
+     interpreter (`sys.prefix != sys.base_prefix`), not the user's shell, so
+     under the install shape veny's own docs prescribe — `uv tool install
+     veny`, `README.md:16` — it is **always True**. Concrete consequence: a
+     `uv tool install veny` user running a script with a missing import gets
+     the branch's `script_exit_code = 1` and "Please deactivate the current
+     virtual environment and run the script again.", **never a build**; the
+     cache search and `setup_virtualenv` are unreachable for them. Not a
+     regression (that same input crashed at `08622a8`), but the deviation
+     should not be read as "this branch is now correct". **The phase's own
+     end-to-end evidence cannot see it:** both closing live runs used `pixi
+     run veny`, and a conda env has `sys.prefix == sys.base_prefix` — the one
+     install shape where the guard is False and the branch is skipped. USER
+     RULING: recorded here, fixed in phase 4; see Deferred items.
   4. **`--full` is gone**, with its help text, its README mention and all
      **six** of its branches. Design ledger item 3 ("`--full` has never
      worked") is closed. `veny --full` now exits 2 with argparse's own
@@ -2225,6 +2304,78 @@ wiring rationale and for two Minors deliberately left unfixed.
       emitting them, so a change that reordered two messages within either
       layer would produce no hunk. The other five layers keep emission order.
 
+- **Two findings from 3e's whole-branch review (2026-08-20) that phase 4 owns.
+  Both are behaviour questions, not test gaps, and neither was fixed on the
+  branch because 3e is behaviour-preserving.**
+  1. **Folder scanning is dead code, and phase 4 must decide whether to revive
+     it or delete it.** The symbols: `get_all_imports` (`pipeline.py:322-358`),
+     `stayed_out_dir` (`:315-319`), and the `elif ek.safe_is_dir(...)` /
+     `else: raise FileNotFoundError` arms of `list_packages` (`:291-301`) —
+     about 55 lines. **Why they are unreachable:** `options.python_script` is
+     written in exactly one production place, `pipeline.resolve_target`
+     (`pipeline.py:409-416`), and that write goes through
+     `ek.ensure_file(...)`, which raises `IsADirectoryError` for a directory.
+     Before Task 5 the branch was reachable only because the `--full` arm
+     assigned `options.python_script = options.cwd`; deleting `--full` deleted
+     the only producer of a directory. **The plan says the opposite** — Task
+     5's fourth acceptance criterion, ticked, reads "a directory is still
+     reachable as a positional argument", which is false; it now carries an
+     `[EXECUTION]` correction. **Why this matters beyond the dead lines:**
+     `tests/test_import_discovery.py:224`
+     (`test_list_packages_walks_a_folder_and_stays_out_of_the_named_directories`)
+     reaches the code only by assigning `options.python_script` directly at
+     `tests/test_import_discovery.py:254`, bypassing `resolve_target` — and
+     that test is the **only** named killer for **16 rows** of the wiring index
+     (`docs/superpowers/plans/2026-08-19-pipeline-and-cli-slimming-wiring-index.md`,
+     every row for `pipeline.py:291`, `:297`, `:317`/`:318` and `:326`-`:346`).
+     Those 16 kills are real kills that pin code no production run reaches. The
+     decision phase 4 owes: **either** make `resolve_target` accept a directory
+     — restoring folder scanning as a real feature, with its own tests and a
+     live run — **or** delete the branch, its helpers and those 16 rows. Do not
+     leave it as it is and count the rows as coverage. **Do not "fix" this by
+     deleting the code inside a behaviour-preserving phase.**
+  2. **The in-virtualenv guard asks about the wrong process: what does
+     "already in a virtualenv" mean when veny itself lives in one?**
+     `last_used.is_virtualenv()` is `sys.prefix != sys.base_prefix`, which
+     describes **veny's own interpreter**, not the user's shell. veny's own
+     documented install (`uv tool install veny`, `README.md:16` and
+     `environment.py`'s `UvUnavailable` message) puts veny in a venv, as does
+     `scripts/smoke-install.sh:33-34`. In any such install the guard is
+     **always True**, so every run with a non-empty `uninstalled_imports` takes
+     the middle branch of `pipeline.run` (`pipeline.py:830-861`), import-checks
+     veny's own tool venv, fails, logs "Please deactivate the current virtual
+     environment and run the script again." and returns 1 — leaving the cache
+     search and `setup_virtualenv` unreachable. **Not a regression** (at
+     `08622a8` the same input hit `assert options.venv_dir is not None` and
+     crashed), but design amendment 14 and sanctioned deviation 3 overstated
+     what Task 6 fixed; both now carry the qualifier. **The minimal fix the
+     review identified:** gate on `os.environ.get("VIRTUAL_ENV")` — the user's
+     own statement of which environment they activated, which is already what
+     `last_used.active_virtualenv_dir()` prefers — rather than veny's
+     `sys.prefix`. That is a **behaviour change**: it needs its own tests
+     (both directions: veny-in-a-venv with no `VIRTUAL_ENV` must fall through
+     to the cache, and an activated `VIRTUAL_ENV` must still be checked) plus a
+     live run **from a tool-install shape**, not from `pixi run`. **USER
+     RULING, 2026-08-20: record now, fix in phase 4.** **Why the phase's
+     end-to-end evidence is blind to it:** both closing live runs used `pixi
+     run veny`, and a conda env has `sys.prefix == sys.base_prefix` — the one
+     install shape where the guard is False and the branch is skipped
+     entirely. Any future live run meant to exercise this branch must not use
+     `pixi run`.
+
+- **`--feeling-lucky` skips the signal normalization, and that is deliberate
+  only by accident** (recorded by 3e's whole-branch review, 2026-08-20; not
+  fixed). `cli.main` normalizes a signal death to 128 + signal at its tail, but
+  the `--feeling-lucky` path returns `pipeline.feeling_lucky`'s status directly
+  from the middle of the function, before that tail. So a lucky run killed by
+  SIGKILL returns **-9**, which the shell wraps to 247, while the same script
+  on the ordinary path returns 137. The behaviour matches `08622a8` exactly —
+  only the *prose* was new and wrong, since Task 6's ledger item 4 ("`cli.py`
+  is the sole owner of veny's exit statuses") wrote a `main()` docstring
+  promising the normalization unconditionally. The docstring now states the
+  asymmetry; the behaviour is untouched. Whoever fixes it should route the
+  lucky status through the same tail rather than duplicating the arithmetic.
+
 - **3e's deferred minors, none blocking.** Recorded because the per-task
   reports are scratch and are deleted with the phase.
   - Task 2's mutation 1 kill is incidental (`venv_python` is None on that
@@ -2232,33 +2383,80 @@ wiring rationale and for two Minors deliberately left unfixed.
     interpreter; blank-slate filter clauses 2 (`.err`) and 3
     (`_custom_modules_*.pkl`) are unpinned; the `--blank-slate` confirmation
     guard itself is unpinned (the prompt is stubbed `True` only); `captured`
-    is bound and unused in all six new tests; the cache-hit/cache-miss tests
+    is bound and unused in all six new tests (**partly closed 2026-08-20** by
+    3e's whole-branch review, which fixed the one site where *both* names were
+    dead —
+    `test_blank_slate_deletes_the_state_directory_and_leaves_other_files_alone`,
+    now `_, _ =`. The other five still bind `captured` and never read it, so
+    **nothing in the suite reads `_drive_main`'s first return value at all**;
+    ruff's F841 exempts tuple unpacking, so no gate catches it); the
+    cache-hit/cache-miss tests
     depend on the ambient interpreter not being a virtualenv; and the
     restated docstring's second failure mode (`match_dir` left unset) is
     reasoned rather than mutation-demonstrated.
   - `cli.py`'s `ResolvedImport` re-export comment is no longer true — only
-    `tests/test_split_imports.py` uses it — and
-    `tests/test_classify.py:487`'s docstring still says "cli.py's own
-    `also_needs` table".
+    `tests/test_split_imports.py` uses it. (~~`tests/test_classify.py:487`'s
+    docstring still says "cli.py's own `also_needs` table"~~ — **CLOSED
+    2026-08-20** by 3e's whole-branch review. Note for the record that it was
+    *not* already closed on the branch, as the review first believed: the
+    branch had repointed only the docstring's first line (`cli.split_imports`
+    → `pipeline.split_imports`), leaving the body's "cli.py's own `also_needs`
+    table" behind. The table has lived in `run_options.Options.__init__` since
+    Task 1 (`e5dfced`), so the phrase was stale; the docstring now names
+    `run_options.Options.__init__`.)
+  - **`run_script`'s `announce` argument: pinned, nothing outstanding**
+    (checked 2026-08-20 while pruning this list — 3e's whole-branch review
+    listed "Task 4's unpinned `announce` branch" as a deferred minor to close,
+    but **no such entry was ever written into this file**, so there was nothing
+    to prune). Recorded here so the next reader does not go looking: all four
+    `announce` rows in the wiring index are accounted for —
+    `test_only_the_venv_launch_announces_the_command_it_is_about_to_run` kills
+    the `announce=True` probe at `pipeline.py:451`, `:821` and `:844` and the
+    `announce=False` substitution at `:909`, and the `announce=True` row at
+    `:909` is an identity substitution. What is still open on that argument is
+    a different thing entirely and is already recorded above as latent defect
+    3: `rawlog` is a DEAD ARGUMENT at the three sites that leave `announce`
+    False.
   - `pipeline.run` is **240 lines**; its acquired-venv tail (~85) is the next
-    extraction candidate. Its `Raises:` documents `UsageError`/
-    `VenvBuildFailed` that this tree never raises from there, and its
-    `return 2` / `return 1` handlers skip `print_all_errors` and
-    `logging.shutdown`. `_drive_main`'s docstring is stale ("main() is 400
-    lines of sequencing") and its `venv_dir=` keyword is now dead — no caller
-    passes it.
-  - **`test_a_run_with_no_script_is_a_usage_error`'s docstring
+    extraction candidate. ~~Its `Raises:` documents `UsageError`/
+    `VenvBuildFailed` that this tree never raises from there~~ — **that clause
+    was wrong and is withdrawn (2026-08-20, 3e's whole-branch review).** It was
+    transcribed unrevised from a pre-Task-5 note. `run` raises `UsageError`
+    **in its own body** (`pipeline.py:770`, the no-script-and-no-`--blank-slate`
+    arm), and `VenvBuildFailed` really does travel through it — `_probe_venv`
+    raises it at `pipeline.py:185`, reached via `run` → `list_packages` →
+    `pipeline.split_imports` → `classify.split_imports`. Both `Raises:` entries
+    are therefore correct and must not be deleted. What *is* still true in that
+    sentence: `cli.main`'s `return 2` / `return 1` handlers skip
+    `print_all_errors` and `logging.shutdown`.
+    ~~`_drive_main`'s docstring is stale ("main() is 400 lines of sequencing")
+    and its `venv_dir=` keyword is now dead — no caller passes it.~~ —
+    **both CLOSED on the branch, verified 2026-08-20**: `rg -n '400 lines'
+    tests/ src/` returns nothing (the docstring was rewritten to describe the
+    post-3e split), and `_drive_main`'s signature is
+    `(monkeypatch, tmp_path, argv, *, uninstalled, all_imports, script_args=())`
+    — no `venv_dir` parameter survives.
+  - ~~**`test_a_run_with_no_script_is_a_usage_error`'s docstring
     (`tests/test_cli_entry_point.py:826-834`) names a crash site that no
-    longer exists.** It says the old fall-through "reached `assert
-    options.python_script is not None` inside `list_packages` and died with a
-    traceback". That was true at `08622a8`, but Task 4 had already moved the
-    run, and the pre-fix failure Task 5 actually observed before deleting the
-    branches was a **`TypeError: expected str, bytes or os.PathLike object,
-    not NoneType` inside `run_script`** — the fall-through no longer even
-    reached `list_packages`. This is a stale-docstring defect **in a committed
-    test**, which is precisely the kind nobody re-derives: the test passes, so
-    nothing ever forces a reader to check the claim. Fix the docstring to name
-    the `TypeError` in `run_script`, or name both with their commits.
+    longer exists.** … Fix the docstring to name the `TypeError` in
+    `run_script`, or name both with their commits.~~ — **THIS LEDGER ENTRY WAS
+    ITSELF WRONG. Withdrawn 2026-08-20 by 3e's whole-branch review; the
+    docstring is correct and must NOT be changed.** The docstring describes the
+    **shipped** behaviour at `08622a8`, which is what a "concrete bug this
+    catches" clause is supposed to describe: at that commit `cli.py`'s
+    no-script fall-through really did reach `list_packages`, whose **first
+    statement** is `assert options.python_script is not None` (verified:
+    `git show 08622a8:src/veny/cli.py`, line 862). The `TypeError: expected
+    str, bytes or os.PathLike object, not NoneType` that Task 5 observed was a
+    **harness artifact, not the shipped crash**: `_drive_main` has replaced
+    `list_packages` with a stub since Task 2 (`5acb137`), so under the harness
+    the assert was substituted away and the run travelled on to `run_script`.
+    Applying the "fix" this entry asked for would have made a correct docstring
+    wrong — it would have pinned the test's rationale to a failure mode no user
+    can reach. **The transferable lesson:** when a deferred minor claims a
+    docstring names a crash that "no longer exists", check whether the
+    observation came from a stubbed harness before believing it, because a stub
+    can delete the very statement the docstring is about.
   - **Task 5's report overstated its `VenvBuildFailed` symmetry argument** —
     it compared handlers as though they logged at the same level, when one is
     **ERROR** and the other **INFO**. The conclusion it drew is still correct;
@@ -2272,8 +2470,11 @@ wiring rationale and for two Minors deliberately left unfixed.
     same. `classify.split_imports` propagates `VenvBuildFailed` with no
     `Raises:` section. `tests/test_cli_entry_point.py` hardcodes a copy of the
     `UvUnavailable` message with nothing pinning the two texts together.
-  - The in-virtualenv success side asserts status only, never `launched` —
-    which interpreter runs the script there is unpinned.
+  - ~~The in-virtualenv success side asserts status only, never `launched` —
+    which interpreter runs the script there is unpinned.~~ — **CLOSED on the
+    branch, verified 2026-08-20** by
+    `test_a_satisfied_surrounding_virtualenv_runs_the_script_under_it`, which
+    asserts the whole launched command, not just the status.
   - The wiring index's constants list drops `/tmp/wrong-venv` while 23 kill
     rows still cite it, and its before/after table drops sweep 2's row
     (202/39/8 at `4033c75`) which the prose still references. Summary/rows
