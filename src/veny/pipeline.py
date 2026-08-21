@@ -30,7 +30,6 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Callable, Iterator
-from pathlib import Path
 
 import emmykit as ek
 
@@ -113,10 +112,14 @@ def find_imports_in_script(
     immediately, with no copy-back step needed afterwards. This is also why
     the scanner must be *seeded* with this call, not just read afterwards:
     dict_of_custom_modules() populates options.custom_modules before
-    list_packages() ever reaches this function, and get_all_imports() calls
-    this once per file in a directory scan, relying on all seven fields
-    (not just all_imports) accumulating across calls. Passing options'
-    own objects in as `scan` is what makes both of those work.
+    list_packages() ever reaches this function, and the scanner reads that
+    dict to tell a local module from a PyPI package. Passing options' own
+    objects in as `scan` is what makes that work. (Until 2026-08-21 a second
+    reason stood here: the deleted folder-scanning helper called this once
+    per file in a directory walk and relied on all seven fields accumulating
+    across calls. Folder scanning is gone, so accumulation now spans one
+    script's import graph rather than a tree of files -- but the fields still
+    accumulate across the recursive walk of that graph.)
 
     Args:
         options: The run's Options; the seven scan fields are updated in place.
@@ -245,64 +248,36 @@ def split_imports(options: run_options.Options) -> None:
 
 
 def list_packages(options: run_options.Options) -> None:
-    """Examine command line arguments to determine if we're looking at a directory or a single python script. List all installed and uninstalled packages that are imported in that directory or python script. Return these sets inside the options object.
+    """Scan the target script for imports, then classify them.
+
+    Folder scanning was deleted here on 2026-08-21 (user ruling). It had been
+    unreachable since 3e deleted --full: options.python_script is written in
+    exactly one production place, resolve_target, and that write goes through
+    ek.ensure_file, which refuses a directory. The only test that reached the
+    directory arms did so by assigning options.python_script directly.
 
     Args:
-        options: Options object containing command line arguments and settings. Contains:
-            - python_script:           Path to the Python script or directory to analyze.
-            - rawlog:                  Boolean indicating if raw logging is enabled.
-            - script_dir:              Directory containing the script, used for logging.
-            - all_imports:             Set to be populated with all imports found.
-            - uninstalled_imports:     Set to be populated with ResolvedImport records.
-            - known_bad_imports:       Set of known bad imports to filter out.
-            - stdlib:                  StdlibIndex used to skip standard library imports.
-            - custom_modules:          Dictionary mapping custom module names to their file paths.
-            - aliases:                 AliasIndex resolving import names to pip names
-                                       (e.g., 'cv2' -> 'opencv-python').
-            - also_needs:              Dictionary mapping import names to their dependencies.
+        options: Options object containing command line arguments and settings.
+            Reads python_script and rawlog; the scan and classification fields
+            are replaced.
 
     Returns:
-        None - modifies options to include all imports found in the specified Python script or directory.
+        None - modifies options to include all imports found in the script.
 
     Raises:
-        ValueError:        If the provided path is not a valid Python script or directory.
-        FileNotFoundError: If the specified file or directory does not exist.
+        UsageError: The target is not a Python script veny can read.
     """
     assert options.python_script is not None, "options.python_script must be set"
-    assert options.script_dir is not None, "options.script_dir must be set"
 
-    if isinstance(options.python_script, (str, Path)):
-        options.python_script = ek.ensure_path(options.python_script)
-        options.loaded_custom_modules = set()
-        if ek.safe_is_file(options.python_script):
-            if ek.is_python_script(options.python_script):
-                if not options.rawlog:
-                    logging.info(
-                        "Processing a single Python script: %s",
-                        os.fspath(options.python_script),
-                    )
-                python_file = options.python_script
-                options.all_imports = set()
-                find_imports_in_script(options, python_file)
-            else:
-                raise ValueError(
-                    f"'{os.fspath(options.python_script)}' is not a valid Python script."
-                )
-        elif ek.safe_is_dir(options.python_script):
-            if not options.rawlog:
-                logging.info(
-                    "Processing an entire folder of Python scripts: %s",
-                    os.fspath(options.python_script),
-                )
-            get_all_imports(options, options.python_script)
-        else:
-            raise FileNotFoundError(
-                f"The file or directory {os.fspath(options.python_script)} does not exist."
-            )
-    else:
-        raise ValueError(
-            f"Unexpected type for options.python_script: {type(options.python_script)}"
-        )
+    python_file = ek.ensure_path(options.python_script)
+    if not ek.safe_is_file(python_file) or not ek.is_python_script(python_file):
+        raise UsageError(f"'{os.fspath(python_file)}' is not a valid Python script.")
+    if not options.rawlog:
+        logging.info("Processing a single Python script: %s", os.fspath(python_file))
+    options.python_script = python_file
+    options.loaded_custom_modules = set()
+    options.all_imports = set()
+    find_imports_in_script(options, python_file)
 
     # Filter out invalid imports before splitting
     options.all_imports = {
@@ -310,52 +285,6 @@ def list_packages(options: run_options.Options) -> None:
     }
 
     split_imports(options)
-
-
-def stayed_out_dir(options: run_options.Options, p: str | os.PathLike[str]) -> bool:
-    """Check if the parent directory of path p contains any substrings from the stay_out_list."""
-    p = ek.ensure_path(p)
-    parent_str = os.fspath(p.parent)
-    return any(sub in parent_str for sub in options.stay_out_list)
-
-
-def get_all_imports(
-    options: run_options.Options, directory: str | os.PathLike[str]
-) -> None:
-    """Get all imports from all Python scripts in a directory."""
-    directory = ek.ensure_path(directory)
-    options.all_imports = set()
-    # Build one iterator of candidate files (recursive)
-    candidates = (
-        p
-        for p in directory.rglob("*")
-        if ek.safe_is_file(p) and not stayed_out_dir(options, p)
-    )
-    # If you want a progress denominator that matches what you'll actually process:
-    total_files = sum(1 for p in candidates if ek.is_python_script(p))
-    max_digits = len(str(total_files))  # For formatting progress output
-    processed_files = 0
-    # Recreate the iterator (generators are single-use)
-    candidates = (
-        p
-        for p in directory.rglob("*")
-        if ek.safe_is_file(p) and not stayed_out_dir(options, p)
-    )
-    for file_path in candidates:
-        if ek.is_python_script(file_path):
-            find_imports_in_script(options, file_path)
-            processed_files += 1
-            if not options.rawlog:
-                # OLD: logging.info(f"Processing file {processed_files:>{max_digits}}/{total_files} : {file_path}")
-                logging.info(
-                    "Processing file %*d/%d : %s",
-                    max_digits,
-                    processed_files,
-                    total_files,
-                    file_path,
-                )
-    if not options.rawlog:
-        logging.info("Finished processing files in %s", os.fspath(directory))
 
 
 def run_script(
@@ -405,20 +334,40 @@ def resolve_target(options: run_options.Options) -> None:
     Args:
         options: The run's Options; options.python_script and
                  options.script_dir are set from options.args.script.
+
+    Raises:
+        UsageError: The positional argument is a directory, or is not a file
+            veny can read. Both used to travel out of main() as tracebacks.
     """
     script_string = getattr(options.args, "script", None)
     if script_string is None:
         options.python_script = None
-    else:
+        return
+    try:
         options.python_script = ek.ensure_file(
             script_string, raise_on_empty=True
         ).resolve(strict=True)
-        options.script_dir = options.python_script.parent.absolute()
-        if logging.getLogger().isEnabledFor(logging.DEBUG):
-            logging.debug(
-                "Directory where the script to run is located: %s",
-                os.fspath(options.script_dir),
-            )
+    except IsADirectoryError as exc:
+        # veny runs a script, not a tree. Folder scanning was deleted with
+        # this change (user ruling, 2026-08-21): --full was its only producer
+        # of a directory, and 3e's deletion of --full made every directory
+        # arm below unreachable. IsADirectoryError is a subclass of OSError,
+        # so this clause must stay above the next one.
+        raise UsageError(
+            f"{script_string} is a directory. veny runs a single Python "
+            f"script; name the script itself."
+        ) from exc
+    except (OSError, ValueError) as exc:
+        # ek.ensure_file raises FileNotFoundError for a missing path and
+        # ValueError for a symlink or an empty file. All three reached the
+        # user as a traceback before this change.
+        raise UsageError(f"{script_string} is not a file veny can run.") from exc
+    options.script_dir = options.python_script.parent.absolute()
+    if logging.getLogger().isEnabledFor(logging.DEBUG):
+        logging.debug(
+            "Directory where the script to run is located: %s",
+            os.fspath(options.script_dir),
+        )
 
 
 def feeling_lucky(options: run_options.Options) -> int | None:

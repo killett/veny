@@ -1,7 +1,9 @@
 """Pin which imports veny's scan discovers, independent of I/O recording."""
 
+import argparse
 import contextlib
 import logging
+import sys
 from pathlib import Path
 
 import pytest
@@ -221,54 +223,6 @@ def test_list_packages_scans_one_script_and_classifies_what_it_found(
     }
 
 
-def test_list_packages_walks_a_folder_and_stays_out_of_the_named_directories(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """The folder branch must scan every Python file under it except the excluded ones.
-
-    Behaviour under test: the directory branch of the same driver -- the
-    recursive walk, the stay-out filter that both the progress count and the
-    scan itself consult, and the per-file scan call. Measured by
-    substitution: all fifteen arguments on this branch could be replaced with
-    a wrong path or a fresh Options and the whole suite stayed green.
-
-    Concrete bugs this catches: a stay-out filter that reaches for a fresh
-    Options' default list stops excluding whatever this run asked to exclude,
-    so veny walks into the cached virtual environments under ~/veny and
-    reports every package they contain as an import of the user's project;
-    losing the filter on the counting pass alone leaves the progress
-    denominator disagreeing with the files actually scanned, which is the
-    only visible sign that the two passes have drifted apart. Expected
-    values obtained by construction: two scannable files, one excluded.
-    """
-    project = tmp_path / "proj"
-    (project / "sub").mkdir(parents=True)
-    (project / "keepout").mkdir()
-    (project / "a.py").write_text("import requests\n")
-    (project / "sub" / "b.py").write_text("import yaml\n")
-    (project / "keepout" / "c.py").write_text("import excluded_package\n")
-    (project / "notes.txt").write_text("not python\n")
-    options = _a_run_that_can_classify(tmp_path, monkeypatch)
-    options.python_script = project
-    options.script_dir = project
-
-    with caplog.at_level(logging.INFO):
-        pipeline.list_packages(options)
-
-    assert f"Processing an entire folder of Python scripts: {project}" in caplog.text
-    assert options.all_imports == {"requests", "yaml"}
-    assert {record.import_name for record in options.uninstalled_imports} == {
-        "requests",
-        "yaml",
-    }
-    # The counting pass and the scanning pass must agree: two files, not three.
-    assert "Processing file 1/2 : " in caplog.text
-    assert "Processing file 2/2 : " in caplog.text
-    assert f"Finished processing files in {project}" in caplog.text
-
-
 def test_report_warns_about_a_standard_library_import_that_needs_a_system_package(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -315,9 +269,10 @@ def test_the_scan_records_the_local_files_folders_and_sys_path_it_followed(
     happily wrote its findings into an object the run then threw away.
 
     Concrete bug this catches: the accumulation those three fields exist for.
-    get_all_imports calls this function once per file in a folder scan and
-    relies on all seven fields carrying across calls; a fresh container per
-    call resets them, so a module already resolved is resolved again -- and
+    The scanner recurses through the script's local modules, calling itself
+    once per reachable file, and relies on all seven fields carrying across
+    those calls; a fresh container per call resets them, so a module already
+    resolved is resolved again -- and
     the report at the end of the run lists none of the local files or package
     folders the scan actually followed, which is the only place a user sees
     that veny read their own code rather than just their imports.
@@ -343,3 +298,81 @@ def test_the_scan_records_the_local_files_folders_and_sys_path_it_followed(
     assert options.samedir_files == [project / "beside.py"]
     assert options.subfolders == ["pkg"]
     assert hint_dir in options.sys_path_hints
+
+
+def test_a_directory_argument_is_a_usage_error_not_a_traceback(tmp_path: Path) -> None:
+    """A directory positional must come back as veny's usage status.
+
+    Behaviour under test: what resolve_target does with a positional argument
+    that names a directory rather than a file.
+
+    Concrete bug this catches: resolve_target goes through ek.ensure_file,
+    which raises IsADirectoryError, and nothing catches it -- so before this
+    change `veny somedir/` was a traceback out of main() rather than a
+    status. Folder scanning was the only thing that ever made a directory
+    meaningful here, and 3e's deletion of --full removed its only producer.
+    """
+    options = cli.Options()
+    options.args = argparse.Namespace(script=str(tmp_path), script_args=[])
+
+    with pytest.raises(pipeline.UsageError) as excinfo:
+        pipeline.resolve_target(options)
+
+    assert str(tmp_path) in str(excinfo.value)
+
+
+def test_a_missing_script_is_a_usage_error_not_a_traceback(tmp_path: Path) -> None:
+    """A script that does not exist must come back as veny's usage status.
+
+    Behaviour under test: what resolve_target does with a positional argument
+    naming a path that is not there.
+
+    Concrete bug this catches: `.resolve(strict=True)` raises
+    FileNotFoundError out of resolve_target and nothing catches it, so
+    `veny /no/such/script.py` printed a traceback instead of a message.
+    Recorded as latent defect 2 in PROGRESS.md; this closes it.
+    """
+    options = cli.Options()
+    missing = tmp_path / "no_such_script.py"
+    options.args = argparse.Namespace(script=str(missing), script_args=[])
+
+    with pytest.raises(pipeline.UsageError) as excinfo:
+        pipeline.resolve_target(options)
+
+    assert "no_such_script.py" in str(excinfo.value)
+
+
+def test_a_directory_argument_returns_status_2_through_main(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end: the usage error must reach the shell as 2, not as a crash.
+
+    Behaviour under test: the whole path from argv to exit status for a
+    directory positional.
+
+    Concrete bug this catches: raising anything cli.main does not catch --
+    IsADirectoryError, or a bare ValueError -- propagates out of main() and
+    the shell sees a Python traceback and status 1. Only pipeline.UsageError
+    maps to veny's usage status of 2.
+    """
+    monkeypatch.setattr(sys, "argv", ["veny", str(tmp_path)])
+
+    assert cli.main() == 2
+
+
+def test_a_missing_script_returns_status_2_through_main(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end: a script that is not there must reach the shell as 2.
+
+    Behaviour under test: the whole path from argv to exit status when the
+    positional names nothing.
+
+    Concrete bug this catches: FileNotFoundError is not IsADirectoryError, so
+    a fix that catches only the directory case leaves this one travelling
+    uncaught out of main() -- the shape latent defect 2 recorded. Only
+    pipeline.UsageError maps to veny's usage status of 2.
+    """
+    monkeypatch.setattr(sys, "argv", ["veny", str(tmp_path / "no_such_script.py")])
+
+    assert cli.main() == 2
