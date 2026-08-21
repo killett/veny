@@ -43,7 +43,7 @@ def test_a_live_import_check_reports_the_distribution_that_provided_it(tmp_path)
     venv_dir = tmp_path / "venv"
     python = shutil.which("python3")
     assert python is not None, "test host must have a python3 on PATH"
-    environment.create_venv(venv_dir, python)
+    assert environment.create_venv(venv_dir, python) is True
     wheel_path = build_wheel(tmp_path)
     venv_python = venv_dir / "bin" / "python"
     assert environment.install_into_venv(venv_python, str(wheel_path)) is True

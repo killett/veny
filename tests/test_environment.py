@@ -48,7 +48,7 @@ def test_the_live_install_uninstall_round_trip_crosses_the_real_uv_boundary(
     venv_dir = tmp_path / "venv"
     python = shutil.which("python3")
     assert python is not None, "test host must have a python3 on PATH"
-    environment.create_venv(venv_dir, python)
+    assert environment.create_venv(venv_dir, python) is True
 
     wheel_path = build_wheel(tmp_path)
 

@@ -771,7 +771,7 @@ def test_blank_slate_deletes_the_state_directory_and_leaves_other_files_alone(
     (workdir / ".script.py-veny-last-used-on-20260101-000000.json").write_text("{}\n")
     (workdir / "keep.json").write_text("{}\n")
     monkeypatch.chdir(workdir)
-    captured, launched = _drive_main(
+    _, _ = _drive_main(
         monkeypatch,
         tmp_path,
         ["--blank-slate", "-y"],
@@ -1583,12 +1583,46 @@ def test_the_run_is_timed_from_the_moment_veny_started(monkeypatch, tmp_path, ca
     makes both "Elapsed time" lines report about nine thousand *days*; the
     mirror-image bug, a start taken after the work rather than before it,
     reports a negative delta. Either way the two lines a user reads to decide
-    whether veny or their own script is the slow part become fiction. This
-    asserts the shape of the delta -- non-negative and under a minute -- not
-    a measured duration, so it pins the wiring without pinning a clock.
+    whether veny or their own script is the slow part become fiction.
+
+    The log-shape assertions alone cannot see the bug this test is named for,
+    which is why the argument itself is recorded here as well. Dropping
+    `start_time=start_time` from `cli.main`'s `pipeline.run` call makes `run`
+    fall back to its own `dt.datetime.now()` default and report a few
+    milliseconds -- comfortably inside "non-negative and under a minute", so
+    every log assertion below still passes. That regression is real: Task 4
+    shipped it and its fix round (`6b35844`) repaired it. So `pipeline.run` is
+    wrapped rather than replaced -- the real run still executes and still logs
+    -- and the recorded `start_time` is bracketed between an instant taken
+    before `cli.main` and the instant `cli.parse_arguments` returned. Three
+    mutations die on that bracket: dropping the keyword (recorded value is
+    None), passing a fixed past datetime (below the lower bound, which is the
+    wiring index's `dt.datetime(2000, 1, 1)` row), and taking the start after
+    argparse instead of before it (above the upper bound). No sleep and no
+    assumption about how long anything takes: `<=` at both ends means even a
+    clock too coarse to separate the two instants still passes.
     """
     _drive_main(monkeypatch, tmp_path, [], uninstalled=set(), all_imports={"os"})
 
+    handed: list[dt.datetime | None] = []
+    real_run = pipeline.run
+
+    def run_spy(options, start_time=None):
+        handed.append(start_time)
+        return real_run(options, start_time=start_time)
+
+    monkeypatch.setattr(pipeline, "run", run_spy)
+
+    parsed_at: list[dt.datetime] = []
+    real_parse_arguments = cli.parse_arguments
+
+    def parse_arguments_spy(options):
+        real_parse_arguments(options)
+        parsed_at.append(dt.datetime.now())
+
+    monkeypatch.setattr(cli, "parse_arguments", parse_arguments_spy)
+
+    before_main = dt.datetime.now()
     with caplog.at_level(logging.INFO):
         cli.main()
 
@@ -1601,3 +1635,16 @@ def test_the_run_is_timed_from_the_moment_veny_started(monkeypatch, tmp_path, ca
     assert all(
         dt.timedelta(0) <= elapsed < dt.timedelta(minutes=1) for elapsed in reported
     ), reported
+
+    assert handed, "cli.main never reached pipeline.run"
+    assert parsed_at, "cli.main never reached cli.parse_arguments"
+    (start_time,) = handed
+    assert start_time is not None, (
+        "cli.main called pipeline.run without start_time, so run timed itself "
+        "from inside instead of from when veny started"
+    )
+    assert before_main <= start_time <= parsed_at[0], (
+        f"start_time {start_time} is not veny's own start: it must fall "
+        f"between {before_main} (before cli.main) and {parsed_at[0]} (when "
+        f"parse_arguments returned)"
+    )

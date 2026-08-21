@@ -490,9 +490,10 @@ def test_split_imports_expands_also_needs_onto_the_uninstalled_records(
     at ``pipeline.split_imports``' call into ``classify.split_imports`` and every
     dependency veny's shipped table declares silently stops being installed --
     the venv is reported complete while the package that makes ``uninst``
-    usable is absent. The chain is nested on purpose: no entry in cli.py's own
-    also_needs table is, so the ``while added`` fixed point is otherwise never
-    exercised on the path a user takes.
+    usable is absent. The chain is nested on purpose: no entry in veny's own
+    shipped also_needs table (``run_options.Options.__init__``) is, so the
+    ``while added`` fixed point is otherwise never exercised on the path a
+    user takes.
     """
     options = cli.Options()
     options.aliases = _index({"uninst": "uninst-pypi", "deepdep": "deep-dep-pypi"})
