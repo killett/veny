@@ -29,61 +29,63 @@ gotchas ledger.
   | **3b** `docs/superpowers/plans/2026-08-16-analysis-imports-and-call-graph.md` (executed, complete on branch `analysis-imports-call-graph`) | `analysis/imports.py`, `analysis/call_graph.py`, `analysis/scan.py`, plus `analysis/scan_state.py` (a fourth module the plan added beyond the design's original three) | 1,100 |
   | **3c** `docs/superpowers/plans/2026-08-18-classify-and-environment.md` (executed, complete on branch `classify-and-environment`) | `classify.py`, `environment.py`, plus `state.py` (a third module the plan added, carrying `Requirements`) | 600 |
   | **3d** `docs/superpowers/plans/2026-08-18-verify-cache-search-last-used.md` (executed, complete, merged at `73cf588`) | `verify.py`, `cache_search.py`, `last_used.py` | 1,100 |
-  | **3e** `docs/superpowers/plans/2026-08-19-pipeline-and-cli-slimming.md` (executed, complete on branch `pipeline-and-cli-slimming`, **not yet merged** — awaiting the whole-branch review) | `pipeline.py`, `run_options.py`, `cli.py` slimming, `--full` deletion. The final `Options` drain was **not** attempted; it stayed phase 4's | 1,079 |
+  | **3e** `docs/superpowers/plans/2026-08-19-pipeline-and-cli-slimming.md` (executed, complete, merged at `4d1846c`) | `pipeline.py`, `run_options.py`, `cli.py` slimming, `--full` deletion. The final `Options` drain was **not** attempted; it stayed phase 4's | 1,079 |
 
   Phases 1 and 2 are complete and merged to `main`.
 
-**Next action:** two things, in this order.
+**Next action:** write and execute phase 4 — the state model.
 
-1. **Merge `pipeline-and-cli-slimming`.** The whole-branch review has now
-   **run and its fix wave has landed** (2026-08-20; see the 3e entry below for
-   what it found). As with 3b, 3c and 3d, it found Important issues per-task
-   review had missed — 3e's were two behaviour questions deliberately left for
-   phase 4 and one test that could not fail on its own bug. Nothing is
-   outstanding on the branch. The merge was **not** performed by the fix wave,
-   by explicit user instruction; run
-   `git switch main && git merge --no-ff pipeline-and-cli-slimming`.
-2. **Write and execute phase 4 — the state model.** It inherits, all in
-   Deferred items below:
-   - **The `Options` drain itself.** 3e moved the class to
-     `run_options.py` and deliberately introduced no frozen dataclass. The
-     `Settings` that already exists is still constructed twice in the moved
-     code. `cli.Options = run_options.Options` is a re-export kept alive
-     only for the suite; phase 4 deletes the module and the re-export — and
-     when it does, it must repoint **69 references in two spellings**, not the
-     42 the plan predicted. Measured at `08622a8`: **41** literal
-     `cli.Options`, plus **28** more spelled `veny.Options` because seven test
-     files do `from veny import cli as veny` — `test_split_imports.py` 11,
-     `test_cache_search.py` 6, `test_options_surface.py` 4,
-     `test_manifest_writing.py` 3, `test_venv_naming.py` 2,
-     `test_rename_venv.py` 1, `test_json_types.py` 1. The alias spelling
-     matches neither `cli\.Options` nor `setattr(cli, …)`, which is the same
-     blind spot that broke Task 3's symbol sweep; re-derive with
-     `rg -c '\bveny\.Options\b' tests/*.py` and check for other aliases with
-     `rg -n 'import cli as (\w+)' tests/` rather than trusting this list.
-   - **Design amendment 9** — `cache_search.find_match_dir_in_cache` still
-     takes and mutates the `argparse.Namespace`, because its selection-policy
-     writes reach disk through `ek.save_options_to_json`. That is the
-     persistence change, which is phase 4's.
-   - **`pathlibcutoff`'s two readers** (`analysis/custom_modules.PATHLIB_CUTOFF`
-     and `Options.pathlibcutoff`, now in `run_options.py`). Both survived 3e
-     untouched; phase 4 must account for both.
-   - **The 17 DEAD ARGUMENTS** 3e's wiring index measured — values built at a
-     call site that the callee never reads. Deletion candidates, not test
-     gaps.
-   - **`run_options.py` has never been through the STANDING CHECK.** Its five
-     argument-carrying call sites (all inside `set_venv_dir`) are counted in
-     no number anywhere. **Phase 4 owns sweeping them.**
-   - **The three latent defects 3e recorded but did not fix**, and **the 21
-     residual risks 3e's differential cannot see** — both their own entries.
-   Not phase 4's, and still unowned: **removing the probe venv from
-   classification** (design amendment 3 — owner is whichever phase will own
-   that user-visible change) and **the single-file reachability gap**
-   (owner: a later `analysis/` plan).
+Phase 3 is **finished**. `pipeline-and-cli-slimming` was merged to `main` at
+`4d1846c` (a `--no-ff` merge; branch deleted after merging — it was at
+`581b390`) on 2026-08-20, after the whole-branch review ran and its fix wave
+landed. As with 3b, 3c and 3d, that review found Important issues per-task
+review had missed — 3e's were two behaviour questions deliberately left for
+phase 4 and one test that could not fail on its own bug. Gates re-measured on
+`main` after the merge: `pixi run test` **408 passed**, `pixi run lint` zero,
+`ruff format --check .` **55 files**, `pixi run typecheck` **29 errors in 7
+files**.
+
+Phase 4 inherits, all in Deferred items below:
+- **The `Options` drain itself.** 3e moved the class to
+  `run_options.py` and deliberately introduced no frozen dataclass. The
+  `Settings` that already exists is still constructed twice in the moved
+  code. `cli.Options = run_options.Options` is a re-export kept alive
+  only for the suite; phase 4 deletes the module and the re-export — and
+  when it does, it must repoint **69 references in two spellings**, not the
+  42 the plan predicted. Measured at `08622a8`: **41** literal
+  `cli.Options`, plus **28** more spelled `veny.Options` because seven test
+  files do `from veny import cli as veny` — `test_split_imports.py` 11,
+  `test_cache_search.py` 6, `test_options_surface.py` 4,
+  `test_manifest_writing.py` 3, `test_venv_naming.py` 2,
+  `test_rename_venv.py` 1, `test_json_types.py` 1. The alias spelling
+  matches neither `cli\.Options` nor `setattr(cli, …)`, which is the same
+  blind spot that broke Task 3's symbol sweep; re-derive with
+  `rg -c '\bveny\.Options\b' tests/*.py` and check for other aliases with
+  `rg -n 'import cli as (\w+)' tests/` rather than trusting this list.
+- **Design amendment 9** — `cache_search.find_match_dir_in_cache` still
+  takes and mutates the `argparse.Namespace`, because its selection-policy
+  writes reach disk through `ek.save_options_to_json`. That is the
+  persistence change, which is phase 4's.
+- **`pathlibcutoff`'s two readers** (`analysis/custom_modules.PATHLIB_CUTOFF`
+  and `Options.pathlibcutoff`, now in `run_options.py`). Both survived 3e
+  untouched; phase 4 must account for both.
+- **The 17 DEAD ARGUMENTS** 3e's wiring index measured — values built at a
+  call site that the callee never reads. Deletion candidates, not test
+  gaps.
+- **`run_options.py` has never been through the STANDING CHECK.** Its five
+  argument-carrying call sites (all inside `set_venv_dir`) are counted in
+  no number anywhere. **Phase 4 owns sweeping them.**
+- **The three latent defects 3e recorded but did not fix**, and **the 21
+  residual risks 3e's differential cannot see** — both their own entries.
+Not phase 4's, and still unowned: **removing the probe venv from
+classification** (design amendment 3 — owner is whichever phase will own
+that user-visible change) and **the single-file reachability gap**
+(owner: a later `analysis/` plan).
 
 Plan 3e, `docs/superpowers/plans/2026-08-19-pipeline-and-cli-slimming.md`, is
-**executed and complete on branch `pipeline-and-cli-slimming`** (off `main` @
-`08622a8`), and **not merged** — see the Next action above. Ten tasks,
+complete and **merged to `main` at `4d1846c`** (a `--no-ff` merge; branch
+`pipeline-and-cli-slimming`, off `main` @ `08622a8`, deleted after merging --
+it was at `581b390`). Ten tasks,
 **nineteen commits** before this closing one: `c9d3989` (the plan itself),
 `e5dfced` (Task 1, `Options` → `run_options.py`), `5acb137`/`f98a775` (Task 2,
 every branch of `main()` driven in process *before* it moved, plus a fix
