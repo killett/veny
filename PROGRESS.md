@@ -45,9 +45,13 @@ gotchas ledger.
   | **4c** (not yet written) | The remaining behaviour changes: the in-virtualenv guard (USER RULING 2026-08-20), `--feeling-lucky`'s missing signal normalization, latent defects 1 and 3, and the residual dead arguments. |
 
 **Next action:** continue plan 4b,
-`docs/superpowers/plans/2026-08-21-last-used-persistence.md`, at Task 8 — the
-task tracker is its `.tasks.json` beside it. Tasks 1-7 are complete on branch
-`last-used-persistence`, off `main` @ `240767b`. The plan's five design
+`docs/superpowers/plans/2026-08-21-last-used-persistence.md`, at Task 9 — the
+task tracker is its `.tasks.json` beside it. Tasks 1-8 are complete on branch
+`last-used-persistence`, off `main` @ `240767b`. Task 8's STANDING CHECK is
+`scripts/wiring_sweep_4b.py` and
+`docs/superpowers/plans/2026-08-21-last-used-persistence-wiring-index.md`:
+154 arguments, 141 killed, 3 measured by driving, 6 dead, 4 open holes each
+with its reason, and 25 holes closed by `tests/test_wiring_4b.py`. The plan's five design
 rulings are already in the design doc's Persistence section, amended at
 `83fd14c`; 4b's inheritance is listed below. Task 7 deleted `json_types.py`
 and repointed the emmykit guard to an `ek.__version__` comparison (deviating

@@ -61,7 +61,7 @@
     {
       "id": 8,
       "subject": "Task 8: The STANDING CHECK \u2014 a wiring index for every changed call site",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Every argument at every call site this phase changed is either killed by a named test, driven, or recorded as an open hole \u2014 measured from the AST, not by hand.\n\n**Files:**\n- Create: `docs/superpowers/plans/2026-08-21-last-used-persistence-wiring-index.md`\n- Modify: `scripts/wiring_sweep_4a.py` \u2192 copy to `scripts/wiring_sweep_4b.py` and retarget\n- Create/Modify: `tests/test_wiring_4b.py` for the holes the sweep finds\n\n**Acceptance Criteria:**\n- [ ] The sweep enumerates arguments at every call site in `last_used.py`, `pipeline.py`'s three changed sites, `cache_search.find_match_dir_in_cache` and `cli.main`, from the AST.\n- [ ] Each row is KILLED (named test), DEAD (no reader \u2014 a deletion candidate for 4c, not a fix here), or OPEN HOLE.\n- [ ] Every OPEN HOLE is either closed by a test in `tests/test_wiring_4b.py` or recorded in the index with the reason it is left open.\n- [ ] Tests added here assert **identity** where identity is the property (the record the run saved is built from the handle the run used), not merely equality of two freshly-built values.\n- [ ] The sweep runs under `pixi run` (so `PYTHONPATH=src` is set) and sanity-imports each mutated module before believing a failure. Phase 4a's first sweep reported 86 spurious kills for want of this.\n\n**Verify:** `pixi run python scripts/wiring_sweep_4b.py` \u2192 a table with zero unexplained OPEN HOLE rows; `pixi run test tests/test_wiring_4b.py -v` \u2192 all pass.\n\nFull steps: `docs/superpowers/plans/2026-08-21-last-used-persistence.md` \u00a7 Task 8.\n\n```json:metadata\n{\"files\": [\"scripts/wiring_sweep_4b.py\", \"tests/test_wiring_4b.py\", \"docs/superpowers/plans/2026-08-21-last-used-persistence-wiring-index.md\"], \"verifyCommand\": \"pixi run python scripts/wiring_sweep_4b.py && pixi run test tests/test_wiring_4b.py -v\", \"modelTier\": \"frontier\", \"acceptanceCriteria\": [\"The sweep enumerates arguments at every call site in last_used.py, pipeline.py's three changed sites, cache_search.find_match_dir_in_cache and cli.main, from the AST.\", \"Each row is KILLED (named test), DEAD (no reader \\u2014 a deletion candidate for 4c, not a fix here), or OPEN HOLE.\", \"Every OPEN HOLE is either closed by a test in tests/test_wiring_4b.py or recorded in the index with the reason it is left open.\", \"Tests added here assert identity where identity is the property (the record the run saved is built from the handle the run used), not merely equality of two freshly-built values.\", \"The sweep runs under pixi run (so PYTHONPATH=src is set) and sanity-imports each mutated module before believing a failure. Phase 4a's first sweep reported 86 spurious kills for want of this.\"]}\n```",
       "blockedBy": [
         7
@@ -86,5 +86,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-08-22"
+  "lastUpdated": "2026-08-22T01:43:46-07:00"
 }
