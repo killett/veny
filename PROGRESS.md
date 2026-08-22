@@ -45,10 +45,22 @@ gotchas ledger.
   | **4c** (not yet written) | The remaining behaviour changes: the in-virtualenv guard (USER RULING 2026-08-20), `--feeling-lucky`'s missing signal normalization, latent defects 1 and 3, and the residual dead arguments. |
 
 **Next action:** write and execute plan 4b — the `LastUsed` persistence
-change. Plan 4a is **complete** on branch `state-model-values` (branched off
-`main` @ `b59cfa8`); all ten tasks are done and committed, and the branch is
-ready for its whole-branch review and merge. 4b's scope is in the table above
-and its inheritance is listed below.
+change. 4b's scope is in the table above and its inheritance is listed below.
+
+Plan 4a is **finished and merged to `main` at `cf2ded4`** (a `--no-ff` merge;
+branch `state-model-values`, off `main` @ `b59cfa8`, deleted after merging —
+it was at `b58c9a5`) on 2026-08-21. Gates re-measured on `main` after the
+merge: `pixi run test` **441 passed**, `pixi run lint` zero,
+`ruff format --check .` **59 files**, `pixi run typecheck` **23 errors in 6
+files**.
+
+**The independent whole-branch review found nothing.** It ran after the
+self-review below and returned zero findings. That is the first time in this
+program a whole-branch review has come back clean — 3b, 3c, 3d and 3e each
+turned up Important issues per-task review had missed. Read it as "nothing
+survived their verification", not as proof of correctness; the eight
+residual-risk items in `scripts/differential_4a.py`'s docstring are still
+open, and 4b and 4c inherit them.
 
 **Plan 4a is finished.** Ten tasks, ten commits after the plan itself:
 `c8c587e` (Task 1, the usage-error change and the folder-scanning deletion),
