@@ -460,6 +460,7 @@ def test_a_saved_record_is_read_back_as_the_same_paths(tmp_path):
     )
 
     assert loaded == record
+    assert loaded is not None
     assert isinstance(loaded.venv_dir, Path)
     assert isinstance(loaded.venv_python, Path)
 
@@ -494,6 +495,7 @@ def test_a_second_save_overwrites_rather_than_accumulating(tmp_path):
     loaded = last_used.load(
         script_dir=tmp_path, python_script=script, my_name="veny", rawlog=True
     )
+    assert loaded is not None
     assert loaded.venv_dir == tmp_path / "new"
 
 
