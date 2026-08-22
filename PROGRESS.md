@@ -41,11 +41,25 @@ gotchas ledger.
   | Plan | Scope |
   |---|---|
   | **4a** `docs/superpowers/plans/2026-08-21-state-model-values.md` (written 2026-08-21, branch `state-model-values`) | The value objects: `Target`, the widened `Settings`, `ImportScan` as a returned product, `Requirements` as a returned product, `VenvHandle` replacing `set_venv_dir`. Also deletes folder scanning (user ruling) and makes a directory or missing script a usage error. |
-  | **4b** (not yet written) | The `LastUsed` persistence change (design amendment 9), which breaks the `ek.Options` coupling and deletes `run_options.py`, the `cli.Options` re-export, `pathlibcutoff` and its two readers, and the test references in both spellings. |
+  | **4b** `docs/superpowers/plans/2026-08-21-last-used-persistence.md` (written 2026-08-21, branch `last-used-persistence`) | The `LastUsed` persistence change (design amendment 9), which breaks the `ek.Options` coupling and deletes `run_options.py`, the `cli.Options` re-export, `pathlibcutoff` and its two readers, and the test references in both spellings. Also deletes `json_types.py` and the pickle `PATHLIB_CUTOFF`, and stops `find_match_dir_in_cache` mutating the `argparse.Namespace` (user rulings, 2026-08-21). |
   | **4c** (not yet written) | The remaining behaviour changes: the in-virtualenv guard (USER RULING 2026-08-20), `--feeling-lucky`'s missing signal normalization, latent defects 1 and 3, and the residual dead arguments. |
 
-**Next action:** write and execute plan 4b — the `LastUsed` persistence
-change. 4b's scope is in the table above and its inheritance is listed below.
+**Next action:** execute plan 4b,
+`docs/superpowers/plans/2026-08-21-last-used-persistence.md`, from its first
+unchecked task — the task tracker is its `.tasks.json` beside it. Ten tasks on
+branch `last-used-persistence`, off `main` @ `240767b`. The plan's five design
+rulings are already in the design doc's Persistence section, amended at
+`83fd14c`; 4b's inheritance is listed below.
+
+**Four user rulings 4b carries** (2026-08-21, all in the plan's header):
+old whole-`Options` records are **ignored, not migrated**; the record is **one
+fixed file per script**, `.{script}-{my_name}-last-used.json`, not one per run;
+`json_types.py` is **deleted** with the emmykit guard kept in a repointed form;
+and `find_match_dir_in_cache` **stops mutating** the `argparse.Namespace`. The
+guard's repointing deviates from the ruling's letter — `register_json_type` is
+the only symbol new in emmykit 0.4.0, so a `hasattr` probe on any other name
+veny calls would let a 0.3.x through, and the guard compares `ek.__version__`
+instead. Recorded in the plan's Task 7.
 
 Plan 4a is **finished and merged to `main` at `cf2ded4`** (a `--no-ff` merge;
 branch `state-model-values`, off `main` @ `b59cfa8`, deleted after merging —
