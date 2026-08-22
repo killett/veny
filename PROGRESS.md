@@ -41,28 +41,92 @@ gotchas ledger.
   | Plan | Scope |
   |---|---|
   | **4a** `docs/superpowers/plans/2026-08-21-state-model-values.md` (written 2026-08-21, branch `state-model-values`) | The value objects: `Target`, the widened `Settings`, `ImportScan` as a returned product, `Requirements` as a returned product, `VenvHandle` replacing `set_venv_dir`. Also deletes folder scanning (user ruling) and makes a directory or missing script a usage error. |
-  | **4b** `docs/superpowers/plans/2026-08-21-last-used-persistence.md` (written 2026-08-21, branch `last-used-persistence`) | The `LastUsed` persistence change (design amendment 9), which breaks the `ek.Options` coupling and deletes `run_options.py`, the `cli.Options` re-export, `pathlibcutoff` and its two readers, and the test references in both spellings. Also deletes `json_types.py` and the pickle `PATHLIB_CUTOFF`, and stops `find_match_dir_in_cache` mutating the `argparse.Namespace` (user rulings, 2026-08-21). |
+  | **4b** `docs/superpowers/plans/2026-08-21-last-used-persistence.md` (executed, complete on branch `last-used-persistence`) | The `LastUsed` persistence change (design amendment 9), which breaks the `ek.Options` coupling and deletes `run_options.py`, the `cli.Options` re-export, `pathlibcutoff` and its two readers, and the test references in both spellings. Also deletes `json_types.py` and the pickle `PATHLIB_CUTOFF`, and stops `find_match_dir_in_cache` mutating the `argparse.Namespace` (user rulings, 2026-08-21). |
   | **4c** (not yet written) | The remaining behaviour changes: the in-virtualenv guard (USER RULING 2026-08-20), `--feeling-lucky`'s missing signal normalization, latent defects 1 and 3, and the residual dead arguments. |
 
-**Next action:** continue plan 4b,
-`docs/superpowers/plans/2026-08-21-last-used-persistence.md`, at Task 9 — the
-task tracker is its `.tasks.json` beside it. Tasks 1-8 are complete on branch
-`last-used-persistence`, off `main` @ `240767b`. Task 8's STANDING CHECK is
-`scripts/wiring_sweep_4b.py` and
-`docs/superpowers/plans/2026-08-21-last-used-persistence-wiring-index.md`:
-172 arguments, 158 killed, 3 measured by driving, 8 dead, 3 open holes each
-with its reason, and 28 holes closed by `tests/test_wiring_4b.py`. The plan's five design
-rulings are already in the design doc's Persistence section, amended at
-`83fd14c`; 4b's inheritance is listed below. Task 7 deleted `json_types.py`
-and repointed the emmykit guard to an `ek.__version__` comparison (deviating
-from the user's ruling to probe an existing attribute, since
-`register_json_type` was the only symbol new in 0.4.0 — see the plan's Task 7
-deviation note); gates after: `pixi run test` 435 passed, `pixi run lint`
-zero, `ruff format --check .` clean, `pixi run typecheck` 23 errors in 6
-files (checked 52 source files, unchanged from the 4a baseline — deleting
-`json_types.py` removed no mypy errors of its own).
+**Next action:** **write plan 4c.** Plan 4b is complete on branch
+`last-used-persistence` (off `main` @ `240767b`); its ten tasks are all
+committed and its tracker
+(`docs/superpowers/plans/2026-08-21-last-used-persistence.md.tasks.json`)
+matches. What remains before the merge is the **whole-branch review** against
+`main..last-used-persistence`, then a `--no-ff` merge. 3b, 3c, 3d and 3e each
+turned up Important issues per-task review had missed; 4a's came back clean,
+which is one data point and not a reason to skip it.
 
-**Four user rulings 4b carries** (2026-08-21, all in the plan's header):
+**4c's scope, restated from the phase-4 table above, and everything 4b handed
+it:** the in-virtualenv guard (USER RULING 2026-08-20), `--feeling-lucky`'s
+missing signal normalization, latent defects 1 and 3, and the residual dead
+arguments — which are now **two lists that must be reconciled into one**, 4a's
+five and 4b's eight (see Deferred items). 4c also inherits the two findings
+below that no code records, and it must **not** run its live check under
+`pixi run`.
+
+**Phase 4b is finished.**
+
+**Gates measured on this branch in the closing session, 2026-08-22 — every
+number below was measured here, not copied from a task report.**
+`pixi run test` **455 passed, 1 warning in 7.89s**; `pixi run lint` **All
+checks passed!**; `pixi run python -m ruff format --check .` **58 files
+already formatted**; `pixi run typecheck` **23 errors in 6 files (checked 55
+source files)**.
+
+**The mypy ceiling did NOT move, and the plan predicted that it would.** Task
+6's acceptance criterion said "deleting a dynamically-attributed class should
+reduce it". It did not: 23 errors in 6 files before, 23 errors in 6 files
+after. The breakdown, measured here: `tests/test_verify.py` **15**,
+`analysis/imports.py` **3**, `tests/test_split_imports.py` **2**,
+`src/veny/cli.py` **1**, `analysis/literals.py` **1**,
+`analysis/call_graph.py` **1**. Both modules 4b deleted —
+`run_options.py` and `json_types.py` — were **already mypy-clean**, so
+deleting them removed no errors of their own. What *did* move is the
+denominator: the checked-file count went 52 → **55**, because 4b net-added
+three files (deleted `run_options.py`, `json_types.py`, `tests/test_json_types.py`
+and `tests/test_options_surface.py`; added `tests/test_wiring_4b.py`,
+`scripts/wiring_sweep_4b.py` and `scripts/differential_4b.py`). The 23 is the
+baseline 4c starts from.
+
+**The deletions, re-measured here rather than copied.** `rg -n 'json_types|
+pathlibcutoff|run_options|save_options_to_json' src/` → **no matches**. Under
+`src/`, the string `Options` survives on exactly **one** line —
+`pipeline.py:218`, a docstring sentence saying the copy-back onto the old
+`Options` is gone. Across `src/ tests/ scripts/` there are 76 mentions and
+**one live constructor call**: `scripts/differential_3d.py:345`
+`tree.cli.Options()`, which belongs to the *older tree that script drives* and
+already carries a comment saying 4b's removal does not apply to it.
+
+**The `cli.Options` re-export and the two-spelling test references are gone,
+measured not copied.** 4a's closing entry recorded **49** literal `cli.Options`
+and **24** spelled `veny.Options` (73 in two spellings). Now: `cli.Options`
+**3**, all three inside `scripts/differential_3d.py` (two of them the comment
+explaining the third); `veny.Options` **0**; and `tests/` holds **zero**
+executable references to the class in either spelling. The only other residue
+is `scripts/wiring_sweep_4a.py:119`, a substitution-table *string*
+(`"run_options.Options()"`) in a historical harness — deliberately left alone,
+and already noted in 4b's wiring index as the one stale row not carried over.
+
+**Plan 4b is finished. Ten tasks, thirteen code/test commits, three in-flight
+docs corrections and three tracker syncs (`e8568b6`, `009ba45`, `47e86b0`),
+after the design amendment and the plan itself:**
+`83fd14c` (the five design rulings, into the design doc's Persistence
+section), `dbea1bc` (the plan), `0fdf720`+`c22a956` (Task 1, the record —
+`state.LastUsed` and `last_used`'s own read and write), `a87da4b`+`2f1fb61`
+(Task 2, the writer — `pipeline.run` records the venv it used, after the
+`failed-` rename), `823d6a7` (Task 3, the readers, and
+`find_match_dir_in_cache`'s `args` de-mutation), `2057af0` (Task 4, the pickle
+`PATHLIB_CUTOFF`), `928620a`+`2d32e41` (Task 5, the test repointing),
+`7881aff` (Task 6, `Options` and `run_options.py` deleted), `94cdcea`
+(Task 7, `json_types.py` deleted and the emmykit guard repointed), `cdb59c8`+
+`8651b20` (Task 8, the wiring sweep and the widened rule 4), `e1a5a9e`
+(Task 9, the differential). The three docs commits record criteria this plan
+got **wrong** and are part of the ledger, not noise: `258888d` (Task 3's
+`ek.Options` criterion was unmeetable in its own scope — `cli.main` still
+constructed `run_options.Options`, whose base could not go until Task 6),
+`987ca82` (Task 4's case-insensitive verify command also matched the unrelated
+`Options.pathlibcutoff` field), and `0c5324a` (the differential sees a
+**fourth** sanctioned difference the criterion listed only three of — see
+below). Task 10 is this entry.
+
+**Four user rulings 4b carried** (2026-08-21, all in the plan's header):
 old whole-`Options` records are **ignored, not migrated**; the record is **one
 fixed file per script**, `.{script}-{my_name}-last-used.json`, not one per run;
 `json_types.py` is **deleted** with the emmykit guard kept in a repointed form;
@@ -70,7 +134,144 @@ and `find_match_dir_in_cache` **stops mutating** the `argparse.Namespace`. The
 guard's repointing deviates from the ruling's letter — `register_json_type` is
 the only symbol new in emmykit 0.4.0, so a `hasattr` probe on any other name
 veny calls would let a 0.3.x through, and the guard compares `ek.__version__`
-instead. Recorded in the plan's Task 7.
+instead. Recorded in the plan's Task 7 and now as **design amendment 6** in
+the doc's 4b block, since it is the one place execution went past what the
+committed rulings said.
+
+**What phase 4b closed, and is now struck from Deferred items below:**
+
+- **Design amendment 9 — the persistence change itself.** Closed by Tasks 1-3
+  (`0fdf720`, `a87da4b`, `823d6a7`). `find_match_dir_in_cache` takes a
+  `Callable[[], state.LastUsed | None]` and performs no attribute assignment
+  on `args`; the selection-policy writes are locals, because nothing
+  serializes the namespace any more.
+- **`pathlibcutoff` and both its readers.** Closed by Tasks 3 and 4
+  (`823d6a7`, `2057af0`) and swept clean by Task 6 (`7881aff`). The
+  `last_used` reader went with the glob (one fixed filename has no timestamp
+  to compare); `analysis/custom_modules.PATHLIB_CUTOFF` went because both arms
+  of the comparison it guarded call `ek.ensure_path`, so it selected a log
+  message and nothing else. The design-doc inaccuracy that recorded a *third*
+  consumer is closed with them.
+- **The `Options` drain itself, and `run_options.py`.** Closed by Task 6
+  (`7881aff`): the class, the module and the `cli.Options` re-export are
+  deleted, `run_options` has left `tests/test_layering.py`'s `state` layer,
+  and `tests/test_state_values.py` carries a test asserting the class is gone.
+- **The `cli.Options` re-export and the two-spelling test references.** Closed
+  by Tasks 5 and 6 (`928620a`, `2d32e41`, `7881aff`), with the measured final
+  count above: 73 → 3, none of them in `tests/`, none of them live.
+- **`json_types.py`.** Closed by Task 7 (`94cdcea`), with its module-scope
+  `register_types()` call, its tests, and the two Gotchas entries that
+  described the registry (both retired below).
+
+**`check_venv_dir`'s `issubset()` self-heal — design ledger item 5 — did NOT
+go with the record, because it was already gone.** Checked, not assumed:
+`rg -n 'issubset' src/ tests/` returns **nothing**, and `git log -S issubset`
+shows the last source change in `7640f1c` ("refactor: judge every cached venv,
+last-used included, by its manifest") — the venv-cache branch, long before
+phase 3, which replaced the `uninstalled_imports.issubset(...)` comparison
+against a loaded options file with manifest-based matching. The design doc
+says phase 4's persistence change "makes it unnecessary"; in fact
+manifest-based matching had already deleted it, and 4b removed the file it
+used to read rather than the check. **Nothing is left for 4c here.** What *is*
+left is a documentation defect: design ledger item 5 still reads as open and
+still says "Closed in phase 4 with the persistence change" — see Deferred
+items.
+
+**What 4b did NOT do, with its owner named:**
+
+- **The in-virtualenv guard** (USER RULING 2026-08-20) — **4c's**, untouched,
+  and still without end-to-end evidence: 4b's live check ran under `pixi run`,
+  the one shape where the guard is False. See the live-check paragraph below.
+- **`--feeling-lucky` skips the signal normalization** — **4c's**, untouched.
+  4b rewrote `feeling_lucky`'s *inputs* (it takes `my_name` and a `LastUsed`
+  now, not an `Options` and a `pathlibcutoff`); it did not touch what the
+  function omits to do.
+- **Latent defects 1 and 3** — **4c's**. Both re-confirmed unchanged by Task
+  8's sweep and named again in `scripts/differential_4b.py`'s residual-risk
+  item 7: `-y`/`--yes` still never reaches `blank_slate` (argparse writes
+  `yes`, the read is `getattr(args, "y", False)`), and `run_script(rawlog=…)`
+  is still passed and unread at three of its four sites. Task 8 found a
+  **fourth** dead site of defect 3, in `feeling_lucky`.
+- **The residual dead arguments** — **4c's**, and now **two lists**: 4a's five
+  and 4b's eight. They must be reconciled into one; none of the eight is a
+  delete-the-argument fix. See Deferred items.
+- **Removing the probe venv from classification** (design amendment 3) and the
+  **single-file reachability gap** — still **unowned**, and still not phase
+  4's.
+
+**The STANDING CHECK.** `scripts/wiring_sweep_4b.py` and
+`docs/superpowers/plans/2026-08-21-last-used-persistence-wiring-index.md`:
+**172 arguments across 39 distinct callees**, enumerated from the AST.
+**158 killed by a named test** (157 on the first substitution, 1 on a second),
+**3 measured by driving** rather than substitution, **8 DEAD**, **3 OPEN HOLE**
+each with its reason. **28 rows that were OPEN HOLE under some measurement are
+closed by `tests/test_wiring_4b.py`**, eighteen of them log lines — veny's
+commentary on a record it decided to ignore is the only thing standing between
+"the pointer was stale" and "`--feeling-lucky` silently stopped working", so
+it is behaviour, not decoration. **The 8 DEAD are 4c candidates**, not test
+gaps. The index is keyed on `file:line` in four modules and goes stale if a
+later phase edits any of them — the caveat is in Deferred items and in the
+index's own header, and Task 9 was checked against it (it added
+`scripts/differential_4b.py` and touched no module under `src/`, so the index
+is **still valid at HEAD**).
+
+**Two findings for 4c that no code records.** Both came out of Task 8's sweep
+and are written down here because nothing in the tree says them:
+
+1. **`cache_search.py`'s `last_used` term inside `explicit` cannot change any
+   outcome, for any command line.** Proved exhaustively across all 16 flag
+   combinations. It is one of the eight DEAD rows.
+2. **The two `getattr(args, …)` defaults at the top of `cli.main` are
+   unreachable**, because every veny flag is `action="store_true"` and
+   argparse therefore always defines the dest. Five such unreachable
+   `getattr(args, …, False)` defaults are in the DEAD list.
+
+**The differential.** `scripts/differential_4b.py` reuses 4a's harness (which
+reuses 3e's) and adds five layers plus a probe on the two last-used readers.
+It reduces the whole phase to a **240-line diff in eleven hunks** against
+`cf2ded4`, and every hunk is one of six sanctioned things: the
+`veny.cli.__file__` header, the record's filename, the record's payload (76
+lines of emmykit-tagged `Options.__dict__` becoming three keys), the readers'
+own messages, the one fallback for a directory holding only a pre-4b record,
+and — the fourth user ruling, which the task's acceptance criteria did not
+list — `find_match_dir_in_cache` no longer writing onto the namespace
+(`args.latest` reads True after a default run on the old tree and False on the
+new one). That omission is corrected in the plan at `0c5324a`.
+
+**It is mutation-tested five ways, and the kill signal is the second column,
+not the first** — a mutation that renames a file changes the *content* of
+lines the diff already carried without changing how many there are. Measured
+2026-08-22: clean **240 lines / 0 differing**; **M1** (the record's filename
+loses its leading dot) 236/34 — *smaller* than clean, because the record
+becomes invisible to `--blank-slate`'s filter and to the driver's own report;
+**M2** (`str` instead of `Path` on read) 251/17; **M3** (the record written
+before the `failed-` rename) 282/58; **M4** (the cache search's last-used
+pointer ignored) 339/149; **M5** (the record never written at all) 279/81;
+reverted **240/0**. **M2 was a no-op until the reader probe existed** —
+dropping `ek.ensure_path` on the way out of `last_used.load` changes no
+message, no argv and no status, because `run_script`, `check_venv_dir` and
+`safe_is_file` all accept a `str`. A weak probe does not make a driver wrong;
+it makes it silent.
+
+**The live check, and the shape it used.** A real two-run check ran from a
+real shell on 2026-08-22 and is recorded in the driver's docstring with its
+output: run 1 wrote `.hello.py-veny-last-used.json` with the venv inside it,
+run 2 reused that environment **through the record** (no cache scan at all),
+the record deleted made run 3 fall back cleanly, `--feeling-lucky` answered
+from the record, and `--feeling-lucky` with the record renamed to the pre-4b
+shape fell through to the cache — the live confirmation of the sanctioned
+fallback. **Install shape: the pixi environment, where `sys.prefix ==
+sys.base_prefix`**, so `last_used.is_virtualenv()` was False and **the
+in-virtualenv branch of `pipeline.run` was not exercised by any of it.** That
+branch is 4c's, and **4c's live run must not use this shape** — this is the
+second phase running whose end-to-end evidence is blind to it.
+
+**Sixteen residual risks the differential cannot see** are in its docstring;
+items 1-8 are 4a's, still open, and 9-16 are this phase's — a degraded record,
+a non-atomic `write_text`, the forged pre-4b record layer 17 hand-builds, the
+pip-name rename turned off in layers 14-16, elided long lists, one record in
+one directory, `~/veny` never holding a real interpreter, and the driver's
+record filter mirroring the code under test. 4c inherits all sixteen.
 
 Plan 4a is **finished and merged to `main` at `cf2ded4`** (a `--no-ff` merge;
 branch `state-model-values`, off `main` @ `b59cfa8`, deleted after merging —
@@ -1094,16 +1295,54 @@ wiring rationale and for two Minors deliberately left unfixed.
   session's edits), and never with `git stash`. Or inject the copy with
   `sys.path.insert(0, ...)` inside the process. Confirm which file was
   loaded with `pixi run python -c "import veny.cli as c; print(c.__file__)"`.
-- veny's own types are serialized by `json_types.register_types()`, called
-  at `src/veny/cli.py` module scope, not inside `main()`. Anything that imports veny --
-  including every test -- gets production's serialization behaviour. If you move
-  the call into `main()`, `save_options_to_json` will silently write
-  `"ResolvedImport(...)"` repr strings for any consumer that does not go through
-  `main()`, and no test will notice unless it runs in a subprocess.
-- `alias_index.AliasIndex` is registered **encode-only** on purpose. It holds
-  `installed` (probed from the target interpreter) and a live `pypi` client, so a
-  decoder would return an index that reports nothing as installed while looking
-  identical to a real one. It reloads as a plain dict by design.
+- ~~veny's own types are serialized by `json_types.register_types()`, called
+  at `src/veny/cli.py` module scope, not inside `main()`.~~ and
+  ~~`alias_index.AliasIndex` is registered **encode-only** on purpose.~~ —
+  **BOTH RETIRED 2026-08-22 by phase 4b's Task 7 (`94cdcea`). They now
+  describe nothing.** `src/veny/json_types.py` is deleted, along with its
+  module-scope `register_types()` call and `tests/test_json_types.py`. There
+  is no JSON type registry in veny any more, so there is no module-scope-
+  versus-`main()` trap to fall into and no encode-only registration to
+  reason about. The saved options file was the registry's only consumer;
+  `alias_index` writes its own cache with plain `json`, and no `to_jsonable`
+  call survives under `src/` (measured: `rg -n 'json_types' src/` → nothing).
+  What replaced the payload is `last_used.save`, which writes three plain
+  string keys with `json.dumps`, and `last_used.load`, which is plain
+  `json.loads` plus `Path(...)` on two fields — no tagged-payload decoding
+  anywhere, by design (design ruling 3, 2026-08-21). **The residue of the old
+  registry is that emmykit's version guard used to be pointed at
+  `register_json_type`;** it is now an `ek.__version__` comparison, because
+  that was the only symbol new in emmykit 0.4.0 and a `hasattr` probe on any
+  other name veny calls would let a 0.3.x through.
+- **The arguments nothing reads are the ones that break silently — and the
+  sweep is the only thing that finds them.** Phase 4b's Task 8 review widened
+  the sweep's scope rule from "the `pipeline.*` calls in `cli.main`" to "every
+  call in `main`", and the eighteen rows that added included
+  `ek.print_all_errors(memory_handler, rawlog)` — **both** of whose arguments
+  turned out to be pinned by **no test at all**, in a tree with 435 passing
+  tests. `rawlog` there decides whether veny's error dump is written for a
+  terminal or for a log file; nothing would have failed if it had been wired
+  to the wrong value, or to a constant. Task 8 closed both with
+  `test_wiring_4b::test_the_error_dump_gets_this_runs_handler_and_this_runs_rawlog`.
+  This is the same shape as 3d's `rawlog` finding and 3e's, and the general
+  lesson is now four phases old: **an argument that only *selects an output
+  channel* has no observable consequence in-process, so it is exactly the kind
+  a green suite cannot see.** Sweep the whole function, not the calls you
+  think you changed.
+- **A test that cannot fail on the bug it is named for is this program's most
+  frequent defect — four instances now, one per reviewing phase.** Phase 4b
+  added the third and fourth. Task 2's review found a record assertion that
+  checked the *contents* of the saved record but never drove the `failed-`
+  rename, so the ordering it existed to pin (the record must be written
+  **after** the rename, or it names a directory that is gone) could not fail
+  it. Task 5's review found a pin on a call-site *choice* that had been
+  rewritten, during the repointing off `Options`, into a restatement of two
+  literals — it asserted that two constants equalled themselves. The earlier
+  two are 3e's timing test and 4a's `test_main_describes_the_run_to_the_cache_search`.
+  **The signature is always the same: the assertion survives a refactor that
+  removed the thing it was watching.** When repointing a test off a value
+  object, re-derive what bug would make it fail; do not check that it still
+  passes.
 - pixi's per-package cooldown override for a PyPI package is a
   `[pypi-exclude-newer]` table keyed by package name (`pixi.toml`'s
   `emmykit = "0d"`). The `[exclude-newer]` table the surrounding comment
@@ -1253,10 +1492,16 @@ wiring rationale and for two Minors deliberately left unfixed.
   vs `foo_bar`) resolved at the same source is first-encountered order, not
   lexicographic. It is deterministic only because `resolve()` always feeds
   a fixed tier/mutation order — do not assume alphabetical output.
-- Options files written before this branch hold bare strings where
+- ~~Options files written before this branch hold bare strings where
   `options.aliases` now lives. `check_venv_dir`'s `issubset()` check fails
   once against such a file and rebuilds the venv a single time; it is
-  self-healing after that one rebuild.
+  self-healing after that one rebuild.~~ — **RETIRED 2026-08-22 (phase 4b
+  Task 10). This has described nothing for several phases.** The `issubset()`
+  comparison against a loaded options file was replaced by manifest-based
+  matching in `7640f1c`, on the venv-cache branch, long before phase 3;
+  `rg -n 'issubset' src/ tests/` returns nothing today. Phase 4b then deleted
+  the options file it used to read. See Deferred items for why the design
+  doc's ledger item 5 still describes this as phase-4 work.
 - `scripts/review-package` can truncate large diffs mid-hunk. A reviewer
   that trusts its output without checking the tail against the working
   tree can sign off on a hunk it never actually saw.
@@ -1713,16 +1958,23 @@ wiring rationale and for two Minors deliberately left unfixed.
 
 ## Deferred items
 
-- **The 4b wiring index goes stale if Task 9 edits any of the four swept
-  modules** (recorded 2026-08-22, phase 4b Task 8).
+- **The 4b wiring index goes stale if any later phase edits one of the four
+  swept modules** (recorded 2026-08-22, phase 4b Task 8; **scope widened and
+  re-checked at Task 10**).
   `docs/superpowers/plans/2026-08-21-last-used-persistence-wiring-index.md`
   keys all 172 of its rows on `file:line`, and
-  `scripts/wiring_sweep_4b.py` rewrites expressions by source position. If the
-  differential (Task 9) changes a single line in `last_used.py`,
-  `pipeline.py`, `cache_search.py` or `cli.py`, every line number below the
-  edit is wrong and the index must be regenerated —
-  `pixi run python scripts/wiring_sweep_4b.py`, about twelve minutes — before
-  the phase closes. The caveat is repeated in the index's own header.
+  `scripts/wiring_sweep_4b.py` rewrites expressions by source position. If
+  anything changes a single line in `last_used.py`, `pipeline.py`,
+  `cache_search.py` or `cli.py`, every line number below the edit is wrong and
+  the index must be regenerated — `pixi run python scripts/wiring_sweep_4b.py`,
+  about twelve minutes. The caveat is repeated in the index's own header,
+  where it still names Task 9 specifically.
+  **Checked at Task 10 (2026-08-22): Task 9 did not edit any of the four.**
+  `e1a5a9e` and `0c5324a` touch `scripts/` and `docs/` only, and the last
+  commit to reach each swept module is `823d6a7` (`last_used.py`,
+  `cache_search.py`), `8651b20` (`pipeline.py`) and `94cdcea` (`cli.py`) —
+  all inside Tasks 3, 7 and 8. **The index is valid as it stands at HEAD, and
+  4c is the first phase that can invalidate it.**
 
 - **The dead-argument list for 4c is split across two indexes and must be
   reconciled** (recorded 2026-08-22, phase 4b Task 8). This file's phase-4a
@@ -1739,6 +1991,60 @@ wiring rationale and for two Minors deliberately left unfixed.
   delete-the-argument fix: in every case the argument dies with the construct
   around it, and removing only the argument would break the hand-built
   `argparse.Namespace()` objects the unit tests pass.
+
+- **Design ledger item 5 is a documentation defect, not open work** (found
+  2026-08-22, phase 4b Task 10). The design doc's ledger item 5 says
+  `check_venv_dir`'s `issubset()` self-heal against options files predating
+  `options.aliases` "becomes unnecessary, since `LastUsed` never carries an
+  `AliasIndex`. Closed in phase 4 with the persistence change." **It was
+  already gone before phase 3 began.** Checked, not assumed:
+  `rg -n 'issubset' src/ tests/` returns nothing, and `git log -S issubset`
+  puts the last source change in `7640f1c` ("refactor: judge every cached
+  venv, last-used included, by its manifest"), on the venv-cache branch — the
+  commit that replaced the `uninstalled_imports.issubset(...)` comparison
+  against a loaded options file with manifest-based matching. Phase 4b deleted
+  the *file it used to read*, not the check. Two lines still misdescribe this
+  and should be corrected by whoever next edits them rather than by a commit
+  of their own: the design doc's item 5, and the Gotchas entry above that
+  still says the `issubset()` check "fails once against such a file and
+  rebuilds the venv a single time; it is self-healing after that one rebuild"
+  — that behaviour has not existed for several phases. **No owner needed:
+  there is no code to change.**
+
+- **Four minors from phase 4b's Task 8 and Task 9 reviews, recorded rather
+  than fixed** (2026-08-22). Each is a weakness in the *evidence*, not in the
+  shipped code, and none is worth a re-run of a twelve-minute sweep or a
+  differential on its own:
+  1. **The differential's layer 18 hand-writes the record filename it means to
+     test.** `--blank-slate` over a directory holding both formats is the
+     layer that holds `record_path`'s docstring promise ("still starts with a
+     dot and still contains `-{my_name}-`"), but it builds the name itself
+     rather than asking `last_used.record_path` for it. Consequence, measured:
+     **mutation M1 (the filename loses its leading dot) leaves that layer
+     unchanged** — the layer that exists for M1 is the one layer M1 cannot
+     move. It is caught elsewhere (M1 moves 34 lines overall), so this is a
+     redundancy lost, not a hole.
+  2. **The differential's layer 15 prints record *names* only.** The
+     second-run read-back layer reports which record files exist, not their
+     contents or timestamps, so **a run that never refreshes the record is
+     nearly invisible**: measured at **239 lines / 5 differing** against a
+     clean 240/0. Five lines is a real signal but a small one for a regression
+     that would silently freeze every user's pointer.
+  3. **The differential's docstring gloss overstates M2.** It says of M2
+     (`str` instead of `Path` on read) that "every line it moves is a
+     `last_used ... reader ->` note". Of the 17 lines M2 moves, **6** are
+     those notes; the rest are consequential formatting. The claim is
+     directionally right — M2 *is* invisible without the reader probe — and
+     wrong in its arithmetic.
+  4. **Residual item 7 says "three latent defects ... all still live" and
+     names two.** The wording is inherited from
+     `scripts/differential_4a.py` (item 7) into `scripts/differential_4b.py`
+     (item 7). Both name defect 1 (`-y`/`--yes` never reaching `blank_slate`)
+     and defect 3 (`run_script(rawlog=…)` dead at three of four sites). **The
+     count is stale, not the content:** defect 2 — a missing script leaving
+     `FileNotFoundError` travelling uncaught out of `main` — was **fixed by
+     4a's own Task 1**, so it was already wrong when 4a wrote it. Two are
+     live, both 4c's. 4c should write "two" when it writes its own driver.
 
 - **Two inaccuracies in the approved re-architecture design doc**, found while
   planning phase 3a on 2026-08-16. Neither invalidates the design; both mislead
@@ -1765,6 +2071,16 @@ wiring rationale and for two Minors deliberately left unfixed.
      `cli.py` for the JSON-loader consumer — the same timestamp literal
      duplicated in two files. Whichever plan finally retires `pathlibcutoff`
      needs to account for both readers, not just the pickle one.
+
+     > **CLOSED 2026-08-21 by phase 4b, both readers.** The `last_used` one
+     > went with the glob in Task 3 (`823d6a7`) — one fixed filename per
+     > script leaves no timestamp to compare — and
+     > `analysis/custom_modules.PATHLIB_CUTOFF` went in Task 4 (`2057af0`),
+     > because both arms of the comparison it guarded call `ek.ensure_path`,
+     > so it selected a log message and nothing else. Task 6 (`7881aff`) swept
+     > the last mention out of `src/` with `run_options.py`. Measured
+     > 2026-08-22: `rg -n 'pathlibcutoff' src/` → nothing. The design doc's
+     > count of consumers was right and is now moot.
 - **Parked by 3a's reviews, 2026-08-16.** None blocking.
   - No test exercises either branch of `dict_of_custom_modules`'s `use_cache`
     keyword — the polarity was preserved by inspection and a live run only.
@@ -2301,6 +2617,20 @@ wiring rationale and for two Minors deliberately left unfixed.
       layer — it imports `alias_index` and `stdlib_index`, both one layer
       below, and nothing at or below that layer imports it. **What resolves
       it:** phase 4 deletes both the module and the re-export.
+      > **RESOLVED 2026-08-21 by phase 4b's Tasks 5 and 6** (`928620a`,
+      > `2d32e41`, `7881aff`). Both are deleted. The repointing 3e predicted
+      > at 42 references and 4a re-measured at 73 in two spellings (49
+      > `cli.Options` + 24 `veny.Options`) is done: measured 2026-08-22,
+      > `cli.Options` is down to **3** — all three inside
+      > `scripts/differential_3d.py`, two of them the comment explaining the
+      > third — and `veny.Options` to **0**. `tests/` holds no executable
+      > reference to the class in either spelling.
+      > `src/veny/json_types.py` went the same way in Task 7 (`94cdcea`),
+      > taking `tests/test_json_types.py` with it, so the layering table above
+      > no longer lists it. The one string left is
+      > `scripts/wiring_sweep_4a.py:119`'s substitution-table entry
+      > `"run_options.Options()"`, deliberately not carried over — 4a's
+      > harness is history and is left alone, as 4b's index header records.
   13. **`blank_slate` belongs to `pipeline.py`, not `cli.py`.** The design
       says `cli.py` owns "argparse and exit status and nothing else", and the
       blank-slate branch is 45 lines of `shutil.rmtree` and directory
@@ -2413,13 +2743,35 @@ wiring rationale and for two Minors deliberately left unfixed.
   - **The `Options` drain itself.** No frozen dataclass was introduced; the
     `Settings` that already exists is still constructed twice in the moved
     code. **Owner: phase 4.**
+    > **CLOSED 2026-08-21 by phase 4b's Task 6 (`7881aff`).** The class,
+    > `src/veny/run_options.py` and the `cli.Options` re-export are all
+    > deleted; `run_options` has left `tests/test_layering.py`'s `state`
+    > layer, and `tests/test_state_values.py` asserts the class is gone.
+    > Phase 4a had already drained it to fourteen fields across six commits;
+    > 4b removed the last six, which were persistence payload, by replacing
+    > the persistence. Measured 2026-08-22: one `Options` mention survives
+    > under `src/` (`pipeline.py:218`, prose saying the copy-back is gone),
+    > and one live constructor call survives anywhere —
+    > `scripts/differential_3d.py:345`, which drives an *older tree* and
+    > already says so in a comment.
   - **Design amendment 9** — `cache_search.find_match_dir_in_cache` keeps
     taking and mutating the `argparse.Namespace`, because its selection-policy
     writes reach disk through `ek.save_options_to_json`. That is the
     persistence change. **Owner: phase 4.**
+    > **CLOSED 2026-08-21 by phase 4b's Tasks 1-3** (`0fdf720`, `a87da4b`,
+    > `823d6a7`). `find_match_dir_in_cache` takes a
+    > `Callable[[], state.LastUsed | None]` and performs **no** attribute
+    > assignment on `args`; the `last_used`/`latest` writes are locals now,
+    > because nothing serializes the namespace. The change is visible in
+    > `scripts/differential_4b.py`'s hunk 2 (`args.latest` after a default run:
+    > True on the old tree, False on the new one) — the fourth sanctioned
+    > difference, which the task's own acceptance criteria had not listed
+    > (corrected at `0c5324a`).
   - **`pathlibcutoff`'s two readers.** Both survived 3e untouched; the
     `Options.pathlibcutoff` one has merely moved file, from `cli.py` to
     `run_options.py`. **Owner: phase 4**, which must account for both.
+    > **CLOSED 2026-08-21 by phase 4b's Tasks 3 and 4** (`823d6a7`,
+    > `2057af0`); see the fuller note on the design-doc inaccuracy above.
   - **Removing the probe venv from classification** (design amendment 3). It
     moved into `pipeline.py` as `_probe_venv`, still injected, still building
     a real environment. **Owner: whichever phase owns that user-visible

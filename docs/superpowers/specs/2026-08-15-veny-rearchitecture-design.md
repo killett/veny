@@ -403,11 +403,26 @@ through `main()`, invisibly to every in-process test.
 >    version guard that protected the call is repointed at a name veny still
 >    calls, so an old emmykit still fails at import with an install hint rather
 >    than mid-run with an `AttributeError`. (User ruling.)
+> 6. **The emmykit guard compares `ek.__version__`; it does not probe a
+>    name.** Added 2026-08-22, at phase 4b's close — this is the one amendment
+>    the phase's *execution* forced beyond the five rulings above. Ruling 5
+>    says the guard is "repointed at a name veny still calls". Task 7 found
+>    that unmeetable as written: `register_json_type` was the **only** symbol
+>    new in emmykit 0.4.0, so a `hasattr` probe on any other name veny calls
+>    would pass under a 0.3.x and let the run reach an `AttributeError`
+>    mid-flight — exactly what the guard exists to prevent. The guard is now a
+>    version comparison against `ek.__version__`, which keeps the ruling's
+>    intent (fail at import, with an install hint) at the cost of its letter.
+>    Recorded in the plan's Task 7 deviation note.
 >
 > One consequence outside the record itself: `cache_search.find_match_dir_in_cache`
 > stops mutating the `argparse.Namespace`. Its `last_used`/`latest` writes were
 > writes because they reached disk through `save_options_to_json`; with nothing
 > serializing `args`, they become locals. (User ruling.)
+>
+> **Executed and closed 2026-08-22.** All six landed on branch
+> `last-used-persistence`; the ledger of commits is in `PROGRESS.md`'s
+> phase-4b entry.
 
 ## Error handling
 
@@ -473,7 +488,16 @@ assigned to the phase that closes it.
    table above, once `cli.py` is their sole owner.
 5. **`check_venv_dir`'s `issubset()` self-heal** against options files written
    before `options.aliases` existed becomes unnecessary, since `LastUsed` never
-   carries an `AliasIndex`. Closed in phase 4 with the persistence change.
+   carries an `AliasIndex`. ~~Closed in phase 4 with the persistence change.~~
+   **CORRECTED 2026-08-22, at phase 4b's close: this item was already closed
+   when the design was written, and phase 4 had nothing to do.** Checked, not
+   assumed — `rg -n 'issubset' src/ tests/` returns nothing, and
+   `git log -S issubset` puts the last source change in `7640f1c`
+   ("refactor: judge every cached venv, last-used included, by its manifest"),
+   on the venv-cache branch, well before phase 3. That commit replaced the
+   `uninstalled_imports.issubset(...)` comparison against a loaded options
+   file with manifest-based matching. Phase 4b deleted the *options file the
+   check used to read*, not the check. **Nothing here is owed to phase 4c.**
 
 ## Testing strategy
 
