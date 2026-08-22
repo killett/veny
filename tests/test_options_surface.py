@@ -55,9 +55,8 @@ RETIRED_FIELDS = {
     "uninstalled_imports",
     "bad_imports",
     "extra_requirements",
-    # VenvHandle (Task 6):
-    "venv_dir",
-    "venv_python",
+    # VenvHandle (Task 6). venv_dir and venv_python are NOT here: they came
+    # back as persistence payload -- see SURVIVING_FIELDS.
     "requirements_file",
     "install_succeeded",
     # Dead since the uv migration (Task 7):
@@ -69,11 +68,15 @@ RETIRED_FIELDS = {
 # group and the class with it; see run_options.py's module docstring.
 # Fields veny's Options adds to ek.Options', beyond emmykit's own.
 SURVIVING_FIELDS = {
-    # Persistence: what ek.save_options_to_json and last_used read.
+    # Persistence: what ek.save_options_to_json and last_used read. The first
+    # four name the file; venv_dir and venv_python ARE the payload the reader
+    # recovers, which is why they survived the VenvHandle drain.
     "python_script",
     "script_dir",
     "timestamp",
     "my_name",
+    "venv_dir",
+    "venv_python",
     "options_json_filepath",
     "pathlibcutoff",
     # Construction inputs cli.main derives the run's Settings from. home and

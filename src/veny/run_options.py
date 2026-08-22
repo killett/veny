@@ -7,7 +7,8 @@ in four groups:
 
 - **Persistence.** `python_script`, `script_dir`, `timestamp` and `my_name`
   are what `ek.save_options_to_json` builds its filename from;
-  `options_json_filepath` is where it records the result, and
+  `venv_dir` and `venv_python` are the payload the *reader* recovers;
+  `options_json_filepath` is where the writer records the result, and
   `pathlibcutoff` is what `last_used.load_last_used_options` compares against.
   emmykit's reader and writer are typed against `ek.Options` rather than
   against a payload, which is the whole of why this class is still alive.
@@ -60,6 +61,15 @@ class Options(ek.Options):
         self.python_script: Path | None = None
         self.script_dir: Path | None = None
         self.timestamp: str = ""
+        # And the two the *reader* recovers. last_used.load_last_used_options
+        # rebuilds an Options from the saved __dict__, and
+        # load_last_used_venv_python and the cache search's last-used pass
+        # read these two back off it. They left Options in phase 4a Task 6
+        # and had to come back: without them the JSON carries no venv at all,
+        # so --feeling-lucky and the last-used pointer silently never match
+        # again. Caught by scripts/differential_4a.py, not by the unit suite.
+        self.venv_dir: Path | None = None
+        self.venv_python: Path | None = None
         self.options_json_filepath: Path | None = None
         # Before 2025-08-10 at 22:49:00, paths were stored as strings. After that date, they were stored as pathlib.Path objects. Any .pkl files created before that date have their paths converted to pathlib.Path objects when loaded. Any .json files created before that date are ignored when loading last-used options.
         self.pathlibcutoff: str = "20250810-224900"

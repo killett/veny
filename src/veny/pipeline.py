@@ -971,12 +971,17 @@ def run(
                 )
 
             # emmykit's writer builds its filename off the Options, not off a
-            # payload, so the Target's three naming fields are copied across
-            # here -- at the save, not carried on Options for the whole run.
-            # Phase 4b replaces this with veny's own LastUsed record.
+            # payload, so the five fields the record is made of are copied
+            # across here -- at the save, not carried on Options for the whole
+            # run. The first three name the file; the last two ARE the payload
+            # the reader recovers, and leaving them out is what phase 4a's
+            # differential caught. Phase 4b replaces all of this with veny's
+            # own LastUsed record.
             options.python_script = target.python_script
             options.script_dir = target.script_dir
             options.timestamp = target.timestamp
+            options.venv_dir = handle.venv_dir
+            options.venv_python = handle.venv_python
             ek.save_options_to_json(options)
 
     return script_exit_code

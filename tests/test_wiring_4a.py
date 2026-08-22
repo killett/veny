@@ -684,3 +684,65 @@ def test_the_custom_module_cache_is_on_when_neither_flag_is_given(
     cli.main()
 
     assert seen == [True]
+
+
+def test_the_saved_record_carries_the_venv_the_run_actually_used(monkeypatch, tmp_path):
+    """The last-used JSON must contain the venv, or nothing can read it back.
+
+    Behaviour under test: what pipeline.run copies onto the Options before
+    ek.save_options_to_json, which serializes that object's whole __dict__.
+
+    Concrete bug this catches: phase 4a's Task 6 moved venv_dir and
+    venv_python onto the frozen VenvHandle and deleted them from Options. The
+    unit suite stayed green -- nothing read them off Options any more -- but
+    the saved record silently stopped containing a venv, so
+    last_used.load_last_used_venv_python's `hasattr` check answered False and
+    --feeling-lucky could never match again, on any script, forever. Found by
+    scripts/differential_4a.py, which drives main() in both trees; this test
+    is what closes it in-process. The five fields together are the whole
+    record: three name the file, two are the payload.
+    """
+    _a_run(monkeypatch, tmp_path, argv=("--rawlog", "--no-cache"))
+    built = tmp_path / "home" / "veny" / "myenv-py3.12-20260101-010203-thing-pkg"
+    saved: list[Any] = []
+    monkeypatch.setattr(
+        ek, "save_options_to_json", lambda options: saved.append(options)
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "list_packages",
+        lambda settings, scan, target, **kwargs: (
+            scan,
+            state.Requirements(
+                all_imports=frozenset({"thing"}),
+                bad=frozenset(),
+                installed=frozenset(),
+                uninstalled=frozenset(
+                    {alias_index.ResolvedImport("thing", "thing-pkg")}
+                ),
+                seen_stdlib=frozenset(),
+                extra_requirements={},
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "setup_virtualenv",
+        lambda settings, target, requirements, **kwargs: (
+            requirements,
+            state.VenvHandle.for_dir(built),
+            True,
+        ),
+    )
+
+    cli.main()
+
+    assert len(saved) == 1
+    record = saved[0]
+    # The payload the reader recovers.
+    assert record.venv_dir == built
+    assert record.venv_python == built / "bin" / "python"
+    # The three the writer names the file from.
+    assert record.python_script == (tmp_path / "script.py").resolve()
+    assert record.script_dir == (tmp_path / "script.py").parent.absolute()
+    assert record.timestamp
