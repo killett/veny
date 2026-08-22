@@ -94,6 +94,14 @@ ignore = [
 # starts. (It cannot call 3e's re-exec: that one re-execs 3e's own __file__,
 # which silently runs 3e's seven layers instead of these twelve.)
 "scripts/differential_4a.py" = ["ANN401", "S606"]
+# The 4b differential reuses 4a's driver, which reuses 3e's harness, so it
+# inherits both reasons a third time: `Any` for every object it reaches through
+# those module handles -- and one more tree shape to speak to, since 4b deleted
+# `run_options.py` -- and one os.execv that re-runs this same file to get
+# PYTHONHASHSEED=0 before the interpreter starts. (It cannot call 4a's or 3e's
+# re-exec: each re-execs its own __file__, which would silently run that
+# phase's layers instead of these eighteen.)
+"scripts/differential_4b.py" = ["ANN401", "S606"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
