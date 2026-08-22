@@ -371,6 +371,44 @@ and nothing in emmykit requires an instance of it.
 would make `save_options_to_json` write repr strings for any consumer not going
 through `main()`, invisibly to every in-process test.
 
+> **AMENDED 2026-08-21 by phase 4b.** Five rulings, four of them the user's,
+> settling how the persistence change is actually made.
+>
+> 1. **`LastUsed` lives in `state.py`, not `settings.py`.** The state-model
+>    listing above puts all four frozen values in `settings.py`; phase 4a in
+>    fact put `Target`, `VenvHandle` and `Requirements` in `state.py` and left
+>    `settings.py` holding `Settings` alone. `LastUsed` follows its siblings.
+> 2. **One fixed file per script, not one per run.** The record is written to
+>    `.{script}-{my_name}-last-used.json` and overwritten each run, replacing
+>    today's `.{script}-{my_name}-last-used-on-{timestamp}.json` and the glob,
+>    regex and newest-wins sort that read it. veny stops leaving one JSON per
+>    run in the user's script directory. (User ruling.)
+> 3. **Records written by earlier veny are ignored, not migrated.** The reader
+>    accepts only veny's own `LastUsed` file. A script whose only record is an
+>    old whole-`Options` dump misses the last-used pointer once and falls back
+>    to the cache scan, which normally finds the same environment; the next
+>    save writes the new format. Old files are left on disk, not deleted. This
+>    is what lets the reader be plain `json.loads` with `Path(...)` on two
+>    string fields, with no tagged-payload decoding anywhere. (User ruling.)
+> 4. **`pathlibcutoff` dies with the glob, and so does the pickle cutoff.**
+>    With one fixed filename there is no timestamp to compare, so the
+>    `last_used` reader loses the cutoff outright. Its second reader,
+>    `analysis/custom_modules.PATHLIB_CUTOFF`, goes too: both arms of the
+>    comparison it guards call `ek.ensure_path`, so it selects a log message
+>    and nothing else.
+> 5. **`json_types.py` is deleted**, with its module-scope call and its tests.
+>    The saved options file was its only consumer -- `alias_index` writes its
+>    cache with plain `json`, and no other `to_jsonable` call exists under
+>    `src/`. The paragraph above is thereby retired, not violated. The emmykit
+>    version guard that protected the call is repointed at a name veny still
+>    calls, so an old emmykit still fails at import with an install hint rather
+>    than mid-run with an `AttributeError`. (User ruling.)
+>
+> One consequence outside the record itself: `cache_search.find_match_dir_in_cache`
+> stops mutating the `argparse.Namespace`. Its `last_used`/`latest` writes were
+> writes because they reached disk through `save_options_to_json`; with nothing
+> serializing `args`, they become locals. (User ruling.)
+
 ## Error handling
 
 Stated per layer, unchanged in spirit from current behaviour.
