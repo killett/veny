@@ -2,6 +2,8 @@
 
 import argparse
 
+import emmykit as ek
+
 from veny import cli as veny
 
 RETIRED_FIELDS = {
@@ -23,6 +25,65 @@ RETIRED_FIELDS = {
     "download_script_path",
     "pip_list",
     "simultaneous_success",
+    # Drained by phase 4a into the frozen values that replaced them. Listed
+    # here so a field cannot creep back onto Options and be read from two
+    # places at once, which is the failure this whole phase exists to remove.
+    # Target (Task 2):
+    "python_command",
+    "script_args",
+    "script_name",
+    # Settings (Task 3), plus the three that turned out to have no readers:
+    "venv_name",
+    "stay_out_list",
+    "search_above_this_dir",
+    "known_bad_imports",
+    "also_needs",
+    "extra_requirements_file",
+    "unusual_imports",
+    "max_checks",
+    "check_interval",
+    # ImportScan (Task 4):
+    "all_imports",
+    "custom_modules",
+    "loaded_custom_modules",
+    "samedir_files",
+    "subfolders",
+    "sys_path_hints",
+    "seen_stdlib_imports",
+    "total_imports",
+    # Requirements (Task 5):
+    "uninstalled_imports",
+    "bad_imports",
+    "extra_requirements",
+    # VenvHandle (Task 6):
+    "venv_dir",
+    "venv_python",
+    "requirements_file",
+    "install_succeeded",
+    # Dead since the uv migration (Task 7):
+    "current_pip_version",
+    "new_pip_version",
+}
+
+# What phase 4a deliberately left, and why. Phase 4b deletes the persistence
+# group and the class with it; see run_options.py's module docstring.
+# Fields veny's Options adds to ek.Options', beyond emmykit's own.
+SURVIVING_FIELDS = {
+    # Persistence: what ek.save_options_to_json and last_used read.
+    "python_script",
+    "script_dir",
+    "timestamp",
+    "my_name",
+    "options_json_filepath",
+    "pathlibcutoff",
+    # Construction inputs cli.main derives the run's Settings from. home and
+    # log_mode come from ek.Options and so are not listed here.
+    "cwd",
+    # Passed as themselves; kept only because they are in the JSON payload,
+    # and my_dir because alias_index.empty needs somewhere to put its cache.
+    "stdlib",
+    "aliases",
+    "my_dir",
 }
 
 
@@ -32,9 +93,31 @@ def test_options_no_longer_carries_helper_script_paths():
     assert present == set(), f"retired fields still on Options: {sorted(present)}"
 
 
-def test_options_still_carries_the_directories_veny_uses():
+def test_options_carries_nothing_but_the_surviving_fields():
+    """The drain is total: every field left is one phase 4a chose to leave.
+
+    Behaviour under test: Options' whole surface, not a sampled subset.
+
+    Concrete bug this catches: a field re-added to Options while its value
+    also lives on a Settings, Target, Requirements or VenvHandle. Nothing
+    raises when that happens -- the run simply carries the value twice, the
+    two can drift, and only a test that happens to read the stale one
+    notices. RETIRED_FIELDS alone cannot catch a *new* name; this can.
+
+    Measured against a bare ek.Options rather than an absolute list, so that
+    a field emmykit adds to the base class is not reported as one veny grew.
+    """
     options = veny.Options()
-    assert options.my_dir == options.home / options.my_name
+
+    venys_own = set(vars(options)) - set(vars(ek.Options()))
+    assert venys_own == SURVIVING_FIELDS
+
+
+def test_options_still_carries_the_directories_veny_uses():
+    # my_dir left Options in phase 4a -- Settings owns it -- but cli.main
+    # still derives it from these two, so the relationship is pinned here.
+    options = veny.Options()
+    assert options.home / options.my_name == options.home / "veny"
 
 
 def test_options_args_defaults_to_the_empty_namespace_emmykit_supplies():

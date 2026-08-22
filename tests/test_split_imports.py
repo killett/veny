@@ -119,7 +119,7 @@ def test_the_offline_argument_keeps_the_index_off_the_network(monkeypatch, tmp_p
 
     assert options.args.offline is True
     assert (
-        pipeline.build_alias_index(_a_settings(my_dir=tmp_path), options, "").pypi
+        pipeline.build_alias_index(_a_settings(my_dir=tmp_path), options.args, "").pypi
         is None
     )
 
@@ -135,7 +135,7 @@ def test_the_index_reaches_pypi_by_default(monkeypatch, tmp_path):
 
     assert options.args.offline is False
     assert (
-        pipeline.build_alias_index(_a_settings(my_dir=tmp_path), options, "").pypi
+        pipeline.build_alias_index(_a_settings(my_dir=tmp_path), options.args, "").pypi
         is not None
     )
 
@@ -286,7 +286,12 @@ def test_setup_virtualenv_verifies_every_import_before_reporting_success(
 
     assert (
         pipeline.setup_virtualenv(
-            _a_settings(my_dir=tmp_path), options, _target(), requirements
+            _a_settings(my_dir=tmp_path),
+            _target(),
+            requirements,
+            args=options.args,
+            aliases=options.aliases,
+            stdlib=options.stdlib,
         )[1]
         is not None
     )

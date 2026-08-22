@@ -136,12 +136,13 @@ def _offline_index():
 
 
 class _CapturedRun(list):  # type: ignore[type-arg]
-    """The Options main() built, with the values it built alongside them.
+    """The argparse namespace main() parsed, and the values it built from it.
 
     A list subclass rather than extra return values from _drive_main: every
     existing caller unpacks two values, and the Settings, Target and
     Requirements are needed only by the handful of tests that assert on what
-    moved off Options in phase 4a.
+    moved off Options in phase 4a. The list itself holds the namespace, which
+    is what is left once the god object is drained.
     """
 
     def __init__(self) -> None:
@@ -199,12 +200,13 @@ def _drive_main(
     )
     captured = _CapturedRun()
 
-    def capture_the_run(settings, options, python_command):
-        # build_alias_index is where the Options main() built is captured: it
-        # is the earliest hook every branch of run() passes through, and
-        # phase 4a took the Options away from list_packages, which used to
-        # serve this purpose.
-        captured.append(options)
+    def capture_the_run(settings, args, python_command):
+        # build_alias_index is the earliest hook every branch of run() passes
+        # through. Phase 4a drained the Options out of it too, so what is
+        # captured here is the parsed namespace -- which is all any remaining
+        # caller needs: the Settings, Target and Requirements have their own
+        # side-channels below.
+        captured.append(args)
         captured.settings.append(settings)
         return _offline_index()
 
@@ -281,15 +283,15 @@ def test_main_describes_the_run_to_the_cache_search(monkeypatch, tmp_path):
     monkeypatch.setattr(
         pipeline,
         "setup_virtualenv",
-        lambda settings, options, target, requirements: (requirements, None, False),
+        lambda settings, target, requirements, **kwargs: (requirements, None, False),
     )
 
     cli.main()
 
-    options = captured[0]
     assert len(seen) == 1
     call = seen[0]
-    assert call["args"] is options.args
+    # The run's own namespace, not a fresh one: the selection flags live on it.
+    assert call["args"] is captured[0]
     assert call["my_dir"] == tmp_path / "home" / "veny"
     assert call["venv_name"] == _a_settings().venv_name
     assert call["uninstalled"] == {
@@ -301,7 +303,11 @@ def test_main_describes_the_run_to_the_cache_search(monkeypatch, tmp_path):
     assert call["rawlog"] is True
     # The callback must reach this run's own last-used loader, not a constant.
     assert load_last_used_callbacks[0]() is None
-    assert loaded == [options]
+    # One call, and with the run's own Options -- the template emmykit's
+    # loader fills in. It is the last thing in run() that still takes one;
+    # phase 4b replaces it with a LastUsed record.
+    assert len(loaded) == 1
+    assert isinstance(loaded[0], cli.Options)
 
 
 def test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs(
@@ -336,7 +342,7 @@ def test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs
     monkeypatch.setattr(
         pipeline,
         "setup_virtualenv",
-        lambda settings, options, target, requirements: (requirements, None, False),
+        lambda settings, target, requirements, **kwargs: (requirements, None, False),
     )
 
     with caplog.at_level(logging.INFO):
@@ -364,7 +370,7 @@ def test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs
     monkeypatch.setattr(
         pipeline,
         "setup_virtualenv",
-        lambda settings, options, target, requirements: (requirements, None, False),
+        lambda settings, target, requirements, **kwargs: (requirements, None, False),
     )
     with caplog.at_level(logging.INFO):
         cli.main()
@@ -399,7 +405,7 @@ def test_main_lets_the_feeling_lucky_loader_speak_on_a_run_that_did_not_ask_for_
     monkeypatch.setattr(
         pipeline,
         "setup_virtualenv",
-        lambda settings, options, target, requirements: (requirements, None, False),
+        lambda settings, target, requirements, **kwargs: (requirements, None, False),
     )
 
     with caplog.at_level(logging.INFO):
@@ -419,7 +425,7 @@ def test_main_lets_the_feeling_lucky_loader_speak_on_a_run_that_did_not_ask_for_
     monkeypatch.setattr(
         pipeline,
         "setup_virtualenv",
-        lambda settings, options, target, requirements: (requirements, None, False),
+        lambda settings, target, requirements, **kwargs: (requirements, None, False),
     )
     with caplog.at_level(logging.INFO):
         cli.main()
@@ -469,7 +475,7 @@ def test_main_loads_the_requirements_file_and_keeps_its_names_out_of_the_import_
     monkeypatch.setattr(
         pipeline,
         "setup_virtualenv",
-        lambda settings, options, target, requirements: (requirements, None, False),
+        lambda settings, target, requirements, **kwargs: (requirements, None, False),
     )
 
     cli.main()
@@ -565,7 +571,7 @@ def test_main_drops_the_failed_prefix_from_the_venv_it_just_built(
     )
     built = tmp_path / "home" / "veny" / "failed-myenv-py3.12-20260101-010203-thing-pkg"
 
-    def fake_setup(settings, options, target, requirements):
+    def fake_setup(settings, target, requirements, **kwargs):
         return requirements, state.VenvHandle.for_dir(built), True
 
     monkeypatch.setattr(pipeline, "setup_virtualenv", fake_setup)
@@ -617,7 +623,7 @@ def test_main_asks_the_last_used_loader_about_this_script(monkeypatch, tmp_path)
     monkeypatch.setattr(
         pipeline,
         "setup_virtualenv",
-        lambda settings, options, target, requirements: (requirements, None, False),
+        lambda settings, target, requirements, **kwargs: (requirements, None, False),
     )
     monkeypatch.setattr(
         cache_search, "find_match_dir_in_cache", lambda args, **kwargs: None
@@ -730,7 +736,7 @@ def test_main_builds_an_environment_when_the_cache_misses(monkeypatch, tmp_path)
     )
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", lambda *a, **k: None)
 
-    def fake_setup(settings, options, target, requirements):
+    def fake_setup(settings, target, requirements, **kwargs):
         return requirements, state.VenvHandle.for_dir(built_dir), False
 
     monkeypatch.setattr(pipeline, "setup_virtualenv", fake_setup)
@@ -938,7 +944,7 @@ def test_main_maps_a_missing_uv_to_status_one(monkeypatch, tmp_path, capsys):
         all_imports={"thing"},
     )
 
-    def unavailable(settings, options, target, start_time=None):
+    def unavailable(settings, args, options, target, start_time=None):
         raise environment.UvUnavailable(
             "veny requires uv, which is not installed and is not on PATH.\n"
             "Reinstall veny with:  uv tool install veny"
@@ -978,7 +984,7 @@ def test_main_maps_a_failed_venv_build_to_status_one(monkeypatch, tmp_path, capl
         all_imports={"thing"},
     )
 
-    def refused(settings, options, target, start_time=None):
+    def refused(settings, args, options, target, start_time=None):
         raise pipeline.VenvBuildFailed(
             "Could not build the throwaway environment used to check which "
             "imports are already available."
@@ -1025,7 +1031,7 @@ def test_a_failed_build_reports_at_critical_and_returns_one_without_a_debugger(
     monkeypatch.setattr(
         pipeline,
         "setup_virtualenv",
-        lambda settings, options, target, requirements: (requirements, None, False),
+        lambda settings, target, requirements, **kwargs: (requirements, None, False),
     )
 
     with caplog.at_level(logging.CRITICAL):
@@ -1505,7 +1511,7 @@ def test_the_run_reports_the_imports_it_decided_are_missing(
     monkeypatch.setattr(
         pipeline,
         "setup_virtualenv",
-        lambda settings, options, target, requirements: (requirements, None, False),
+        lambda settings, target, requirements, **kwargs: (requirements, None, False),
     )
 
     with caplog.at_level(logging.INFO):
@@ -1545,7 +1551,7 @@ def test_no_cache_skips_the_cache_search_entirely(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", find_spy)
 
-    def fake_setup(settings, options, target, requirements):
+    def fake_setup(settings, target, requirements, **kwargs):
         return requirements, state.VenvHandle.for_dir(built), False
 
     monkeypatch.setattr(pipeline, "setup_virtualenv", fake_setup)
@@ -1635,7 +1641,7 @@ def test_build_alias_index_reads_this_runs_own_directory_and_interpreter(
     options.args = argparse.Namespace(offline=True)
 
     index = pipeline.build_alias_index(
-        _a_settings(my_dir=tmp_path), options, sys.executable
+        _a_settings(my_dir=tmp_path), options.args, sys.executable
     )
 
     assert index.cache.path == tmp_path / "module_aliases_cache.json"
@@ -1685,9 +1691,9 @@ def test_the_run_is_timed_from_the_moment_veny_started(monkeypatch, tmp_path, ca
     handed: list[dt.datetime | None] = []
     real_run = pipeline.run
 
-    def run_spy(settings, options, target, start_time=None):
+    def run_spy(settings, args, options, target, start_time=None):
         handed.append(start_time)
-        return real_run(settings, options, target, start_time=start_time)
+        return real_run(settings, args, options, target, start_time=start_time)
 
     monkeypatch.setattr(pipeline, "run", run_spy)
 

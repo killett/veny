@@ -73,7 +73,7 @@ class VenvBuildFailed(Exception):
 
 
 def build_alias_index(
-    settings: Settings, options: run_options.Options, python_command: str
+    settings: Settings, args: argparse.Namespace, python_command: str
 ) -> alias_index.AliasIndex:
     """Rebuild the alias index against the interpreter that will run the user's script.
 
@@ -84,7 +84,7 @@ def build_alias_index(
 
     Args:
         settings: The run's invariants; reads my_dir
-        options: Options object; reads the --offline flag off options.args
+        args: The parsed command line; reads the --offline flag
         python_command: The interpreter the resolver probes
                  and the --offline flag.
 
@@ -97,7 +97,7 @@ def build_alias_index(
     return alias_index.build(
         python_command,
         settings.my_dir,
-        offline=getattr(options.args, "offline", False),
+        offline=getattr(args, "offline", False),
     )
 
 
@@ -443,7 +443,7 @@ def feeling_lucky(
     return None
 
 
-def blank_slate(settings: Settings, options: run_options.Options) -> int:
+def blank_slate(settings: Settings, args: argparse.Namespace) -> int:
     """Delete veny's state directory and its own dotfiles in the current directory.
 
     The filter is four OR'd name tests rather than a glob so that only files
@@ -452,13 +452,13 @@ def blank_slate(settings: Settings, options: run_options.Options) -> int:
 
     Args:
         settings: The run's invariants; reads my_name, my_dir and cwd.
-        options: The run's Options; reads the -y flag off options.args.
+        args: The parsed command line; reads the -y flag.
 
     Returns:
         0, whether the user confirmed or declined -- both are a complete run
         that was never going to launch a script.
     """
-    if not getattr(options.args, "y", False):
+    if not getattr(args, "y", False):
         if not ek.prompt_then_confirm(
             f"Are you sure you want to delete everything in ~/{settings.my_name}/"
             f" and all {settings.my_name} .json files in the current directory? (y/n) "
@@ -568,18 +568,23 @@ def _load_last_used(
 
 def setup_virtualenv(
     settings: Settings,
-    options: run_options.Options,
     target: state.Target,
     requirements: state.Requirements,
+    *,
+    args: argparse.Namespace,
+    aliases: alias_index.AliasIndex,
+    stdlib: stdlib_index.StdlibIndex,
 ) -> tuple[state.Requirements, state.VenvHandle | None, bool]:
     """Setup a virtual environment and install packages.
 
     Args:
         settings: The run's invariants; supplies my_dir, venv_name and rawlog.
-        options: The run's state; the venv it builds is recorded on it.
         target: The run's Target; supplies python_command and timestamp.
         requirements: What classification decided. Read for what to install,
             and returned again with the repair pass folded in.
+        args: The parsed command line; reads --reqs.
+        aliases: The alias index the repair pass records its findings in.
+        stdlib: The run's standard-library index, for the interpreter tag.
 
     Returns:
         Three values: the requirements after the repair pass; the handle for
@@ -593,7 +598,7 @@ def setup_virtualenv(
     # The folder name is a cheap prefilter for the cache search; veny_manifest.json
     # inside the venv is the authority. venv_cache owns the encoding so a
     # hyphenated pip name cannot be mistaken for a field separator.
-    run_tag = cache_search.interpreter_tag(options.stdlib)
+    run_tag = cache_search.interpreter_tag(stdlib)
     folder_name = venv_cache.build_folder_name(
         venv_name=settings.venv_name,
         interpreter_tag=run_tag,
@@ -647,7 +652,7 @@ def setup_virtualenv(
     source_names = verify.source_import_names(
         set(requirements.all_imports),
         requirements.extra_requirements,
-        getattr(options.args, "reqs", False),
+        getattr(args, "reqs", False),
     )
     # The two "load-bearing" re-narrowing asserts that stood here are gone:
     # VenvHandle's fields are non-optional Paths, so there is nothing left for
@@ -665,7 +670,7 @@ def setup_virtualenv(
                 uninstalled=set(requirements.uninstalled),
                 extra_requirements=requirements.extra_requirements,
                 source_names=source_names,
-                index=options.aliases,
+                index=aliases,
                 rawlog=settings.rawlog,
             )
         ),
@@ -697,6 +702,7 @@ def setup_virtualenv(
 
 def run(
     settings: Settings,
+    args: argparse.Namespace,
     options: run_options.Options,
     target: state.Target | None,
     *,
@@ -706,7 +712,10 @@ def run(
 
     Args:
         settings: The run's invariants, built once in cli.main.
-        options: The run's state, with argv already parsed onto it.
+        args: The parsed command line.
+        options: What is left of the god object -- the template emmykit's
+            last-used reader and writer are typed against. Nothing in this
+            module reads it for anything else. Phase 4b removes it.
         target: What is being run, or None for a scriptless invocation --
             which only --blank-slate excuses.
         start_time: What the two "Elapsed time" lines are measured from.
@@ -743,23 +752,23 @@ def run(
     else:
         if logging.getLogger().isEnabledFor(logging.DEBUG):
             logging.debug("Python %s is not available.", ek.PY_VERSION)
-    options.stdlib = stdlib_index.resolve(python_command)
+    stdlib = stdlib_index.resolve(python_command)
     if logging.getLogger().isEnabledFor(logging.DEBUG):
         logging.debug(
             "Standard library index: %d names from Python %d.%d (source: %s)",
-            len(options.stdlib.names),
-            options.stdlib.python_version[0],
-            options.stdlib.python_version[1],
-            options.stdlib.source,
+            len(stdlib.names),
+            stdlib.python_version[0],
+            stdlib.python_version[1],
+            stdlib.source,
         )
     # This must happen before anything resolves, i.e. before list_packages() below.
-    options.aliases = build_alias_index(settings, options, python_command or "")
+    aliases = build_alias_index(settings, args, python_command or "")
     if logging.getLogger().isEnabledFor(logging.DEBUG):
         logging.debug(
             "Alias index: %d overrides, %d cached names, tagged %s",
-            len(options.aliases.overrides),
-            len(options.aliases.cache.entries),
-            options.aliases.cache.interpreter_tag,
+            len(aliases.overrides),
+            len(aliases.cache.entries),
+            aliases.cache.interpreter_tag,
         )
 
     if not ek.safe_is_dir(settings.my_dir):
@@ -772,8 +781,8 @@ def run(
 
     if target is not None:
         pass  # If a script was provided as an argument, skip the rest of these checks.
-    elif getattr(options.args, "blank_slate", False):
-        return blank_slate(settings, options)
+    elif getattr(args, "blank_slate", False):
+        return blank_slate(settings, args)
     else:
         raise UsageError(
             "You must specify either a script to run or --blank-slate (be "
@@ -782,7 +791,7 @@ def run(
         )
 
     extra_requirements: Mapping[str, str | None] = {}
-    if getattr(options.args, "reqs", False):
+    if getattr(args, "reqs", False):
         extra_requirements = environment.parse_extra_requirements(
             settings.extra_requirements_file, rawlog=settings.rawlog
         )
@@ -797,8 +806,8 @@ def run(
     scan = ImportScan(
         custom_modules=custom_modules.dict_of_custom_modules(
             settings,
-            use_cache=not getattr(options.args, "rc", False)
-            and not getattr(options.args, "no_cache", False),
+            use_cache=not getattr(args, "rc", False)
+            and not getattr(args, "no_cache", False),
         )
     )
     time2 = dt.datetime.now()
@@ -815,15 +824,15 @@ def run(
         settings,
         scan,
         target,
-        args=options.args,
-        aliases=options.aliases,
+        args=args,
+        aliases=aliases,
         extra_requirements=extra_requirements,
-        is_stdlib=options.stdlib.__contains__,
+        is_stdlib=stdlib.__contains__,
     )
 
     report(settings, scan, requirements)
 
-    if getattr(options.args, "justprint", False):
+    if getattr(args, "justprint", False):
         return 0
 
     if not requirements.uninstalled:
@@ -849,7 +858,7 @@ def run(
             source_names=verify.source_import_names(
                 set(requirements.all_imports),
                 requirements.extra_requirements,
-                getattr(options.args, "reqs", False),
+                getattr(args, "reqs", False),
             ),
         ):
             start_raw_time = dt.datetime.now()
@@ -874,11 +883,11 @@ def run(
     else:
         handle: state.VenvHandle | None = None
         install_succeeded = False
-        if getattr(options.args, "no_cache", False):
+        if getattr(args, "no_cache", False):
             match_dir = None
         else:
             match_dir = cache_search.find_match_dir_in_cache(
-                options.args,
+                args,
                 my_dir=settings.my_dir,
                 venv_name=settings.venv_name,
                 uninstalled=set(requirements.uninstalled),
@@ -886,9 +895,9 @@ def run(
                 source_names=verify.source_import_names(
                     set(requirements.all_imports),
                     requirements.extra_requirements,
-                    getattr(options.args, "reqs", False),
+                    getattr(args, "reqs", False),
                 ),
-                tag=cache_search.interpreter_tag(options.stdlib),
+                tag=cache_search.interpreter_tag(stdlib),
                 rawlog=settings.rawlog,
                 load_last_used=lambda: _load_last_used(
                     options,
@@ -903,7 +912,12 @@ def run(
                     "Creating new virtual environment '%s'...", settings.venv_name
                 )
             requirements, handle, install_succeeded = setup_virtualenv(
-                settings, options, target, requirements
+                settings,
+                target,
+                requirements,
+                args=args,
+                aliases=aliases,
+                stdlib=stdlib,
             )
             if handle is None:
                 # This was emmykit's critical-error helper, called with

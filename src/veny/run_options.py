@@ -1,10 +1,31 @@
-"""The per-run state object, on its way out.
+"""What is left of the per-run state object, and why each field survived.
 
-`Options` is the 48-attribute god object the re-architecture retires. It lives
-here rather than in `cli.py` for one reason: `pipeline.py` is handed one, and a
-module may not import the module above it. Phase 4 deletes this file when the
-frozen `Settings`, `Target`, `VenvHandle` and `LastUsed` dataclasses replace it;
-nothing new should be added here in the meantime.
+Phase 4a drained every field the pipeline read or wrote into the frozen
+`Settings`, `Target`, `Requirements` and `VenvHandle` values, and into the
+mutable `ImportScan` the analysis layer accumulates. Fourteen fields remain,
+in four groups:
+
+- **Persistence.** `python_script`, `script_dir`, `timestamp` and `my_name`
+  are what `ek.save_options_to_json` builds its filename from;
+  `options_json_filepath` is where it records the result, and
+  `pathlibcutoff` is what `last_used.load_last_used_options` compares against.
+  emmykit's reader and writer are typed against `ek.Options` rather than
+  against a payload, which is the whole of why this class is still alive.
+  `pipeline.run` copies the first three across at the save and nowhere else.
+- **Construction inputs.** `home` and `cwd`, which `cli.main` derives the
+  run's `Settings` from, and `log_mode`, which only `ek.configure_logging`
+  reads.
+- **Passed as themselves.** `stdlib` and `aliases`. The design keeps both out
+  of every bundle ("they belong to no bundle"), and `pipeline.run` builds its
+  own rather than reading these -- they survive because
+  `save_options_to_json` serializes the instance's whole `__dict__`, so
+  removing them would change the payload, and the payload is phase 4b's.
+- **`rawlog`.** Read by `cli.main` for `ek.configure_logging` and for
+  `ek.print_all_errors`; `Settings.rawlog` is what every stage below reads.
+
+Phase 4b breaks the persistence coupling -- veny writes its own `LastUsed`
+record -- and deletes this file, the `cli.Options` re-export, and the test
+references in both spellings. Nothing new goes in here.
 """
 
 from __future__ import annotations
@@ -42,8 +63,6 @@ class Options(ek.Options):
         self.options_json_filepath: Path | None = None
         # Before 2025-08-10 at 22:49:00, paths were stored as strings. After that date, they were stored as pathlib.Path objects. Any .pkl files created before that date have their paths converted to pathlib.Path objects when loaded. Any .json files created before that date are ignored when loading last-used options.
         self.pathlibcutoff: str = "20250810-224900"
-        self.current_pip_version: str = ""
-        self.new_pip_version: str = ""
         self.rawlog: bool = False
         # Standard-library membership is derived from a real interpreter, never hardcoded.
         # Replaced in run() once the target's python_command is known, so that truth comes from

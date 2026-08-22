@@ -208,7 +208,7 @@ def main() -> int:
             options.my_name, log_level=options.log_mode, rawlog=options.rawlog
         )
         script_exit_code = pipeline.run(
-            run_settings, options, target, start_time=start_time
+            run_settings, options.args, options, target, start_time=start_time
         )
     except pipeline.UsageError as exc:
         logging.info("%s", exc)

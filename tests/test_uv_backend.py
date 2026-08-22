@@ -156,7 +156,14 @@ def test_setup_virtualenv_builds_the_venv_before_writing_requirements_txt(
 
     settings = _a_settings(my_dir=tmp_path)
     target = _target()
-    _, handle, _ = pipeline.setup_virtualenv(settings, options, target, requirements)
+    _, handle, _ = pipeline.setup_virtualenv(
+        settings,
+        target,
+        requirements,
+        args=options.args,
+        aliases=options.aliases,
+        stdlib=options.stdlib,
+    )
 
     assert handle is not None
     assert (handle.venv_dir / "requirements.txt").read_text() == "thing-pkg\n"
@@ -223,7 +230,14 @@ def test_setup_virtualenv_writes_the_extra_requirements_version_specifiers(
 
     settings = _a_settings(my_dir=tmp_path)
     target = _target()
-    _, handle, _ = pipeline.setup_virtualenv(settings, options, target, requirements)
+    _, handle, _ = pipeline.setup_virtualenv(
+        settings,
+        target,
+        requirements,
+        args=options.args,
+        aliases=options.aliases,
+        stdlib=options.stdlib,
+    )
 
     assert handle is not None
     assert (
@@ -255,7 +269,12 @@ def test_setup_virtualenv_reports_failure_when_uv_refuses_to_build(
 
     with caplog.at_level(logging.ERROR):
         _, handle, _ = pipeline.setup_virtualenv(
-            settings, options, target, requirements
+            settings,
+            target,
+            requirements,
+            args=options.args,
+            aliases=options.aliases,
+            stdlib=options.stdlib,
         )
 
     # No handle at all: there is no usable environment, which is what
@@ -410,7 +429,14 @@ def test_the_venv_folder_name_and_build_interpreter_come_from_this_run(
     settings, options, target, requirements = _a_wired_run(tmp_path)
     created = _stub_the_venv_away(monkeypatch)
 
-    _, handle, _ = pipeline.setup_virtualenv(settings, options, target, requirements)
+    _, handle, _ = pipeline.setup_virtualenv(
+        settings,
+        target,
+        requirements,
+        args=options.args,
+        aliases=options.aliases,
+        stdlib=options.stdlib,
+    )
 
     assert handle is not None
     assert handle.venv_dir.name == "failed-wiredenv-py3.12-20260101-010203-thing-pkg"
@@ -450,7 +476,14 @@ def test_verify_and_repair_imports_is_handed_the_whole_description_of_the_run(
     monkeypatch.setattr(verify, "verify_and_repair_imports", spy)
 
     assert (
-        pipeline.setup_virtualenv(settings, options, target, requirements)[1]
+        pipeline.setup_virtualenv(
+            settings,
+            target,
+            requirements,
+            args=options.args,
+            aliases=options.aliases,
+            stdlib=options.stdlib,
+        )[1]
         is not None
     )
 
@@ -515,7 +548,14 @@ def test_the_manifest_and_the_final_check_describe_the_venv_after_repair(
     monkeypatch.setattr(verify, "check_packages_in_venv", check_spy)
 
     assert (
-        pipeline.setup_virtualenv(settings, options, target, requirements)[1]
+        pipeline.setup_virtualenv(
+            settings,
+            target,
+            requirements,
+            args=options.args,
+            aliases=options.aliases,
+            stdlib=options.stdlib,
+        )[1]
         is not None
     )
 
@@ -627,7 +667,12 @@ def test_setup_virtualenv_lets_the_repair_pass_name_the_package_it_settled_on(
 
     with caplog.at_level(logging.INFO):
         _, handle, _ = pipeline.setup_virtualenv(
-            settings, options, target, requirements
+            settings,
+            target,
+            requirements,
+            args=options.args,
+            aliases=options.aliases,
+            stdlib=options.stdlib,
         )
 
     assert "repaired-pkg provides the import thing (the seed named it)" in caplog.text
@@ -641,7 +686,12 @@ def test_setup_virtualenv_lets_the_repair_pass_name_the_package_it_settled_on(
 
     with caplog.at_level(logging.INFO):
         _, handle, _ = pipeline.setup_virtualenv(
-            quiet_settings, quiet, target, requirements
+            quiet_settings,
+            target,
+            requirements,
+            args=quiet.args,
+            aliases=quiet.aliases,
+            stdlib=quiet.stdlib,
         )
 
     assert "provides the import" not in caplog.text
@@ -702,7 +752,12 @@ def test_setup_virtualenv_lets_the_manifest_pass_explain_a_rename(
 
     with caplog.at_level(logging.INFO):
         _, handle, _ = pipeline.setup_virtualenv(
-            settings, options, target, requirements
+            settings,
+            target,
+            requirements,
+            args=options.args,
+            aliases=options.aliases,
+            stdlib=options.stdlib,
         )
 
     assert (
@@ -719,7 +774,12 @@ def test_setup_virtualenv_lets_the_manifest_pass_explain_a_rename(
 
     with caplog.at_level(logging.INFO):
         _, handle, _ = pipeline.setup_virtualenv(
-            quiet_settings, quiet, target, requirements
+            quiet_settings,
+            target,
+            requirements,
+            args=quiet.args,
+            aliases=quiet.aliases,
+            stdlib=quiet.stdlib,
         )
 
     assert "renaming it to" not in caplog.text
