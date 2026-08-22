@@ -4,16 +4,56 @@ import argparse
 import contextlib
 import logging
 import os
+import pickle
 import sys
 from pathlib import Path
 
+import emmykit as ek
 import pytest
 
 from veny import alias_index, cli, pipeline, state, stdlib_index
 from veny import settings as settings_module
+from veny.analysis import custom_modules
 from veny.analysis.scan_state import ImportScan
 
 from .test_state_values import a_settings as _a_settings
+
+
+@pytest.mark.parametrize(
+    "timestamp",
+    ["20240101-010101", "20260101-010101"],
+    ids=["before-old-cutoff", "after-old-cutoff"],
+)
+def test_a_pickle_of_string_paths_loads_as_paths(
+    tmp_path: Path, timestamp: str
+) -> None:
+    """A custom-modules pickle written with str paths loads back as Path values.
+
+    Behaviour under test: dict_of_custom_modules() coerces every value it
+    reads out of a cached pickle to a pathlib.Path, regardless of the
+    timestamp encoded in the pickle's own filename.
+
+    Concrete bug this catches: the removed date-comparison used to pick
+    between two arms that both coerced str to Path -- one unconditionally,
+    one only for values that were not already a Path. If the coercion were
+    deleted along with the comparison (rather than just the comparison),
+    this would come back with the plain str veny pickled, not a Path, and
+    every consumer that compares these values against a Path -- like the
+    same-directory import checks -- would silently stop matching. The two
+    timestamps pin that the fix does not depend on the now-removed cutoff
+    date: one predates the old cutoff, one postdates it, and both must
+    coerce identically.
+    """
+    helper = tmp_path / "helper.py"
+    cache = tmp_path / f".veny_custom_modules_{ek.COMPUTER_NAME}_{timestamp}.pkl"
+    cache.write_bytes(pickle.dumps({"helper": str(helper)}))
+
+    loaded = custom_modules.dict_of_custom_modules(
+        _a_settings(cwd=tmp_path), use_cache=True
+    )
+
+    assert loaded == {"helper": helper}
+    assert all(isinstance(v, Path) for v in loaded.values())
 
 
 def _scan(script: Path, custom_modules: dict[str, Path]) -> ImportScan:
