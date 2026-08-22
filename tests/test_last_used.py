@@ -24,6 +24,7 @@ which satisfies both of ``load_last_used_options``'s filters: the
 ``last-used-on-(\\d{8}-\\d{6})`` regex.
 """
 
+import json
 import logging
 import os
 import sys
@@ -32,7 +33,7 @@ from pathlib import Path
 import emmykit as ek
 import pytest
 
-from veny import cli, last_used, pipeline
+from veny import cli, last_used, pipeline, state
 
 from .test_state_values import a_target as _target
 
@@ -436,3 +437,172 @@ def test_the_last_used_adapter_hands_over_this_runs_script_and_cutoff(
     # The cutoff is the class default, not a literal copied into this test:
     # a call site substituting any other value fails the equality above.
     assert options.pathlibcutoff == cli.Options().pathlibcutoff
+
+
+# --- The new record. Behaviour under test, and the bug each test would catch.
+
+
+def test_a_saved_record_is_read_back_as_the_same_paths(tmp_path):
+    # Bug caught: a reader that hands back the JSON strings instead of Paths.
+    # Every consumer compares against a Path or feeds ek.safe_is_file, and a
+    # str fails both silently in the second case.
+    script = tmp_path / "thing.py"
+    script.write_text("import yaml\n")
+    record = state.LastUsed(
+        venv_dir=tmp_path / "myenv-1",
+        venv_python=tmp_path / "myenv-1" / "bin" / "python",
+        timestamp="20260202-020202",
+    )
+
+    last_used.save(record, script_dir=tmp_path, python_script=script, my_name="veny")
+    loaded = last_used.load(
+        script_dir=tmp_path, python_script=script, my_name="veny", rawlog=True
+    )
+
+    assert loaded == record
+    assert isinstance(loaded.venv_dir, Path)
+    assert isinstance(loaded.venv_python, Path)
+
+
+def test_the_record_is_named_for_the_script_and_the_program(tmp_path):
+    # Bug caught: a filename that omits the script's name, which would make
+    # two scripts in one directory share -- and overwrite -- one record.
+    script = tmp_path / "thing.py"
+
+    path = last_used.record_path(tmp_path, script, "veny")
+
+    assert path == tmp_path / ".thing.py-veny-last-used.json"
+
+
+def test_a_second_save_overwrites_rather_than_accumulating(tmp_path):
+    # Bug caught: reinstating the per-run timestamped filename, which is what
+    # littered the user's script directory with one JSON per run.
+    script = tmp_path / "thing.py"
+    first = state.LastUsed(
+        tmp_path / "old", tmp_path / "old" / "python", "20260101-010101"
+    )
+    second = state.LastUsed(
+        tmp_path / "new", tmp_path / "new" / "python", "20260202-020202"
+    )
+
+    last_used.save(first, script_dir=tmp_path, python_script=script, my_name="veny")
+    last_used.save(second, script_dir=tmp_path, python_script=script, my_name="veny")
+
+    assert [p.name for p in tmp_path.glob(".thing.py-veny*")] == [
+        ".thing.py-veny-last-used.json"
+    ]
+    loaded = last_used.load(
+        script_dir=tmp_path, python_script=script, my_name="veny", rawlog=True
+    )
+    assert loaded.venv_dir == tmp_path / "new"
+
+
+def test_a_missing_record_is_none_and_not_an_error(tmp_path):
+    # Bug caught: letting FileNotFoundError out of the reader, which reaches
+    # main() as a traceback on every first run of every script.
+    assert (
+        last_used.load(
+            script_dir=tmp_path,
+            python_script=tmp_path / "thing.py",
+            my_name="veny",
+            rawlog=True,
+        )
+        is None
+    )
+
+
+def test_a_record_written_by_an_earlier_veny_is_ignored(tmp_path):
+    # Bug caught: a reader that globs the directory instead of naming one
+    # file would pick up the old whole-Options dumps, whose tagged payload
+    # this phase deliberately stopped being able to decode. User ruling
+    # 2026-08-21: ignore them, do not migrate them.
+    script = tmp_path / "thing.py"
+    (tmp_path / ".thing.py-veny-last-used-on-20260101-010101.json").write_text(
+        json.dumps(
+            {
+                "venv_dir": {"__type__": "path", "value": str(tmp_path / "old")},
+                "venv_python": {
+                    "__type__": "path",
+                    "value": str(tmp_path / "old" / "python"),
+                },
+                "pathlibcutoff": "20250810-224900",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        last_used.load(
+            script_dir=tmp_path, python_script=script, my_name="veny", rawlog=True
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "{not json",  # invalid JSON
+        "[]",  # valid JSON, wrong shape
+        json.dumps({"venv_dir": "/a"}),  # venv_python missing
+        json.dumps({"venv_dir": "", "venv_python": ""}),  # present but empty
+    ],
+    ids=["invalid", "not-an-object", "missing-key", "empty-values"],
+)
+def test_a_damaged_record_is_none_and_not_a_crash(tmp_path, text):
+    # Bug caught: JSONDecodeError, TypeError or KeyError escaping into main --
+    # or, worse, a LastUsed carrying Path("") that every later check treats as
+    # a real directory.
+    script = tmp_path / "thing.py"
+    last_used.record_path(tmp_path, script, "veny").write_text(text, encoding="utf-8")
+
+    assert (
+        last_used.load(
+            script_dir=tmp_path, python_script=script, my_name="veny", rawlog=True
+        )
+        is None
+    )
+
+
+def test_load_venv_python_returns_the_recorded_interpreter(tmp_path):
+    # Bug caught: dropping the existence check, which would hand
+    # --feeling-lucky a deleted interpreter and turn a clean fallback into a
+    # FileNotFoundError from subprocess.
+    script = tmp_path / "thing.py"
+    interpreter = tmp_path / "myenv-1" / "bin" / "python"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_text("#!/bin/sh\n")
+    last_used.save(
+        state.LastUsed(interpreter.parent.parent, interpreter, "20260202-020202"),
+        script_dir=tmp_path,
+        python_script=script,
+        my_name="veny",
+    )
+
+    assert (
+        last_used.load_venv_python(
+            script_dir=tmp_path, python_script=script, my_name="veny", rawlog=True
+        )
+        == interpreter
+    )
+
+
+def test_load_venv_python_is_none_when_the_interpreter_is_gone(tmp_path, caplog):
+    # Bug caught: returning a Path to a deleted venv, which is the whole
+    # reason the old reader called ek.safe_is_file.
+    script = tmp_path / "thing.py"
+    gone = tmp_path / "deleted-env" / "bin" / "python"
+    last_used.save(
+        state.LastUsed(gone.parent.parent, gone, "20260202-020202"),
+        script_dir=tmp_path,
+        python_script=script,
+        my_name="veny",
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = last_used.load_venv_python(
+            script_dir=tmp_path, python_script=script, my_name="veny", rawlog=False
+        )
+
+    assert result is None
+    assert "no longer valid" in caplog.text

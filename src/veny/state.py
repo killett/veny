@@ -132,3 +132,32 @@ class VenvHandle:
             venv_python=p / "bin" / "python",
             requirements_file=p / "requirements.txt",
         )
+
+
+@dataclass(frozen=True)
+class LastUsed:
+    """The one thing veny remembers between runs.
+
+    Frozen, like every other product in this module: it is written once at
+    the end of a successful run and only read on the next one.
+
+    Phase 4b wrote this record itself rather than persisting an ek.Options,
+    which is what coupled veny's state object to emmykit's reader and writer.
+    The design's state-model listing puts LastUsed in settings.py; it lives
+    here with its siblings instead, because settings.py holds the run's
+    invariants and this is a product.
+
+    Attributes:
+        venv_dir:    The environment the last successful run used.
+        venv_python: That environment's interpreter -- recorded rather than
+                     derived, so a reader need not know how a venv is laid
+                     out on this platform.
+        timestamp:   The run's stamp, in the same "YYYYmmdd-HHMMSS" format
+                     Target carries. Diagnostic: nothing selects on it now
+                     that there is one record per script rather than one per
+                     run.
+    """
+
+    venv_dir: Path
+    venv_python: Path
+    timestamp: str
