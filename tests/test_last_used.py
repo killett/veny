@@ -24,6 +24,7 @@ which satisfies both of ``load_last_used_options``'s filters: the
 ``last-used-on-(\\d{8}-\\d{6})`` regex.
 """
 
+import argparse
 import json
 import logging
 import os
@@ -35,6 +36,7 @@ import pytest
 
 from veny import cli, last_used, pipeline, state
 
+from .test_state_values import a_settings
 from .test_state_values import a_target as _target
 
 
@@ -608,3 +610,24 @@ def test_load_venv_python_is_none_when_the_interpreter_is_gone(tmp_path, caplog)
 
     assert result is None
     assert "no longer valid" in caplog.text
+
+
+def test_blank_slate_deletes_the_new_last_used_record(tmp_path, monkeypatch):
+    # Bug caught: a record filename that no longer matches blank_slate's
+    # ".{...}-veny-...json" test, which would leave veny's own dotfiles behind
+    # after the user asked for a clean slate.
+    script = tmp_path / "thing.py"
+    record = last_used.save(
+        state.LastUsed(
+            tmp_path / "env", tmp_path / "env" / "python", "20260202-020202"
+        ),
+        script_dir=tmp_path,
+        python_script=script,
+        my_name="veny",
+    )
+    assert record.exists()
+    settings_for_run = a_settings(my_dir=tmp_path / "veny-home", cwd=tmp_path)
+
+    pipeline.blank_slate(settings_for_run, argparse.Namespace(y=True))
+
+    assert not record.exists()

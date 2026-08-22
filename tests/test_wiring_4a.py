@@ -687,10 +687,10 @@ def test_the_custom_module_cache_is_on_when_neither_flag_is_given(
 
 
 def test_the_saved_record_carries_the_venv_the_run_actually_used(monkeypatch, tmp_path):
-    """The last-used JSON must contain the venv, or nothing can read it back.
+    """The last-used record must contain the venv, or nothing can read it back.
 
-    Behaviour under test: what pipeline.run copies onto the Options before
-    ek.save_options_to_json, which serializes that object's whole __dict__.
+    Behaviour under test: what pipeline.run hands to last_used.save at the
+    end of a run.
 
     Concrete bug this catches: phase 4a's Task 6 moved venv_dir and
     venv_python onto the frozen VenvHandle and deleted them from Options. The
@@ -699,15 +699,14 @@ def test_the_saved_record_carries_the_venv_the_run_actually_used(monkeypatch, tm
     last_used.load_last_used_venv_python's `hasattr` check answered False and
     --feeling-lucky could never match again, on any script, forever. Found by
     scripts/differential_4a.py, which drives main() in both trees; this test
-    is what closes it in-process. The five fields together are the whole
-    record: three name the file, two are the payload.
+    is what closes it in-process. Phase 4b replaced the Options copy-back
+    with veny's own LastUsed record; this test now reads that record off
+    disk instead of inspecting what was handed to the old writer.
     """
     _a_run(monkeypatch, tmp_path, argv=("--rawlog", "--no-cache"))
     built = tmp_path / "home" / "veny" / "myenv-py3.12-20260101-010203-thing-pkg"
-    saved: list[Any] = []
-    monkeypatch.setattr(
-        ek, "save_options_to_json", lambda options: saved.append(options)
-    )
+    targets: list[state.Target] = []
+    handles: list[state.VenvHandle] = []
     monkeypatch.setattr(
         pipeline,
         "list_packages",
@@ -725,24 +724,27 @@ def test_the_saved_record_carries_the_venv_the_run_actually_used(monkeypatch, tm
             ),
         ),
     )
-    monkeypatch.setattr(
-        pipeline,
-        "setup_virtualenv",
-        lambda settings, target, requirements, **kwargs: (
-            requirements,
-            state.VenvHandle.for_dir(built),
-            True,
-        ),
-    )
+
+    def setup_spy(settings, target, requirements, **kwargs):
+        targets.append(target)
+        handle = state.VenvHandle.for_dir(built)
+        handles.append(handle)
+        return requirements, handle, True
+
+    monkeypatch.setattr(pipeline, "setup_virtualenv", setup_spy)
 
     cli.main()
 
-    assert len(saved) == 1
-    record = saved[0]
-    # The payload the reader recovers.
-    assert record.venv_dir == built
-    assert record.venv_python == built / "bin" / "python"
-    # The three the writer names the file from.
-    assert record.python_script == (tmp_path / "script.py").resolve()
-    assert record.script_dir == (tmp_path / "script.py").parent.absolute()
-    assert record.timestamp
+    target = targets[0]
+    handle = handles[0]
+    record = last_used.load(
+        script_dir=target.script_dir,
+        python_script=target.python_script,
+        my_name="veny",
+        rawlog=True,
+    )
+    # Identity of the environment, not just its existence: the 4a regression
+    # this test was written for wrote a record with no venv in it at all.
+    assert record is not None
+    assert record.venv_python == handle.venv_python
+    assert record.venv_dir == handle.venv_dir

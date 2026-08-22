@@ -12,11 +12,12 @@ the environment. Nothing here writes its product onto the object it was
 handed -- the one exception is `ImportScan`, which is an accumulator by design
 and which `analysis/scan.py` mutates in place as it walks.
 
-`Options` survives in exactly two places, both of them persistence:
-`_load_last_used` hands it to emmykit's reader as a template, and `run` copies
-five fields onto it just before `ek.save_options_to_json`. Both are typed
-against `ek.Options` rather than against a payload, which is the whole of why
-the class is still alive; phase 4b breaks that coupling and deletes it.
+`Options` survives in exactly one place, persistence: `_load_last_used` hands
+it to emmykit's reader as a template. It is typed against `ek.Options` rather
+than against a payload, which is the whole of why the class is still alive;
+`run` now writes its own `state.LastUsed` record through `last_used.save`
+instead, and phase 4b's remaining tasks finish breaking the reader's coupling
+and delete the class.
 
 Everything here calls its collaborators through the module object
 (`verify.check_packages_in_venv(...)`, never `from .verify import ...`), which
@@ -976,18 +977,19 @@ def run(
                     )
                 )
 
-            # emmykit's writer builds its filename off the Options, not off a
-            # payload, so the five fields the record is made of are copied
-            # across here -- at the save, not carried on Options for the whole
-            # run. The first three name the file; the last two ARE the payload
-            # the reader recovers, and leaving them out is what phase 4a's
-            # differential caught. Phase 4b replaces all of this with veny's
-            # own LastUsed record.
-            options.python_script = target.python_script
-            options.script_dir = target.script_dir
-            options.timestamp = target.timestamp
-            options.venv_dir = handle.venv_dir
-            options.venv_python = handle.venv_python
-            ek.save_options_to_json(options)
+            # What the next run needs, and nothing else: which environment
+            # ran this script and which interpreter is inside it. Written
+            # after the failed- rename above, so the recorded folder is the
+            # one that exists on disk.
+            last_used.save(
+                state.LastUsed(
+                    venv_dir=handle.venv_dir,
+                    venv_python=handle.venv_python,
+                    timestamp=target.timestamp,
+                ),
+                script_dir=target.script_dir,
+                python_script=target.python_script,
+                my_name=settings.my_name,
+            )
 
     return script_exit_code
