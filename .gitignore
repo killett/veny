@@ -28,3 +28,8 @@ logs/
 # Packaging build outputs
 dist/
 build/
+
+# Local Claude Code harness config -- session hooks and settings for whoever
+# happens to be driving the agent, not something this project ships. CLAUDE.md
+# at the repo root IS tracked: it is the project's own instructions.
+.claude/
