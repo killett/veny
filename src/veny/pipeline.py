@@ -571,7 +571,7 @@ def setup_virtualenv(
     options: run_options.Options,
     target: state.Target,
     requirements: state.Requirements,
-) -> tuple[state.Requirements, bool]:
+) -> tuple[state.Requirements, state.VenvHandle | None, bool]:
     """Setup a virtual environment and install packages.
 
     Args:
@@ -582,10 +582,13 @@ def setup_virtualenv(
             and returned again with the repair pass folded in.
 
     Returns:
-        The requirements after the repair pass, and whether the environment
-        was built with every one of them installed and verified. False there
-        means uv refused to build it, or a requirement could not be made
-        importable in it -- `pipeline.run` reports that and returns 1.
+        Three values: the requirements after the repair pass; the handle for
+        the environment, or None if there is no usable one -- uv refused to
+        build it, or a requirement could not be made importable in it, which
+        is what `setup_virtualenv` returning False used to mean and what
+        `pipeline.run` reports as status 1; and whether every requirement
+        installed, which `run` needs separately because it decides the
+        "failed-" rename even on the success path.
     """
     # The folder name is a cheap prefilter for the cache search; veny_manifest.json
     # inside the venv is the authority. venv_cache owns the encoding so a
@@ -598,40 +601,36 @@ def setup_virtualenv(
         pip_names=[record.pip_name for record in requirements.uninstalled],
     )
     # Create a virtual environment directory that starts with "failed" in case the process fails. Only remove the "failed" part if this process completes successfully.
-    options.set_venv_dir(settings.my_dir / f"failed-{folder_name}")
+    handle = state.VenvHandle.for_dir(settings.my_dir / f"failed-{folder_name}")
 
     if not settings.rawlog:
         logging.info("Creating virtual environment...")
-    assert options.venv_dir is not None, "options.venv_dir must be set"
     if not environment.create_venv(
-        options.venv_dir, environment.venv_build_interpreter(target.python_command)
+        handle.venv_dir, environment.venv_build_interpreter(target.python_command)
     ):
         logging.error(
-            "uv could not create the virtual environment at %s.", options.venv_dir
+            "uv could not create the virtual environment at %s.", handle.venv_dir
         )
-        return requirements, False
+        return requirements, None, False
     if not settings.rawlog:
         logging.info("Virtual environment created.")
 
     # `uv venv` refuses to build into a directory that already exists AND is
-    # non-empty. set_venv_dir above already created options.venv_dir (mkdir),
-    # so the requirements file must not land inside it until create_venv has
-    # already succeeded against that (empty) directory -- writing it earlier
-    # made every fresh build crash with CalledProcessError.
-    assert options.requirements_file is not None, (
-        "options.requirements_file must be set"
-    )
+    # non-empty. VenvHandle.for_dir above already created the directory
+    # (mkdir), so the requirements file must not land inside it until
+    # create_venv has already succeeded against that (empty) directory --
+    # writing it earlier made every fresh build crash with CalledProcessError.
     environment.write_requirements_file_with_extras(
-        options.requirements_file,
+        handle.requirements_file,
         (record.pip_name for record in requirements.uninstalled),
         requirements.extra_requirements,
     )
 
     result = environment.run_uv_pip(
-        options.venv_python, "install", "-r", os.fspath(options.requirements_file)
+        handle.venv_python, "install", "-r", os.fspath(handle.requirements_file)
     )
-    options.install_succeeded = result is not None and result.returncode == 0
-    if not options.install_succeeded:
+    install_succeeded = result is not None and result.returncode == 0
+    if not install_succeeded:
         # uv names the package it could not satisfy, so there is nothing an
         # individual sweep would add. The venv keeps its "failed-" prefix, and
         # verify_and_repair_imports below gets its turn on what did install.
@@ -650,13 +649,9 @@ def setup_virtualenv(
         requirements.extra_requirements,
         getattr(options.args, "reqs", False),
     )
-    # Re-narrows: mypy loses the narrowing established above across the
-    # intervening environment.run_uv_pip / logging / verify.source_import_names
-    # calls, so this looks redundant but is load-bearing.
-    assert options.requirements_file is not None, (
-        "options.requirements_file must be set"
-    )
-    assert options.venv_python is not None, "options.venv_python must be set"
+    # The two "load-bearing" re-narrowing asserts that stood here are gone:
+    # VenvHandle's fields are non-optional Paths, so there is nothing left for
+    # mypy to lose across the intervening calls.
     # A rebind, not a mutation: Requirements is a value, so the pre-repair
     # one still describes what was first attempted. The manifest below is
     # written from the post-repair value on purpose -- it must record what
@@ -665,8 +660,8 @@ def setup_virtualenv(
         requirements,
         uninstalled=frozenset(
             verify.verify_and_repair_imports(
-                venv_python=options.venv_python,
-                requirements_file=options.requirements_file,
+                venv_python=handle.venv_python,
+                requirements_file=handle.requirements_file,
                 uninstalled=set(requirements.uninstalled),
                 extra_requirements=requirements.extra_requirements,
                 source_names=source_names,
@@ -678,11 +673,10 @@ def setup_virtualenv(
     # The manifest records the venv's final state, so it is written after any
     # repair -- it must describe what really provided each import, not what was
     # first attempted.
-    assert options.venv_dir is not None, "options.venv_dir must be set"
-    options.set_venv_dir(
+    handle = state.VenvHandle.for_dir(
         cache_search.record_venv_state(
-            options.venv_dir,
-            venv_python=options.venv_python,
+            handle.venv_dir,
+            venv_python=handle.venv_python,
             venv_name=settings.venv_name,
             timestamp=target.timestamp,
             run_tag=run_tag,
@@ -693,12 +687,12 @@ def setup_virtualenv(
         )
     )
     # Check that all packages can be imported in the venv.
-    assert options.venv_dir is not None, "options.venv_dir must be set"
-    return requirements, verify.check_packages_in_venv(
-        environment.venv_python_for(options.venv_dir),
+    all_importable = verify.check_packages_in_venv(
+        environment.venv_python_for(handle.venv_dir),
         uninstalled=set(requirements.uninstalled),
         source_names=source_names,
     )
+    return requirements, (handle if all_importable else None), install_succeeded
 
 
 def run(
@@ -878,6 +872,8 @@ def run(
                 )
             script_exit_code = 1
     else:
+        handle: state.VenvHandle | None = None
+        install_succeeded = False
         if getattr(options.args, "no_cache", False):
             match_dir = None
         else:
@@ -906,12 +902,10 @@ def run(
                 logging.info(
                     "Creating new virtual environment '%s'...", settings.venv_name
                 )
-            requirements, built = setup_virtualenv(
+            requirements, handle, install_succeeded = setup_virtualenv(
                 settings, options, target, requirements
             )
-            if built:
-                match_dir = options.venv_dir
-            else:
+            if handle is None:
                 # This was emmykit's critical-error helper, called with
                 # choose_breakpoint=True: it logged this same message at this
                 # same level and then opened a pdb prompt -- a debugger in the
@@ -925,15 +919,20 @@ def run(
         else:
             if not settings.rawlog:
                 logging.info("Using existing virtual environment: %s", match_dir)
+            handle = state.VenvHandle.for_dir(match_dir)
+            # A reused venv never carries a "failed-" prefix -- the cache
+            # search only offers folders that dropped it -- and
+            # setup_virtualenv never ran, which is what left
+            # options.install_succeeded False here before phase 4a.
+            install_succeeded = False
 
-        if match_dir:
-            options.set_venv_dir(match_dir)
+        if handle is not None:
             start_venv_time = dt.datetime.now()
             elapsed_time = start_venv_time - start_time
             if not settings.rawlog:
                 logging.info("Elapsed time: %s", elapsed_time)
             script_exit_code = run_script(
-                options.venv_python,
+                handle.venv_python,
                 target.python_script,
                 list(target.script_args),
                 rawlog=settings.rawlog,
@@ -948,16 +947,12 @@ def run(
                 )
             if script_exit_code != 0 and not settings.rawlog:
                 logging.error("Script exited with status %d", script_exit_code)
-            assert options.venv_dir is not None, "options.venv_dir must be set"
-            if (
-                options.venv_dir.name.startswith("failed-")
-                and options.install_succeeded
-            ):
+            if handle.venv_dir.name.startswith("failed-") and install_succeeded:
                 # If the program has made it to this point, it has run successfully, so the venv directory can be renamed because it DIDN'T fail.
-                options.set_venv_dir(
+                handle = state.VenvHandle.for_dir(
                     cache_search.rename_venv(
-                        options.venv_dir,
-                        options.venv_dir.name.removeprefix("failed-"),
+                        handle.venv_dir,
+                        handle.venv_dir.name.removeprefix("failed-"),
                     )
                 )
 

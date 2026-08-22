@@ -10,6 +10,7 @@ from veny import (
     cache_search,
     environment,
     pipeline,
+    state,
     venv_cache,
     verify,
 )
@@ -277,7 +278,7 @@ def test_setup_virtualenv_verifies_every_import_before_reporting_success(
     # versions, which this test's fake subprocess.run cannot answer -- it is
     # unrelated to the ordering this test checks, so it is stubbed out too.
     # It returns the (possibly renamed) venv directory now, which
-    # setup_virtualenv feeds straight to options.set_venv_dir, so the stub
+    # setup_virtualenv feeds straight to VenvHandle.for_dir, so the stub
     # hands back the directory it was given rather than None.
     monkeypatch.setattr(
         cache_search, "record_venv_state", lambda venv_dir, **kwargs: venv_dir
@@ -287,7 +288,7 @@ def test_setup_virtualenv_verifies_every_import_before_reporting_success(
         pipeline.setup_virtualenv(
             _a_settings(my_dir=tmp_path), options, _target(), requirements
         )[1]
-        is True
+        is not None
     )
     # Verification has to happen before the gate that drops the "failed-"
     # prefix, or its repairs cannot affect the answer.
@@ -299,9 +300,7 @@ def test_the_repair_installer_reports_failure_instead_of_exiting(monkeypatch, tm
     # return code, logs the error and returns False rather than raising or
     # exiting. resolve_and_verify's installer must not be able to end the
     # run: one unverifiable import is not a reason to kill everything.
-    options = veny.Options()
-    options.my_dir = tmp_path
-    options.set_venv_dir(tmp_path / "venv")
+    handle = state.VenvHandle.for_dir(tmp_path / "venv")
 
     def fake_run(command, *args, **kwargs):
         return subprocess.CompletedProcess(
@@ -311,7 +310,7 @@ def test_the_repair_installer_reports_failure_instead_of_exiting(monkeypatch, tm
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     assert (
-        environment.install_into_venv(options.venv_python, "nonexistent-package")
+        environment.install_into_venv(handle.venv_python, "nonexistent-package")
         is False
     )
 

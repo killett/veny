@@ -1,8 +1,13 @@
 """The products one veny run's stages hand to the next."""
 
+from __future__ import annotations
+
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+
+import emmykit as ek
 
 from .alias_index import ResolvedImport
 
@@ -82,3 +87,48 @@ class Requirements:
             counts towards.
         """
         return len(self.all_imports)
+
+
+@dataclass(frozen=True)
+class VenvHandle:
+    """One virtual environment, and the two paths derived wholly from it.
+
+    Frozen because the three paths must move together: repointing venv_dir
+    after a rename while venv_python still names the old directory is exactly
+    the drift Options.set_venv_dir's three coupled writes existed to prevent.
+    A rename produces a new handle via for_dir, never an edit to this one.
+
+    Attributes:
+        venv_dir:          The environment's directory.
+        venv_python:       Its interpreter. NOT resolved -- see for_dir.
+        requirements_file: The requirements.txt written inside it.
+    """
+
+    venv_dir: Path
+    venv_python: Path
+    requirements_file: Path
+
+    @classmethod
+    def for_dir(cls, venv_dir: str | os.PathLike[str]) -> VenvHandle:
+        """Derive a handle from a venv directory, creating the directory.
+
+        The mkdir is not incidental: `uv venv` needs the directory to exist
+        and be empty, which is also why nothing may write into it until
+        environment.create_venv has succeeded against it.
+
+        Args:
+            venv_dir: Where the environment lives, or will.
+
+        Returns:
+            The handle for that directory.
+        """
+        p = ek.ensure_path(venv_dir)
+        p.mkdir(parents=True, exist_ok=True)
+        return cls(
+            venv_dir=p,
+            # Do NOT resolve() this symlink path: in a real venv it points at
+            # the base interpreter, and a resolved path would run the system
+            # python with none of the venv's packages.
+            venv_python=p / "bin" / "python",
+            requirements_file=p / "requirements.txt",
+        )

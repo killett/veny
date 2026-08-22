@@ -386,3 +386,69 @@ def test_split_imports_returns_requirements_and_writes_nothing_back(
     assert not hasattr(cli.Options(), "uninstalled_imports")
     assert not hasattr(cli.Options(), "bad_imports")
     assert not hasattr(cli.Options(), "all_imports")
+
+
+def test_venv_handle_does_not_resolve_the_interpreter_symlink(tmp_path: Path) -> None:
+    """venv_python must stay inside the venv, symlink and all.
+
+    Behaviour under test: the three paths VenvHandle.for_dir derives.
+
+    Concrete bug this catches: calling .resolve() on venv_dir/"bin"/"python".
+    In a real venv that symlink points at the base interpreter, so a resolved
+    path runs the system python with none of the venv's packages -- every
+    installed requirement would look missing at run time, and veny would
+    rebuild the environment on every invocation.
+
+    The interpreter symlink is real here, and has to be: .resolve() on a path
+    that does not exist returns the path unchanged, so a fixture without the
+    symlink cannot tell the bug from the fix. Measured 2026-08-21 -- the
+    first version of this test passed under the mutation.
+    """
+    base = tmp_path / "base" / "bin"
+    base.mkdir(parents=True)
+    (base / "python3.12").write_text("#!/bin/sh\n")
+    venv_dir = tmp_path / "myenv-py3.12-20260821-120000"
+    (venv_dir / "bin").mkdir(parents=True)
+    (venv_dir / "bin" / "python").symlink_to(base / "python3.12")
+
+    handle = state.VenvHandle.for_dir(venv_dir)
+
+    assert handle.venv_python.parent.parent == handle.venv_dir
+    assert handle.venv_python.name == "python"
+    assert handle.venv_python == venv_dir / "bin" / "python"
+    # The decisive one: resolving would land in base/bin, outside the venv.
+    assert handle.venv_python.resolve() != handle.venv_python
+    assert handle.requirements_file == handle.venv_dir / "requirements.txt"
+
+
+def test_venv_handle_creates_the_directory(tmp_path: Path) -> None:
+    """for_dir must mkdir, as set_venv_dir did.
+
+    Behaviour under test: the side effect for_dir inherited.
+
+    Concrete bug this catches: dropping the mkdir. `uv venv` needs the
+    directory to exist and be empty; without the mkdir the requirements write
+    that follows a successful build fails with FileNotFoundError instead.
+    """
+    target_dir = tmp_path / "does" / "not" / "exist" / "yet"
+
+    handle = state.VenvHandle.for_dir(target_dir)
+
+    assert handle.venv_dir.is_dir()
+
+
+def test_venv_handle_is_frozen(tmp_path: Path) -> None:
+    """The three paths are derived together and must move together.
+
+    Behaviour under test: VenvHandle's immutability.
+
+    Concrete bug this catches: a mutable VenvHandle would let a caller
+    repoint venv_dir after a rename while venv_python still named the old
+    path -- the exact drift set_venv_dir's three coupled writes existed to
+    prevent, and the reason a rename produces a new handle rather than an
+    edit.
+    """
+    handle = state.VenvHandle.for_dir(tmp_path / "v")
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        handle.venv_dir = tmp_path / "other"  # type: ignore[misc]

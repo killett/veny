@@ -10,7 +10,6 @@ nothing new should be added here in the meantime.
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 
 import emmykit as ek
@@ -45,10 +44,6 @@ class Options(ek.Options):
         self.pathlibcutoff: str = "20250810-224900"
         self.current_pip_version: str = ""
         self.new_pip_version: str = ""
-        self.venv_dir: Path | None = None
-        self.venv_python: Path | None = None
-        self.requirements_file: Path | None = None
-        self.install_succeeded: bool = False
         self.rawlog: bool = False
         # Standard-library membership is derived from a real interpreter, never hardcoded.
         # Replaced in run() once the target's python_command is known, so that truth comes from
@@ -63,11 +58,3 @@ class Options(ek.Options):
         # probe subprocess. See
         # docs/superpowers/specs/2026-08-12-module-alias-resolver-design.md
         self.aliases: alias_index.AliasIndex = alias_index.empty(self.my_dir)
-
-    def set_venv_dir(self, venv_dir: str | os.PathLike[str]) -> None:
-        """Set the directory for the virtual environment."""
-        p = ek.ensure_path(venv_dir)
-        self.venv_dir = p
-        self.venv_python = p / "bin" / "python"  # Do NOT resolve() this symlink path
-        self.requirements_file = p / "requirements.txt"
-        p.mkdir(parents=True, exist_ok=True)  # Create the directory if it doesn't exist

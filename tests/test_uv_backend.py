@@ -107,12 +107,12 @@ def test_create_venv_reports_success_when_uv_returns_zero(monkeypatch, tmp_path)
 def test_setup_virtualenv_builds_the_venv_before_writing_requirements_txt(
     monkeypatch, tmp_path
 ):
-    """setup_virtualenv must not write requirements.txt into options.venv_dir
+    """setup_virtualenv must not write requirements.txt into handle.venv_dir
     until create_venv has already built the environment there.
 
-    Options.set_venv_dir (called by setup_virtualenv before either
+    VenvHandle.for_dir (called by setup_virtualenv before either
     write_requirements_file_with_extras or create_venv run) creates
-    options.venv_dir with mkdir(exist_ok=True), so create_venv always sees a
+    handle.venv_dir with mkdir(exist_ok=True), so create_venv always sees a
     directory that already exists. `uv venv` tolerates an existing directory
     only while it is empty -- it refuses (CalledProcessError) once anything
     has been written into it. If write_requirements_file_with_extras ran
@@ -147,8 +147,8 @@ def test_setup_virtualenv_builds_the_venv_before_writing_requirements_txt(
     )
     monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: True)
     # record_venv_state returns the (possibly renamed) venv directory now, and
-    # setup_virtualenv feeds that return value straight to options.set_venv_dir.
-    # A stub returning None would set_venv_dir(None) and mkdir a path built from
+    # setup_virtualenv feeds that return value straight to VenvHandle.for_dir.
+    # A stub returning None would call for_dir(None) and mkdir a path built from
     # it, so the stub hands back the directory it was given.
     monkeypatch.setattr(
         cache_search, "record_venv_state", lambda venv_dir, **kwargs: venv_dir
@@ -156,11 +156,11 @@ def test_setup_virtualenv_builds_the_venv_before_writing_requirements_txt(
 
     settings = _a_settings(my_dir=tmp_path)
     target = _target()
-    assert pipeline.setup_virtualenv(settings, options, target, requirements)[1] is True
+    _, handle, _ = pipeline.setup_virtualenv(settings, options, target, requirements)
 
-    assert options.venv_dir is not None
-    assert (options.venv_dir / "requirements.txt").read_text() == "thing-pkg\n"
-    assert (options.venv_dir / "bin" / "python").exists()
+    assert handle is not None
+    assert (handle.venv_dir / "requirements.txt").read_text() == "thing-pkg\n"
+    assert (handle.venv_dir / "bin" / "python").exists()
 
 
 def test_setup_virtualenv_writes_the_extra_requirements_version_specifiers(
@@ -195,7 +195,7 @@ def test_setup_virtualenv_writes_the_extra_requirements_version_specifiers(
         extra_requirements={"thing-pkg": ">=2.0"},
     )
     # The venv itself is a subprocess boundary and is not what this test is
-    # about; set_venv_dir has already created the directory the file lands in.
+    # about; VenvHandle.for_dir has already created the directory the file lands in.
     monkeypatch.setattr(environment, "create_venv", lambda target, python="": True)
     monkeypatch.setattr(
         environment,
@@ -214,8 +214,8 @@ def test_setup_virtualenv_writes_the_extra_requirements_version_specifiers(
     )
     monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: True)
     # record_venv_state returns the (possibly renamed) venv directory now, and
-    # setup_virtualenv feeds that return value straight to options.set_venv_dir.
-    # A stub returning None would set_venv_dir(None) and mkdir a path built from
+    # setup_virtualenv feeds that return value straight to VenvHandle.for_dir.
+    # A stub returning None would call for_dir(None) and mkdir a path built from
     # it, so the stub hands back the directory it was given.
     monkeypatch.setattr(
         cache_search, "record_venv_state", lambda venv_dir, **kwargs: venv_dir
@@ -223,11 +223,11 @@ def test_setup_virtualenv_writes_the_extra_requirements_version_specifiers(
 
     settings = _a_settings(my_dir=tmp_path)
     target = _target()
-    pipeline.setup_virtualenv(settings, options, target, requirements)
+    _, handle, _ = pipeline.setup_virtualenv(settings, options, target, requirements)
 
-    assert options.venv_dir is not None
+    assert handle is not None
     assert (
-        options.venv_dir / "requirements.txt"
+        handle.venv_dir / "requirements.txt"
     ).read_text() == "thing-pkg>=2.0\nzeta-pkg\n"
 
 
@@ -254,18 +254,21 @@ def test_setup_virtualenv_reports_failure_when_uv_refuses_to_build(
     monkeypatch.setattr(environment, "create_venv", lambda target, python="": False)
 
     with caplog.at_level(logging.ERROR):
-        target = _target()
-        _, built = pipeline.setup_virtualenv(settings, options, target, requirements)
+        _, handle, _ = pipeline.setup_virtualenv(
+            settings, options, target, requirements
+        )
 
-    assert built is False
-    assert options.venv_dir is not None
-    assert (
-        f"uv could not create the virtual environment at {options.venv_dir}."
-        in caplog.text
-    )
+    # No handle at all: there is no usable environment, which is what
+    # setup_virtualenv returning False used to mean.
+    assert handle is None
+    # The refused directory is named in the message, and is where the
+    # requirements file would have landed. The handle is gone, so the path is
+    # rebuilt from what for_dir was given.
+    refused = tmp_path / "failed-wiredenv-py3.12-20260101-010203-thing-pkg"
+    assert f"uv could not create the virtual environment at {refused}." in caplog.text
     # The early return has to happen *before* the requirements file is written:
     # writing it would leave a directory that looks like a half-built venv.
-    assert not (options.venv_dir / "requirements.txt").exists()
+    assert not (refused / "requirements.txt").exists()
 
 
 def test_create_venv_is_given_a_resolved_interpreter_path_not_a_bare_command(
@@ -407,12 +410,12 @@ def test_the_venv_folder_name_and_build_interpreter_come_from_this_run(
     settings, options, target, requirements = _a_wired_run(tmp_path)
     created = _stub_the_venv_away(monkeypatch)
 
-    assert pipeline.setup_virtualenv(settings, options, target, requirements)[1] is True
+    _, handle, _ = pipeline.setup_virtualenv(settings, options, target, requirements)
 
-    assert options.venv_dir is not None
-    assert options.venv_dir.name == "failed-wiredenv-py3.12-20260101-010203-thing-pkg"
+    assert handle is not None
+    assert handle.venv_dir.name == "failed-wiredenv-py3.12-20260101-010203-thing-pkg"
     assert created == [
-        (options.venv_dir, environment.venv_build_interpreter(target.python_command))
+        (handle.venv_dir, environment.venv_build_interpreter(target.python_command))
     ]
     # Not sys.executable: an empty python_command would silently resolve to it.
     assert created[0][1] == "python-under-test-not-on-path"
@@ -446,10 +449,13 @@ def test_verify_and_repair_imports_is_handed_the_whole_description_of_the_run(
 
     monkeypatch.setattr(verify, "verify_and_repair_imports", spy)
 
-    assert pipeline.setup_virtualenv(settings, options, target, requirements)[1] is True
+    assert (
+        pipeline.setup_virtualenv(settings, options, target, requirements)[1]
+        is not None
+    )
 
-    # Literal paths, not options.venv_python / options.requirements_file:
-    # setup_virtualenv writes those two fields itself (via set_venv_dir), so
+    # Literal paths, not handle.venv_python / options.requirements_file:
+    # setup_virtualenv derives those two paths itself (via VenvHandle.for_dir), so
     # asserting against them would compare the call site to its own output and
     # pass however the folder name was built.
     built = tmp_path / "failed-wiredenv-py3.12-20260101-010203-thing-pkg"
@@ -508,12 +514,15 @@ def test_the_manifest_and_the_final_check_describe_the_venv_after_repair(
     monkeypatch.setattr(cache_search, "record_venv_state", record_spy)
     monkeypatch.setattr(verify, "check_packages_in_venv", check_spy)
 
-    assert pipeline.setup_virtualenv(settings, options, target, requirements)[1] is True
+    assert (
+        pipeline.setup_virtualenv(settings, options, target, requirements)[1]
+        is not None
+    )
 
-    # Literal paths, not options.venv_dir / options.venv_python, for the same
+    # Literal paths, not handle.venv_dir / handle.venv_python, for the same
     # reason the sibling test above spells them out: record_spy echoes its
     # venv_dir argument back and setup_virtualenv assigns that echo to
-    # options.venv_dir (via set_venv_dir), so asserting against options.* here
+    # handle.venv_dir (via VenvHandle.for_dir), so asserting against options.* here
     # would compare the call site to its own output and pass however the
     # folder name was built. Measured: a wrong `timestamp=` at
     # setup_virtualenv's build_folder_name left this test green before this
@@ -617,7 +626,9 @@ def test_setup_virtualenv_lets_the_repair_pass_name_the_package_it_settled_on(
     _a_repair_that_succeeds(monkeypatch)
 
     with caplog.at_level(logging.INFO):
-        pipeline.setup_virtualenv(settings, options, target, requirements)
+        _, handle, _ = pipeline.setup_virtualenv(
+            settings, options, target, requirements
+        )
 
     assert "repaired-pkg provides the import thing (the seed named it)" in caplog.text
 
@@ -629,7 +640,9 @@ def test_setup_virtualenv_lets_the_repair_pass_name_the_package_it_settled_on(
     _a_repair_that_succeeds(monkeypatch)
 
     with caplog.at_level(logging.INFO):
-        pipeline.setup_virtualenv(quiet_settings, quiet, target, requirements)
+        _, handle, _ = pipeline.setup_virtualenv(
+            quiet_settings, quiet, target, requirements
+        )
 
     assert "provides the import" not in caplog.text
 
@@ -688,7 +701,9 @@ def test_setup_virtualenv_lets_the_manifest_pass_explain_a_rename(
     _a_manifest_pass_that_renames(monkeypatch, tmp_path, repaired)
 
     with caplog.at_level(logging.INFO):
-        pipeline.setup_virtualenv(settings, options, target, requirements)
+        _, handle, _ = pipeline.setup_virtualenv(
+            settings, options, target, requirements
+        )
 
     assert (
         "renaming it to failed-wiredenv-py3.12-20260101-010203-repaired-pkg"
@@ -703,6 +718,8 @@ def test_setup_virtualenv_lets_the_manifest_pass_explain_a_rename(
     _a_manifest_pass_that_renames(monkeypatch, tmp_path, repaired)
 
     with caplog.at_level(logging.INFO):
-        pipeline.setup_virtualenv(quiet_settings, quiet, target, requirements)
+        _, handle, _ = pipeline.setup_virtualenv(
+            quiet_settings, quiet, target, requirements
+        )
 
     assert "renaming it to" not in caplog.text

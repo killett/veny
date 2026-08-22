@@ -2,8 +2,7 @@
 
 from pathlib import Path
 
-from veny import cache_search
-from veny import cli as veny
+from veny import cache_search, state
 
 
 def a_venv(root: Path, name: str) -> Path:
@@ -36,26 +35,26 @@ def test_rename_venv_moves_the_directory(tmp_path: Path) -> None:
 def test_rename_venv_returns_the_directory_the_caller_must_record(
     tmp_path: Path,
 ) -> None:
-    """rename_venv no longer writes options.venv_dir; its return value is the only record.
+    """rename_venv writes nothing; its return value is the only record.
 
     Concrete bug this catches: `return old_dir` (or returning the argument
     unchanged) instead of the moved directory. Every assertion in
     test_rename_venv_moves_the_directory about the *disk* still holds under
     that mutation -- the directory really did move -- so only following the
-    return value into the caller's own set_venv_dir can tell them apart.
-    set_venv_dir mkdirs whatever it is handed, so a stale return value does
-    not merely mislabel the venv: it resurrects the "failed-" directory as an
-    empty one, which the cache search would then read as a real venv.
+    return value into the caller's own VenvHandle can tell them apart.
+    VenvHandle.for_dir mkdirs whatever it is handed (as set_venv_dir did
+    before phase 4a), so a stale return value does not merely mislabel the
+    venv: it resurrects the "failed-" directory as an empty one, which the
+    cache search would then read as a real venv.
     """
     venv_dir = a_venv(tmp_path, "failed-myenv-py3.12-20260814-091500-numpy")
     moved = cache_search.rename_venv(venv_dir, "myenv-py3.12-20260814-091500-numpy")
 
-    options = veny.Options()
-    options.set_venv_dir(moved)
+    handle = state.VenvHandle.for_dir(moved)
 
-    assert options.venv_dir == tmp_path / "myenv-py3.12-20260814-091500-numpy"
+    assert handle.venv_dir == tmp_path / "myenv-py3.12-20260814-091500-numpy"
     assert not (tmp_path / "failed-myenv-py3.12-20260814-091500-numpy").exists()
-    assert (options.venv_dir / "pyvenv.cfg").is_file()
+    assert (handle.venv_dir / "pyvenv.cfg").is_file()
 
 
 def test_rename_venv_rewrites_the_recorded_paths(tmp_path: Path) -> None:

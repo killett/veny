@@ -941,6 +941,6 @@ def test_the_probe_venv_is_asked_about_the_interpreter_it_just_built(
     )
 
     assert len(created) == 1, "exactly one probe venv is built"
-    # Options.set_venv_dir's documented shape, written out rather than read
+    # VenvHandle's documented shape, written out rather than read
     # back through venv_python_for -- the directory is gone by now.
     assert asked == [created[0] / "bin" / "python"]

@@ -179,7 +179,7 @@ def test_record_venv_state_renames_before_writing_the_manifest(monkeypatch, tmp_
         pip_names=["yaml"],  # The pre-repair pip name the folder was built with.
     )
     old_dir = tmp_path / old_name
-    options.set_venv_dir(old_dir)  # Creates old_dir on disk.
+    state.VenvHandle.for_dir(old_dir)  # Creates old_dir on disk.
 
     # Real record_venv_state, real rename_venv, real venv_cache.write_manifest
     # -- only the interpreter probe is stubbed, since it would otherwise spawn
@@ -201,7 +201,7 @@ def test_record_venv_state_renames_before_writing_the_manifest(monkeypatch, tmp_
 
     recorded = cache_search.record_venv_state(
         old_dir,
-        # What set_venv_dir(old_dir) above put on options.venv_python, spelled
+        # What VenvHandle.for_dir(old_dir) above derives as venv_python, spelled
         # out because record_venv_state takes it as a real argument now. The
         # probe that would read it is stubbed, so only its type matters here.
         venv_python=old_dir / "bin" / "python",
@@ -211,7 +211,7 @@ def test_record_venv_state_renames_before_writing_the_manifest(monkeypatch, tmp_
         python_command=PYTHON_COMMAND,
         uninstalled=requirements.uninstalled,
         extra_requirements=requirements.extra_requirements,
-        rawlog=options.rawlog,
+        rawlog=True,
     )
 
     wanted_name = venv_cache.build_folder_name(
@@ -265,7 +265,7 @@ def test_record_venv_state_renames_into_agreement_when_the_venvs_tag_differs_fro
         pip_names=[record.pip_name for record in requirements.uninstalled],
     )
     old_dir = tmp_path / old_name
-    options.set_venv_dir(old_dir)  # Creates old_dir on disk.
+    state.VenvHandle.for_dir(old_dir)  # Creates old_dir on disk.
 
     # The venv actually reports 3.13 -- disagreeing with the run's 3.12 -- and
     # no package changed.
@@ -277,7 +277,7 @@ def test_record_venv_state_renames_into_agreement_when_the_venvs_tag_differs_fro
 
     recorded = cache_search.record_venv_state(
         old_dir,
-        # What set_venv_dir(old_dir) above put on options.venv_python, spelled
+        # What VenvHandle.for_dir(old_dir) above derives as venv_python, spelled
         # out because record_venv_state takes it as a real argument now. The
         # probe that would read it is stubbed, so only its type matters here.
         venv_python=old_dir / "bin" / "python",
@@ -287,7 +287,7 @@ def test_record_venv_state_renames_into_agreement_when_the_venvs_tag_differs_fro
         python_command=PYTHON_COMMAND,
         uninstalled=requirements.uninstalled,
         extra_requirements=requirements.extra_requirements,
-        rawlog=options.rawlog,
+        rawlog=True,
     )
 
     wanted_name = venv_cache.build_folder_name(
@@ -385,7 +385,7 @@ def test_installed_state_in_venv_keys_by_normalized_pip_name(monkeypatch):
 def test_installed_state_in_venv_probes_the_interpreter_it_was_given(monkeypatch):
     """The probe must run the venv's own Python, not whatever interpreter veny happens to be.
 
-    installed_state_in_venv no longer reads options.venv_python; the caller
+    installed_state_in_venv no longer reads a venv_python off Options; the caller
     passes it. Ignoring the argument and probing sys.executable would report
     the versions installed outside the venv, and every manifest would record
     them as the venv's own.
@@ -461,7 +461,7 @@ def test_record_venv_state_probes_the_given_venv_and_records_the_runs_own_fields
         pip_names=["yaml"],
     )
     old_dir = tmp_path / stale_name
-    options.set_venv_dir(old_dir)
+    state.VenvHandle.for_dir(old_dir)
     probed: list[Path] = []
 
     def spy_probe(venv_python):
@@ -479,7 +479,7 @@ def test_record_venv_state_probes_the_given_venv_and_records_the_runs_own_fields
         python_command=PYTHON_COMMAND,
         uninstalled=requirements.uninstalled,
         extra_requirements=requirements.extra_requirements,
-        rawlog=options.rawlog,
+        rawlog=True,
     )
 
     assert probed == [old_dir / "bin" / "python"]

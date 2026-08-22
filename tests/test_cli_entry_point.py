@@ -281,7 +281,7 @@ def test_main_describes_the_run_to_the_cache_search(monkeypatch, tmp_path):
     monkeypatch.setattr(
         pipeline,
         "setup_virtualenv",
-        lambda settings, options, target, requirements: (requirements, False),
+        lambda settings, options, target, requirements: (requirements, None, False),
     )
 
     cli.main()
@@ -336,7 +336,7 @@ def test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs
     monkeypatch.setattr(
         pipeline,
         "setup_virtualenv",
-        lambda settings, options, target, requirements: (requirements, False),
+        lambda settings, options, target, requirements: (requirements, None, False),
     )
 
     with caplog.at_level(logging.INFO):
@@ -364,7 +364,7 @@ def test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs
     monkeypatch.setattr(
         pipeline,
         "setup_virtualenv",
-        lambda settings, options, target, requirements: (requirements, False),
+        lambda settings, options, target, requirements: (requirements, None, False),
     )
     with caplog.at_level(logging.INFO):
         cli.main()
@@ -399,7 +399,7 @@ def test_main_lets_the_feeling_lucky_loader_speak_on_a_run_that_did_not_ask_for_
     monkeypatch.setattr(
         pipeline,
         "setup_virtualenv",
-        lambda settings, options, target, requirements: (requirements, False),
+        lambda settings, options, target, requirements: (requirements, None, False),
     )
 
     with caplog.at_level(logging.INFO):
@@ -419,7 +419,7 @@ def test_main_lets_the_feeling_lucky_loader_speak_on_a_run_that_did_not_ask_for_
     monkeypatch.setattr(
         pipeline,
         "setup_virtualenv",
-        lambda settings, options, target, requirements: (requirements, False),
+        lambda settings, options, target, requirements: (requirements, None, False),
     )
     with caplog.at_level(logging.INFO):
         cli.main()
@@ -469,7 +469,7 @@ def test_main_loads_the_requirements_file_and_keeps_its_names_out_of_the_import_
     monkeypatch.setattr(
         pipeline,
         "setup_virtualenv",
-        lambda settings, options, target, requirements: (requirements, False),
+        lambda settings, options, target, requirements: (requirements, None, False),
     )
 
     cli.main()
@@ -566,9 +566,7 @@ def test_main_drops_the_failed_prefix_from_the_venv_it_just_built(
     built = tmp_path / "home" / "veny" / "failed-myenv-py3.12-20260101-010203-thing-pkg"
 
     def fake_setup(settings, options, target, requirements):
-        options.set_venv_dir(built)
-        options.install_succeeded = True
-        return requirements, True
+        return requirements, state.VenvHandle.for_dir(built), True
 
     monkeypatch.setattr(pipeline, "setup_virtualenv", fake_setup)
     renamed: list[tuple[Path, str]] = []
@@ -582,9 +580,10 @@ def test_main_drops_the_failed_prefix_from_the_venv_it_just_built(
     assert cli.main() == 0
 
     assert renamed == [(built, "myenv-py3.12-20260101-010203-thing-pkg")]
-    assert (
-        captured[0].venv_dir == built.parent / "myenv-py3.12-20260101-010203-thing-pkg"
-    )
+    # The renamed directory really exists -- run() rebuilt its handle from
+    # rename_venv's return value, and VenvHandle.for_dir mkdirs it. A stale
+    # return value would leave the "failed-" name on disk instead.
+    assert (built.parent / "myenv-py3.12-20260101-010203-thing-pkg").is_dir()
 
 
 def test_main_asks_the_last_used_loader_about_this_script(monkeypatch, tmp_path):
@@ -618,7 +617,7 @@ def test_main_asks_the_last_used_loader_about_this_script(monkeypatch, tmp_path)
     monkeypatch.setattr(
         pipeline,
         "setup_virtualenv",
-        lambda settings, options, target, requirements: (requirements, False),
+        lambda settings, options, target, requirements: (requirements, None, False),
     )
     monkeypatch.setattr(
         cache_search, "find_match_dir_in_cache", lambda args, **kwargs: None
@@ -677,7 +676,7 @@ def test_main_runs_the_script_under_the_cached_venvs_interpreter_on_a_cache_hit(
     script in whatever environment veny itself is in -- the packages just
     matched would not be importable, and the failure would look like a bad
     cache match rather than a bad launch. Expected value obtained by
-    construction: set_venv_dir puts the interpreter at <venv>/bin/python.
+    construction: VenvHandle puts the interpreter at <venv>/bin/python.
     """
     venv_dir = tmp_path / "home" / "veny" / "myenv-py3.12-20260819-000000-thing"
     venv_dir.mkdir(parents=True)
@@ -717,7 +716,7 @@ def test_main_builds_an_environment_when_the_cache_misses(monkeypatch, tmp_path)
     because then nothing is launched at all and veny still reports success.
     Expected value obtained by construction, not by reading the branch: the
     fake builder is the only thing in this test that sets venv_dir, and
-    set_venv_dir puts the interpreter at <venv>/bin/python, so
+    VenvHandle puts the interpreter at <venv>/bin/python, so
     built_dir/bin/python is the only interpreter path a correct run can use.
     """
     built_dir = tmp_path / "home" / "veny" / "myenv-py3.12-20260819-111111-thing"
@@ -732,8 +731,7 @@ def test_main_builds_an_environment_when_the_cache_misses(monkeypatch, tmp_path)
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", lambda *a, **k: None)
 
     def fake_setup(settings, options, target, requirements):
-        options.set_venv_dir(built_dir)
-        return requirements, True
+        return requirements, state.VenvHandle.for_dir(built_dir), False
 
     monkeypatch.setattr(pipeline, "setup_virtualenv", fake_setup)
 
@@ -749,7 +747,7 @@ def test_main_checks_the_virtualenv_it_is_running_inside(monkeypatch, tmp_path):
     """Inside a virtualenv, main() import-checks that environment's python.
 
     Behaviour under test: the branch phase 3e made reachable. Concrete bug
-    this catches: the old code asserted options.venv_dir, which nothing sets
+    this catches: the old code asserted a venv_dir on Options, which nothing sets
     on this path, so the branch could only ever raise AssertionError --
     veny was unusable from inside an activated environment. Expected value
     obtained by construction: environment.venv_python_for puts the
@@ -1027,7 +1025,7 @@ def test_a_failed_build_reports_at_critical_and_returns_one_without_a_debugger(
     monkeypatch.setattr(
         pipeline,
         "setup_virtualenv",
-        lambda settings, options, target, requirements: (requirements, False),
+        lambda settings, options, target, requirements: (requirements, None, False),
     )
 
     with caplog.at_level(logging.CRITICAL):
@@ -1507,7 +1505,7 @@ def test_the_run_reports_the_imports_it_decided_are_missing(
     monkeypatch.setattr(
         pipeline,
         "setup_virtualenv",
-        lambda settings, options, target, requirements: (requirements, False),
+        lambda settings, options, target, requirements: (requirements, None, False),
     )
 
     with caplog.at_level(logging.INFO):
@@ -1548,8 +1546,7 @@ def test_no_cache_skips_the_cache_search_entirely(monkeypatch, tmp_path):
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", find_spy)
 
     def fake_setup(settings, options, target, requirements):
-        options.set_venv_dir(built)
-        return requirements, True
+        return requirements, state.VenvHandle.for_dir(built), False
 
     monkeypatch.setattr(pipeline, "setup_virtualenv", fake_setup)
 
