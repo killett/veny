@@ -4,13 +4,19 @@ This module owns sequencing and is the only one that knows the order. Every
 module below it does one thing and is handed what it needs; `cli.py` above it
 parses argv and maps what happens here onto an exit status.
 
-It is handed the run's `Options` object and hands back a status. That is
-transitional: `Options` is the god object the re-architecture retires, and
-phase 4 replaces it with the frozen `Settings`, `Target`, `VenvHandle` and
-`Requirements` values each stage actually needs. Until then this module is
-where the bridge code lives -- the `ImportScan` seeding, the classification
-copy-back -- rather than in `cli.py`, so that the modules under it never see
-an `Options` at all.
+Each stage is handed the values it needs and hands back its product. Phase 4a
+replaced the `Options` god object with them: `Settings` for the run's
+invariants, `Target` for what is being run, `ImportScan` for what the scan
+found, `Requirements` for what classification decided, and `VenvHandle` for
+the environment. Nothing here writes its product onto the object it was
+handed -- the one exception is `ImportScan`, which is an accumulator by design
+and which `analysis/scan.py` mutates in place as it walks.
+
+`Options` survives in exactly two places, both of them persistence:
+`_load_last_used` hands it to emmykit's reader as a template, and `run` copies
+five fields onto it just before `ek.save_options_to_json`. Both are typed
+against `ek.Options` rather than against a payload, which is the whole of why
+the class is still alive; phase 4b breaks that coupling and deletes it.
 
 Everything here calls its collaborators through the module object
 (`verify.check_packages_in_venv(...)`, never `from .verify import ...`), which

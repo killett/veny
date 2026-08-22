@@ -2,7 +2,7 @@
 
 Phase 4a drained every field the pipeline read or wrote into the frozen
 `Settings`, `Target`, `Requirements` and `VenvHandle` values, and into the
-mutable `ImportScan` the analysis layer accumulates. Fourteen fields remain,
+mutable `ImportScan` the analysis layer accumulates. Fifteen fields remain,
 in four groups:
 
 - **Persistence.** `python_script`, `script_dir`, `timestamp` and `my_name`

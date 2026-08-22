@@ -40,7 +40,8 @@ json_types.register_types()
 
 # Phase 3e moved the class itself to run_options.py so pipeline.py can be
 # handed one without importing the module above it. This name stays for the
-# suite's 42 `cli.Options` references and dies with the class in phase 4.
+# suite's references -- 49 spelled `cli.Options` and 24 spelled `veny.Options`,
+# re-measured on 2026-08-21 -- and dies with the class in phase 4b.
 Options = run_options.Options
 
 
