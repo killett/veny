@@ -182,9 +182,9 @@ def test_a_script_with_no_third_party_imports_yields_an_empty_import_set(
 def test_a_prepopulated_custom_module_outside_the_script_dir_is_recognized(
     tmp_path: Path,
 ) -> None:
-    """options.custom_modules is seeded before the scan is ever reached.
+    """scan.custom_modules is seeded before the scan is ever reached.
 
-    dict_of_custom_modules() populates options.custom_modules before
+    dict_of_custom_modules() populates scan.custom_modules before
     list_packages() reaches find_imports_in_script -- the scanner must see
     that prior state from its very first call. faraway.py lives outside the
     script's own directory and is not a package, so the only way it can
@@ -255,9 +255,9 @@ def test_list_packages_scans_one_script_and_classifies_what_it_found(
 
     Concrete bugs this catches: scanning a path other than the one the user
     named finds another script's imports, so veny builds an environment for
-    the wrong program; handing the classification copy-back a different
-    Options leaves options.uninstalled_imports empty, so veny decides nothing
-    needs installing and runs the script under an interpreter that cannot
+    the wrong program; dropping the classification's result instead of
+    returning it leaves requirements.uninstalled empty, so veny decides
+    nothing needs installing and runs the script under an interpreter that cannot
     import what it needs. `extra-pkg` is asserted absent because --reqs was
     not given: use_reqs must be read from the flag, not assumed true.
     """

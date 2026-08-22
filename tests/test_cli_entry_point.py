@@ -229,7 +229,6 @@ def _drive_main(
     )
     monkeypatch.setattr(ek, "configure_logging", lambda *a, **k: None)
     monkeypatch.setattr(ek, "print_all_errors", lambda *a, **k: None)
-    monkeypatch.setattr(ek, "save_options_to_json", lambda options: None)
     monkeypatch.setattr(logging, "shutdown", lambda: None)
     launched: list[list[str]] = []
 
@@ -841,7 +840,7 @@ def test_blank_slate_deletes_the_state_directory_and_leaves_other_files_alone(
     The confirmation prompt is stubbed rather than answered by -y, because
     measured 2026-08-19 the flag does not reach this branch: argparse gives
     `-y/--yes` the dest `yes`, while the branch reads
-    `getattr(options.args, "y", False)`, which is never set and so is always
+    `getattr(args, "y", False)`, which is never set and so is always
     False. That is a pre-existing bug, recorded here rather than fixed,
     because this phase is behaviour-preserving; -y is kept in argv so this
     test keeps working unchanged once the dest is corrected and the prompt
@@ -1098,7 +1097,7 @@ def test_configure_logging_is_told_this_runs_name_level_and_raw_output_choice(
     This is the one site in the phase pinned by an argument spy rather than by
     a log record, and the index says so: the effect lives in emmykit, so
     there is no veny-visible record to read. Expected values come from the
-    flags' contracts -- Options.my_name is fixed at "veny", no --debug means
+    flags' contracts -- cli.MY_NAME is fixed at "veny", no --debug means
     logging.INFO, --rawlog means rawlog=True.
     """
     seen: list[tuple[str, int, bool]] = []
@@ -1126,11 +1125,12 @@ def test_configure_logging_is_told_when_the_run_wants_normal_output_and_debug(
     catches: a hardcoded `rawlog=True` strips timestamps and INFO prefixes
     from every ordinary run and suppresses veny's own commentary -- the exact
     inverse failure, invisible to a test that only ever drives --rawlog. A
-    second bug it catches: parse_arguments reading the wrong flag name (or
-    defaulting to True) when it decides whether to raise options.log_mode to
-    DEBUG, which would either silence --debug entirely or make every run
-    debug-verbose. Expected values come from Options.rawlog's default (False)
-    and from --debug's contract (logging.DEBUG).
+    second bug it catches: cli.main reading the wrong flag name (or
+    defaulting to True) when it decides whether to raise its local log_mode
+    to DEBUG, which would either silence --debug entirely or make every run
+    debug-verbose. Expected values come from --rawlog's default (False, the
+    store_true default parse_arguments gives it) and from --debug's contract
+    (logging.DEBUG).
     """
     seen: list[tuple[str, int, bool]] = []
     _drive_main(monkeypatch, tmp_path, ["-d"], uninstalled=set(), all_imports={"os"})
@@ -1627,7 +1627,7 @@ def test_blank_slate_with_no_state_directory_still_completes(monkeypatch, tmp_pa
     Concrete bug this catches: any first-ever --blank-slate that fails --
     a traceback, or a non-zero status, for a request that was already
     satisfied before it was made. It does not pin `ignore_errors=True` on the
-    removal itself: pipeline.run creates options.my_dir a few lines before it
+    removal itself: pipeline.run creates settings.my_dir a few lines before it
     reaches this branch, so the removal never sees a missing directory. The
     wiring index records that as an open hole with this as its reason.
     """

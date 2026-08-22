@@ -96,7 +96,6 @@ def _a_run(monkeypatch, tmp_path, argv=("--rawlog", "--no-cache")):
     monkeypatch.setattr(ek, "find_preferred_python_version", lambda: "python3")
     monkeypatch.setattr(ek, "configure_logging", lambda *a, **k: None)
     monkeypatch.setattr(ek, "print_all_errors", lambda *a, **k: None)
-    monkeypatch.setattr(ek, "save_options_to_json", lambda options: None)
     monkeypatch.setattr(logging, "shutdown", lambda: None)
     monkeypatch.setattr(
         subprocess,
