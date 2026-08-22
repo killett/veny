@@ -1,6 +1,7 @@
 """Pin how veny locates the uv binary it drives its environment layer with."""
 
 import argparse
+import dataclasses
 import logging
 import os
 import shutil
@@ -19,6 +20,10 @@ from veny import (
     stdlib_index,
     verify,
 )
+
+from .test_state_values import a_requirements as _a_requirements
+from .test_state_values import a_settings as _a_settings
+from .test_state_values import a_target as _target
 
 
 def test_the_packaged_uv_is_preferred_over_the_one_on_path(monkeypatch):
@@ -102,12 +107,12 @@ def test_create_venv_reports_success_when_uv_returns_zero(monkeypatch, tmp_path)
 def test_setup_virtualenv_builds_the_venv_before_writing_requirements_txt(
     monkeypatch, tmp_path
 ):
-    """setup_virtualenv must not write requirements.txt into options.venv_dir
+    """setup_virtualenv must not write requirements.txt into handle.venv_dir
     until create_venv has already built the environment there.
 
-    Options.set_venv_dir (called by setup_virtualenv before either
+    VenvHandle.for_dir (called by setup_virtualenv before either
     write_requirements_file_with_extras or create_venv run) creates
-    options.venv_dir with mkdir(exist_ok=True), so create_venv always sees a
+    handle.venv_dir with mkdir(exist_ok=True), so create_venv always sees a
     directory that already exists. `uv venv` tolerates an existing directory
     only while it is empty -- it refuses (CalledProcessError) once anything
     has been written into it. If write_requirements_file_with_extras ran
@@ -120,9 +125,11 @@ def test_setup_virtualenv_builds_the_venv_before_writing_requirements_txt(
     """
     options = cli.Options()
     options.my_dir = tmp_path
-    options.uninstalled_imports = {
-        cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")
-    }
+    requirements = _a_requirements(
+        uninstalled=frozenset(
+            {cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")}
+        )
+    )
     monkeypatch.setattr(
         environment,
         "run_uv_pip",
@@ -140,18 +147,27 @@ def test_setup_virtualenv_builds_the_venv_before_writing_requirements_txt(
     )
     monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: True)
     # record_venv_state returns the (possibly renamed) venv directory now, and
-    # setup_virtualenv feeds that return value straight to options.set_venv_dir.
-    # A stub returning None would set_venv_dir(None) and mkdir a path built from
+    # setup_virtualenv feeds that return value straight to VenvHandle.for_dir.
+    # A stub returning None would call for_dir(None) and mkdir a path built from
     # it, so the stub hands back the directory it was given.
     monkeypatch.setattr(
         cache_search, "record_venv_state", lambda venv_dir, **kwargs: venv_dir
     )
 
-    assert pipeline.setup_virtualenv(options) is True
+    settings = _a_settings(my_dir=tmp_path)
+    target = _target()
+    _, handle, _ = pipeline.setup_virtualenv(
+        settings,
+        target,
+        requirements,
+        args=options.args,
+        aliases=options.aliases,
+        stdlib=options.stdlib,
+    )
 
-    assert options.venv_dir is not None
-    assert (options.venv_dir / "requirements.txt").read_text() == "thing-pkg\n"
-    assert (options.venv_dir / "bin" / "python").exists()
+    assert handle is not None
+    assert (handle.venv_dir / "requirements.txt").read_text() == "thing-pkg\n"
+    assert (handle.venv_dir / "bin" / "python").exists()
 
 
 def test_setup_virtualenv_writes_the_extra_requirements_version_specifiers(
@@ -176,13 +192,17 @@ def test_setup_virtualenv_writes_the_extra_requirements_version_specifiers(
     """
     options = cli.Options()
     options.my_dir = tmp_path
-    options.uninstalled_imports = {
-        cli.ResolvedImport(import_name="thing", pip_name="thing-pkg"),
-        cli.ResolvedImport(import_name="zeta", pip_name="zeta-pkg"),
-    }
-    options.extra_requirements = {"thing-pkg": ">=2.0"}
+    requirements = _a_requirements(
+        uninstalled=frozenset(
+            {
+                cli.ResolvedImport(import_name="thing", pip_name="thing-pkg"),
+                cli.ResolvedImport(import_name="zeta", pip_name="zeta-pkg"),
+            }
+        ),
+        extra_requirements={"thing-pkg": ">=2.0"},
+    )
     # The venv itself is a subprocess boundary and is not what this test is
-    # about; set_venv_dir has already created the directory the file lands in.
+    # about; VenvHandle.for_dir has already created the directory the file lands in.
     monkeypatch.setattr(environment, "create_venv", lambda target, python="": True)
     monkeypatch.setattr(
         environment,
@@ -201,18 +221,27 @@ def test_setup_virtualenv_writes_the_extra_requirements_version_specifiers(
     )
     monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: True)
     # record_venv_state returns the (possibly renamed) venv directory now, and
-    # setup_virtualenv feeds that return value straight to options.set_venv_dir.
-    # A stub returning None would set_venv_dir(None) and mkdir a path built from
+    # setup_virtualenv feeds that return value straight to VenvHandle.for_dir.
+    # A stub returning None would call for_dir(None) and mkdir a path built from
     # it, so the stub hands back the directory it was given.
     monkeypatch.setattr(
         cache_search, "record_venv_state", lambda venv_dir, **kwargs: venv_dir
     )
 
-    pipeline.setup_virtualenv(options)
+    settings = _a_settings(my_dir=tmp_path)
+    target = _target()
+    _, handle, _ = pipeline.setup_virtualenv(
+        settings,
+        target,
+        requirements,
+        args=options.args,
+        aliases=options.aliases,
+        stdlib=options.stdlib,
+    )
 
-    assert options.venv_dir is not None
+    assert handle is not None
     assert (
-        options.venv_dir / "requirements.txt"
+        handle.venv_dir / "requirements.txt"
     ).read_text() == "thing-pkg>=2.0\nzeta-pkg\n"
 
 
@@ -234,22 +263,31 @@ def test_setup_virtualenv_reports_failure_when_uv_refuses_to_build(
     obtained from the new contract: False means "no environment", and the
     message names the directory so the user can see which build was refused.
     """
-    options = _a_wired_run(tmp_path)
+    settings, options, target, requirements = _a_wired_run(tmp_path)
     _stub_the_venv_away(monkeypatch)
     monkeypatch.setattr(environment, "create_venv", lambda target, python="": False)
 
     with caplog.at_level(logging.ERROR):
-        built = pipeline.setup_virtualenv(options)
+        _, handle, _ = pipeline.setup_virtualenv(
+            settings,
+            target,
+            requirements,
+            args=options.args,
+            aliases=options.aliases,
+            stdlib=options.stdlib,
+        )
 
-    assert built is False
-    assert options.venv_dir is not None
-    assert (
-        f"uv could not create the virtual environment at {options.venv_dir}."
-        in caplog.text
-    )
+    # No handle at all: there is no usable environment, which is what
+    # setup_virtualenv returning False used to mean.
+    assert handle is None
+    # The refused directory is named in the message, and is where the
+    # requirements file would have landed. The handle is gone, so the path is
+    # rebuilt from what for_dir was given.
+    refused = tmp_path / "failed-wiredenv-py3.12-20260101-010203-thing-pkg"
+    assert f"uv could not create the virtual environment at {refused}." in caplog.text
     # The early return has to happen *before* the requirements file is written:
     # writing it would leave a directory that looks like a half-built venv.
-    assert not (options.venv_dir / "requirements.txt").exists()
+    assert not (refused / "requirements.txt").exists()
 
 
 def test_create_venv_is_given_a_resolved_interpreter_path_not_a_bare_command(
@@ -265,12 +303,11 @@ def test_create_venv_is_given_a_resolved_interpreter_path_not_a_bare_command(
     before the uv migration -- used to build with (3.13). That silently builds
     the venv against a different interpreter than the one imports were
     classified against. If venv_build_interpreter regressed to returning
-    options.python_command unresolved, this test would see the bare "python3"
+    the target's python_command unresolved, this test would see the bare "python3"
     in the captured uv command instead of the absolute path shutil.which
     resolves it to.
     """
-    options = cli.Options()
-    options.python_command = "python3"
+    target = _target(python_command="python3")
     monkeypatch.setattr(
         shutil,
         "which",
@@ -282,7 +319,7 @@ def test_create_venv_is_given_a_resolved_interpreter_path_not_a_bare_command(
         subprocess, "check_call", lambda command: captured.append(command)
     )
 
-    python = environment.venv_build_interpreter(options.python_command)
+    python = environment.venv_build_interpreter(target.python_command)
     environment.create_venv(tmp_path / "target", python)
 
     assert captured == [
@@ -297,28 +334,34 @@ def test_create_venv_is_given_a_resolved_interpreter_path_not_a_bare_command(
 
 
 def _a_wired_run(tmp_path):
-    """Build an Options whose every setup_virtualenv argument is distinguishable.
+    """Build the Settings, Options and Target whose every setup_virtualenv argument is distinguishable.
 
     Each field carries a value no other field could supply -- a venv name, a
     timestamp, an interpreter tag, a pip name, an import name and a --reqs
     spelling that are all different strings -- so a call site that reaches for
     the wrong one cannot produce the expected result by coincidence.
+
+    Returns:
+        The Settings, the Options, the Target and the Requirements, in that
+        order.
     """
     options = cli.Options()
-    options.my_dir = tmp_path
-    options.venv_name = "wiredenv"
-    options.timestamp = "20260101-010203"
-    options.python_command = "python-under-test-not-on-path"
+    settings = _a_settings(my_dir=tmp_path, venv_name="wiredenv", rawlog=True)
+    target = _target(
+        timestamp="20260101-010203",
+        python_command="python-under-test-not-on-path",
+    )
     options.stdlib = stdlib_index.StdlibIndex(
         names=frozenset({"os"}), python_version=(3, 12), source="test"
     )
-    options.uninstalled_imports = {
-        cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")
-    }
-    options.all_imports = {"thing", "extra-pkg"}
-    options.extra_requirements = {"extra-pkg": ">=2.0"}
+    requirements = _a_requirements(
+        uninstalled=frozenset(
+            {cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")}
+        ),
+        all_imports=frozenset({"thing", "extra-pkg"}),
+        extra_requirements={"extra-pkg": ">=2.0"},
+    )
     options.args = argparse.Namespace(reqs=True)
-    options.rawlog = True
     options.aliases = alias_index.AliasIndex(
         overrides={},
         cache=alias_index.AliasCache(
@@ -331,7 +374,7 @@ def _a_wired_run(tmp_path):
         pypi=None,
         seed={},
     )
-    return options
+    return settings, options, target, requirements
 
 
 def _stub_the_venv_away(monkeypatch, uninstalled_after_repair=None):
@@ -383,15 +426,22 @@ def test_the_venv_folder_name_and_build_interpreter_come_from_this_run(
     exact defect PROGRESS records from phase 2 task 9, where a script
     importing `cgi` was classified installed under 3.12 and died under 3.13.
     """
-    options = _a_wired_run(tmp_path)
+    settings, options, target, requirements = _a_wired_run(tmp_path)
     created = _stub_the_venv_away(monkeypatch)
 
-    assert pipeline.setup_virtualenv(options) is True
+    _, handle, _ = pipeline.setup_virtualenv(
+        settings,
+        target,
+        requirements,
+        args=options.args,
+        aliases=options.aliases,
+        stdlib=options.stdlib,
+    )
 
-    assert options.venv_dir is not None
-    assert options.venv_dir.name == "failed-wiredenv-py3.12-20260101-010203-thing-pkg"
+    assert handle is not None
+    assert handle.venv_dir.name == "failed-wiredenv-py3.12-20260101-010203-thing-pkg"
     assert created == [
-        (options.venv_dir, environment.venv_build_interpreter(options.python_command))
+        (handle.venv_dir, environment.venv_build_interpreter(target.python_command))
     ]
     # Not sys.executable: an empty python_command would silently resolve to it.
     assert created[0][1] == "python-under-test-not-on-path"
@@ -415,7 +465,7 @@ def test_verify_and_repair_imports_is_handed_the_whole_description_of_the_run(
     but is a --reqs pip spelling, so source_import_names must drop it. That
     pins the three arguments of the source_import_names call too.
     """
-    options = _a_wired_run(tmp_path)
+    settings, options, target, requirements = _a_wired_run(tmp_path)
     _stub_the_venv_away(monkeypatch)
     seen: list[dict[str, object]] = []
 
@@ -425,10 +475,20 @@ def test_verify_and_repair_imports_is_handed_the_whole_description_of_the_run(
 
     monkeypatch.setattr(verify, "verify_and_repair_imports", spy)
 
-    assert pipeline.setup_virtualenv(options) is True
+    assert (
+        pipeline.setup_virtualenv(
+            settings,
+            target,
+            requirements,
+            args=options.args,
+            aliases=options.aliases,
+            stdlib=options.stdlib,
+        )[1]
+        is not None
+    )
 
-    # Literal paths, not options.venv_python / options.requirements_file:
-    # setup_virtualenv writes those two fields itself (via set_venv_dir), so
+    # Literal paths, not handle.venv_python / options.requirements_file:
+    # setup_virtualenv derives those two paths itself (via VenvHandle.for_dir), so
     # asserting against them would compare the call site to its own output and
     # pass however the folder name was built.
     built = tmp_path / "failed-wiredenv-py3.12-20260101-010203-thing-pkg"
@@ -463,7 +523,7 @@ def test_the_manifest_and_the_final_check_describe_the_venv_after_repair(
     manifest, finds nothing it needs, and rebuilds the environment from
     scratch every single time.
     """
-    options = _a_wired_run(tmp_path)
+    settings, options, target, requirements = _a_wired_run(tmp_path)
     repaired = {cli.ResolvedImport(import_name="thing", pip_name="repaired-pkg")}
     _stub_the_venv_away(monkeypatch, uninstalled_after_repair=repaired)
     recorded: list[dict[str, object]] = []
@@ -487,12 +547,22 @@ def test_the_manifest_and_the_final_check_describe_the_venv_after_repair(
     monkeypatch.setattr(cache_search, "record_venv_state", record_spy)
     monkeypatch.setattr(verify, "check_packages_in_venv", check_spy)
 
-    assert pipeline.setup_virtualenv(options) is True
+    assert (
+        pipeline.setup_virtualenv(
+            settings,
+            target,
+            requirements,
+            args=options.args,
+            aliases=options.aliases,
+            stdlib=options.stdlib,
+        )[1]
+        is not None
+    )
 
-    # Literal paths, not options.venv_dir / options.venv_python, for the same
+    # Literal paths, not handle.venv_dir / handle.venv_python, for the same
     # reason the sibling test above spells them out: record_spy echoes its
     # venv_dir argument back and setup_virtualenv assigns that echo to
-    # options.venv_dir (via set_venv_dir), so asserting against options.* here
+    # handle.venv_dir (via VenvHandle.for_dir), so asserting against options.* here
     # would compare the call site to its own output and pass however the
     # folder name was built. Measured: a wrong `timestamp=` at
     # setup_virtualenv's build_folder_name left this test green before this
@@ -591,24 +661,38 @@ def test_setup_virtualenv_lets_the_repair_pass_name_the_package_it_settled_on(
     Expected message obtained from repair_unsatisfied_import's contract:
     "<pip name> provides the import <import name> (<evidence>)".
     """
-    options = _a_wired_run(tmp_path)
-    options.rawlog = False
+    settings, options, target, requirements = _a_wired_run(tmp_path)
+    settings = dataclasses.replace(settings, rawlog=False)
     _a_repair_that_succeeds(monkeypatch)
 
     with caplog.at_level(logging.INFO):
-        pipeline.setup_virtualenv(options)
+        _, handle, _ = pipeline.setup_virtualenv(
+            settings,
+            target,
+            requirements,
+            args=options.args,
+            aliases=options.aliases,
+            stdlib=options.stdlib,
+        )
 
     assert "repaired-pkg provides the import thing (the seed named it)" in caplog.text
 
     # The other direction: a --rawlog run must stay quiet, so a hardcoded
     # rawlog=False at this call site dies too.
     caplog.clear()
-    quiet = _a_wired_run(tmp_path)
-    quiet.rawlog = True
+    quiet_settings, quiet, target, requirements = _a_wired_run(tmp_path)
+    quiet_settings = dataclasses.replace(quiet_settings, rawlog=True)
     _a_repair_that_succeeds(monkeypatch)
 
     with caplog.at_level(logging.INFO):
-        pipeline.setup_virtualenv(quiet)
+        _, handle, _ = pipeline.setup_virtualenv(
+            quiet_settings,
+            target,
+            requirements,
+            args=quiet.args,
+            aliases=quiet.aliases,
+            stdlib=quiet.stdlib,
+        )
 
     assert "provides the import" not in caplog.text
 
@@ -662,12 +746,19 @@ def test_setup_virtualenv_lets_the_manifest_pass_explain_a_rename(
     folder it is renaming to.
     """
     repaired = {cli.ResolvedImport(import_name="thing", pip_name="repaired-pkg")}
-    options = _a_wired_run(tmp_path / "normal")
-    options.rawlog = False
+    settings, options, target, requirements = _a_wired_run(tmp_path / "normal")
+    settings = dataclasses.replace(settings, rawlog=False)
     _a_manifest_pass_that_renames(monkeypatch, tmp_path, repaired)
 
     with caplog.at_level(logging.INFO):
-        pipeline.setup_virtualenv(options)
+        _, handle, _ = pipeline.setup_virtualenv(
+            settings,
+            target,
+            requirements,
+            args=options.args,
+            aliases=options.aliases,
+            stdlib=options.stdlib,
+        )
 
     assert (
         "renaming it to failed-wiredenv-py3.12-20260101-010203-repaired-pkg"
@@ -677,11 +768,18 @@ def test_setup_virtualenv_lets_the_manifest_pass_explain_a_rename(
     # The other direction: --rawlog must reach it, so a hardcoded rawlog=False
     # at this call site dies too.
     caplog.clear()
-    quiet = _a_wired_run(tmp_path / "raw")
-    quiet.rawlog = True
+    quiet_settings, quiet, target, requirements = _a_wired_run(tmp_path / "raw")
+    quiet_settings = dataclasses.replace(quiet_settings, rawlog=True)
     _a_manifest_pass_that_renames(monkeypatch, tmp_path, repaired)
 
     with caplog.at_level(logging.INFO):
-        pipeline.setup_virtualenv(quiet)
+        _, handle, _ = pipeline.setup_virtualenv(
+            quiet_settings,
+            target,
+            requirements,
+            args=quiet.args,
+            aliases=quiet.aliases,
+            stdlib=quiet.stdlib,
+        )
 
     assert "renaming it to" not in caplog.text

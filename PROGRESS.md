@@ -31,9 +31,196 @@ gotchas ledger.
   | **3d** `docs/superpowers/plans/2026-08-18-verify-cache-search-last-used.md` (executed, complete, merged at `73cf588`) | `verify.py`, `cache_search.py`, `last_used.py` | 1,100 |
   | **3e** `docs/superpowers/plans/2026-08-19-pipeline-and-cli-slimming.md` (executed, complete, merged at `4d1846c`) | `pipeline.py`, `run_options.py`, `cli.py` slimming, `--full` deletion. The final `Options` drain was **not** attempted; it stayed phase 4's | 1,079 |
 
-  Phases 1 and 2 are complete and merged to `main`.
+  Phases 1 and 2 are complete and merged to `main`. Phase 3 is complete and
+  merged to `main` at `4d1846c`.
 
-**Next action:** write and execute phase 4 — the state model.
+- **Phase 4 is three plans, not one** (user ruling, 2026-08-21). The `Options`
+  drain, the persistence change and two behaviour changes are more than one
+  plan can specify without placeholders, the same way phase 3 was:
+
+  | Plan | Scope |
+  |---|---|
+  | **4a** `docs/superpowers/plans/2026-08-21-state-model-values.md` (written 2026-08-21, branch `state-model-values`) | The value objects: `Target`, the widened `Settings`, `ImportScan` as a returned product, `Requirements` as a returned product, `VenvHandle` replacing `set_venv_dir`. Also deletes folder scanning (user ruling) and makes a directory or missing script a usage error. |
+  | **4b** (not yet written) | The `LastUsed` persistence change (design amendment 9), which breaks the `ek.Options` coupling and deletes `run_options.py`, the `cli.Options` re-export, `pathlibcutoff` and its two readers, and the test references in both spellings. |
+  | **4c** (not yet written) | The remaining behaviour changes: the in-virtualenv guard (USER RULING 2026-08-20), `--feeling-lucky`'s missing signal normalization, latent defects 1 and 3, and the residual dead arguments. |
+
+**Next action:** write and execute plan 4b — the `LastUsed` persistence
+change. Plan 4a is **complete** on branch `state-model-values` (branched off
+`main` @ `b59cfa8`); all ten tasks are done and committed, and the branch is
+ready for its whole-branch review and merge. 4b's scope is in the table above
+and its inheritance is listed below.
+
+**Plan 4a is finished.** Ten tasks, ten commits after the plan itself:
+`c8c587e` (Task 1, the usage-error change and the folder-scanning deletion),
+`c91fd6e` (Task 2, `Target`), `30b80cd` (Task 3, the widened `Settings`),
+`1d03ca8` (Task 4, `ImportScan` returned), `5b93c95` (Task 5, `Requirements`
+returned), `569515c` (Task 6, `VenvHandle`), `d1847b9` (Task 7, the last
+readers drained), `d6428c9` (Task 8, the wiring index), `7f2987b` (Task 9, the
+differential and the regression it caught). Task 10 is this entry.
+
+**Gates measured on this branch in the closing session, 2026-08-21 — every
+number below was measured here, not copied from a task report.**
+`pixi run test` **441 passed, 1 warning**; `pixi run lint` **All checks
+passed!**; `pixi run python -m ruff format --check .` **59 files already
+formatted**; `pixi run typecheck` **23 errors in 6 files**. The mypy ceiling
+moved for the second time in the program: 29 → **23**, and from seven files to
+six. Nothing was suppressed to get there — the frozen values' non-optional
+fields removed the `Path | None` narrowing errors that needed the asserts, and
+the asserts went with them.
+
+**The live runs, and which install shape they used.** `python -m veny
+hello.py --some-arg 42` from a real shell: exit 0, the script's own stdout
+reached the terminal, `Runtime:` logged. `python -m veny a_directory` → the
+message and **exit status 2**; `python -m veny no_such_script.py` → the message
+and **exit status 2**. No traceback in either. **Install shape: the pixi
+environment, where `sys.prefix == sys.base_prefix`** — so
+`last_used.is_virtualenv()` was False and the middle branch of `pipeline.run`
+was not exercised. That branch is phase 4c's, and 4c's live run must not use
+this shape.
+
+**The differential.** `scripts/differential_4a.py`, thirteen layers, reduces
+the whole phase to a **43-line diff (four hunks)** against `4d1846c`: the
+header, and Task 1's three usage-error changes — a directory, a missing
+script, and a file that is not Python. The third was found by the review, not
+by the plan; before layer 13 existed the diff was 29 lines and two hunks. It is
+mutation-tested one regression per value object — clean 29, M1 216, M2 37,
+M3 197, M4 92, M5 353, reverted 29 — and its eight residual-risk items are in
+its docstring, inherited by 4b and 4c.
+
+**It caught one regression the unit suite could not see.** Task 6 moved
+`venv_dir` and `venv_python` onto the frozen `VenvHandle` and deleted them from
+`Options`. Nothing read them off `Options` any more, so 439 tests stayed
+green — but `ek.save_options_to_json` serializes that object's whole
+`__dict__`, so the last-used record silently stopped containing a venv at all,
+and `load_last_used_venv_python`'s `hasattr` check would have answered False
+for every script, forever. Both fields are restored as persistence payload,
+written from the handle at the save.
+`test_wiring_4a::test_the_saved_record_carries_the_venv_the_run_actually_used`
+closes it in-process. **This is the second phase running in which the
+differential, not the suite, found the phase's one real defect.**
+
+**The STANDING CHECK.** 178 arguments across 39 callees, enumerated from the
+AST rather than by hand. **162 killed by a named test, 6 OPEN HOLE, 5 DEAD, 5
+measured by driving.** 24 holes were closed inside Task 8 by
+`tests/test_wiring_4a.py`, which asserts identity rather than equality. The
+full table is
+`docs/superpowers/plans/2026-08-21-state-model-values-wiring-index.md`; the
+harness is `scripts/wiring_sweep_4a.py`.
+
+**Six design amendments plan 4a records** (numbered on from 3e's last):
+
+1. **`Settings` has 10 fields, not the design's 15.** `home` exists only to
+   derive `my_dir`, so it stays a construction detail in `cli.py`; `log_mode`
+   is read once, by `ek.configure_logging`, and stays a local there.
+2. **`unusual_imports`, `max_checks` and `check_interval` are dead** —
+   measured 2026-08-21, zero readers anywhere under `src/`. The design rehomed
+   all three into `Settings`. Deleted instead.
+3. **`script_name` is dead** — written once, to `""`, and never read. The
+   design lists it in `Target`. Deleted; it is a `.stem` if anything ever
+   needs it.
+4. **`total_imports` was already a `len()`.** `state.Requirements.total_imports`
+   has been a property since 3c; the `Options` attribute shadowing it was
+   written and never read. Deleted.
+5. **The four dead-argument rows at the old `pipeline.py:125` close by
+   construction, not by deletion.** They were dead because
+   `find_imports_in_script` built a *second* `Settings` and the scanner reads
+   only `rawlog`. One object, built in `cli.main` and handed to both
+   consumers, has a live reader for every field.
+6. **`python_script`, `script_dir`, `timestamp`, `venv_dir`, `venv_python` and
+   `my_name` do NOT leave `Options` in 4a.** The plan's Task 2 and Task 6
+   acceptance criteria said they should; both were wrong, and the plan's own
+   architecture paragraph was right. `ek.save_options_to_json` builds its
+   filename from the first three plus `my_name`, and the last two **are** the
+   payload the reader recovers. They are persistence-only fields now, written
+   from the `Target` and the `VenvHandle` at the save and read nowhere else.
+   Phase 4b removes them with the coupling.
+
+**What phase 4a closed, and is now struck from Deferred items below:**
+
+- **The folder-scanning ruling** — decided (delete, not revive; user, 2026-08-21)
+  and executed in Task 1, along with the 16 wiring-index rows whose only killer
+  reached them by bypassing `resolve_target`.
+- **Latent defect 2** (a missing script leaves `FileNotFoundError` travelling
+  uncaught out of `main`) — fixed in Task 1, together with the directory case
+  and, as a deviation beyond the plan's acceptance criteria, the `ValueError`
+  case `ek.ensure_file` raises for a symlink or an empty file. Leaving that
+  one uncaught would have been an inconsistent half-fix.
+- **`run_options.py` has never been through the STANDING CHECK** — closed by
+  Tasks 6 and 8. All five of its argument-carrying call sites were inside
+  `set_venv_dir`, which Task 6 deleted; `VenvHandle.for_dir`'s four
+  replacements are in the new index.
+- **The four `pipeline.py:125` dead arguments** — closed by construction; see
+  amendment 5.
+
+**What 4a did NOT do, with its owner named:**
+
+- **The `Options` deletion itself, and design amendment 9** (the persistence
+  change) — **4b's**. The class is down to fourteen fields in four documented
+  groups; `run_options.py`'s module docstring accounts for every one.
+- **`pathlibcutoff` and its two readers** — **4b's**, unchanged.
+- **The `cli.Options` re-export and the test references.** Re-derived on this
+  branch, **not copied**: **49** literal `cli.Options` (two of them in `src` —
+  `cli.py`'s re-export and `run_options.py`'s own docstring) plus **24**
+  spelled `veny.Options` across five test files that alias with
+  `from veny import cli as veny` (one of the 24,
+  `tests/test_json_types.py:174`, is a comment, not a reference). 3e predicted
+  42 and measured 69; **4b must measure again rather than trust this.**
+- **The in-virtualenv guard** (USER RULING 2026-08-20) — **4c's**, untouched.
+- **`--feeling-lucky` skips the signal normalization** — **4c's**, untouched.
+- **Latent defects 1 and 3** — **4c's**. Both re-confirmed unchanged by Task
+  8's sweep: `-y`/`--yes` still never reaches `blank_slate`, and
+  `run_script(rawlog=…)` is still passed and unread at three of its four
+  sites. The fourth, the venv launch, passes `announce=True` and *is* killed.
+- **The remaining dead arguments** — **4c's**. Task 8's list is five, not 3e's
+  seventeen: the rest closed when the values that carried them became
+  arguments with live readers.
+- **Removing the probe venv from classification** (design amendment 3) and the
+  **single-file reachability gap** — still unowned, and still not phase 4's.
+
+**What the closing self-review found (2026-08-21).** Read this as the
+*first* of two passes, not as the phase's review: an independent whole-branch
+review was run afterwards and its findings are recorded below this list. The
+self-review's coverage is the weaker of the two by construction — it was the
+author reading the author's diff — and it still found one Important issue and
+four Minor, which is the argument for the second pass rather than against it:
+
+1. **IMPORTANT — a third sanctioned behaviour change nobody had recorded.**
+   `veny notes.txt` — a real file that is not a Python script — used to raise
+   `ValueError` out of `list_packages` and reach the user as a traceback with
+   status 1. It is now a `UsageError` and **status 2**. `ek.ensure_file`
+   accepts any file, so `resolve_target` lets it through and `list_packages`
+   is where it fails; Task 1 changed that raise along with the two the plan
+   named, and neither the plan, this file nor the differential said so. Both
+   trees were run to confirm the old status was 1 and the new one is 2. Now
+   carries `test_import_discovery::test_a_file_that_is_not_python_is_a_usage_error_not_a_traceback`
+   (mutation-checked) and **layer 13** of the differential, which is why the
+   diff is now 43 lines and four hunks rather than 29 and two.
+2. **MINOR — the saved JSON payload changed, harmlessly.** `run` no longer
+   assigns `options.stdlib` or `options.aliases`, so the last-used record now
+   carries the defaults `Options.__init__` builds rather than the indexes the
+   run resolved. Nothing reads either back — `last_used` reads `venv_python`
+   and `cache_search` reads `venv_dir`, both restored — so this is a change to
+   the file's contents and nothing else. Phase 4b deletes the whole payload.
+3. **MINOR — an orphaned docstring line** in `build_alias_index`, where the
+   old `options` entry's continuation ("and the --offline flag.") was left
+   dangling under `python_command`.
+4. **MINOR — `run`'s summary line** still read "Execute the run described by
+   options" after options stopped describing it.
+5. **MINOR — a weakened assertion.** Repointing
+   `test_main_describes_the_run_to_the_cache_search` had turned
+   `assert loaded == [options]` into an `isinstance` check, losing the pin
+   that the loader gets the run's *own* Options — the one thing only identity
+   can prove, since `load_last_used_options` loads *into* whatever it is
+   handed. Restored by capturing the Options at `parse_arguments`, and
+   mutation-checked.
+
+**One trap this phase paid for, worth not paying twice.** `pixi run` sets
+`PYTHONPATH=src`, and `tests/test_import_guard.py` spawns its own subprocess
+that needs it. Task 8's first sweep invoked pytest directly, without it, so
+that one test failed under **every** mutation and reported 86 spurious kills —
+which would have hidden every real hole behind them. Any tool that runs this
+suite outside `pixi run` must set `PYTHONPATH=src`, and any sweep must
+sanity-import the mutated module before believing a failure.
 
 Phase 3 is **finished**. `pipeline-and-cli-slimming` was merged to `main` at
 `4d1846c` (a `--no-ff` merge; branch deleted after merging — it was at
@@ -2177,6 +2364,10 @@ wiring rationale and for two Minors deliberately left unfixed.
   - **The third pre-existing `AssertionError`.** `veny -y` with no script was
     fixed (deviation 2); nothing else in the crash ledger was.
 
+> **DEFECT 2 FIXED 2026-08-21 by phase 4a Task 1** (a missing script is now a
+> usage error, exit 2). **DEFECTS 1 AND 3 ARE STILL OPEN and are phase 4c's**;
+> both were re-confirmed unchanged by 4a's Task 8 sweep.
+
 - **Three latent defects 3e's STANDING CHECK surfaced, recorded and NOT
   fixed** — the phase was behaviour-preserving, and each is pre-existing at
   `08622a8`. Each is a real bug a user can hit.
@@ -2208,6 +2399,14 @@ wiring rationale and for two Minors deliberately left unfixed.
      meant to announce itself, `rawlog` becomes live there and the rows close
      on their own.
 
+> **SUPERSEDED 2026-08-21 by phase 4a Task 8.** The list is five, not
+> seventeen. Twelve closed when the values that carried them became arguments
+> with live readers; the four `pipeline.py:125` `Settings` rows closed by
+> construction (one Settings, two consumers). The survivors are the three
+> `run_script(rawlog=…)` sites, the probe venv's `ResolvedImport(pip_name=…)`,
+> and one non-substitutable expression. See
+> `docs/superpowers/plans/2026-08-21-state-model-values-wiring-index.md`.
+
 - **17 arguments measured DEAD — passed and never read. Phase 4 deletion
   candidates, not test gaps.** They are 17 of the 47 unpinned wiring-index
   rows (13 distinct arguments at six call sites), split out so the headline
@@ -2226,6 +2425,10 @@ wiring rationale and for two Minors deliberately left unfixed.
     nothing else.
   - `pipeline.py:451`/`821`/`844` `run_script(rawlog=…)` — the third latent
     defect above; six rows, one cause.
+
+> **CLOSED 2026-08-21 by phase 4a Tasks 6 and 8.** All five sites were inside
+> `set_venv_dir`, which Task 6 deleted; `VenvHandle.for_dir`'s four
+> replacements are counted in the 4a wiring index.
 
 - **`run_options.py` has never been through the STANDING CHECK, and is
   counted in no number anywhere.** Task 8's brief scoped the sweep to
@@ -2317,6 +2520,10 @@ wiring rationale and for two Minors deliberately left unfixed.
       9's review: those two layers **sort** their captured log records before
       emitting them, so a change that reordered two messages within either
       layer would produce no hunk. The other five layers keep emission order.
+
+> **FINDING 1 DECIDED AND EXECUTED 2026-08-21 by phase 4a Task 1** (user
+> ruling: delete the branch, do not revive it; the 16 rows are retired).
+> **FINDING 2 (the in-virtualenv guard) is still open and is phase 4c's.**
 
 - **Two findings from 3e's whole-branch review (2026-08-20) that phase 4 owns.
   Both are behaviour questions, not test gaps, and neither was fixed on the

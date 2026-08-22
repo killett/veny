@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from contextlib import AbstractContextManager
 
 import emmykit as ek
@@ -26,7 +27,7 @@ from .state import Requirements
 
 
 def _compute_bad_imports(
-    all_imports: set[str], known_bad: set[str], py2_only: frozenset[str]
+    all_imports: set[str], known_bad: AbstractSet[str], py2_only: frozenset[str]
 ) -> set[str]:
     """Return the imports that must never be handed to pip.
 
@@ -38,7 +39,7 @@ def _compute_bad_imports(
     Returns:
         The subset of all_imports that pip must not be asked to install.
     """
-    bad = (known_bad | py2_only) & all_imports
+    bad = set(known_bad | py2_only) & all_imports
     bad.update({imp for imp in all_imports if imp.startswith("_")})
     return bad
 
@@ -83,7 +84,7 @@ def requirement_records(pip_names: Iterable[str]) -> set[ResolvedImport]:
 def add_dependencies(
     uninstalled: set[ResolvedImport],
     *,
-    also_needs: Mapping[str, list[str]],
+    also_needs: Mapping[str, Sequence[str]],
     aliases: alias_index.AliasIndex,
     rawlog: bool,
 ) -> set[ResolvedImport]:
@@ -136,8 +137,8 @@ def split_imports(
     scan: ImportScan,
     *,
     aliases: alias_index.AliasIndex,
-    known_bad_imports: set[str],
-    also_needs: Mapping[str, list[str]],
+    known_bad_imports: AbstractSet[str],
+    also_needs: Mapping[str, Sequence[str]],
     extra_requirements: Mapping[str, str | None],
     use_reqs: bool,
     probe: AbstractContextManager[Callable[[str], bool]],

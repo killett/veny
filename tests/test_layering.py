@@ -344,33 +344,22 @@ def test_analysis_never_rebinds_an_importscan_field() -> None:
     assert violations == [], violations
 
 
-def test_split_imports_copies_back_every_field_it_owns() -> None:
-    """pipeline.split_imports' copy-back must be total, and only the AST can say so.
+def test_split_imports_writes_nothing_back_onto_options() -> None:
+    """pipeline.split_imports must return its product, not write it onto Options.
 
-    The adapter is the single place a Requirements is written back onto
-    Options, and a copy-back that silently drops one field is exactly
-    dbf013c's class of bug: the run keeps whatever stale value Options was
-    already carrying, so nothing raises, nothing logs, and the whole suite
-    stays green while the dropped field is wrong. Only the tests that happen
-    to read that one field could ever notice, and a field with no such test
-    -- which is how dbf013c survived -- is invisible. So this reads the
-    assignments themselves rather than any behaviour.
+    Behaviour under test: the absence of the copy-back. Phase 4a's Task 5
+    deleted it -- classification's product is a Requirements the caller
+    receives, and nothing downstream writes to it.
 
-    The four names are written out rather than derived from Requirements'
-    fields: the mapping is deliberately not one-to-one (`total_imports` is a
-    property, `seen_stdlib` and `extra_requirements` are pass-throughs that
-    Options already holds and must not be re-written), so deriving them would
-    only restate whatever state.py currently says. Only `ast.Attribute`
-    targets whose value is the name `options` count -- the local `scan = ...`
-    and `result = ...` bindings are names, not attributes, and must not trip
-    this guard.
+    This reads the assignments themselves rather than any behaviour, for the
+    same reason its predecessor did. A copy-back that came back would be
+    invisible: the run would carry the value in two places, they could
+    disagree, and only a test that happened to read the stale one could
+    notice. dbf013c was exactly that bug in the other direction -- a
+    copy-back that silently dropped a field.
 
-    This proves the copy-back is *total* -- every field split_imports owns
-    gets written -- and nothing more. It does not prove the copy-back is
-    *correct*: `options.bad_imports = set(result.installed)` (the right
-    field name, the wrong source attribute) still writes to `bad_imports` and
-    so still passes this guard. Catching that class of bug needs a
-    behavioural test that reads the value back, not this one.
+    Only `ast.Attribute` targets whose value is the name `options` count; the
+    local `requirements = ...` binding is a name, not an attribute.
     """
     tree = ast.parse((SRC / "pipeline.py").read_text())
     adapters = [
@@ -395,9 +384,4 @@ def test_split_imports_copies_back_every_field_it_owns() -> None:
                 and target.value.id == "options"
             ):
                 written.add(target.attr)
-    assert written == {
-        "all_imports",
-        "bad_imports",
-        "uninstalled_imports",
-        "total_imports",
-    }
+    assert written == set()

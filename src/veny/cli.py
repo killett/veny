@@ -25,7 +25,7 @@ if not hasattr(ek, "register_json_type"):
         f"veny requires emmykit >= 0.4.0; found {getattr(ek, '__version__', 'unknown')}.\n"
         f"Upgrade it with:  pip install -U 'emmykit>=0.4.0'"
     )
-from . import environment, json_types, pipeline, run_options
+from . import environment, json_types, pipeline, run_options, settings
 
 # An import name paired with the pip package that provides it. Defined in
 # alias_index, which imports nothing of veny's, and re-exported here because
@@ -40,7 +40,8 @@ json_types.register_types()
 
 # Phase 3e moved the class itself to run_options.py so pipeline.py can be
 # handed one without importing the module above it. This name stays for the
-# suite's 42 `cli.Options` references and dies with the class in phase 4.
+# suite's references -- 49 spelled `cli.Options` and 24 spelled `veny.Options`,
+# re-measured on 2026-08-21 -- and dies with the class in phase 4b.
 Options = run_options.Options
 
 
@@ -175,18 +176,41 @@ def main() -> int:
     start_time = dt.datetime.now()
     options = Options()
     parse_arguments(options)
-    options.script_args = getattr(options.args, "script_args", [])
     options.rawlog = getattr(options.args, "rawlog", False)
+    # The run's invariants, built exactly once and handed down. `home` is a
+    # construction detail rather than a field: it exists only to derive
+    # my_dir. `log_mode` stays on Options because ek.configure_logging below
+    # is the only reader.
+    run_settings = settings.Settings(
+        my_name=options.my_name,
+        my_dir=options.home / options.my_name,
+        cwd=options.cwd,
+        venv_name="myenv",
+        stay_out_list=settings.DEFAULT_STAY_OUT_LIST,
+        search_above_this_dir=True,
+        rawlog=options.rawlog,
+        known_bad_imports=settings.DEFAULT_KNOWN_BAD_IMPORTS,
+        also_needs=settings.DEFAULT_ALSO_NEEDS,
+        extra_requirements_file="extra_requirements.txt",
+    )
     memory_handler = None
     try:
-        pipeline.resolve_target(options)
-        lucky_status = pipeline.feeling_lucky(options)
+        target = pipeline.resolve_target(options.args)
+        lucky_status = pipeline.feeling_lucky(
+            options.args,
+            target,
+            options=options,
+            pathlibcutoff=options.pathlibcutoff,
+            rawlog=options.rawlog,
+        )
         if lucky_status is not None:
             return lucky_status
         memory_handler = ek.configure_logging(
             options.my_name, log_level=options.log_mode, rawlog=options.rawlog
         )
-        script_exit_code = pipeline.run(options, start_time=start_time)
+        script_exit_code = pipeline.run(
+            run_settings, options.args, options, target, start_time=start_time
+        )
     except pipeline.UsageError as exc:
         logging.info("%s", exc)
         return 2

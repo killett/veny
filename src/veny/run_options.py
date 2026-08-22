@@ -1,17 +1,37 @@
-"""The per-run state object, on its way out.
+"""What is left of the per-run state object, and why each field survived.
 
-`Options` is the 48-attribute god object the re-architecture retires. It lives
-here rather than in `cli.py` for one reason: `pipeline.py` is handed one, and a
-module may not import the module above it. Phase 4 deletes this file when the
-frozen `Settings`, `Target`, `VenvHandle` and `LastUsed` dataclasses replace it;
-nothing new should be added here in the meantime.
+Phase 4a drained every field the pipeline read or wrote into the frozen
+`Settings`, `Target`, `Requirements` and `VenvHandle` values, and into the
+mutable `ImportScan` the analysis layer accumulates. Fifteen fields remain,
+in four groups:
+
+- **Persistence.** `python_script`, `script_dir`, `timestamp` and `my_name`
+  are what `ek.save_options_to_json` builds its filename from;
+  `venv_dir` and `venv_python` are the payload the *reader* recovers;
+  `options_json_filepath` is where the writer records the result, and
+  `pathlibcutoff` is what `last_used.load_last_used_options` compares against.
+  emmykit's reader and writer are typed against `ek.Options` rather than
+  against a payload, which is the whole of why this class is still alive.
+  `pipeline.run` copies the first three across at the save and nowhere else.
+- **Construction inputs.** `home` and `cwd`, which `cli.main` derives the
+  run's `Settings` from, and `log_mode`, which only `ek.configure_logging`
+  reads.
+- **Passed as themselves.** `stdlib` and `aliases`. The design keeps both out
+  of every bundle ("they belong to no bundle"), and `pipeline.run` builds its
+  own rather than reading these -- they survive because
+  `save_options_to_json` serializes the instance's whole `__dict__`, so
+  removing them would change the payload, and the payload is phase 4b's.
+- **`rawlog`.** Read by `cli.main` for `ek.configure_logging` and for
+  `ek.print_all_errors`; `Settings.rawlog` is what every stage below reads.
+
+Phase 4b breaks the persistence coupling -- veny writes its own `LastUsed`
+record -- and deletes this file, the `cli.Options` re-export, and the test
+references in both spellings. Nothing new goes in here.
 """
 
 from __future__ import annotations
 
-import datetime as dt
 import logging
-import os
 from pathlib import Path
 
 import emmykit as ek
@@ -26,114 +46,44 @@ class Options(ek.Options):
         """Initialize the Options class with default values."""
         super().__init__()  # Call the parent class's __init__ method from emmykit
         self.log_mode: int = logging.INFO  # Use --debug to change to logging.DEBUG.
-        self.search_above_this_dir: bool = True
         self.my_name: str = "veny"  # Fixed: the installed command's name, not whatever argv[0] happens to be.
         self.home: Path = Path.home()  # User's home directory
         # The "my_dir" is NOT the directory where this script is located.
         # Instead, it's the directory where this script will store its virtual environments and packages.
         self.my_dir: Path = self.home / self.my_name
-        self.python_command: str = ""
         self.cwd: Path = Path.cwd().expanduser().resolve(strict=True)
-        self.venv_name: str = "myenv"  # Can NOT include dashes ("-")
-        # Both sets hold ResolvedImport records, so every consumer can pick the
-        # right name instead of guessing which kind of string it was handed.
-        self.uninstalled_imports: set[alias_index.ResolvedImport] = set()
-        self.bad_imports: set[str] = set()
-        self.all_imports: set[str] = set()
-        self.total_imports: int = 0
-        self.custom_modules: dict[
-            str, Path
-        ] = {}  # Maps custom module names to their file Paths
-        self.subfolders: list[str] = []
-        self.samedir_files: list[Path] = []
-        self.loaded_custom_modules: set[str] = set()
-        self.timestamp: str = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-        self.sys_path_hints: set[Path] = set()  # Filled by SysPathVisitor
+        # The three fields ek.save_options_to_json builds its filename from,
+        # alongside my_name. Target owns them for the run; pipeline.run copies
+        # them across just before the save, because emmykit's writer is typed
+        # against ek.Options rather than against a payload. Phase 4b drops the
+        # coupling -- veny writes its own LastUsed record -- and these go with
+        # it. Nothing else may read them.
         self.python_script: Path | None = None
-        self.script_name: str = ""  # python_script without the .py extension
         self.script_dir: Path | None = None
-        self.script_args: list[str] = []
+        self.timestamp: str = ""
+        # And the two the *reader* recovers. last_used.load_last_used_options
+        # rebuilds an Options from the saved __dict__, and
+        # load_last_used_venv_python and the cache search's last-used pass
+        # read these two back off it. They left Options in phase 4a Task 6
+        # and had to come back: without them the JSON carries no venv at all,
+        # so --feeling-lucky and the last-used pointer silently never match
+        # again. Caught by scripts/differential_4a.py, not by the unit suite.
+        self.venv_dir: Path | None = None
+        self.venv_python: Path | None = None
         self.options_json_filepath: Path | None = None
         # Before 2025-08-10 at 22:49:00, paths were stored as strings. After that date, they were stored as pathlib.Path objects. Any .pkl files created before that date have their paths converted to pathlib.Path objects when loaded. Any .json files created before that date are ignored when loading last-used options.
         self.pathlibcutoff: str = "20250810-224900"
-        self.current_pip_version: str = ""
-        self.new_pip_version: str = ""
-        self.venv_dir: Path | None = None
-        self.venv_python: Path | None = None
-        self.requirements_file: Path | None = None
-        self.extra_requirements: dict[str, str | None] = {}
-        self.extra_requirements_file: str = "extra_requirements.txt"
-        self.install_succeeded: bool = False
-        self.max_checks: int = (
-            10  # Maximum number of times to check any repeated process.
-        )
-        self.check_interval: int = 5  # Number of seconds to wait between checks.
         self.rawlog: bool = False
-        # Some imports also need other packages to be installed. Both the keys and
-        # the values are *import* names: they are matched against and resolved
-        # through options.aliases, which turns e.g. "netCDF4" into pip's "netcdf4".
-        self.also_needs: dict[str, list[str]] = {
-            "xarray": ["dask", "netCDF4", "h5netcdf"],
-            "litellm": ["tenacity"],
-            # NOT PIP PACKAGES: "pyautogui": ["scrot", "python3-tk"]
-            # Add more packages and their dependencies here
-        }
         # Standard-library membership is derived from a real interpreter, never hardcoded.
-        # Replaced in main() once options.python_command is known, so that truth comes from
+        # Replaced in run() once the target's python_command is known, so that truth comes from
         # the interpreter that will actually run the user's script. See
         # docs/superpowers/specs/2026-08-12-stdlib-index-design.md
         self.stdlib: stdlib_index.StdlibIndex = stdlib_index.for_running_interpreter()
-        self.seen_stdlib_imports: set[str] = (
-            set()
-        )  # Standard-library imports that were skipped
         # Import-name-to-pip-name resolution. Replaced in main() once
-        # options.python_command is known, so the resolver probes the
+        # the target's python_command is known, so the resolver probes the
         # interpreter that will actually run the user's script. empty()
         # rather than build() here: Options() is constructed before
         # python_command is known and in every test, and build() spawns a
         # probe subprocess. See
         # docs/superpowers/specs/2026-08-12-module-alias-resolver-design.md
         self.aliases: alias_index.AliasIndex = alias_index.empty(self.my_dir)
-        # Project-specific module names that are not on PyPI and never will be. Python 2
-        # names and system-package cases now live in stdlib_index.py instead.
-        self.known_bad_imports: set[str] = {
-            "snakeClass",
-            "GPUampcor",
-            "pathfinding_salvo_rework",
-            "DQN",
-            "bayesOpt",
-            "non_existent_module",
-        }
-        # List of unusual imports that are not standard library modules or packages.
-        self.unusual_imports: list[str] = [
-            "a",
-            "an",
-            "dl",
-            "the",
-            "it",
-            "x",
-            "xx",
-            "above",
-            "another",
-            "__builtin__",
-            "within",
-        ]
-        # List of directories to stay out of when searching for local custom imports because they're filled with standard library modules or other irrelevant files.
-        self.stay_out_list: list[str] = [
-            "myenv",
-            ".venv",
-            "anaconda3",
-            "miniconda3",
-            "miniforge3",
-            ".conda",
-            os.sep + "lib" + os.sep,
-            ".vscode",
-        ]
-
-    def set_venv_dir(self, venv_dir: str | os.PathLike[str]) -> None:
-        """Set the directory for the virtual environment."""
-        p = ek.ensure_path(venv_dir)
-        self.venv_dir = p
-        self.venv_python = p / "bin" / "python"  # Do NOT resolve() this symlink path
-        self.requirements_file = p / "requirements.txt"
-        p.mkdir(parents=True, exist_ok=True)  # Create the directory if it doesn't exist

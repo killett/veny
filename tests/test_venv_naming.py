@@ -6,10 +6,14 @@ from veny import cache_search, environment, stdlib_index
 from veny import cli as veny
 
 
-def an_options(python_command: str) -> veny.Options:
-    """Build an Options carrying only what these helpers read."""
+def an_options() -> veny.Options:
+    """Build an Options carrying only what these helpers read.
+
+    It no longer takes a python_command: phase 4a moved that onto the Target,
+    and interpreter_tag never read it -- which is exactly what the test below
+    pins.
+    """
     options = veny.Options()
-    options.python_command = python_command
     options.stdlib = stdlib_index.StdlibIndex(
         names=frozenset({"os"}), python_version=(3, 12), source="test"
     )
@@ -30,12 +34,13 @@ def test_venv_build_interpreter_falls_back_when_no_preferred_python_was_found() 
 
 
 def test_interpreter_tag_comes_from_the_stdlib_index() -> None:
-    """A mutation reading the tag out of python_command must fail here: the two sources disagree.
+    """A mutation reading the tag out of the run's interpreter must fail here.
 
-    an_options() always builds stdlib for (3, 12); giving python_command a
-    different minor version means "3.12" can only come from options.stdlib.
+    an_options() always builds stdlib for (3, 12), and carries no interpreter
+    of its own at all since phase 4a moved python_command onto the Target --
+    so "3.12" can only have come from options.stdlib.
     """
-    options = an_options("/usr/bin/python3.9")
+    options = an_options()
     assert options.stdlib.python_version == (
         3,
         12,

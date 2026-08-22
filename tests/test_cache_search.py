@@ -2,6 +2,7 @@
 
 import argparse
 import contextlib
+import dataclasses
 import importlib
 import io
 import logging
@@ -17,6 +18,7 @@ from veny import (
     alias_index,
     cache_search,
     environment,
+    state,
     stdlib_index,
     venv_cache,
     verify,
@@ -24,20 +26,40 @@ from veny import (
 from veny import cli as veny
 from veny.alias_index import ResolvedImport
 
+from .test_state_values import a_requirements as _a_requirements
+
 
 def an_options(records: set[ResolvedImport]) -> veny.Options:
-    """Build an Options carrying what the cache search reads."""
+    """Build an Options carrying what the cache search still reads off one.
+
+    Phase 4a moved uninstalled_imports, all_imports and extra_requirements
+    onto Requirements; a_reqs below builds the matching value. Only the
+    stdlib index is left here.
+    """
     options = veny.Options()
     options.stdlib = stdlib_index.StdlibIndex(
         names=frozenset({"os"}), python_version=(3, 12), source="test"
     )
-    options.uninstalled_imports = records
-    options.extra_requirements = {}
     return options
 
 
+def a_reqs(records: set[ResolvedImport], **overrides: object) -> state.Requirements:
+    """The Requirements matching an_options' run description.
+
+    Args:
+        records: What the run still has to install.
+        **overrides: Field values to replace, e.g. extra_requirements.
+
+    Returns:
+        The Requirements the cache search reads.
+    """
+    return _a_requirements(uninstalled=frozenset(records), **overrides)
+
+
 def candidates(
-    options: veny.Options, folders: list[Path]
+    options: veny.Options,
+    requirements: state.Requirements,
+    folders: list[Path],
 ) -> list[cache_search.CacheCandidate]:
     """cache_candidates wired the way find_match_dir_in_cache wires it.
 
@@ -48,14 +70,16 @@ def candidates(
     return cache_search.cache_candidates(
         folders,
         wanted=cache_search.wanted_packages(
-            options.uninstalled_imports, options.extra_requirements
+            set(requirements.uninstalled), requirements.extra_requirements
         ),
         tag=cache_search.interpreter_tag(options.stdlib),
-        rawlog=options.rawlog,
+        rawlog=True,
     )
 
 
-def check(options: veny.Options, venv_dir: Path) -> bool:
+def check(
+    options: veny.Options, requirements: state.Requirements, venv_dir: Path
+) -> bool:
     """check_venv_dir wired the way find_match_dir_in_cache wires it.
 
     source_names is computed once by main() now and passed down, rather than
@@ -64,16 +88,16 @@ def check(options: veny.Options, venv_dir: Path) -> bool:
     return cache_search.check_venv_dir(
         venv_dir,
         wanted=cache_search.wanted_packages(
-            options.uninstalled_imports, options.extra_requirements
+            set(requirements.uninstalled), requirements.extra_requirements
         ),
         tag=cache_search.interpreter_tag(options.stdlib),
-        uninstalled=options.uninstalled_imports,
+        uninstalled=set(requirements.uninstalled),
         source_names=verify.source_import_names(
-            options.all_imports,
-            options.extra_requirements,
+            set(requirements.all_imports),
+            requirements.extra_requirements,
             getattr(options.args, "reqs", False),
         ),
-        rawlog=options.rawlog,
+        rawlog=True,
     )
 
 
@@ -105,7 +129,10 @@ def test_a_hyphenated_package_does_not_disqualify_its_own_venv(tmp_path: Path) -
         [venv_cache.PackageRecord("ruamel.yaml", "ruamel-yaml", "0.18.6", None)],
     )
     options = an_options({ResolvedImport("ruamel.yaml", "ruamel-yaml")})
-    assert [c.folder for c in candidates(options, [venv_dir])] == [venv_dir]
+    requirements = a_reqs({ResolvedImport("ruamel.yaml", "ruamel-yaml")})
+    assert [c.folder for c in candidates(options, requirements, [venv_dir])] == [
+        venv_dir
+    ]
 
 
 def test_a_venv_without_a_manifest_is_skipped(tmp_path: Path) -> None:
@@ -113,7 +140,8 @@ def test_a_venv_without_a_manifest_is_skipped(tmp_path: Path) -> None:
     venv_dir = tmp_path / "myenv-py3.12-20260814-091500-numpy"
     venv_dir.mkdir()
     options = an_options({ResolvedImport("numpy", "numpy")})
-    assert candidates(options, [venv_dir]) == []
+    requirements = a_reqs({ResolvedImport("numpy", "numpy")})
+    assert candidates(options, requirements, [venv_dir]) == []
 
 
 def test_a_venv_for_another_interpreter_is_skipped(tmp_path: Path) -> None:
@@ -125,7 +153,8 @@ def test_a_venv_for_another_interpreter_is_skipped(tmp_path: Path) -> None:
         tag="3.13",
     )
     options = an_options({ResolvedImport("numpy", "numpy")})
-    assert candidates(options, [venv_dir]) == []
+    requirements = a_reqs({ResolvedImport("numpy", "numpy")})
+    assert candidates(options, requirements, [venv_dir]) == []
 
 
 def test_a_venv_missing_a_package_is_skipped(tmp_path: Path) -> None:
@@ -135,10 +164,11 @@ def test_a_venv_missing_a_package_is_skipped(tmp_path: Path) -> None:
         "myenv-py3.12-20260814-091500-numpy",
         [venv_cache.PackageRecord("numpy", "numpy", "2.1.3", None)],
     )
-    options = an_options(
-        {ResolvedImport("numpy", "numpy"), ResolvedImport("scipy", "scipy")}
-    )
-    assert candidates(options, [venv_dir]) == []
+    wanted = {ResolvedImport("numpy", "numpy"), ResolvedImport("scipy", "scipy")}
+    options = an_options(wanted)
+    requirements = a_reqs(wanted)
+
+    assert candidates(options, requirements, [venv_dir]) == []
 
 
 def test_a_venv_whose_name_allows_it_but_manifest_disagrees_is_skipped(
@@ -150,10 +180,11 @@ def test_a_venv_whose_name_allows_it_but_manifest_disagrees_is_skipped(
         "myenv-py3.12-20260814-091500-numpy_scipy",
         [venv_cache.PackageRecord("numpy", "numpy", "2.1.3", None)],
     )
-    options = an_options(
-        {ResolvedImport("numpy", "numpy"), ResolvedImport("scipy", "scipy")}
-    )
-    assert candidates(options, [venv_dir]) == []
+    wanted = {ResolvedImport("numpy", "numpy"), ResolvedImport("scipy", "scipy")}
+    options = an_options(wanted)
+    requirements = a_reqs(wanted)
+
+    assert candidates(options, requirements, [venv_dir]) == []
 
 
 def test_a_pin_is_checked_against_the_installed_version(tmp_path: Path) -> None:
@@ -164,10 +195,17 @@ def test_a_pin_is_checked_against_the_installed_version(tmp_path: Path) -> None:
         [venv_cache.PackageRecord("numpy", "numpy", "1.0.0", ">=1.2")],
     )
     options = an_options({ResolvedImport("numpy", "numpy")})
-    options.extra_requirements = {"numpy": ">=1.2"}
-    assert candidates(options, [venv_dir]) == []
-    options.extra_requirements = {"numpy": ">=0.9"}
-    assert [c.folder for c in candidates(options, [venv_dir])] == [venv_dir]
+    requirements = a_reqs({ResolvedImport("numpy", "numpy")})
+    requirements = dataclasses.replace(
+        requirements, extra_requirements={"numpy": ">=1.2"}
+    )
+    assert candidates(options, requirements, [venv_dir]) == []
+    requirements = dataclasses.replace(
+        requirements, extra_requirements={"numpy": ">=0.9"}
+    )
+    assert [c.folder for c in candidates(options, requirements, [venv_dir])] == [
+        venv_dir
+    ]
 
 
 def test_a_folder_that_loses_its_manifest_between_calls_is_dropped_not_raised(
@@ -193,26 +231,31 @@ def test_a_folder_that_loses_its_manifest_between_calls_is_dropped_not_raised(
         [venv_cache.PackageRecord("numpy", "numpy", "2.1.3", None)],
     )
     options = an_options({ResolvedImport("numpy", "numpy")})
-    assert [c.folder for c in candidates(options, [venv_dir])] == [venv_dir]
+    requirements = a_reqs({ResolvedImport("numpy", "numpy")})
+    assert [c.folder for c in candidates(options, requirements, [venv_dir])] == [
+        venv_dir
+    ]
     (venv_dir / venv_cache.MANIFEST_FILENAME).unlink()
-    assert candidates(options, [venv_dir]) == []
+    assert candidates(options, requirements, [venv_dir]) == []
 
 
 def test_wanted_packages_carries_the_requested_specs() -> None:
     """A spec dropped here makes every pin invisible to matching."""
-    options = an_options({ResolvedImport("numpy", "numpy")})
-    options.extra_requirements = {"numpy": ">=1.2"}
+    requirements = a_reqs(
+        {ResolvedImport("numpy", "numpy")}, extra_requirements={"numpy": ">=1.2"}
+    )
     assert cache_search.wanted_packages(
-        options.uninstalled_imports, options.extra_requirements
+        set(requirements.uninstalled), requirements.extra_requirements
     ) == [venv_cache.Wanted("numpy", ">=1.2")]
 
 
 def test_wanted_packages_finds_a_pin_keyed_by_a_different_spelling() -> None:
     """The record's pip_name and the user's --reqs spelling can differ in case or separators for one project."""
-    options = an_options({ResolvedImport("yaml", "pyyaml")})
-    options.extra_requirements = {"PyYAML": ">=6.0"}
+    requirements = a_reqs(
+        {ResolvedImport("yaml", "pyyaml")}, extra_requirements={"PyYAML": ">=6.0"}
+    )
     assert cache_search.wanted_packages(
-        options.uninstalled_imports, options.extra_requirements
+        set(requirements.uninstalled), requirements.extra_requirements
     ) == [venv_cache.Wanted("pyyaml", ">=6.0")]
 
 
@@ -221,13 +264,15 @@ def test_check_venv_dir_rejects_a_directory_with_no_manifest(tmp_path: Path) -> 
     venv_dir = tmp_path / "myenv-py3.12-20260814-091500-numpy"
     venv_dir.mkdir()
     options = an_options({ResolvedImport("numpy", "numpy")})
-    assert check(options, venv_dir) is False
+    requirements = a_reqs({ResolvedImport("numpy", "numpy")})
+    assert check(options, requirements, venv_dir) is False
 
 
 def test_check_venv_dir_rejects_a_missing_directory(tmp_path: Path) -> None:
     """A deleted venv must be a cache miss, not an exception."""
     options = an_options({ResolvedImport("numpy", "numpy")})
-    assert check(options, tmp_path / "gone") is False
+    requirements = a_reqs({ResolvedImport("numpy", "numpy")})
+    assert check(options, requirements, tmp_path / "gone") is False
 
 
 def test_check_venv_dir_rejects_a_manifest_that_does_not_match(tmp_path: Path) -> None:
@@ -238,7 +283,8 @@ def test_check_venv_dir_rejects_a_manifest_that_does_not_match(tmp_path: Path) -
         [venv_cache.PackageRecord("numpy", "numpy", "2.1.3", None)],
     )
     options = an_options({ResolvedImport("scipy", "scipy")})
-    assert check(options, venv_dir) is False
+    requirements = a_reqs({ResolvedImport("scipy", "scipy")})
+    assert check(options, requirements, venv_dir) is False
 
 
 def _stub_successful_import_check(
@@ -296,7 +342,8 @@ def test_check_venv_dir_accepts_a_manifest_match_whose_import_actually_imports(
         [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
     )
     options = an_options({ResolvedImport("thing", "thing-pkg")})
-    options.all_imports = {"thing"}
+    requirements = a_reqs({ResolvedImport("thing", "thing-pkg")})
+    requirements = dataclasses.replace(requirements, all_imports=frozenset({"thing"}))
     monkeypatch.setattr(
         alias_index,
         "probe_interpreter",
@@ -304,7 +351,7 @@ def test_check_venv_dir_accepts_a_manifest_match_whose_import_actually_imports(
     )
     _stub_successful_import_check(monkeypatch, importable={"thing"})
 
-    assert check(options, venv_dir) is True
+    assert check(options, requirements, venv_dir) is True
 
 
 def test_check_venv_dir_checks_the_name_the_user_wrote_not_the_distributions_others(
@@ -332,7 +379,8 @@ def test_check_venv_dir_checks_the_name_the_user_wrote_not_the_distributions_oth
         [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
     )
     options = an_options({ResolvedImport("thing", "thing-pkg")})
-    options.all_imports = {"thing"}
+    requirements = a_reqs({ResolvedImport("thing", "thing-pkg")})
+    requirements = dataclasses.replace(requirements, all_imports=frozenset({"thing"}))
     # thing-pkg installs a top-level `_hack`, not `thing`.
     monkeypatch.setattr(
         alias_index,
@@ -341,7 +389,7 @@ def test_check_venv_dir_checks_the_name_the_user_wrote_not_the_distributions_oth
     )
     _stub_successful_import_check(monkeypatch, importable={"_hack"})
 
-    assert check(options, venv_dir) is False
+    assert check(options, requirements, venv_dir) is False
 
 
 def _never_called() -> ek.Options | None:
@@ -370,9 +418,9 @@ def test_find_match_dir_in_cache_returns_a_manifest_match(
         [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
     )
     options = an_options({ResolvedImport("thing", "thing-pkg")})
-    options.all_imports = {"thing"}
+    requirements = a_reqs({ResolvedImport("thing", "thing-pkg")})
+    requirements = dataclasses.replace(requirements, all_imports=frozenset({"thing"}))
     options.my_dir = tmp_path
-    options.venv_name = "myenv"
     options.args = argparse.Namespace(
         latest=True, oldest=False, last_used=False, smallest=False
     )
@@ -387,16 +435,16 @@ def test_find_match_dir_in_cache_returns_a_manifest_match(
         cache_search.find_match_dir_in_cache(
             options.args,
             my_dir=options.my_dir,
-            venv_name=options.venv_name,
-            uninstalled=options.uninstalled_imports,
-            extra_requirements=options.extra_requirements,
+            venv_name="myenv",
+            uninstalled=set(requirements.uninstalled),
+            extra_requirements=requirements.extra_requirements,
             source_names=verify.source_import_names(
-                options.all_imports,
-                options.extra_requirements,
+                set(requirements.all_imports),
+                requirements.extra_requirements,
                 getattr(options.args, "reqs", False),
             ),
             tag=cache_search.interpreter_tag(options.stdlib),
-            rawlog=options.rawlog,
+            rawlog=True,
             load_last_used=_never_called,
         )
         == venv_dir
@@ -414,6 +462,7 @@ def test_find_match_dir_in_cache_tolerates_a_last_used_options_without_venv_dir(
     the key) must not crash the run.
     """
     options = an_options({ResolvedImport("numpy", "numpy")})
+    requirements = a_reqs({ResolvedImport("numpy", "numpy")})
     options.my_dir = tmp_path
     options.args = argparse.Namespace(
         latest=False, oldest=False, last_used=False, smallest=False
@@ -423,12 +472,12 @@ def test_find_match_dir_in_cache_tolerates_a_last_used_options_without_venv_dir(
         cache_search.find_match_dir_in_cache(
             options.args,
             my_dir=options.my_dir,
-            venv_name=options.venv_name,
-            uninstalled=options.uninstalled_imports,
-            extra_requirements=options.extra_requirements,
+            venv_name="myenv",
+            uninstalled=set(requirements.uninstalled),
+            extra_requirements=requirements.extra_requirements,
             source_names=verify.source_import_names(
-                options.all_imports,
-                options.extra_requirements,
+                set(requirements.all_imports),
+                requirements.extra_requirements,
                 getattr(options.args, "reqs", False),
             ),
             tag=cache_search.interpreter_tag(options.stdlib),
@@ -481,9 +530,9 @@ def test_a_cache_hit_reads_and_matches_each_manifest_once(
         [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
     )
     options = an_options({ResolvedImport("thing", "thing-pkg")})
-    options.all_imports = {"thing"}
+    requirements = a_reqs({ResolvedImport("thing", "thing-pkg")})
+    requirements = dataclasses.replace(requirements, all_imports=frozenset({"thing"}))
     options.my_dir = tmp_path
-    options.venv_name = "myenv"
     options.args = argparse.Namespace(
         latest=True, oldest=False, last_used=False, smallest=False
     )
@@ -515,16 +564,16 @@ def test_a_cache_hit_reads_and_matches_each_manifest_once(
     result = cache_search.find_match_dir_in_cache(
         options.args,
         my_dir=options.my_dir,
-        venv_name=options.venv_name,
-        uninstalled=options.uninstalled_imports,
-        extra_requirements=options.extra_requirements,
+        venv_name="myenv",
+        uninstalled=set(requirements.uninstalled),
+        extra_requirements=requirements.extra_requirements,
         source_names=verify.source_import_names(
-            options.all_imports,
-            options.extra_requirements,
+            set(requirements.all_imports),
+            requirements.extra_requirements,
             getattr(options.args, "reqs", False),
         ),
         tag=cache_search.interpreter_tag(options.stdlib),
-        rawlog=options.rawlog,
+        rawlog=True,
         load_last_used=_never_called,
     )
 
@@ -562,8 +611,9 @@ def test_check_venv_dir_survives_the_manifest_vanishing_after_it_was_already_rea
         [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
     )
     options = an_options({ResolvedImport("thing", "thing-pkg")})
-    options.all_imports = {"thing"}
-    found = candidates(options, [venv_dir])
+    requirements = a_reqs({ResolvedImport("thing", "thing-pkg")})
+    requirements = dataclasses.replace(requirements, all_imports=frozenset({"thing"}))
+    found = candidates(options, requirements, [venv_dir])
     assert [c.folder for c in found] == [venv_dir]
     already_matched = found[0]
 
@@ -580,13 +630,13 @@ def test_check_venv_dir_survives_the_manifest_vanishing_after_it_was_already_rea
         cache_search.check_venv_dir(
             venv_dir,
             wanted=cache_search.wanted_packages(
-                options.uninstalled_imports, options.extra_requirements
+                set(requirements.uninstalled), requirements.extra_requirements
             ),
             tag=cache_search.interpreter_tag(options.stdlib),
-            uninstalled=options.uninstalled_imports,
+            uninstalled=set(requirements.uninstalled),
             source_names=verify.source_import_names(
-                options.all_imports,
-                options.extra_requirements,
+                set(requirements.all_imports),
+                requirements.extra_requirements,
                 getattr(options.args, "reqs", False),
             ),
             rawlog=options.rawlog,
@@ -630,8 +680,9 @@ def test_check_venv_dir_refuses_a_candidate_that_describes_another_folder(
         [venv_cache.PackageRecord("other", "other-pkg", "1.0.0", None)],
     )
     options = an_options({ResolvedImport("thing", "thing-pkg")})
-    options.all_imports = {"thing"}
-    found = candidates(options, [wanted_dir])
+    requirements = a_reqs({ResolvedImport("thing", "thing-pkg")})
+    requirements = dataclasses.replace(requirements, all_imports=frozenset({"thing"}))
+    found = candidates(options, requirements, [wanted_dir])
     assert [c.folder for c in found] == [wanted_dir]
 
     monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: True)
@@ -640,10 +691,10 @@ def test_check_venv_dir_refuses_a_candidate_that_describes_another_folder(
         cache_search.check_venv_dir(
             other_dir,
             wanted=cache_search.wanted_packages(
-                options.uninstalled_imports, options.extra_requirements
+                set(requirements.uninstalled), requirements.extra_requirements
             ),
             tag=cache_search.interpreter_tag(options.stdlib),
-            uninstalled=options.uninstalled_imports,
+            uninstalled=set(requirements.uninstalled),
             source_names={"thing"},
             rawlog=options.rawlog,
             candidate=found[0],
@@ -659,10 +710,10 @@ def test_check_venv_dir_refuses_a_candidate_that_describes_another_folder(
         cache_search.check_venv_dir(
             wanted_dir,
             wanted=cache_search.wanted_packages(
-                options.uninstalled_imports, options.extra_requirements
+                set(requirements.uninstalled), requirements.extra_requirements
             ),
             tag=cache_search.interpreter_tag(options.stdlib),
-            uninstalled=options.uninstalled_imports,
+            uninstalled=set(requirements.uninstalled),
             source_names={"thing"},
             rawlog=options.rawlog,
             candidate=found[0],
@@ -693,9 +744,9 @@ def test_a_last_used_hit_still_reads_and_matches_its_own_manifest(
         [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
     )
     options = an_options({ResolvedImport("thing", "thing-pkg")})
-    options.all_imports = {"thing"}
+    requirements = a_reqs({ResolvedImport("thing", "thing-pkg")})
+    requirements = dataclasses.replace(requirements, all_imports=frozenset({"thing"}))
     options.my_dir = tmp_path
-    options.venv_name = "myenv"
     options.args = argparse.Namespace(
         latest=False, oldest=False, last_used=True, smallest=False
     )
@@ -730,16 +781,16 @@ def test_a_last_used_hit_still_reads_and_matches_its_own_manifest(
     result = cache_search.find_match_dir_in_cache(
         options.args,
         my_dir=options.my_dir,
-        venv_name=options.venv_name,
-        uninstalled=options.uninstalled_imports,
-        extra_requirements=options.extra_requirements,
+        venv_name="myenv",
+        uninstalled=set(requirements.uninstalled),
+        extra_requirements=requirements.extra_requirements,
         source_names=verify.source_import_names(
-            options.all_imports,
-            options.extra_requirements,
+            set(requirements.all_imports),
+            requirements.extra_requirements,
             getattr(options.args, "reqs", False),
         ),
         tag=cache_search.interpreter_tag(options.stdlib),
-        rawlog=options.rawlog,
+        rawlog=True,
         load_last_used=lambda: last_used_options,
     )
 
@@ -748,7 +799,9 @@ def test_a_last_used_hit_still_reads_and_matches_its_own_manifest(
     assert satisfies_calls == 1
 
 
-def _a_run_with_a_pinned_package(tmp_path: Path) -> tuple[veny.Options, Path]:
+def _a_run_with_a_pinned_package(
+    tmp_path: Path,
+) -> tuple[veny.Options, state.Requirements, Path]:
     """Build a run whose four check_venv_dir arguments are all distinguishable.
 
     Every value the call site has to wire is given a different shape, so a
@@ -756,6 +809,9 @@ def _a_run_with_a_pinned_package(tmp_path: Path) -> tuple[veny.Options, Path]:
     `wanted` holds a Wanted carrying the --reqs spec (which only
     extra_requirements can supply), `source_names` holds an import name that
     is in neither, and `tag` is the run's own interpreter tag.
+
+    Returns:
+        The Options, the Requirements and the cached venv directory.
     """
     folder_name = venv_cache.build_folder_name(
         venv_name="myenv",
@@ -769,12 +825,15 @@ def _a_run_with_a_pinned_package(tmp_path: Path) -> tuple[veny.Options, Path]:
         [venv_cache.PackageRecord("thing", "thing-pkg", "2.5.0", None)],
     )
     options = an_options({ResolvedImport("thing", "thing-pkg")})
+    requirements = a_reqs({ResolvedImport("thing", "thing-pkg")})
     options.my_dir = tmp_path
-    options.venv_name = "myenv"
-    options.all_imports = {"thing", "other"}
-    options.extra_requirements = {"thing-pkg": ">=2.0"}
-    options.rawlog = True
-    return options, venv_dir
+    requirements = dataclasses.replace(
+        requirements, all_imports=frozenset({"thing", "other"})
+    )
+    requirements = dataclasses.replace(
+        requirements, extra_requirements={"thing-pkg": ">=2.0"}
+    )
+    return options, requirements, venv_dir
 
 
 @pytest.mark.parametrize(
@@ -831,7 +890,7 @@ def test_every_branch_hands_check_venv_dir_the_same_description_of_the_run(
     cheap folder-name prefilter cannot catch, so it is the one that proves
     `wanted` and `tag` are actually consulted rather than merely passed.
     """
-    options, venv_dir = _a_run_with_a_pinned_package(tmp_path)
+    options, requirements, venv_dir = _a_run_with_a_pinned_package(tmp_path)
     options.args = argparse.Namespace(**flags)
     calls: list[dict[str, object]] = []
 
@@ -847,16 +906,16 @@ def test_every_branch_hands_check_venv_dir_the_same_description_of_the_run(
     result = cache_search.find_match_dir_in_cache(
         options.args,
         my_dir=options.my_dir,
-        venv_name=options.venv_name,
-        uninstalled=options.uninstalled_imports,
-        extra_requirements=options.extra_requirements,
+        venv_name="myenv",
+        uninstalled=set(requirements.uninstalled),
+        extra_requirements=requirements.extra_requirements,
         source_names=verify.source_import_names(
-            options.all_imports,
-            options.extra_requirements,
+            set(requirements.all_imports),
+            requirements.extra_requirements,
             getattr(options.args, "reqs", False),
         ),
         tag=cache_search.interpreter_tag(options.stdlib),
-        rawlog=options.rawlog,
+        rawlog=True,
         load_last_used=lambda: last_used_options,
     )
 
@@ -905,12 +964,12 @@ def test_every_branch_hands_check_venv_dir_the_same_description_of_the_run(
         cache_search.find_match_dir_in_cache(
             options.args,
             my_dir=liar_dir,
-            venv_name=options.venv_name,
-            uninstalled=options.uninstalled_imports,
-            extra_requirements=options.extra_requirements,
+            venv_name="myenv",
+            uninstalled=set(requirements.uninstalled),
+            extra_requirements=requirements.extra_requirements,
             source_names=verify.source_import_names(
-                options.all_imports,
-                options.extra_requirements,
+                set(requirements.all_imports),
+                requirements.extra_requirements,
                 getattr(options.args, "reqs", False),
             ),
             tag=cache_search.interpreter_tag(options.stdlib),
@@ -949,7 +1008,8 @@ def test_the_cache_search_lets_cache_candidates_explain_a_rejected_folder(
         [venv_cache.PackageRecord("other", "other-pkg", "1.0.0", None)],
     )
     options = an_options({ResolvedImport("thing", "thing-pkg")})
-    options.all_imports = {"thing"}
+    requirements = a_reqs({ResolvedImport("thing", "thing-pkg")})
+    requirements = dataclasses.replace(requirements, all_imports=frozenset({"thing"}))
 
     def run(rawlog: bool) -> Path | None:
         return cache_search.find_match_dir_in_cache(
@@ -958,8 +1018,8 @@ def test_the_cache_search_lets_cache_candidates_explain_a_rejected_folder(
             ),
             my_dir=tmp_path,
             venv_name="myenv",
-            uninstalled=options.uninstalled_imports,
-            extra_requirements=options.extra_requirements,
+            uninstalled=set(requirements.uninstalled),
+            extra_requirements=requirements.extra_requirements,
             source_names={"thing"},
             tag=cache_search.interpreter_tag(options.stdlib),
             rawlog=rawlog,
@@ -1022,8 +1082,9 @@ def test_every_branch_lets_check_venv_dir_report_a_venv_that_vanished(
         [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
     )
     options = an_options({ResolvedImport("thing", "thing-pkg")})
-    options.all_imports = {"thing"}
-    already_found = candidates(options, [venv_dir])
+    requirements = a_reqs({ResolvedImport("thing", "thing-pkg")})
+    requirements = dataclasses.replace(requirements, all_imports=frozenset({"thing"}))
+    already_found = candidates(options, requirements, [venv_dir])
     assert [c.folder for c in already_found] == [venv_dir]
 
     shutil.rmtree(venv_dir)
@@ -1039,8 +1100,8 @@ def test_every_branch_lets_check_venv_dir_report_a_venv_that_vanished(
             argparse.Namespace(**flags),
             my_dir=cache_dir,
             venv_name="myenv",
-            uninstalled=options.uninstalled_imports,
-            extra_requirements=options.extra_requirements,
+            uninstalled=set(requirements.uninstalled),
+            extra_requirements=requirements.extra_requirements,
             source_names={"thing"},
             tag=cache_search.interpreter_tag(options.stdlib),
             rawlog=rawlog,
@@ -1074,7 +1135,7 @@ def test_the_cache_search_filters_the_folders_against_this_run_not_a_blank_one(
     name-and-tag-shaped folder in ~/veny becomes a candidate and the first
     one wins.
     """
-    options, venv_dir = _a_run_with_a_pinned_package(tmp_path)
+    options, requirements, venv_dir = _a_run_with_a_pinned_package(tmp_path)
     options.args = argparse.Namespace(
         latest=True, oldest=False, last_used=False, smallest=False
     )
@@ -1090,16 +1151,16 @@ def test_the_cache_search_filters_the_folders_against_this_run_not_a_blank_one(
         cache_search.find_match_dir_in_cache(
             options.args,
             my_dir=options.my_dir,
-            venv_name=options.venv_name,
-            uninstalled=options.uninstalled_imports,
-            extra_requirements=options.extra_requirements,
+            venv_name="myenv",
+            uninstalled=set(requirements.uninstalled),
+            extra_requirements=requirements.extra_requirements,
             source_names=verify.source_import_names(
-                options.all_imports,
-                options.extra_requirements,
+                set(requirements.all_imports),
+                requirements.extra_requirements,
                 getattr(options.args, "reqs", False),
             ),
             tag=cache_search.interpreter_tag(options.stdlib),
-            rawlog=options.rawlog,
+            rawlog=True,
             load_last_used=_never_called,
         )
         is None
@@ -1130,7 +1191,7 @@ def test_check_venv_dir_probes_the_interpreter_inside_the_venv_it_was_given(
     veny (or from a previous candidate), so a venv missing the package is
     reused whenever veny's own environment happens to provide it.
     """
-    options, venv_dir = _a_run_with_a_pinned_package(tmp_path)
+    options, requirements, venv_dir = _a_run_with_a_pinned_package(tmp_path)
     probed: list[str] = []
 
     def spy(venv_python, **kwargs):
@@ -1143,10 +1204,10 @@ def test_check_venv_dir_probes_the_interpreter_inside_the_venv_it_was_given(
         cache_search.check_venv_dir(
             venv_dir,
             wanted=cache_search.wanted_packages(
-                options.uninstalled_imports, options.extra_requirements
+                set(requirements.uninstalled), requirements.extra_requirements
             ),
             tag="3.12",
-            uninstalled=options.uninstalled_imports,
+            uninstalled=set(requirements.uninstalled),
             source_names={"thing"},
             rawlog=True,
         )

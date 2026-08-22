@@ -10,6 +10,7 @@ from veny import (
     cache_search,
     environment,
     pipeline,
+    state,
     venv_cache,
     verify,
 )
@@ -18,12 +19,15 @@ from veny.analysis.imports import process_import
 from veny.analysis.scan import _enqueue_top_level_imports
 from veny.analysis.scan_state import ImportScan
 
+from .test_state_values import a_requirements as _a_requirements
+from .test_state_values import a_settings as _a_settings
+from .test_state_values import a_target as _target
+
 
 def test_tkinter_produces_one_system_package_warning(caplog):
-    options = veny.Options()
-    options.seen_stdlib_imports = {"tkinter", "os"}
+    scan = ImportScan(seen_stdlib_imports={"tkinter", "os"})
     with caplog.at_level(logging.WARNING):
-        pipeline.warn_about_system_packages(options)
+        pipeline.warn_about_system_packages(scan)
     messages = [record.getMessage() for record in caplog.records]
     assert len(messages) == 1
     assert "tkinter" in messages[0]
@@ -31,10 +35,9 @@ def test_tkinter_produces_one_system_package_warning(caplog):
 
 
 def test_no_warning_when_no_hint_module_was_seen(caplog):
-    options = veny.Options()
-    options.seen_stdlib_imports = {"os", "sys"}
+    scan = ImportScan(seen_stdlib_imports={"os", "sys"})
     with caplog.at_level(logging.WARNING):
-        pipeline.warn_about_system_packages(options)
+        pipeline.warn_about_system_packages(scan)
     assert caplog.records == []
 
 
@@ -42,24 +45,16 @@ def test_process_import_records_a_stdlib_skip(tmp_path):
     options = veny.Options()
     script = tmp_path / "user_script.py"
     script.write_text("import tkinter\n")
-    # process_import now takes an ImportScan and an injected is_stdlib
-    # predicate instead of Options. scan holds the same objects options
-    # does (not copies), so asserting on options.seen_stdlib_imports below
-    # still observes what process_import wrote.
-    scan = ImportScan(
-        all_imports=options.all_imports,
-        custom_modules=options.custom_modules,
-        loaded_custom_modules=options.loaded_custom_modules,
-        samedir_files=options.samedir_files,
-        subfolders=options.subfolders,
-        sys_path_hints=options.sys_path_hints,
-        seen_stdlib_imports=options.seen_stdlib_imports,
-    )
+    # process_import takes an ImportScan and an injected is_stdlib predicate.
+    # Phase 4a stopped seeding that scan from Options -- the seven fields are
+    # the scan's own now -- so the assertion below reads the scan directly.
+    scan = ImportScan()
+
     assert (
         process_import(scan, "tkinter", script, is_stdlib=options.stdlib.__contains__)
         is False
     )
-    assert "tkinter" in options.seen_stdlib_imports
+    assert "tkinter" in scan.seen_stdlib_imports
 
 
 def test_enqueue_top_level_imports_records_stdlib_and_skips_enqueue(tmp_path):
@@ -68,17 +63,9 @@ def test_enqueue_top_level_imports_records_stdlib_and_skips_enqueue(tmp_path):
     options = veny.Options()
     module_path = tmp_path / "user_script.py"
     module_path.write_text("import tkinter\n")
-    processed_paths: set = set()
-    modules_to_process: deque = deque()
-    scan = ImportScan(
-        all_imports=options.all_imports,
-        custom_modules=options.custom_modules,
-        loaded_custom_modules=options.loaded_custom_modules,
-        samedir_files=options.samedir_files,
-        subfolders=options.subfolders,
-        sys_path_hints=options.sys_path_hints,
-        seen_stdlib_imports=options.seen_stdlib_imports,
-    )
+    processed_paths: set[Path] = set()
+    modules_to_process: deque[Path] = deque()
+    scan = ImportScan()
 
     _enqueue_top_level_imports(
         scan,
@@ -89,7 +76,7 @@ def test_enqueue_top_level_imports_records_stdlib_and_skips_enqueue(tmp_path):
         is_stdlib=options.stdlib.__contains__,
     )
 
-    assert "tkinter" in options.seen_stdlib_imports
+    assert "tkinter" in scan.seen_stdlib_imports
     assert len(modules_to_process) == 0
 
 
@@ -126,13 +113,15 @@ def test_the_offline_argument_keeps_the_index_off_the_network(monkeypatch, tmp_p
     # on a plane, behind a blocked index, or in a sandbox without egress.
     options = veny.Options()
     options.my_dir = tmp_path
-    options.python_command = None
     monkeypatch.setattr(sys, "argv", ["veny.py", "--offline", "script.py"])
 
     veny.parse_arguments(options)
 
     assert options.args.offline is True
-    assert pipeline.build_alias_index(options).pypi is None
+    assert (
+        pipeline.build_alias_index(_a_settings(my_dir=tmp_path), options.args, "").pypi
+        is None
+    )
 
 
 def test_the_index_reaches_pypi_by_default(monkeypatch, tmp_path):
@@ -140,13 +129,15 @@ def test_the_index_reaches_pypi_by_default(monkeypatch, tmp_path):
     # only tier that can resolve a name veny has never seen before.
     options = veny.Options()
     options.my_dir = tmp_path
-    options.python_command = None
     monkeypatch.setattr(sys, "argv", ["veny.py", "script.py"])
 
     veny.parse_arguments(options)
 
     assert options.args.offline is False
-    assert pipeline.build_alias_index(options).pypi is not None
+    assert (
+        pipeline.build_alias_index(_a_settings(my_dir=tmp_path), options.args, "").pypi
+        is not None
+    )
 
 
 def _run_check_against_fake_venv(monkeypatch, importable: set[str], errors=None):
@@ -202,8 +193,9 @@ def test_check_venv_dir_rejects_a_manifest_match_whose_import_does_not_actually_
     cached_dir.mkdir()
     record = veny.ResolvedImport(import_name="thing", pip_name="thing-pkg")
     options = veny.Options()
-    options.all_imports = {"thing"}
-    options.uninstalled_imports = {record}
+    requirements = _a_requirements(
+        all_imports=frozenset({"thing"}), uninstalled=frozenset({record})
+    )
     venv_cache.write_manifest(
         cached_dir,
         venv_cache.Manifest(
@@ -228,16 +220,16 @@ def test_check_venv_dir_rejects_a_manifest_match_whose_import_does_not_actually_
         cache_search.check_venv_dir(
             cached_dir,
             wanted=cache_search.wanted_packages(
-                options.uninstalled_imports, options.extra_requirements
+                set(requirements.uninstalled), requirements.extra_requirements
             ),
             tag=cache_search.interpreter_tag(options.stdlib),
-            uninstalled=options.uninstalled_imports,
+            uninstalled=set(requirements.uninstalled),
             source_names=verify.source_import_names(
-                options.all_imports,
-                options.extra_requirements,
+                set(requirements.all_imports),
+                requirements.extra_requirements,
                 getattr(options.args, "reqs", False),
             ),
-            rawlog=options.rawlog,
+            rawlog=True,
         )
         is False
     )
@@ -251,10 +243,11 @@ def test_setup_virtualenv_verifies_every_import_before_reporting_success(
     # and two of the five evidence tiers were unreachable. Nothing inside
     # either function could catch that -- only a test of the join can.
     options = veny.Options()
-    options.my_dir = tmp_path
-    options.uninstalled_imports = {
-        veny.ResolvedImport(import_name="thing", pip_name="thing-pkg")
-    }
+    requirements = _a_requirements(
+        uninstalled=frozenset(
+            {veny.ResolvedImport(import_name="thing", pip_name="thing-pkg")}
+        )
+    )
     calls = []
     monkeypatch.setattr(
         environment, "write_requirements_file_with_extras", lambda *args: None
@@ -285,13 +278,23 @@ def test_setup_virtualenv_verifies_every_import_before_reporting_success(
     # versions, which this test's fake subprocess.run cannot answer -- it is
     # unrelated to the ordering this test checks, so it is stubbed out too.
     # It returns the (possibly renamed) venv directory now, which
-    # setup_virtualenv feeds straight to options.set_venv_dir, so the stub
+    # setup_virtualenv feeds straight to VenvHandle.for_dir, so the stub
     # hands back the directory it was given rather than None.
     monkeypatch.setattr(
         cache_search, "record_venv_state", lambda venv_dir, **kwargs: venv_dir
     )
 
-    assert pipeline.setup_virtualenv(options) is True
+    assert (
+        pipeline.setup_virtualenv(
+            _a_settings(my_dir=tmp_path),
+            _target(),
+            requirements,
+            args=options.args,
+            aliases=options.aliases,
+            stdlib=options.stdlib,
+        )[1]
+        is not None
+    )
     # Verification has to happen before the gate that drops the "failed-"
     # prefix, or its repairs cannot affect the answer.
     assert calls == ["verify", "check"]
@@ -302,9 +305,7 @@ def test_the_repair_installer_reports_failure_instead_of_exiting(monkeypatch, tm
     # return code, logs the error and returns False rather than raising or
     # exiting. resolve_and_verify's installer must not be able to end the
     # run: one unverifiable import is not a reason to kill everything.
-    options = veny.Options()
-    options.my_dir = tmp_path
-    options.set_venv_dir(tmp_path / "venv")
+    handle = state.VenvHandle.for_dir(tmp_path / "venv")
 
     def fake_run(command, *args, **kwargs):
         return subprocess.CompletedProcess(
@@ -314,7 +315,7 @@ def test_the_repair_installer_reports_failure_instead_of_exiting(monkeypatch, tm
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     assert (
-        environment.install_into_venv(options.venv_python, "nonexistent-package")
+        environment.install_into_venv(handle.venv_python, "nonexistent-package")
         is False
     )
 

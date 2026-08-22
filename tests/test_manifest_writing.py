@@ -7,25 +7,49 @@ from collections.abc import Set as AbstractSet
 from pathlib import Path
 from typing import TypedDict
 
-from veny import cache_search, stdlib_index, venv_cache
+from veny import cache_search, state, stdlib_index, venv_cache
 from veny import cli as veny
 from veny.alias_index import ResolvedImport
 
+from .test_state_values import a_requirements as _a_requirements
+
+# The interpreter the manifest records. Phase 4a moved python_command off
+# Options and onto the Target, and manifest_for takes it as an explicit
+# argument, so these tests name it here rather than staging it on an Options.
+PYTHON_COMMAND = "/usr/bin/python3.12"
+
+# The venv-name prefix cached folder names are built from. Phase 4a moved it
+# onto the Settings; record_venv_state takes it as an explicit argument.
+VENV_NAME = "myenv"
+
 
 def an_options() -> veny.Options:
-    """Build an Options carrying the fields manifest_for reads."""
+    """Build an Options carrying what manifest_for still reads off one.
+
+    Phase 4a moved uninstalled_imports and extra_requirements onto
+    Requirements; a_reqs below builds the matching value. Only the stdlib
+    index and the run stamp are left here.
+    """
     options = veny.Options()
-    options.python_command = "/usr/bin/python3.12"
     options.stdlib = stdlib_index.StdlibIndex(
         names=frozenset({"os"}), python_version=(3, 12), source="test"
     )
     options.timestamp = "20260814-091500"
-    options.uninstalled_imports = {
-        ResolvedImport("yaml", "PyYAML"),
-        ResolvedImport("numpy", "numpy"),
-    }
-    options.extra_requirements = {"numpy": ">=1.2"}
     return options
+
+
+def a_reqs() -> state.Requirements:
+    """The Requirements matching an_options' run description.
+
+    Returns:
+        Two records the manifest must list, and one --reqs pin.
+    """
+    return _a_requirements(
+        uninstalled=frozenset(
+            {ResolvedImport("yaml", "PyYAML"), ResolvedImport("numpy", "numpy")}
+        ),
+        extra_requirements={"numpy": ">=1.2"},
+    )
 
 
 class ManifestKwargs(TypedDict):
@@ -49,7 +73,10 @@ class ManifestKwargs(TypedDict):
 
 
 def manifest_kwargs(
-    options: veny.Options, versions: dict[str, str], venv_tag: str = ""
+    options: veny.Options,
+    requirements: state.Requirements,
+    versions: dict[str, str],
+    venv_tag: str = "",
 ) -> ManifestKwargs:
     """The arguments cli.py hands cache_search.manifest_for, read off an Options.
 
@@ -60,6 +87,7 @@ def manifest_kwargs(
 
     Args:
         options:  The run's Options, read for the fields manifest_for wants.
+        requirements: What the run still has to install, and its --reqs pins.
         versions: Installed versions, keyed by normalized pip name.
         venv_tag: The venv's own "major.minor", or "" if it could not be probed.
 
@@ -67,10 +95,10 @@ def manifest_kwargs(
         Keyword arguments ready to splat into cache_search.manifest_for.
     """
     return {
-        "uninstalled": options.uninstalled_imports,
-        "extra_requirements": options.extra_requirements,
+        "uninstalled": requirements.uninstalled,
+        "extra_requirements": requirements.extra_requirements,
         "timestamp": options.timestamp,
-        "python_command": options.python_command,
+        "python_command": PYTHON_COMMAND,
         "run_tag": cache_search.interpreter_tag(options.stdlib),
         "versions": versions,
         "venv_tag": venv_tag,
@@ -80,7 +108,7 @@ def manifest_kwargs(
 def test_manifest_for_records_versions_and_specs() -> None:
     """A manifest without versions cannot answer whether a pin is satisfied."""
     manifest = cache_search.manifest_for(
-        **manifest_kwargs(an_options(), {"pyyaml": "6.0.2", "numpy": "2.1.3"})
+        **manifest_kwargs(an_options(), a_reqs(), {"pyyaml": "6.0.2", "numpy": "2.1.3"})
     )
     by_pip = {record.pip_name: record for record in manifest.packages}
     assert by_pip["PyYAML"].installed_version == "6.0.2"
@@ -95,19 +123,19 @@ def test_manifest_for_records_versions_and_specs() -> None:
 
 def test_manifest_for_records_an_unknown_version_as_none() -> None:
     """Inventing a version here would let an unsatisfiable pin look satisfied."""
-    manifest = cache_search.manifest_for(**manifest_kwargs(an_options(), {}))
+    manifest = cache_search.manifest_for(**manifest_kwargs(an_options(), a_reqs(), {}))
     assert all(record.installed_version is None for record in manifest.packages)
 
 
 def test_manifest_for_keys_versions_by_normalized_name() -> None:
     """pip reports 'PyYAML'; the record spells it differently; both name one project."""
     manifest = cache_search.manifest_for(
-        **manifest_kwargs(an_options(), {"py-yaml": "6.0.2"})
+        **manifest_kwargs(an_options(), a_reqs(), {"py-yaml": "6.0.2"})
     )
     by_pip = {record.pip_name: record for record in manifest.packages}
     assert by_pip["PyYAML"].installed_version is None
     manifest = cache_search.manifest_for(
-        **manifest_kwargs(an_options(), {"pyyaml": "6.0.2"})
+        **manifest_kwargs(an_options(), a_reqs(), {"pyyaml": "6.0.2"})
     )
     by_pip = {record.pip_name: record for record in manifest.packages}
     assert by_pip["PyYAML"].installed_version == "6.0.2"
@@ -116,9 +144,11 @@ def test_manifest_for_keys_versions_by_normalized_name() -> None:
 def test_manifest_for_finds_a_pin_keyed_by_a_different_spelling() -> None:
     """extra_requirements is user-typed; a lookup on the record's own pip_name spelling can miss it entirely."""
     options = an_options()
-    options.uninstalled_imports = {ResolvedImport("yaml", "pyyaml")}
-    options.extra_requirements = {"PyYAML": ">=6.0"}
-    manifest = cache_search.manifest_for(**manifest_kwargs(options, {}))
+    requirements = _a_requirements(
+        uninstalled=frozenset({ResolvedImport("yaml", "pyyaml")}),
+        extra_requirements={"PyYAML": ">=6.0"},
+    )
+    manifest = cache_search.manifest_for(**manifest_kwargs(options, requirements, {}))
     assert manifest.packages[0].requested_spec == ">=6.0"
 
 
@@ -140,15 +170,16 @@ def test_record_venv_state_renames_before_writing_the_manifest(monkeypatch, tmp_
     can tell the two orderings apart.
     """
     options = an_options()
+    requirements = a_reqs()
     run_tag = cache_search.interpreter_tag(options.stdlib)
     old_name = "failed-" + venv_cache.build_folder_name(
-        venv_name=options.venv_name,
+        venv_name=VENV_NAME,
         interpreter_tag=run_tag,
         timestamp=options.timestamp,
         pip_names=["yaml"],  # The pre-repair pip name the folder was built with.
     )
     old_dir = tmp_path / old_name
-    options.set_venv_dir(old_dir)  # Creates old_dir on disk.
+    state.VenvHandle.for_dir(old_dir)  # Creates old_dir on disk.
 
     # Real record_venv_state, real rename_venv, real venv_cache.write_manifest
     # -- only the interpreter probe is stubbed, since it would otherwise spawn
@@ -170,24 +201,24 @@ def test_record_venv_state_renames_before_writing_the_manifest(monkeypatch, tmp_
 
     recorded = cache_search.record_venv_state(
         old_dir,
-        # What set_venv_dir(old_dir) above put on options.venv_python, spelled
+        # What VenvHandle.for_dir(old_dir) above derives as venv_python, spelled
         # out because record_venv_state takes it as a real argument now. The
         # probe that would read it is stubbed, so only its type matters here.
         venv_python=old_dir / "bin" / "python",
-        venv_name=options.venv_name,
+        venv_name=VENV_NAME,
         timestamp=options.timestamp,
         run_tag=run_tag,
-        python_command=options.python_command,
-        uninstalled=options.uninstalled_imports,
-        extra_requirements=options.extra_requirements,
-        rawlog=options.rawlog,
+        python_command=PYTHON_COMMAND,
+        uninstalled=requirements.uninstalled,
+        extra_requirements=requirements.extra_requirements,
+        rawlog=True,
     )
 
     wanted_name = venv_cache.build_folder_name(
-        venv_name=options.venv_name,
+        venv_name=VENV_NAME,
         interpreter_tag=run_tag,
         timestamp=options.timestamp,
-        pip_names=[record.pip_name for record in options.uninstalled_imports],
+        pip_names=[record.pip_name for record in requirements.uninstalled],
     )
     new_dir = tmp_path / f"failed-{wanted_name}"
 
@@ -224,16 +255,17 @@ def test_record_venv_state_renames_into_agreement_when_the_venvs_tag_differs_fro
     manifest's tag even when no package changed -- only the tag did -- not
     just when verify_and_repair_imports changed which packages are listed.
     """
+    requirements = a_reqs()
     options = an_options()  # classifies against "3.12"
     run_tag = cache_search.interpreter_tag(options.stdlib)  # "3.12", the run's tag
     old_name = "failed-" + venv_cache.build_folder_name(
-        venv_name=options.venv_name,
+        venv_name=VENV_NAME,
         interpreter_tag=run_tag,
         timestamp=options.timestamp,
-        pip_names=[record.pip_name for record in options.uninstalled_imports],
+        pip_names=[record.pip_name for record in requirements.uninstalled],
     )
     old_dir = tmp_path / old_name
-    options.set_venv_dir(old_dir)  # Creates old_dir on disk.
+    state.VenvHandle.for_dir(old_dir)  # Creates old_dir on disk.
 
     # The venv actually reports 3.13 -- disagreeing with the run's 3.12 -- and
     # no package changed.
@@ -245,24 +277,24 @@ def test_record_venv_state_renames_into_agreement_when_the_venvs_tag_differs_fro
 
     recorded = cache_search.record_venv_state(
         old_dir,
-        # What set_venv_dir(old_dir) above put on options.venv_python, spelled
+        # What VenvHandle.for_dir(old_dir) above derives as venv_python, spelled
         # out because record_venv_state takes it as a real argument now. The
         # probe that would read it is stubbed, so only its type matters here.
         venv_python=old_dir / "bin" / "python",
-        venv_name=options.venv_name,
+        venv_name=VENV_NAME,
         timestamp=options.timestamp,
         run_tag=run_tag,
-        python_command=options.python_command,
-        uninstalled=options.uninstalled_imports,
-        extra_requirements=options.extra_requirements,
-        rawlog=options.rawlog,
+        python_command=PYTHON_COMMAND,
+        uninstalled=requirements.uninstalled,
+        extra_requirements=requirements.extra_requirements,
+        rawlog=True,
     )
 
     wanted_name = venv_cache.build_folder_name(
-        venv_name=options.venv_name,
+        venv_name=VENV_NAME,
         interpreter_tag="3.13",
         timestamp=options.timestamp,
-        pip_names=[record.pip_name for record in options.uninstalled_imports],
+        pip_names=[record.pip_name for record in requirements.uninstalled],
     )
     new_dir = tmp_path / f"failed-{wanted_name}"
 
@@ -353,7 +385,7 @@ def test_installed_state_in_venv_keys_by_normalized_pip_name(monkeypatch):
 def test_installed_state_in_venv_probes_the_interpreter_it_was_given(monkeypatch):
     """The probe must run the venv's own Python, not whatever interpreter veny happens to be.
 
-    installed_state_in_venv no longer reads options.venv_python; the caller
+    installed_state_in_venv no longer reads a venv_python off Options; the caller
     passes it. Ignoring the argument and probing sys.executable would report
     the versions installed outside the venv, and every manifest would record
     them as the venv's own.
@@ -380,14 +412,18 @@ def test_the_manifest_tag_comes_from_the_venv_not_the_run() -> None:
     an_options() classifies against 3.12. A venv reporting 3.13 must be recorded
     as 3.13, or a later degraded run matches the wrong tag and reuses it.
     """
-    manifest = cache_search.manifest_for(**manifest_kwargs(an_options(), {}, "3.13"))
+    manifest = cache_search.manifest_for(
+        **manifest_kwargs(an_options(), a_reqs(), {}, "3.13")
+    )
     assert manifest.interpreter_tag == "3.13"
     assert manifest.interpreter_path == "/usr/bin/python3.12"
 
 
 def test_an_unreadable_venv_falls_back_to_the_runs_own_tag() -> None:
     """An empty tag means the probe failed, not that the venv has no version."""
-    manifest = cache_search.manifest_for(**manifest_kwargs(an_options(), {}, ""))
+    manifest = cache_search.manifest_for(
+        **manifest_kwargs(an_options(), a_reqs(), {}, "")
+    )
     assert manifest.interpreter_tag == "3.12"
 
 
@@ -416,15 +452,16 @@ def test_record_venv_state_probes_the_given_venv_and_records_the_runs_own_fields
     degraded case where the fallback is the only thing supplying a tag.
     """
     options = an_options()
+    requirements = a_reqs()
     run_tag = cache_search.interpreter_tag(options.stdlib)
     stale_name = "failed-" + venv_cache.build_folder_name(
-        venv_name=options.venv_name,
+        venv_name=VENV_NAME,
         interpreter_tag=run_tag,
         timestamp=options.timestamp,
         pip_names=["yaml"],
     )
     old_dir = tmp_path / stale_name
-    options.set_venv_dir(old_dir)
+    state.VenvHandle.for_dir(old_dir)
     probed: list[Path] = []
 
     def spy_probe(venv_python):
@@ -436,18 +473,18 @@ def test_record_venv_state_probes_the_given_venv_and_records_the_runs_own_fields
     recorded = cache_search.record_venv_state(
         old_dir,
         venv_python=old_dir / "bin" / "python",
-        venv_name=options.venv_name,
+        venv_name=VENV_NAME,
         timestamp=options.timestamp,
         run_tag=run_tag,
-        python_command=options.python_command,
-        uninstalled=options.uninstalled_imports,
-        extra_requirements=options.extra_requirements,
-        rawlog=options.rawlog,
+        python_command=PYTHON_COMMAND,
+        uninstalled=requirements.uninstalled,
+        extra_requirements=requirements.extra_requirements,
+        rawlog=True,
     )
 
     assert probed == [old_dir / "bin" / "python"]
     assert recorded.name == "failed-" + venv_cache.build_folder_name(
-        venv_name=options.venv_name,
+        venv_name=VENV_NAME,
         interpreter_tag="3.12",
         timestamp=options.timestamp,
         pip_names=["PyYAML", "numpy"],

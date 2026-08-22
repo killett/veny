@@ -1,9 +1,47 @@
 """The products one veny run's stages hand to the next."""
 
+from __future__ import annotations
+
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
+
+import emmykit as ek
 
 from .alias_index import ResolvedImport
+
+
+@dataclass(frozen=True)
+class Target:
+    """What this run is being asked to run.
+
+    Frozen because the target is decided once, at the argparse boundary, and
+    only read after that. `python_command` is the one field discovered later:
+    `pipeline.run` rebinds the whole value with dataclasses.replace once
+    ek.find_preferred_python_version() has answered, rather than leaving a
+    mutable hole in an otherwise fixed value.
+
+    script_args is a tuple rather than a list so that the run's own copy of
+    the user's arguments cannot be appended to by a later stage. The launch
+    paths call list(...) on it at the subprocess boundary.
+
+    Attributes:
+        python_script:  The script itself, resolved strictly.
+        script_dir:     Its parent -- the directory later stages search for
+                        custom modules and last-used records.
+        script_args:    Everything after the script on veny's command line.
+        python_command: The interpreter veny will build the venv against;
+                        "" until `run` resolves it.
+        timestamp:      The run's stamp, in the YYYYmmdd-HHMMSS format
+                        venv_cache builds and parses cached folder names with.
+    """
+
+    python_script: Path
+    script_dir: Path
+    script_args: tuple[str, ...]
+    python_command: str
+    timestamp: str
 
 
 @dataclass(frozen=True)
@@ -49,3 +87,48 @@ class Requirements:
             counts towards.
         """
         return len(self.all_imports)
+
+
+@dataclass(frozen=True)
+class VenvHandle:
+    """One virtual environment, and the two paths derived wholly from it.
+
+    Frozen because the three paths must move together: repointing venv_dir
+    after a rename while venv_python still names the old directory is exactly
+    the drift Options.set_venv_dir's three coupled writes existed to prevent.
+    A rename produces a new handle via for_dir, never an edit to this one.
+
+    Attributes:
+        venv_dir:          The environment's directory.
+        venv_python:       Its interpreter. NOT resolved -- see for_dir.
+        requirements_file: The requirements.txt written inside it.
+    """
+
+    venv_dir: Path
+    venv_python: Path
+    requirements_file: Path
+
+    @classmethod
+    def for_dir(cls, venv_dir: str | os.PathLike[str]) -> VenvHandle:
+        """Derive a handle from a venv directory, creating the directory.
+
+        The mkdir is not incidental: `uv venv` needs the directory to exist
+        and be empty, which is also why nothing may write into it until
+        environment.create_venv has succeeded against it.
+
+        Args:
+            venv_dir: Where the environment lives, or will.
+
+        Returns:
+            The handle for that directory.
+        """
+        p = ek.ensure_path(venv_dir)
+        p.mkdir(parents=True, exist_ok=True)
+        return cls(
+            venv_dir=p,
+            # Do NOT resolve() this symlink path: in a real venv it points at
+            # the base interpreter, and a resolved path would run the system
+            # python with none of the venv's packages.
+            venv_python=p / "bin" / "python",
+            requirements_file=p / "requirements.txt",
+        )

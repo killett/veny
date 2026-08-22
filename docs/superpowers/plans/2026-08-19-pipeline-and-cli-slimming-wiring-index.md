@@ -262,6 +262,17 @@ among the 47 unpinned rows: they are pinned, just not by anything a user can
 run. Recorded in `PROGRESS.md`'s deferred items and as an `[EXECUTION]` block on
 Task 5's fourth acceptance criterion.
 
+> **DECIDED AND EXECUTED 2026-08-21, phase 4a Task 1.** User ruling: delete the
+> branch, do not revive it. `get_all_imports`, `stayed_out_dir` and the
+> directory arms of `list_packages` are gone; so is the bypassing test. All
+> sixteen rows are struck from the table below, replaced by a single retirement
+> row at the point where they stood. Three further rows (`pipeline.py:275`,
+> `:286`, `:312`) named that test as *one* of several killers and keep their
+> other killers; only the dead citation was trimmed. `resolve_target` now
+> raises `UsageError` for a directory — and for a missing, empty or symlinked
+> path, which closes latent defect 2 in the same stroke — so `veny somedir/`
+> is exit status 2 rather than a traceback.
+
 ## Every argument, measured
 
 `Sweep 1` marks the rows that were holes at `183bdcc`, and `*not reached*` the
@@ -318,7 +329,7 @@ detach it from the measurement it documents; the function name in each row's
 | `pipeline.py:125` (find_imports_in_script) -> `Settings` | `search_above_this_dir` | `False` | **DEAD ARGUMENT** -- Dead argument: `analysis.scan` reads only `settings.rawlog`. `search_above_this_dir` is never read at this call site. | was a hole |
 | `pipeline.py:125` (find_imports_in_script) -> `Settings` | `rawlog` | `True` | `test_import_discovery::test_the_scan_adapter_lets_the_scanner_name_the_files_it_opens` |  |
 | `pipeline.py:125` (find_imports_in_script) -> `Settings` | `rawlog` | `False` | `test_import_discovery::test_the_scan_adapter_lets_the_scanner_name_the_files_it_opens` |  |
-| `pipeline.py:132` (find_imports_in_script) -> `ImportScan` | `all_imports` | `set()` | `test_import_discovery::test_function_body_import_in_a_custom_module_is_discovered`<br>`test_import_discovery::test_list_packages_scans_one_script_and_classifies_what_it_found`<br>`test_import_discovery::test_list_packages_walks_a_folder_and_stays_out_of_the_named_directories`<br>(+2 more) |  |
+| `pipeline.py:132` (find_imports_in_script) -> `ImportScan` | `all_imports` | `set()` | `test_import_discovery::test_function_body_import_in_a_custom_module_is_discovered`<br>`test_import_discovery::test_list_packages_scans_one_script_and_classifies_what_it_found`<br>(+2 more) |  |
 | `pipeline.py:132` (find_imports_in_script) -> `ImportScan` | `custom_modules` | `{}` | `test_import_discovery::test_a_prepopulated_custom_module_outside_the_script_dir_is_recognized` |  |
 | `pipeline.py:132` (find_imports_in_script) -> `ImportScan` | `loaded_custom_modules` | `set()` | `test_import_discovery::test_a_prepopulated_custom_module_outside_the_script_dir_is_recognized`<br>`test_import_discovery::test_function_body_import_in_a_custom_module_is_discovered` |  |
 | `pipeline.py:132` (find_imports_in_script) -> `ImportScan` | `samedir_files` | `[]` | `test_import_discovery::test_the_scan_records_the_local_files_folders_and_sys_path_it_followed` | was a hole |
@@ -356,28 +367,13 @@ detach it from the measurement it documents; the function name in each row's
 | `pipeline.py:231` (split_imports) -> `classify.split_imports` | `rawlog` | `True` | `test_classify::test_the_classification_adapter_lets_classify_report_each_import` |  |
 | `pipeline.py:231` (split_imports) -> `classify.split_imports` | `rawlog` | `False` | `test_classify::test_the_classification_adapter_lets_classify_report_each_import` |  |
 | `pipeline.py:238` (split_imports) -> `_probe_venv` | `positional 0` | `run_options.Options()` | `test_classify::test_split_imports_probe_venv_is_given_the_classified_interpreter` |  |
-| `pipeline.py:275` (list_packages) -> `ek.ensure_path` | `positional 0` | `Path("/tmp/wrong-script.py")` | `test_import_discovery::test_list_packages_scans_one_script_and_classifies_what_it_found`<br>`test_import_discovery::test_list_packages_walks_a_folder_and_stays_out_of_the_named_directories`<br>`test_import_discovery::test_report_warns_about_a_standard_library_import_that_needs_a_system_package` | was a hole |
+| `pipeline.py:275` (list_packages) -> `ek.ensure_path` | `positional 0` | `Path("/tmp/wrong-script.py")` | `test_import_discovery::test_list_packages_scans_one_script_and_classifies_what_it_found`<br>`test_import_discovery::test_report_warns_about_a_standard_library_import_that_needs_a_system_package` | was a hole |
 | `pipeline.py:277` (list_packages) -> `ek.safe_is_file` | `positional 0` | `Path("/tmp/wrong-script.py")` | `test_import_discovery::test_list_packages_scans_one_script_and_classifies_what_it_found`<br>`test_import_discovery::test_report_warns_about_a_standard_library_import_that_needs_a_system_package` | was a hole |
 | `pipeline.py:278` (list_packages) -> `ek.is_python_script` | `positional 0` | `Path("/tmp/wrong-script.py")` | `test_import_discovery::test_list_packages_scans_one_script_and_classifies_what_it_found`<br>`test_import_discovery::test_report_warns_about_a_standard_library_import_that_needs_a_system_package` | was a hole |
 | `pipeline.py:286` (list_packages) -> `find_imports_in_script` | `positional 0` | `run_options.Options()` | `test_import_discovery::test_list_packages_scans_one_script_and_classifies_what_it_found`<br>`test_import_discovery::test_report_warns_about_a_standard_library_import_that_needs_a_system_package` | was a hole |
 | `pipeline.py:286` (list_packages) -> `find_imports_in_script` | `positional 1` | `Path("/tmp/wrong-script.py")` | `test_import_discovery::test_list_packages_scans_one_script_and_classifies_what_it_found`<br>`test_import_discovery::test_report_warns_about_a_standard_library_import_that_needs_a_system_package` | was a hole |
-| `pipeline.py:291` (list_packages) -> `ek.safe_is_dir` | `positional 0` | `Path("/tmp/wrong-script.py")` | `test_import_discovery::test_list_packages_walks_a_folder_and_stays_out_of_the_named_directories` | was a hole |
-| `pipeline.py:297` (list_packages) -> `get_all_imports` | `positional 0` | `run_options.Options()` | `test_import_discovery::test_list_packages_walks_a_folder_and_stays_out_of_the_named_directories` | was a hole |
-| `pipeline.py:297` (list_packages) -> `get_all_imports` | `positional 1` | `Path("/tmp/wrong-dir")` | `test_import_discovery::test_list_packages_walks_a_folder_and_stays_out_of_the_named_directories` | was a hole |
-| `pipeline.py:312` (list_packages) -> `split_imports` | `positional 0` | `run_options.Options()` | `test_import_discovery::test_list_packages_scans_one_script_and_classifies_what_it_found`<br>`test_import_discovery::test_list_packages_walks_a_folder_and_stays_out_of_the_named_directories` | was a hole |
-| `pipeline.py:317` (stayed_out_dir) -> `ek.ensure_path` | `positional 0` | `Path("/tmp/wrong-script.py")` | `test_import_discovery::test_list_packages_walks_a_folder_and_stays_out_of_the_named_directories` | was a hole |
-| `pipeline.py:318` (stayed_out_dir) -> `os.fspath` | `positional 0` | `"/tmp/wrong-dir"` | `test_import_discovery::test_list_packages_walks_a_folder_and_stays_out_of_the_named_directories` | was a hole |
-| `pipeline.py:326` (get_all_imports) -> `ek.ensure_path` | `positional 0` | `Path("/tmp/wrong-dir")` | `test_import_discovery::test_list_packages_walks_a_folder_and_stays_out_of_the_named_directories` | was a hole |
-| `pipeline.py:332` (get_all_imports) -> `ek.safe_is_file` | `positional 0` | `Path("/tmp/wrong-script.py")` | `test_import_discovery::test_list_packages_walks_a_folder_and_stays_out_of_the_named_directories` | was a hole |
-| `pipeline.py:332` (get_all_imports) -> `stayed_out_dir` | `positional 0` | `run_options.Options()` | `test_import_discovery::test_list_packages_walks_a_folder_and_stays_out_of_the_named_directories` | was a hole |
-| `pipeline.py:332` (get_all_imports) -> `stayed_out_dir` | `positional 1` | `Path("/tmp/wrong-script.py")` | `test_import_discovery::test_list_packages_walks_a_folder_and_stays_out_of_the_named_directories` | was a hole |
-| `pipeline.py:335` (get_all_imports) -> `ek.is_python_script` | `positional 0` | `Path("/tmp/wrong-script.py")` | `test_import_discovery::test_list_packages_walks_a_folder_and_stays_out_of_the_named_directories` | was a hole |
-| `pipeline.py:342` (get_all_imports) -> `ek.safe_is_file` | `positional 0` | `Path("/tmp/wrong-script.py")` | `test_import_discovery::test_list_packages_walks_a_folder_and_stays_out_of_the_named_directories` | was a hole |
-| `pipeline.py:342` (get_all_imports) -> `stayed_out_dir` | `positional 0` | `run_options.Options()` | `test_import_discovery::test_list_packages_walks_a_folder_and_stays_out_of_the_named_directories` | was a hole |
-| `pipeline.py:342` (get_all_imports) -> `stayed_out_dir` | `positional 1` | `Path("/tmp/wrong-script.py")` | `test_import_discovery::test_list_packages_walks_a_folder_and_stays_out_of_the_named_directories` | was a hole |
-| `pipeline.py:345` (get_all_imports) -> `ek.is_python_script` | `positional 0` | `Path("/tmp/wrong-script.py")` | `test_import_discovery::test_list_packages_walks_a_folder_and_stays_out_of_the_named_directories` | was a hole |
-| `pipeline.py:346` (get_all_imports) -> `find_imports_in_script` | `positional 0` | `run_options.Options()` | `test_import_discovery::test_list_packages_walks_a_folder_and_stays_out_of_the_named_directories` | was a hole |
-| `pipeline.py:346` (get_all_imports) -> `find_imports_in_script` | `positional 1` | `Path("/tmp/wrong-script.py")` | `test_import_discovery::test_list_packages_walks_a_folder_and_stays_out_of_the_named_directories` | was a hole |
+| _(16 rows retired)_ | | | **RETIRED 2026-08-21 by phase 4a Task 1.** These rows measured arguments to `list_packages`' directory arms and the two folder-scanning helpers. Their only named killer reached them by assigning `options.python_script` directly, bypassing `resolve_target`; no production run could. The code and that test are deleted (user ruling, 2026-08-21). Retired, not closed -- nothing pinned them, and nothing needed to. | |
+| `pipeline.py:312` (list_packages) -> `split_imports` | `positional 0` | `run_options.Options()` | `test_import_discovery::test_list_packages_scans_one_script_and_classifies_what_it_found` | was a hole |
 | `pipeline.py:383` (run_script) -> `os.fspath` | `positional 0` | `"/tmp/wrong-python"` | `test_cli_entry_point::test_a_satisfied_surrounding_virtualenv_runs_the_script_under_it`<br>`test_cli_entry_point::test_every_launch_path_passes_the_scripts_own_arguments_through`<br>`test_cli_entry_point::test_feeling_lucky_launches_the_interpreter_the_loader_named`<br>(+4 more) |  |
 | `pipeline.py:383` (run_script) -> `os.fspath` | `positional 0` | `'/tmp/wrong-script.py'` | `test_cli_entry_point::test_a_satisfied_surrounding_virtualenv_runs_the_script_under_it`<br>`test_cli_entry_point::test_every_launch_path_passes_the_scripts_own_arguments_through`<br>`test_cli_entry_point::test_feeling_lucky_launches_the_interpreter_the_loader_named`<br>(+4 more) |  |
 | `pipeline.py:390` (run_script) -> `subprocess.run` | `positional 0` | `[sys.executable, "-c", ""]` | `test_cli_entry_point::test_a_satisfied_surrounding_virtualenv_runs_the_script_under_it`<br>`test_cli_entry_point::test_every_launch_path_passes_the_scripts_own_arguments_through`<br>`test_cli_entry_point::test_feeling_lucky_launches_the_interpreter_the_loader_named`<br>(+3 more) |  |

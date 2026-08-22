@@ -841,7 +841,7 @@ def _verify_and_repair(
 ):
     """Run verify_and_repair_imports wired the way pipeline.setup_virtualenv wires it.
 
-    The venv paths match Options.set_venv_dir's documented shape
+    The venv paths match VenvHandle's documented shape
     (<venv>/bin/python, <venv>/requirements.txt), written out here rather than
     read back off an Options -- verify has never heard of one.
 
@@ -1316,7 +1316,7 @@ def test_a_repair_rewrites_requirements_txt_with_the_extra_requirements(
 def test_the_repair_installer_is_given_the_venvs_own_interpreter(monkeypatch, tmp_path):
     """install_into_venv must be handed the venv's interpreter, not None.
 
-    Phase 3c task 2 replaced install_into_venv's implicit `options.venv_python`
+    Phase 3c task 2 replaced install_into_venv's implicit venv-python field
     read with an explicit first argument built at this call site, so the
     interpreter can now be wired wrongly where before it could not be.
 
@@ -1327,7 +1327,7 @@ def test_the_repair_installer_is_given_the_venvs_own_interpreter(monkeypatch, tm
     exhausts the ranked list, and veny reports "Could not find a package that
     provides the import thing" for an import whose correct package was sitting
     right there and installable. Nothing raises and nothing else in the suite
-    notices. The expected path is Options.set_venv_dir's documented shape
+    notices. The expected path is VenvHandle's documented shape
     (<venv>/bin/python), written out here rather than read back off options.
     """
     index = _live_index(tmp_path, seed={"thing": "right-pkg"})
