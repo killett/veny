@@ -748,3 +748,75 @@ def test_the_saved_record_carries_the_venv_the_run_actually_used(monkeypatch, tm
     assert record is not None
     assert record.venv_python == handle.venv_python
     assert record.venv_dir == handle.venv_dir
+
+
+def test_the_saved_record_names_the_post_rename_venv_dir(monkeypatch, tmp_path):
+    """The saved record must name the renamed folder, not the failed- one.
+
+    Behaviour under test: last_used.save runs after the "failed-" rename in
+    pipeline.run, so the record it writes points at the directory that
+    actually exists on disk once the run has succeeded.
+
+    Concrete bug this catches: hoisting the last_used.save call above the
+    rename block -- the exact regression this task's brief names -- would
+    record the pre-rename "failed-..." path, the directory rename_venv is
+    about to move away from under it. The next run's --feeling-lucky lookup
+    (or any other reader of the record) would then point at a directory that
+    no longer exists.
+
+    Neither sibling test catches this: the identity assertions in
+    test_the_saved_record_carries_the_venv_the_run_actually_used never
+    exercise the rename branch (its built venv has no "failed-" prefix, so
+    pre- and post-rename `handle` are the same object regardless of where
+    the save sits), and test_main_drops_the_failed_prefix_from_the_venv_it_
+    just_built checks that the rename happened but never inspects the saved
+    record. This test drives the rename for real and reads the record back
+    off disk.
+    """
+    _a_run(monkeypatch, tmp_path, argv=("--rawlog", "--no-cache"))
+    built = tmp_path / "home" / "veny" / "failed-myenv-py3.12-20260101-010203-thing-pkg"
+    renamed = built.parent / "myenv-py3.12-20260101-010203-thing-pkg"
+    monkeypatch.setattr(
+        pipeline,
+        "list_packages",
+        lambda settings, scan, target, **kwargs: (
+            scan,
+            state.Requirements(
+                all_imports=frozenset({"thing"}),
+                bad=frozenset(),
+                installed=frozenset(),
+                uninstalled=frozenset(
+                    {alias_index.ResolvedImport("thing", "thing-pkg")}
+                ),
+                seen_stdlib=frozenset(),
+                extra_requirements={},
+            ),
+        ),
+    )
+    targets: list[state.Target] = []
+
+    def setup_spy(settings, target, requirements, **kwargs):
+        targets.append(target)
+        # install_succeeded=True, and a "failed-" prefixed dir, is exactly
+        # what fires pipeline.run's rename branch.
+        return requirements, state.VenvHandle.for_dir(built), True
+
+    monkeypatch.setattr(pipeline, "setup_virtualenv", setup_spy)
+
+    cli.main()
+
+    target = targets[0]
+    record = last_used.load(
+        script_dir=target.script_dir,
+        python_script=target.python_script,
+        my_name="veny",
+        rawlog=True,
+    )
+    assert record is not None
+    # The post-rename path, not the "failed-" one the venv was built under.
+    assert record.venv_dir == renamed
+    assert record.venv_python == renamed / "bin" / "python"
+    # And it must be the real, post-rename directory on disk -- not merely
+    # a Path string that happens to match while nothing is actually there.
+    assert record.venv_dir.is_dir()
+    assert not built.exists()
