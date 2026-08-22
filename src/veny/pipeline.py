@@ -12,12 +12,12 @@ the environment. Nothing here writes its product onto the object it was
 handed -- the one exception is `ImportScan`, which is an accumulator by design
 and which `analysis/scan.py` mutates in place as it walks.
 
-`Options` survives in exactly one place, persistence: `_load_last_used` hands
-it to emmykit's reader as a template. It is typed against `ek.Options` rather
-than against a payload, which is the whole of why the class is still alive;
-`run` now writes its own `state.LastUsed` record through `last_used.save`
-instead, and phase 4b's remaining tasks finish breaking the reader's coupling
-and delete the class.
+`Options` no longer reaches persistence at all: `run` writes its own
+`state.LastUsed` record through `last_used.save`, and both readers --
+`_load_last_used` for the cache search's last-used pass and `feeling_lucky`
+for the `--feeling-lucky` shortcut -- take that record back. What is left of
+the class is `run`'s own parameter, which phase 4b's remaining tasks drain
+and delete.
 
 Everything here calls its collaborators through the module object
 (`verify.check_packages_in_venv(...)`, never `from .verify import ...`), which
@@ -400,8 +400,7 @@ def feeling_lucky(
     args: argparse.Namespace,
     target: state.Target | None,
     *,
-    options: run_options.Options,
-    pathlibcutoff: str,
+    my_name: str,
     rawlog: bool,
 ) -> int | None:
     """Try the previous run's virtual environment without analyzing anything.
@@ -413,10 +412,7 @@ def feeling_lucky(
     Args:
         args: The parsed command line; reads the --feeling-lucky flag.
         target: The run's Target, or None for a scriptless run.
-        options: The template ek.Options load_last_used_venv_python fills in.
-            Still an Options because emmykit's loader is typed against one;
-            phase 4b replaces it with a LastUsed record.
-        pathlibcutoff: JSON files stamped before this are ignored.
+        my_name: The program's own name, for the record's filename.
         rawlog: True suppresses veny's own commentary.
 
     Returns:
@@ -425,11 +421,10 @@ def feeling_lucky(
     """
     if not getattr(args, "feeling_lucky", False) or target is None:
         return None
-    last_used_venv_python = last_used.load_last_used_venv_python(
-        options,
+    last_used_venv_python = last_used.load_venv_python(
         script_dir=target.script_dir,
         python_script=target.python_script,
-        pathlibcutoff=pathlibcutoff,
+        my_name=my_name,
         rawlog=rawlog,
     )
     if last_used_venv_python:
@@ -537,37 +532,29 @@ def report(
 
 
 def _load_last_used(
-    options: run_options.Options,
     target: state.Target,
     *,
-    pathlibcutoff: str,
+    my_name: str,
     rawlog: bool,
-) -> ek.Options | None:
-    """Load the previous run's options JSON, for the cache search's last-used pass.
+) -> state.LastUsed | None:
+    """Load the previous run's record, for the cache search's last-used pass.
 
     find_match_dir_in_cache takes this as an injected callable rather than
-    reaching for last_used itself, so nothing below pipeline has to know what
-    an Options is.
-
-    The two asserts this carried before phase 4a are gone: Target's fields are
-    non-optional, so there is nothing left to assert.
+    reaching for last_used itself, so nothing below pipeline has to know
+    where the record lives.
 
     Args:
-        options: The template ek.Options the loader fills in. Phase 4b
-            replaces it with a LastUsed record.
-        target: The run's Target; supplies script_dir and python_script.
-        pathlibcutoff: JSON files stamped before this are ignored.
-        rawlog: True suppresses veny's own commentary.
+        target:  The run's Target; supplies script_dir and python_script.
+        my_name: The program's own name, for the record's filename.
+        rawlog:  True suppresses veny's own commentary.
 
     Returns:
-        The previous run's options, or None when there is no usable last-used
-        JSON in the script's directory.
+        The previous run's record, or None when there is no usable one.
     """
-    return last_used.load_last_used_options(
-        options,
+    return last_used.load(
         script_dir=target.script_dir,
         python_script=target.python_script,
-        pathlibcutoff=pathlibcutoff,
+        my_name=my_name,
         rawlog=rawlog,
     )
 
@@ -907,10 +894,7 @@ def run(
                 tag=cache_search.interpreter_tag(stdlib),
                 rawlog=settings.rawlog,
                 load_last_used=lambda: _load_last_used(
-                    options,
-                    target,
-                    pathlibcutoff=options.pathlibcutoff,
-                    rawlog=settings.rawlog,
+                    target, my_name=settings.my_name, rawlog=settings.rawlog
                 ),
             )
         if match_dir is None:

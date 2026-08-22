@@ -199,8 +199,7 @@ def main() -> int:
         lucky_status = pipeline.feeling_lucky(
             options.args,
             target,
-            options=options,
-            pathlibcutoff=options.pathlibcutoff,
+            my_name=options.my_name,
             rawlog=options.rawlog,
         )
         if lucky_status is not None:

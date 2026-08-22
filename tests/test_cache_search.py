@@ -9,9 +9,9 @@ import logging
 import os
 import shutil
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
-import emmykit as ek
 import pytest
 
 from veny import (
@@ -392,7 +392,7 @@ def test_check_venv_dir_checks_the_name_the_user_wrote_not_the_distributions_oth
     assert check(options, requirements, venv_dir) is False
 
 
-def _never_called() -> ek.Options | None:
+def _never_called() -> state.LastUsed | None:
     """A load_last_used the --latest path must never reach.
 
     --latest short-circuits the last-used pass, so consulting the previous
@@ -451,15 +451,17 @@ def test_find_match_dir_in_cache_returns_a_manifest_match(
     )
 
 
-def test_find_match_dir_in_cache_tolerates_a_last_used_options_without_venv_dir(
+def test_find_match_dir_in_cache_treats_no_record_at_all_as_a_cache_miss(
     tmp_path: Path,
 ) -> None:
-    """A last-used JSON restored as a bare emmykit.Options must be a cache miss, not an AttributeError.
+    """A run with no readable last-used record must be a miss, not a crash.
 
-    venv_dir is declared only in veny.Options.__init__, not in the
-    emmykit.Options base class load_last_used_options builds from, so an
-    options JSON written before that field existed (or otherwise missing
-    the key) must not crash the run.
+    This replaces the "a bare emmykit.Options has no venv_dir" tolerance
+    test: the reader now hands back a state.LastUsed, whose venv_dir always
+    exists, or None. None is the one degraded input left -- no record, an
+    unreadable one, or one naming no environment, all of which last_used.load
+    turns into None -- and the last-used pass must fall through it to the
+    ordinary scan rather than raising on the missing attribute.
     """
     options = an_options({ResolvedImport("numpy", "numpy")})
     requirements = a_reqs({ResolvedImport("numpy", "numpy")})
@@ -482,10 +484,176 @@ def test_find_match_dir_in_cache_tolerates_a_last_used_options_without_venv_dir(
             ),
             tag=cache_search.interpreter_tag(options.stdlib),
             rawlog=options.rawlog,
-            load_last_used=lambda: ek.Options(),
+            load_last_used=lambda: None,
         )
         is None
     )
+
+
+def _a_satisfying_venv(
+    monkeypatch: pytest.MonkeyPatch, root: Path, timestamp: str
+) -> Path:
+    """One cached venv folder the run under test can legitimately reuse.
+
+    Args:
+        monkeypatch: pytest's monkeypatch fixture, for the interpreter probe
+                     and the import-level check the selection runs for real.
+        root:        The cache directory the folder is created in.
+        timestamp:   The "YYYYmmdd-HHMMSS" stamp in the folder's name, which
+                     is what latest_venv orders on.
+
+    Returns:
+        The folder created.
+    """
+    venv_dir = a_cached_venv(
+        root,
+        f"myenv-py3.12-{timestamp}-thing-pkg",
+        [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
+    )
+    monkeypatch.setattr(
+        alias_index,
+        "probe_interpreter",
+        lambda python, timeout=30.0: ("3.12", {"thing": ["thing-pkg"]}),
+    )
+    _stub_successful_import_check(monkeypatch, importable={"thing"})
+    return venv_dir
+
+
+def _search(
+    args: argparse.Namespace,
+    *,
+    my_dir: Path,
+    load_last_used: Callable[[], state.LastUsed | None],
+) -> Path | None:
+    """find_match_dir_in_cache wired for the one-package run the tests build.
+
+    Args:
+        args:           The parsed command line the selection reads its flags
+                        off.
+        my_dir:         The cache directory to search.
+        load_last_used: The injected reader of the previous run's record.
+
+    Returns:
+        Whatever the search selected, or None.
+    """
+    options = an_options({ResolvedImport("thing", "thing-pkg")})
+    requirements = dataclasses.replace(
+        a_reqs({ResolvedImport("thing", "thing-pkg")}),
+        all_imports=frozenset({"thing"}),
+    )
+    return cache_search.find_match_dir_in_cache(
+        args,
+        my_dir=my_dir,
+        venv_name="myenv",
+        uninstalled=set(requirements.uninstalled),
+        extra_requirements=requirements.extra_requirements,
+        source_names=verify.source_import_names(
+            set(requirements.all_imports),
+            requirements.extra_requirements,
+            False,
+        ),
+        tag=cache_search.interpreter_tag(options.stdlib),
+        rawlog=True,
+        load_last_used=load_last_used,
+    )
+
+
+def test_the_last_used_pointer_selects_the_recorded_venv(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A run with no selection flags reuses the venv the record names.
+
+    Bug caught: reading the pointer off the wrong field, or dropping the
+    last-used pass entirely -- both leave the run rebuilding an environment
+    it already had, which is invisible to a test that only asserts "some
+    venv was chosen". Here the recorded folder is the *older* of the two in
+    the cache, so a search that skipped the pointer and went straight to
+    "latest" returns the other one.
+    """
+    folder = _a_satisfying_venv(monkeypatch, tmp_path, "20260101-010101")
+    newer = a_cached_venv(
+        tmp_path,
+        "myenv-py3.12-20260814-091500-thing-pkg",
+        [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
+    )
+    record = state.LastUsed(folder, folder / "bin" / "python", "20260202-020202")
+
+    chosen = _search(
+        argparse.Namespace(), my_dir=tmp_path, load_last_used=lambda: record
+    )
+
+    assert chosen == folder
+    assert chosen != newer
+
+
+def test_a_stale_pointer_falls_through_to_the_latest_match(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A record naming a venv that is gone must not end the search.
+
+    Bug caught: returning None (rebuild) instead of falling through when the
+    recorded venv no longer satisfies the run -- the behaviour the old
+    `args.latest = True` write implemented. The cache still holds a venv this
+    run can use, and rebuilding it would be a silent waste of a whole install.
+    """
+    newest_satisfying_folder = _a_satisfying_venv(
+        monkeypatch, tmp_path, "20260814-091500"
+    )
+    a_cached_venv(
+        tmp_path,
+        "myenv-py3.12-20260101-010101-thing-pkg",
+        [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
+    )
+    record = state.LastUsed(
+        tmp_path / "gone", tmp_path / "gone" / "python", "20260101-010101"
+    )
+
+    chosen = _search(
+        argparse.Namespace(), my_dir=tmp_path, load_last_used=lambda: record
+    )
+
+    assert chosen == newest_satisfying_folder
+
+
+def test_the_cache_search_does_not_write_to_the_command_line(tmp_path: Path) -> None:
+    """The selection resolves its own defaults in locals, not on args.
+
+    Bug caught: leaving the in-place flag writes in place. They were only
+    ever writes because they reached disk through save_options_to_json;
+    with that gone, a mutated Namespace is a shared-state surprise for
+    every later reader of args.
+    """
+    args = argparse.Namespace(
+        latest=False, oldest=False, last_used=False, smallest=False
+    )
+    before = vars(args).copy()
+
+    assert _search(args, my_dir=tmp_path, load_last_used=lambda: None) is None
+
+    assert vars(args) == before
+
+
+def test_asking_for_both_the_latest_and_the_last_used_venv_selects_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """--latest --last-used is the "invalid combination" branch, and stays it.
+
+    Behaviour under test: the one flag combination the selection refuses to
+    act on. --latest suppresses the last-used pass, and the four selection
+    branches below each require the other three flags to be clear, so nothing
+    matches and the run rebuilds from scratch after logging the combination.
+
+    Bug caught: collapsing the two flag reads into a single local during the
+    de-mutation of this function -- `try_last_used and not prefer_latest`
+    reads as False here, which would quietly turn this combination into a
+    plain --latest run and hand back a cached venv where veny used to build a
+    new one. Not covered by the four single-flag paths, all of which are
+    unaffected by the difference.
+    """
+    _a_satisfying_venv(monkeypatch, tmp_path, "20260814-091500")
+    args = argparse.Namespace(latest=True, oldest=False, last_used=True, smallest=False)
+
+    assert _search(args, my_dir=tmp_path, load_last_used=lambda: None) is None
 
 
 def test_a_cache_hit_reads_and_matches_each_manifest_once(
@@ -775,8 +943,9 @@ def test_a_last_used_hit_still_reads_and_matches_its_own_manifest(
     monkeypatch.setattr(venv_cache, "read_manifest", counting_read_manifest)
     monkeypatch.setattr(venv_cache, "satisfies", counting_satisfies)
 
-    last_used_options = ek.Options()
-    last_used_options.venv_dir = venv_dir  # type: ignore[attr-defined]
+    last_used_record = state.LastUsed(
+        venv_dir, venv_dir / "bin" / "python", "20260202-020202"
+    )
 
     result = cache_search.find_match_dir_in_cache(
         options.args,
@@ -791,7 +960,7 @@ def test_a_last_used_hit_still_reads_and_matches_its_own_manifest(
         ),
         tag=cache_search.interpreter_tag(options.stdlib),
         rawlog=True,
-        load_last_used=lambda: last_used_options,
+        load_last_used=lambda: last_used_record,
     )
 
     assert result == venv_dir
@@ -900,8 +1069,9 @@ def test_every_branch_hands_check_venv_dir_the_same_description_of_the_run(
 
     real_check_venv_dir = cache_search.check_venv_dir
     monkeypatch.setattr(cache_search, "check_venv_dir", spy)
-    last_used_options = ek.Options()
-    last_used_options.venv_dir = venv_dir  # type: ignore[attr-defined]
+    last_used_record = state.LastUsed(
+        venv_dir, venv_dir / "bin" / "python", "20260202-020202"
+    )
 
     result = cache_search.find_match_dir_in_cache(
         options.args,
@@ -916,7 +1086,7 @@ def test_every_branch_hands_check_venv_dir_the_same_description_of_the_run(
         ),
         tag=cache_search.interpreter_tag(options.stdlib),
         rawlog=True,
-        load_last_used=lambda: last_used_options,
+        load_last_used=lambda: last_used_record,
     )
 
     assert result == venv_dir
@@ -956,8 +1126,7 @@ def test_every_branch_hands_check_venv_dir_the_same_description_of_the_run(
         ),
         [venv_cache.PackageRecord("other", "other-pkg", "1.0.0", None)],
     )
-    liar_last_used = ek.Options()
-    liar_last_used.venv_dir = liar  # type: ignore[attr-defined]
+    liar_last_used = state.LastUsed(liar, liar / "bin" / "python", "20260202-020202")
     options.args = argparse.Namespace(**flags)
 
     assert (
@@ -1092,8 +1261,9 @@ def test_every_branch_lets_check_venv_dir_report_a_venv_that_vanished(
         monkeypatch.setattr(
             cache_search, "cache_candidates", lambda *a, **k: already_found
         )
-    last_used_options = ek.Options()
-    last_used_options.venv_dir = venv_dir  # type: ignore[attr-defined]
+    last_used_record = state.LastUsed(
+        venv_dir, venv_dir / "bin" / "python", "20260202-020202"
+    )
 
     def run(rawlog: bool) -> Path | None:
         return cache_search.find_match_dir_in_cache(
@@ -1105,7 +1275,7 @@ def test_every_branch_lets_check_venv_dir_report_a_venv_that_vanished(
             source_names={"thing"},
             tag=cache_search.interpreter_tag(options.stdlib),
             rawlog=rawlog,
-            load_last_used=lambda: last_used_options,
+            load_last_used=lambda: last_used_record,
         )
 
     with caplog.at_level(logging.INFO):

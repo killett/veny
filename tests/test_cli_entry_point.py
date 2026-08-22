@@ -278,7 +278,8 @@ def test_main_describes_the_run_to_the_cache_search(monkeypatch, tmp_path):
         all_imports={"thing", "other"},
     )
     seen: list[dict[str, object]] = []
-    loaded: list[cli.Options] = []
+    loaded: list[dict[str, object]] = []
+    loaded_targets: list[state.Target] = []
 
     load_last_used_callbacks: list[Callable[[], object]] = []
 
@@ -287,8 +288,9 @@ def test_main_describes_the_run_to_the_cache_search(monkeypatch, tmp_path):
         load_last_used_callbacks.append(load_last_used)
         return None
 
-    def load_last_used_spy(options, target, **kwargs):
-        loaded.append(options)
+    def load_last_used_spy(target, **kwargs):
+        loaded_targets.append(target)
+        loaded.append(dict(kwargs))
         return None
 
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", find_spy)
@@ -316,13 +318,14 @@ def test_main_describes_the_run_to_the_cache_search(monkeypatch, tmp_path):
     assert call["rawlog"] is True
     # The callback must reach this run's own last-used loader, not a constant.
     assert load_last_used_callbacks[0]() is None
-    # One call, and with the run's OWN Options by identity -- the template
-    # emmykit's loader fills in. A fresh one would still yield a record
-    # (load_last_used_options loads *into* whatever it is handed), so only
-    # identity can tell the two apart. It is the last thing in run() that
-    # still takes an Options; phase 4b replaces it with a LastUsed record.
+    # One call, and about THIS run's script: the adapter now takes the run's
+    # Target and the program's own name instead of an Options template, and
+    # those three values are the whole of what decides which record file is
+    # read.
     assert len(loaded) == 1
-    assert loaded[0] is captured.options[0]
+    assert loaded_targets[0].python_script == tmp_path / "script.py"
+    assert loaded[0]["my_name"] == "veny"
+    assert loaded[0]["rawlog"] is True
 
 
 def test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs(
@@ -368,9 +371,9 @@ def test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs
         "Checking the cache for a virtual environment with all the required packages"
         in caplog.text
     )
-    # From last_used.load_last_used_options, reached through _load_last_used --
-    # the cache search's default branch asks for the last-used record first.
-    assert "No previous JSON files found in the script directory." in caplog.text
+    # From last_used.load, reached through _load_last_used -- the cache
+    # search's default branch asks for the last-used record first.
+    assert "No usable last-used record for" in caplog.text
 
     # The other direction: --rawlog must reach both, so a hardcoded
     # `rawlog=False` at either site is caught too.
@@ -391,7 +394,7 @@ def test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs
         cli.main()
 
     assert "Checking the cache for a virtual environment" not in caplog.text
-    assert "No previous JSON files found" not in caplog.text
+    assert "No usable last-used record" not in caplog.text
 
 
 def test_main_lets_the_feeling_lucky_loader_speak_on_a_run_that_did_not_ask_for_raw_logs(
@@ -399,7 +402,7 @@ def test_main_lets_the_feeling_lucky_loader_speak_on_a_run_that_did_not_ask_for_
 ):
     """--feeling-lucky's loader gets its own rawlog argument, and its own hole.
 
-    Measured 2026-08-19: `rawlog=True` at the load_last_used_venv_python call
+    Measured 2026-08-19: `rawlog=True` at the load_venv_python call
     site left all 360 tests green. The cache search is stubbed out here on
     purpose -- main()'s other last-used call site (_load_last_used, reached
     from find_match_dir_in_cache) logs the identical line, so leaving it live
@@ -426,7 +429,7 @@ def test_main_lets_the_feeling_lucky_loader_speak_on_a_run_that_did_not_ask_for_
     with caplog.at_level(logging.INFO):
         cli.main()
 
-    assert "No previous JSON files found in the script directory." in caplog.text
+    assert "No usable last-used record for" in caplog.text
 
     caplog.clear()
     _drive_main(
@@ -445,7 +448,7 @@ def test_main_lets_the_feeling_lucky_loader_speak_on_a_run_that_did_not_ask_for_
     with caplog.at_level(logging.INFO):
         cli.main()
 
-    assert "No previous JSON files found" not in caplog.text
+    assert "No usable last-used record" not in caplog.text
 
 
 def test_main_loads_the_requirements_file_and_keeps_its_names_out_of_the_import_check(
@@ -615,8 +618,8 @@ def test_main_asks_the_last_used_loader_about_this_script(monkeypatch, tmp_path)
     which record is consulted. Measured by substitution: all five could be
     replaced with all 338 tests green.
 
-    Concrete bug this catches: a wrong `python_script` matches another
-    script's last-used JSON in the same directory, and --feeling-lucky runs
+    Concrete bug this catches: a wrong `python_script` names another
+    script's last-used record in the same directory, and --feeling-lucky runs
     this script under an environment built for a different one.
     """
     _drive_main(
@@ -627,14 +630,12 @@ def test_main_asks_the_last_used_loader_about_this_script(monkeypatch, tmp_path)
         all_imports=set(),
     )
     seen: list[dict[str, object]] = []
-    passed_options: list[cli.Options] = []
 
-    def spy(options, **kwargs):
+    def spy(**kwargs):
         seen.append(kwargs)
-        passed_options.append(options)
         return None
 
-    monkeypatch.setattr(last_used, "load_last_used_venv_python", spy)
+    monkeypatch.setattr(last_used, "load_venv_python", spy)
     monkeypatch.setattr(
         pipeline,
         "setup_virtualenv",
@@ -650,17 +651,13 @@ def test_main_asks_the_last_used_loader_about_this_script(monkeypatch, tmp_path)
     assert len(seen) == 1
     assert seen[0]["script_dir"] == tmp_path
     assert seen[0]["python_script"] == script
-    assert seen[0]["pathlibcutoff"] == cli.Options().pathlibcutoff
+    assert seen[0]["my_name"] == "veny"
     assert seen[0]["rawlog"] is True
-    # The run's own Options, not a fresh one: a fresh emmykit Options carries
-    # an empty Namespace, so --feeling-lucky would read back as False and the
-    # loader would be answering about a different (empty) run. The script
-    # itself is checked through seen[0] above rather than off the Options --
-    # phase 4a moved it onto the Target, and Options only receives it again
-    # at the save, which this run never reaches.
-    passed = passed_options[0]
-    assert getattr(passed.args, "feeling_lucky", False) is True
-    assert passed.rawlog is True
+    # Four arguments, not five: the Options template the emmykit-typed reader
+    # needed is gone, and so is the pathlibcutoff it compared timestamps
+    # against. That the loader was reached at all is what proves the run read
+    # --feeling-lucky off its own parsed arguments -- a run that did not would
+    # never call it.
 
 
 def test_main_runs_the_script_under_the_running_interpreter_when_nothing_is_missing(
@@ -1327,9 +1324,7 @@ def _a_lucky_run(monkeypatch, tmp_path, argv, script_args=()):
         all_imports=set(),
         script_args=script_args,
     )
-    monkeypatch.setattr(
-        last_used, "load_last_used_venv_python", lambda options, **kwargs: lucky_python
-    )
+    monkeypatch.setattr(last_used, "load_venv_python", lambda **kwargs: lucky_python)
     return lucky_python, launched
 
 

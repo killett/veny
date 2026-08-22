@@ -5,14 +5,13 @@ Phase 4a drained every field the pipeline read or wrote into the frozen
 mutable `ImportScan` the analysis layer accumulates. Fifteen fields remain,
 in four groups:
 
-- **Persistence.** `python_script`, `script_dir`, `timestamp` and `my_name`
-  are what `ek.save_options_to_json` builds its filename from;
-  `venv_dir` and `venv_python` are the payload the *reader* recovers;
-  `options_json_filepath` is where the writer records the result, and
-  `pathlibcutoff` is what `last_used.load_last_used_options` compares against.
-  emmykit's reader and writer are typed against `ek.Options` rather than
-  against a payload, which is the whole of why this class is still alive.
-  `pipeline.run` copies the first three across at the save and nowhere else.
+- **Persistence, now dead.** `python_script`, `script_dir`, `timestamp`,
+  `venv_dir`, `venv_python`, `options_json_filepath` and `pathlibcutoff`
+  existed only for `ek.save_options_to_json` and the reader that read its
+  output back. Phase 4b Task 2 replaced the writer with `last_used.save` and
+  Task 3 replaced both readers with `last_used.load` /
+  `last_used.load_venv_python`, so nothing in `src/` reads or writes any of
+  them any more. Task 4 deletes `pathlibcutoff` and Task 6 the rest.
 - **Construction inputs.** `home` and `cwd`, which `cli.main` derives the
   run's `Settings` from, and `log_mode`, which only `ek.configure_logging`
   reads.
@@ -52,22 +51,20 @@ class Options(ek.Options):
         # Instead, it's the directory where this script will store its virtual environments and packages.
         self.my_dir: Path = self.home / self.my_name
         self.cwd: Path = Path.cwd().expanduser().resolve(strict=True)
-        # The three fields ek.save_options_to_json builds its filename from,
-        # alongside my_name. Target owns them for the run; pipeline.run copies
-        # them across just before the save, because emmykit's writer is typed
-        # against ek.Options rather than against a payload. Phase 4b drops the
-        # coupling -- veny writes its own LastUsed record -- and these go with
-        # it. Nothing else may read them.
+        # The three fields ek.save_options_to_json used to build its filename
+        # from, alongside my_name. Target owns them for the run, and phase 4b
+        # dropped the coupling -- veny writes its own LastUsed record now --
+        # so nothing reads these. Task 6 deletes them.
         self.python_script: Path | None = None
         self.script_dir: Path | None = None
         self.timestamp: str = ""
-        # And the two the *reader* recovers. last_used.load_last_used_options
-        # rebuilds an Options from the saved __dict__, and
-        # load_last_used_venv_python and the cache search's last-used pass
-        # read these two back off it. They left Options in phase 4a Task 6
-        # and had to come back: without them the JSON carries no venv at all,
-        # so --feeling-lucky and the last-used pointer silently never match
-        # again. Caught by scripts/differential_4a.py, not by the unit suite.
+        # And the two the reader used to recover from the saved __dict__.
+        # They left Options in phase 4a Task 6 and had to come back, because
+        # without them the JSON carried no venv at all and neither
+        # --feeling-lucky nor the last-used pointer could ever match again
+        # (caught by scripts/differential_4a.py, not by the unit suite).
+        # state.LastUsed carries both now, so these are unread. Task 6
+        # deletes them.
         self.venv_dir: Path | None = None
         self.venv_python: Path | None = None
         self.options_json_filepath: Path | None = None

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import emmykit as ek
 
-from . import __version__, environment, stdlib_index, venv_cache, verify
+from . import __version__, environment, state, stdlib_index, venv_cache, verify
 from .alias_index import ResolvedImport
 
 
@@ -564,15 +564,14 @@ def find_match_dir_in_cache(
     source_names: AbstractSet[str],
     tag: str,
     rawlog: bool,
-    load_last_used: Callable[[], ek.Options | None],
+    load_last_used: Callable[[], state.LastUsed | None],
 ) -> Path | None:
     """Try to find a matching virtual environment directory in the cache.
 
     Args:
-        args:               The parsed command-line arguments. Read *and
-                            written*: the --latest/--last-used flags are
-                            resolved in place, and those writes reach the
-                            options JSON the run saves.
+        args:               The parsed command-line arguments. Read only: the
+                            --latest/--last-used decisions this makes are
+                            locals, and nothing here writes to args.
         my_dir:             The directory the cached venvs live in.
         venv_name:          The base name every cached folder starts with.
         uninstalled:        The records this run needs a venv to provide.
@@ -580,8 +579,8 @@ def find_match_dir_in_cache(
         source_names:       The import names actually written in the source.
         tag:                The run's "major.minor" interpreter tag.
         rawlog:             Whether informational logging is suppressed.
-        load_last_used:     Loads the previous run's options, or returns None
-                            when there is no usable last-used JSON.
+        load_last_used:     Loads the previous run's record, or returns None
+                            when there is no usable one.
 
     Returns:
         The path to the matching virtual environment directory if found, otherwise None.
@@ -591,43 +590,41 @@ def find_match_dir_in_cache(
         or if the cached venv is invalid.
     """
     wanted = wanted_packages(uninstalled, extra_requirements)
-    if (
-        not getattr(args, "latest", False)
-        and not getattr(args, "oldest", False)
-        and not getattr(args, "last_used", False)
-        and not getattr(args, "smallest", False)
-    ):
-        args.last_used = True  # If no flags are set, then the default is to load the last used venv in the cache
-    if (
-        getattr(args, "last_used", False)
-        and not getattr(args, "latest", False)
-        and not getattr(args, "smallest", False)
-    ):
-        options_last_used = load_last_used()
-        # venv_dir is declared in veny.Options.__init__, not in the base
-        # emmykit.Options that load_last_used_options builds from, so a
-        # last-used JSON written without that key must not raise here.
-        venv_dir_last_used = getattr(options_last_used, "venv_dir", None)
-        if (
-            options_last_used is not None
-            and venv_dir_last_used is not None
-            and check_venv_dir(
-                venv_dir_last_used,
-                wanted=wanted,
-                tag=tag,
-                uninstalled=uninstalled,
-                source_names=source_names,
-                rawlog=rawlog,
-            )
+    explicit = (
+        getattr(args, "latest", False)
+        or getattr(args, "oldest", False)
+        or getattr(args, "last_used", False)
+        or getattr(args, "smallest", False)
+    )
+    # No flag at all means "the one you used last time" -- a local now, not a
+    # write onto args. It was a write only because args was serialized into
+    # the options JSON, which veny no longer keeps.
+    try_last_used = not explicit or getattr(args, "last_used", False)
+    prefer_latest = getattr(args, "latest", False)
+    if try_last_used and not prefer_latest and not getattr(args, "smallest", False):
+        record = load_last_used()
+        if record is not None and check_venv_dir(
+            record.venv_dir,
+            wanted=wanted,
+            tag=tag,
+            uninstalled=uninstalled,
+            source_names=source_names,
+            rawlog=rawlog,
         ):
-            return ek.ensure_path(venv_dir_last_used)
-        else:
-            if not rawlog:
-                logging.info("Trying to load the latest matching venv now.")
-        args.latest = (
-            True  # If that didn't work, try to load the latest venv in the cache
-        )
-        args.last_used = False  # And set this to False because it failed
+            return ek.ensure_path(record.venv_dir)
+        if not rawlog:
+            logging.info("Trying to load the latest matching venv now.")
+        # If that didn't work, take the latest -- the same fall-through the
+        # `args.latest = True` write used to encode.
+        prefer_latest = True
+        # ...and the last-used pass is spent, which is what `args.last_used =
+        # False` recorded. Both locals are kept rather than deriving the
+        # second from the first: `try_last_used and not prefer_latest` would
+        # also read False for a run that asked for --latest *and* --last-used,
+        # where the pass never ran and the flag was never cleared. That
+        # combination selects nothing at all (see the final else below), and
+        # deriving it would silently turn it into a plain --latest run.
+        try_last_used = False
     if not rawlog:
         logging.info(
             "Checking the cache for a virtual environment with all the required packages..."
@@ -656,9 +653,9 @@ def find_match_dir_in_cache(
                 "Found %d matching venv folders in the cache.", len(final_venv_folders)
             )
         if (
-            getattr(args, "latest", False)
+            prefer_latest
             and not getattr(args, "oldest", False)
-            and not getattr(args, "last_used", False)
+            and not try_last_used
             and not getattr(args, "smallest", False)
         ):
             # Return the latest venv in the cache which has all the packages needed now
@@ -686,8 +683,8 @@ def find_match_dir_in_cache(
             return None
         elif (
             getattr(args, "oldest", False)
-            and not getattr(args, "latest", False)
-            and not getattr(args, "last_used", False)
+            and not prefer_latest
+            and not try_last_used
             and not getattr(args, "smallest", False)
         ):
             # Return the oldest venv in the cache which has all the packages needed now
@@ -715,9 +712,9 @@ def find_match_dir_in_cache(
             return None
         elif (
             getattr(args, "smallest", False)
-            and not getattr(args, "latest", False)
+            and not prefer_latest
             and not getattr(args, "oldest", False)
-            and not getattr(args, "last_used", False)
+            and not try_last_used
         ):
             # Return the smallest venv in the cache which has all the packages needed now
             smallest_venv_folder: Path | None = smallest_venv(final_venv_folders)
@@ -745,9 +742,9 @@ def find_match_dir_in_cache(
         else:  # This should never happen
             logging.error(
                 f"Invalid combination of flags!\n"
-                f"{getattr(args, 'latest',    False) = }\n"
+                f"{prefer_latest = }\n"
                 f"{getattr(args, 'oldest',    False) = }\n"
-                f"{getattr(args, 'last_used', False) = }\n"
+                f"{try_last_used = }\n"
                 f"{getattr(args, 'smallest',  False) = }"
             )
     return None

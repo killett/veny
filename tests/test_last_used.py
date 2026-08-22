@@ -1,27 +1,15 @@
 """Characterize the last-used record now that it lives in veny.last_used.
 
-Fixtures write records via ``ek.save_options_to_json`` rather than hand-rolled
-JSON. ``ek.load_options_from_json`` round-trips tagged values (a bare JSON
-string does not decode back into a ``Path``), and
-``load_last_used_venv_python`` both calls ``ek.safe_is_file`` on the recorded
-value and compares it for equality against a real ``Path`` in the happy-path
-test below — a fixture that skipped the tagging would silently test the
-wrong thing (a str never equals a Path, and would never reliably satisfy a
-filesystem-path predicate the way a Path does). So every fixture here builds
-a real ``cli.Options`` object, sets the field(s) under test on it, and saves
-it with ``ek.save_options_to_json``, letting the library do the tagging
-instead of transcribing its format by hand.
-
-Measured (not transcribed): building an ``Options`` with ``python_script`` =
-``tmp_path / "thing.py"``, ``script_dir`` = ``tmp_path`` and ``timestamp`` =
-``"20260202-020202"``, then calling ``ek.save_options_to_json(options)`` and
-printing ``options.options_json_filepath.name``, produces:
-
-    .thing.py-veny-last-used-on-20260202-020202.json
-
-which satisfies both of ``load_last_used_options``'s filters: the
-``.thing.py`` prefix (``"." + options.python_script.name``) and the
-``last-used-on-(\\d{8}-\\d{6})`` regex.
+Phase 4b Task 3 deleted the two emmykit-typed readers this file used to
+cover. ``load_last_used_options`` globbed the script's directory for
+``.<script>-veny-last-used-on-<stamp>.json`` files, sorted them and rebuilt
+an ``ek.Options`` from the newest one that cleared ``pathlibcutoff``; the
+tests for the glob, the sort and the cutoff went with it, because a reader
+that names one fixed file has no glob to get wrong, no sort to reverse and
+no pre-2025 format to reject on a timestamp (it cannot decode those payloads
+at all -- see ``test_a_record_written_by_an_earlier_veny_is_ignored``).
+What is left here is the record itself, ``load`` / ``load_venv_python``, and
+the two call sites in ``pipeline`` that reach them.
 """
 
 import argparse
@@ -31,144 +19,37 @@ import os
 import sys
 from pathlib import Path
 
-import emmykit as ek
 import pytest
 
-from veny import cli, last_used, pipeline, state
+from veny import last_used, pipeline, state
 
 from .test_state_values import a_settings
 from .test_state_values import a_target as _target
 
 
-def _write_record(tmp_path: Path, script: Path, stamp: str, **fields: object) -> Path:
-    """Write one last-used options JSON the loader will recognise.
+def _a_script(tmp_path: Path) -> Path:
+    """A real script inside tmp_path, for the record to be named after.
 
     Args:
-        tmp_path: The directory the loader scans (also options.script_dir).
-        script:   The script Path the record belongs to.
-        stamp:    The "YYYYmmdd-HHMMSS" the filename carries (options.timestamp).
-        **fields: Extra attributes (e.g. venv_dir=..., venv_python=...) set on
-                  the Options object before saving, so they round-trip through
-                  ek.save_options_to_json / ek.load_options_from_json with
-                  their real types (e.g. Path, not str).
+        tmp_path: The directory the script (and its record) lives in.
 
     Returns:
-        The path written.
-    """
-    options = cli.Options()
-    options.python_script = script
-    options.script_dir = tmp_path
-    options.timestamp = stamp
-    for key, value in fields.items():
-        setattr(options, key, value)
-    ek.save_options_to_json(options)
-    assert options.options_json_filepath is not None
-    return options.options_json_filepath
-
-
-def _options_for(tmp_path: Path) -> tuple[cli.Options, Path]:
-    """An Options pointed at a real script inside tmp_path.
-
-    Returns both the Options and the script Path (rather than making callers
-    read it back off ``options.python_script``, which mypy sees as
-    ``Path | None``) since every caller needs a definitely-not-None Path to
-    hand to ``_write_record``.
+        The script's path.
     """
     script = tmp_path / "thing.py"
     script.write_text("import yaml\n")
-    options = cli.Options()
-    options.python_script = script
-    options.script_dir = tmp_path
-    return options, script
-
-
-def test_the_most_recent_matching_json_wins(tmp_path: Path) -> None:
-    """Two candidates, and the newer timestamp is the one loaded.
-
-    A bug that would make this fail: dropping the reverse=True on the sort,
-    which would resurrect the oldest venv on every run and quietly stop the
-    cache from ever advancing.
-
-    Expected value: the venv_dir recorded in the *newer* file. Obtained by
-    running the current loader against both files, not by reading the sort
-    key.
-    """
-    options, script = _options_for(tmp_path)
-    _write_record(
-        tmp_path,
-        script,
-        "20260101-010101",
-        venv_dir=tmp_path / "older",
-    )
-    _write_record(
-        tmp_path,
-        script,
-        "20260202-020202",
-        venv_dir=tmp_path / "newer",
-    )
-    loaded = last_used.load_last_used_options(
-        options,
-        script_dir=tmp_path,
-        python_script=script,
-        pathlibcutoff=options.pathlibcutoff,
-        rawlog=options.rawlog,
-    )
-    assert loaded is not None
-    assert getattr(loaded, "venv_dir", None) == tmp_path / "newer"
-
-
-def test_a_json_older_than_the_pathlib_cutoff_is_ignored(tmp_path: Path) -> None:
-    """Pre-cutoff files stored paths as strings and must not be loaded.
-
-    A bug that would make this fail: comparing the timestamps as numbers, or
-    dropping the `>= options.pathlibcutoff` term, which would feed str-typed
-    paths into code that calls Path methods on them. The cutoff is
-    "20250810-224900" (cli.py's Options default).
-    """
-    options, script = _options_for(tmp_path)
-    _write_record(
-        tmp_path,
-        script,
-        "20250101-000000",
-        venv_dir=tmp_path / "ancient",
-    )
-    assert (
-        last_used.load_last_used_options(
-            options,
-            script_dir=tmp_path,
-            python_script=script,
-            pathlibcutoff=options.pathlibcutoff,
-            rawlog=options.rawlog,
-        )
-        is None
-    )
-
-
-def test_no_matching_json_returns_none(tmp_path: Path) -> None:
-    """An empty script directory yields None, not an exception."""
-    options, script = _options_for(tmp_path)
-    assert (
-        last_used.load_last_used_options(
-            options,
-            script_dir=tmp_path,
-            python_script=script,
-            pathlibcutoff=options.pathlibcutoff,
-            rawlog=options.rawlog,
-        )
-        is None
-    )
+    return script
 
 
 def test_the_venv_python_loader_lets_the_record_search_explain_itself(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """load_last_used_venv_python must pass the caller's rawlog down, not a constant.
+    """load_venv_python must pass the caller's rawlog down, not a constant.
 
-    It has two voices on a miss: its own ("No last used options found, so no
-    venv_python to return.") and the one from load_last_used_options it
-    delegates to ("No previous JSON files found in the script directory."),
-    which is the only one that says *why*. The second is the one this call
-    site's `rawlog` argument controls.
+    It has two voices on a miss: its own ("No last used record found, so no
+    venv_python to return.") and the one from ``load``, which it delegates to
+    and which is the only one that says *which* script found nothing. The
+    second is the one this call site's `rawlog` argument controls.
 
     Measured 2026-08-19 across all 17 `rawlog=` sites in
     cli/cache_search/last_used/verify: substituting the wrong-but-type-correct
@@ -178,94 +59,39 @@ def test_the_venv_python_loader_lets_the_record_search_explain_itself(
 
     Concrete bug this catches: `rawlog=True` here, and a --feeling-lucky run
     that finds nothing reports only that it found nothing, never that the
-    script's directory holds no record at all (as opposed to holding one that
-    is too old, or one whose interpreter has been deleted -- each of which
-    has its own line).
+    script's directory holds no record at all (as opposed to holding one
+    whose interpreter has been deleted, which has its own line).
     """
-    options, script = _options_for(tmp_path)
+    script = _a_script(tmp_path)
 
     with caplog.at_level(logging.INFO):
         assert (
-            last_used.load_last_used_venv_python(
-                options,
+            last_used.load_venv_python(
                 script_dir=tmp_path,
                 python_script=script,
-                pathlibcutoff=options.pathlibcutoff,
+                my_name="veny",
                 rawlog=False,
             )
             is None
         )
 
-    assert "No previous JSON files found in the script directory." in caplog.text
+    assert f"No usable last-used record for {os.fspath(script)}." in caplog.text
 
     # And the other direction: a run that asked for raw logging must stay
     # quiet, so a hardcoded `rawlog=False` at that call site is caught too.
     caplog.clear()
     with caplog.at_level(logging.INFO):
         assert (
-            last_used.load_last_used_venv_python(
-                options,
+            last_used.load_venv_python(
                 script_dir=tmp_path,
                 python_script=script,
-                pathlibcutoff=options.pathlibcutoff,
+                my_name="veny",
                 rawlog=True,
             )
             is None
         )
 
-    assert "No previous JSON files found" not in caplog.text
-
-
-def test_a_recorded_interpreter_that_no_longer_exists_returns_none(
-    tmp_path: Path,
-) -> None:
-    """A deleted venv's interpreter is not offered to --feeling-lucky.
-
-    A bug that would make this fail: dropping the ek.safe_is_file guard, which
-    would hand main() a path to a missing interpreter and turn
-    --feeling-lucky's fast path into a FileNotFoundError.
-    """
-    options, script = _options_for(tmp_path)
-    _write_record(
-        tmp_path,
-        script,
-        "20260202-020202",
-        venv_python=tmp_path / "gone" / "bin" / "python",
-    )
-    assert (
-        last_used.load_last_used_venv_python(
-            options,
-            script_dir=tmp_path,
-            python_script=script,
-            pathlibcutoff=options.pathlibcutoff,
-            rawlog=options.rawlog,
-        )
-        is None
-    )
-
-
-def test_a_recorded_interpreter_that_exists_is_returned(tmp_path: Path) -> None:
-    """The happy path, so the guard above cannot pass by always returning None."""
-    options, script = _options_for(tmp_path)
-    interpreter = tmp_path / "venv" / "bin" / "python"
-    interpreter.parent.mkdir(parents=True)
-    interpreter.write_text("")
-    _write_record(
-        tmp_path,
-        script,
-        "20260202-020202",
-        venv_python=interpreter,
-    )
-    assert (
-        last_used.load_last_used_venv_python(
-            options,
-            script_dir=tmp_path,
-            python_script=script,
-            pathlibcutoff=options.pathlibcutoff,
-            rawlog=options.rawlog,
-        )
-        == interpreter
-    )
+    assert "No usable last-used record" not in caplog.text
 
 
 def test_is_virtualenv_reflects_prefix_vs_base_prefix(
@@ -323,122 +149,105 @@ def test_active_virtualenv_dir_falls_back_to_sys_prefix(monkeypatch):
 def test_the_last_used_adapter_returns_the_record_this_run_is_entitled_to(
     tmp_path: Path,
 ) -> None:
-    """pipeline._load_last_used must return the newest record that clears the cutoff.
+    """pipeline._load_last_used must return this script's own record.
 
-    This drives the adapter for real, against two records written into the
-    script's own directory: one stamped before options.pathlibcutoff (records
-    written before 2025-08-10 22:49:00 stored paths as strings and must never
-    be loaded) and one after. Which venv_dir comes back is the observable, and
-    it is decided by all four of the keyword arguments the adapter builds --
-    a wrong script_dir or python_script finds no file at all, a wrong cutoff
-    rejects both, and only the wired cutoff rejects exactly the stale one.
+    This drives the adapter for real, against records written into the
+    script's own directory. Which venv_dir comes back is the observable, and
+    it is decided by all three of the keyword arguments the adapter builds:
+    a wrong script_dir or python_script finds no file at all, and a wrong
+    my_name names a different file in the same directory -- so the directory
+    here holds a decoy record under another program's name as well as this
+    run's own.
 
-    Concrete bug this catches: hand over a cutoff of "00000000-000000" (or
-    drop the comparison) and the pre-cutoff record wins whenever it is the
-    newer file, resurrecting string-valued paths into a run that expects
-    Paths. Nothing raises; the failure lands much later, wherever one of those
-    strings is used as a Path.
+    Concrete bug this catches: the adapter reading some other script's
+    record, which hands the cache search a pointer to an environment built
+    for different imports. check_venv_dir rejects it, so nothing crashes --
+    the run simply falls through to "latest" forever and the last-used
+    pointer never wins.
     """
-    options, script = _options_for(tmp_path)
-    options.rawlog = True
-    _write_record(
-        tmp_path, script, "20250101-000000", venv_dir=tmp_path / "before-the-cutoff"
+    script = _a_script(tmp_path)
+    last_used.save(
+        state.LastUsed(
+            tmp_path / "ours", tmp_path / "ours" / "bin" / "python", "20260202-020202"
+        ),
+        script_dir=tmp_path,
+        python_script=script,
+        my_name="veny",
     )
-    _write_record(
-        tmp_path, script, "20260202-020202", venv_dir=tmp_path / "after-the-cutoff"
+    last_used.save(
+        state.LastUsed(
+            tmp_path / "theirs",
+            tmp_path / "theirs" / "bin" / "python",
+            "20260303-030303",
+        ),
+        script_dir=tmp_path,
+        python_script=script,
+        my_name="someone-else",
     )
 
     loaded = pipeline._load_last_used(
-        options,
         _target(python_script=script, script_dir=tmp_path),
-        pathlibcutoff=options.pathlibcutoff,
-        rawlog=options.rawlog,
+        my_name="veny",
+        rawlog=True,
     )
 
     assert loaded is not None
-    assert getattr(loaded, "venv_dir", None) == tmp_path / "after-the-cutoff"
+    assert loaded.venv_dir == tmp_path / "ours"
 
-    # And the other direction, which the pair above cannot show: a pre-cutoff
-    # record is always the *older* file, so lowering the cutoff never changes
-    # which of two records wins. A directory holding only the stale one does
-    # show it -- with the cutoff wired, there is nothing to load.
-    stale_only = tmp_path / "stale_only"
-    stale_only.mkdir()
-    stale_script = stale_only / "thing.py"
-    stale_script.write_text("import yaml\n")
-    _write_record(
-        stale_only,
-        stale_script,
-        "20250101-000000",
-        venv_dir=stale_only / "before-the-cutoff",
-    )
-    stale_options = cli.Options()
-    stale_options.rawlog = True
+    # And the other direction: a script whose directory holds no record of
+    # its own is a miss, not the neighbouring script's record.
+    other_dir = tmp_path / "elsewhere"
+    other_dir.mkdir()
+    other_script = other_dir / "thing.py"
+    other_script.write_text("import yaml\n")
 
     assert (
         pipeline._load_last_used(
-            stale_options,
-            _target(python_script=stale_script, script_dir=stale_only),
-            pathlibcutoff=stale_options.pathlibcutoff,
-            rawlog=stale_options.rawlog,
+            _target(python_script=other_script, script_dir=other_dir),
+            my_name="veny",
+            rawlog=True,
         )
         is None
     )
 
 
-def test_the_last_used_adapter_hands_over_this_runs_script_and_cutoff(
+def test_the_last_used_adapter_hands_over_this_runs_script_and_name(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The same five arguments again, this time read off the call itself.
+    """The same four arguments again, this time read off the call itself.
 
-    Secondary to the behavioural test above, and kept because two of the five
-    are invisible to it: the Options object handed over as the first argument
-    (ek.load_options_from_json loads *into* it, so a fresh one still yields a
-    record) and rawlog, which only decides whether the "no previous JSON
-    files" line is logged. Measured by substitution: all five could be
-    replaced with a wrong value while all 338 tests stayed green -- nothing
-    drove pipeline._load_last_used at all.
+    Secondary to the behavioural test above, and kept because one of the four
+    is invisible to it: rawlog, which only decides whether the "No usable
+    last-used record" line is logged.
 
     Concrete bug this catches: a wrong `script_dir` looks in a directory that
-    holds no last-used JSON, so the cache search silently falls through to
+    holds no last-used record, so the cache search silently falls through to
     "latest" on every run and the last-used pointer never wins.
     """
-    options = cli.Options()
-    options.rawlog = True
     target = _target(
         python_script=tmp_path / "scripts" / "thing.py",
         script_dir=tmp_path / "scripts",
     )
     seen: list[dict[str, object]] = []
-    sentinel = ek.Options()
+    sentinel = state.LastUsed(
+        tmp_path / "env", tmp_path / "env" / "bin" / "python", "20260202-020202"
+    )
 
-    def spy(passed_options, **kwargs):
-        seen.append({"options": passed_options, **kwargs})
+    def spy(**kwargs: object) -> state.LastUsed:
+        seen.append(kwargs)
         return sentinel
 
-    monkeypatch.setattr(last_used, "load_last_used_options", spy)
+    monkeypatch.setattr(last_used, "load", spy)
 
-    assert (
-        pipeline._load_last_used(
-            options,
-            target,
-            pathlibcutoff=options.pathlibcutoff,
-            rawlog=options.rawlog,
-        )
-        is sentinel
-    )
+    assert pipeline._load_last_used(target, my_name="veny", rawlog=True) is sentinel
     assert seen == [
         {
-            "options": options,
             "script_dir": tmp_path / "scripts",
             "python_script": tmp_path / "scripts" / "thing.py",
-            "pathlibcutoff": options.pathlibcutoff,
+            "my_name": "veny",
             "rawlog": True,
         }
     ]
-    # The cutoff is the class default, not a literal copied into this test:
-    # a call site substituting any other value fails the equality above.
-    assert options.pathlibcutoff == cli.Options().pathlibcutoff
 
 
 # --- The new record. Behaviour under test, and the bug each test would catch.

@@ -344,30 +344,30 @@ def test_the_run_builds_its_alias_index_from_its_own_settings(monkeypatch, tmp_p
     assert python_command == "python3"
 
 
-def test_the_last_used_callback_carries_this_runs_target_and_cutoff(
+def test_the_last_used_callback_carries_this_runs_target_and_name(
     monkeypatch, tmp_path
 ):
-    """The injected loader must close over this run's target and cutoff.
+    """The injected loader must close over this run's target and program name.
 
     Behaviour under test: the lambda handed to find_match_dir_in_cache, which
     is the only place the last-used pass reaches a Target at all.
 
     Concrete bug this catches: a wrong script_dir looks in a directory that
-    holds no last-used JSON, so the last-used pointer silently never wins and
-    every run falls through to "latest"; a cutoff of "00000000-000000" lets a
-    pre-2025-08-10 record through, resurrecting string-valued paths into a run
-    that expects Paths. Measured by substitution 2026-08-21: the options, the
-    target and the cutoff could each be replaced and the suite stayed green.
+    holds no last-used record, so the last-used pointer silently never wins
+    and every run falls through to "latest"; a wrong my_name names a file no
+    veny run ever writes, with the same effect. Measured by substitution
+    2026-08-21: the target and the name could each be replaced and the suite
+    stayed green.
     """
     script = _a_run(monkeypatch, tmp_path, argv=("--rawlog", "--last-used"))
     seen: list[dict[str, Any]] = []
 
-    def loader_spy(options, *, script_dir, python_script, pathlibcutoff, rawlog):
+    def loader_spy(*, script_dir, python_script, my_name, rawlog):
         seen.append(
             {
                 "script_dir": script_dir,
                 "python_script": python_script,
-                "pathlibcutoff": pathlibcutoff,
+                "my_name": my_name,
             }
         )
         return None
@@ -394,14 +394,14 @@ def test_the_last_used_callback_carries_this_runs_target_and_cutoff(
         "setup_virtualenv",
         lambda settings, target, requirements, **kwargs: (requirements, None, False),
     )
-    monkeypatch.setattr(last_used, "load_last_used_options", loader_spy)
+    monkeypatch.setattr(last_used, "load", loader_spy)
 
     cli.main()
 
     assert len(seen) == 1
     assert seen[0]["script_dir"] == script.parent.absolute()
     assert seen[0]["python_script"] == script.resolve()
-    assert seen[0]["pathlibcutoff"] == cli.Options().pathlibcutoff
+    assert seen[0]["my_name"] == "veny"
 
 
 def test_cli_builds_the_settings_from_the_shipped_defaults(monkeypatch, tmp_path):
@@ -696,8 +696,8 @@ def test_the_saved_record_carries_the_venv_the_run_actually_used(monkeypatch, tm
     venv_python onto the frozen VenvHandle and deleted them from Options. The
     unit suite stayed green -- nothing read them off Options any more -- but
     the saved record silently stopped containing a venv, so
-    last_used.load_last_used_venv_python's `hasattr` check answered False and
-    --feeling-lucky could never match again, on any script, forever. Found by
+    the reader's `hasattr` check answered False and --feeling-lucky could
+    never match again, on any script, forever. Found by
     scripts/differential_4a.py, which drives main() in both trees; this test
     is what closes it in-process. Phase 4b replaced the Options copy-back
     with veny's own LastUsed record; this test now reads that record off
