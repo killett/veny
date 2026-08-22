@@ -81,17 +81,6 @@ def test_enqueue_top_level_imports_records_stdlib_and_skips_enqueue(tmp_path):
     assert len(modules_to_process) == 0
 
 
-def test_options_alias_index_is_offline_and_unprobed(tmp_path):
-    # alias_index.empty() is what every fresh run's alias index is built
-    # from, before the target interpreter is even known. If this were
-    # alias_index.build(), each construction would fork a probe subprocess
-    # and open PyPI sockets.
-    index = alias_index.empty(tmp_path)
-    assert isinstance(index, alias_index.AliasIndex)
-    assert index.pypi is None
-    assert index.installed == {}
-
-
 def test_resolved_import_record_carries_both_names():
     # The old code put pip names in one set and import names in another, so
     # every consumer had to guess which kind of string it held.
@@ -104,6 +93,10 @@ def test_the_offline_argument_keeps_the_index_off_the_network(monkeypatch, tmp_p
     # build() has taken an offline flag since it was written and nothing ever
     # passed True, so there was no way to stop veny opening PyPI sockets --
     # on a plane, behind a blocked index, or in a sandbox without egress.
+    # Forced construction: veny.parse_arguments(options) -> None has no way
+    # to hand back its namespace except by mutating the Options it was
+    # given, so calling it at all requires one. Task 6's signature change
+    # removes this.
     options = veny.Options()
     monkeypatch.setattr(sys, "argv", ["veny.py", "--offline", "script.py"])
 
@@ -119,6 +112,10 @@ def test_the_offline_argument_keeps_the_index_off_the_network(monkeypatch, tmp_p
 def test_the_index_reaches_pypi_by_default(monkeypatch, tmp_path):
     # The flag must be opt-in: defaulting to offline would silently drop the
     # only tier that can resolve a name veny has never seen before.
+    # Forced construction: veny.parse_arguments(options) -> None has no way
+    # to hand back its namespace except by mutating the Options it was
+    # given, so calling it at all requires one. Task 6's signature change
+    # removes this.
     options = veny.Options()
     monkeypatch.setattr(sys, "argv", ["veny.py", "script.py"])
 

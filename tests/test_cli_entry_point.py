@@ -71,6 +71,12 @@ def test_state_directory_ignores_argv0(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", os.fspath(tmp_path))
     monkeypatch.setattr(sys, "argv", ["/tmp/anywhere/__main__.py"])
 
+    # Forced construction, not a bag: Options.__init__ is currently the only
+    # place that computes my_name/my_dir, and this is a live behaviour pin,
+    # not a drain assertion -- under `python -m veny` the regression it
+    # catches moves every venv, log and record from ~/veny to ~/__main__.
+    # Task 6 must relocate this pin to wherever my_name/my_dir come to live
+    # once Options is gone, not delete it along with the class.
     options = cli.Options()
 
     assert options.my_name == "veny"
@@ -87,6 +93,9 @@ def test_retired_alias_flags_are_rejected(argv_tail, monkeypatch):
     # parser while the functions behind them are gone -- an AttributeError at
     # the moment the flag is typed, rather than a clean argparse rejection.
     monkeypatch.setattr(sys, "argv", ["veny", *argv_tail])
+    # Forced construction: cli.parse_arguments(options) -> None has no way to
+    # hand back its namespace except by mutating the Options it was given, so
+    # calling it at all requires one. Task 6's signature change removes this.
     options = cli.Options()
 
     with pytest.raises(SystemExit) as excinfo:
@@ -893,6 +902,9 @@ def test_the_full_flag_is_gone(monkeypatch, tmp_path):
     script.write_text("import os\n")
     monkeypatch.setattr(sys, "argv", ["veny", "--full", os.fspath(script)])
 
+    # Forced construction: cli.parse_arguments(options) -> None has no way to
+    # hand back its namespace except by mutating the Options it was given, so
+    # calling it at all requires one. Task 6's signature change removes this.
     with pytest.raises(SystemExit) as exit_info:
         cli.parse_arguments(cli.Options())
 

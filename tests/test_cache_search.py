@@ -78,13 +78,14 @@ def check(
     stdlib: stdlib_index.StdlibIndex,
     requirements: state.Requirements,
     venv_dir: Path,
-    *,
-    args: argparse.Namespace | None = None,
 ) -> bool:
     """check_venv_dir wired the way find_match_dir_in_cache wires it.
 
     source_names is computed once by main() now and passed down, rather than
-    rebuilt inside check_venv_dir; this reproduces that one wiring.
+    rebuilt inside check_venv_dir; this reproduces that one wiring. No caller
+    here ever sets --reqs, so the getattr(args, "reqs", False) this used to
+    read off an Options is always False -- inlined rather than threaded
+    through as a never-set parameter.
     """
     return cache_search.check_venv_dir(
         venv_dir,
@@ -96,7 +97,7 @@ def check(
         source_names=verify.source_import_names(
             set(requirements.all_imports),
             requirements.extra_requirements,
-            getattr(args, "reqs", False),
+            False,
         ),
         rawlog=True,
     )
