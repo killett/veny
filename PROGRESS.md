@@ -60,7 +60,7 @@ differential and the regression it caught). Task 10 is this entry.
 
 **Gates measured on this branch in the closing session, 2026-08-21 — every
 number below was measured here, not copied from a task report.**
-`pixi run test` **440 passed, 1 warning**; `pixi run lint` **All checks
+`pixi run test` **441 passed, 1 warning**; `pixi run lint` **All checks
 passed!**; `pixi run python -m ruff format --check .` **59 files already
 formatted**; `pixi run typecheck` **23 errors in 6 files**. The mypy ceiling
 moved for the second time in the program: 29 → **23**, and from seven files to
@@ -78,9 +78,11 @@ environment, where `sys.prefix == sys.base_prefix`** — so
 was not exercised. That branch is phase 4c's, and 4c's live run must not use
 this shape.
 
-**The differential.** `scripts/differential_4a.py`, twelve layers, reduces the
-whole phase to a **29-line diff (two hunks, ten differing lines)** against
-`4d1846c`: the header, and Task 1's sanctioned usage-error change. It is
+**The differential.** `scripts/differential_4a.py`, thirteen layers, reduces
+the whole phase to a **43-line diff (four hunks)** against `4d1846c`: the
+header, and Task 1's three usage-error changes — a directory, a missing
+script, and a file that is not Python. The third was found by the review, not
+by the plan; before layer 13 existed the diff was 29 lines and two hunks. It is
 mutation-tested one regression per value object — clean 29, M1 216, M2 37,
 M3 197, M4 92, M5 353, reverted 29 — and its eight residual-risk items are in
 its docstring, inherited by 4b and 4c.
@@ -174,6 +176,42 @@ harness is `scripts/wiring_sweep_4a.py`.
   arguments with live readers.
 - **Removing the probe venv from classification** (design amendment 3) and the
   **single-file reachability gap** — still unowned, and still not phase 4's.
+
+**What the whole-branch review found (self-review, 2026-08-21).** This was
+**not** the independent review 3b, 3c, 3d and 3e each got — no reviewer agent
+was available in the closing session — so its coverage should be treated as
+weaker than theirs, and 4b should not assume 4a was reviewed to the same
+standard. It found one Important issue and four Minor:
+
+1. **IMPORTANT — a third sanctioned behaviour change nobody had recorded.**
+   `veny notes.txt` — a real file that is not a Python script — used to raise
+   `ValueError` out of `list_packages` and reach the user as a traceback with
+   status 1. It is now a `UsageError` and **status 2**. `ek.ensure_file`
+   accepts any file, so `resolve_target` lets it through and `list_packages`
+   is where it fails; Task 1 changed that raise along with the two the plan
+   named, and neither the plan, this file nor the differential said so. Both
+   trees were run to confirm the old status was 1 and the new one is 2. Now
+   carries `test_import_discovery::test_a_file_that_is_not_python_is_a_usage_error_not_a_traceback`
+   (mutation-checked) and **layer 13** of the differential, which is why the
+   diff is now 43 lines and four hunks rather than 29 and two.
+2. **MINOR — the saved JSON payload changed, harmlessly.** `run` no longer
+   assigns `options.stdlib` or `options.aliases`, so the last-used record now
+   carries the defaults `Options.__init__` builds rather than the indexes the
+   run resolved. Nothing reads either back — `last_used` reads `venv_python`
+   and `cache_search` reads `venv_dir`, both restored — so this is a change to
+   the file's contents and nothing else. Phase 4b deletes the whole payload.
+3. **MINOR — an orphaned docstring line** in `build_alias_index`, where the
+   old `options` entry's continuation ("and the --offline flag.") was left
+   dangling under `python_command`.
+4. **MINOR — `run`'s summary line** still read "Execute the run described by
+   options" after options stopped describing it.
+5. **MINOR — a weakened assertion.** Repointing
+   `test_main_describes_the_run_to_the_cache_search` had turned
+   `assert loaded == [options]` into an `isinstance` check, losing the pin
+   that the loader gets the run's *own* Options — the one thing only identity
+   can prove, since `load_last_used_options` loads *into* whatever it is
+   handed. Restored by capturing the Options at `parse_arguments`, and
+   mutation-checked.
 
 **One trap this phase paid for, worth not paying twice.** `pixi run` sets
 `PYTHONPATH=src`, and `tests/test_import_guard.py` spawns its own subprocess

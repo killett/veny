@@ -3,6 +3,7 @@
 import argparse
 import contextlib
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -457,3 +458,26 @@ def test_the_scan_list_packages_is_handed_is_the_one_it_fills(
     # being treated as a package, and the scan followed it to its own import.
     assert seeded.loaded_custom_modules == {"my_helper"}
     assert seeded.all_imports == {"requests"}
+
+
+def test_a_file_that_is_not_python_is_a_usage_error_not_a_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real file that is not a Python script must come back as a status.
+
+    Behaviour under test: what list_packages does when resolve_target let the
+    path through -- ek.ensure_file accepts any file -- but the content is not
+    a script.
+
+    Concrete bug this catches: the ValueError this used to raise travelled
+    uncaught out of main(), so `veny notes.txt` printed a traceback and
+    exited 1. It is now pipeline.UsageError, which cli.main maps to 2. This
+    is the third of phase 4a's sanctioned behaviour changes and the only one
+    the plan did not name; it was found by the whole-branch review, and both
+    trees were run to confirm the old status was 1 and the new one is 2.
+    """
+    not_python = tmp_path / "notes.txt"
+    not_python.write_text("this is not python\n")
+    monkeypatch.setattr(sys, "argv", ["veny", os.fspath(not_python)])
+
+    assert cli.main() == 2

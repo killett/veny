@@ -30,6 +30,15 @@ failed under *every* mutation and reported 86 spurious kills — which would
 have hidden every real hole behind it. Any future sweep must run pytest with
 `PYTHONPATH=src`, or through `pixi run`.
 
+> **REVIEW ADDENDUM 2026-08-21.** The whole-branch review added one call site
+> this table does not cover: `list_packages`' `UsageError` raise for a file
+> that is not a Python script. It carries no arguments of its own — the
+> message interpolates `python_file`, which the table already covers at
+> `pipeline.py`'s `ek.safe_is_file` and `ek.is_python_script` rows — so the
+> 178 count is unchanged. The behaviour it guards is now pinned by
+> `test_import_discovery::test_a_file_that_is_not_python_is_a_usage_error_not_a_traceback`
+> and by layer 13 of the differential.
+
 ## The headline
 
 | | |

@@ -146,11 +146,16 @@ class _CapturedRun(list):  # type: ignore[type-arg]
     """
 
     def __init__(self) -> None:
-        """Start with empty side-channels for the three values."""
+        """Start with empty side-channels for the four values."""
         super().__init__()
         self.settings: list[settings_module.Settings] = []
         self.targets: list[state.Target] = []
         self.requirements: list[state.Requirements] = []
+        # The Options main() built. Phase 4a drained it out of every hook the
+        # run passes through, so the only place left to catch it is
+        # parse_arguments -- which is also the only thing that still writes to
+        # it before the persistence save.
+        self.options: list[cli.Options] = []
 
 
 def _drive_main(
@@ -211,6 +216,14 @@ def _drive_main(
         return _offline_index()
 
     monkeypatch.setattr(pipeline, "build_alias_index", capture_the_run)
+
+    real_parse = cli.parse_arguments
+
+    def parse_spy(options):
+        real_parse(options)
+        captured.options.append(options)
+
+    monkeypatch.setattr(cli, "parse_arguments", parse_spy)
     monkeypatch.setattr(
         custom_modules, "dict_of_custom_modules", lambda settings, use_cache: {}
     )
@@ -303,11 +316,13 @@ def test_main_describes_the_run_to_the_cache_search(monkeypatch, tmp_path):
     assert call["rawlog"] is True
     # The callback must reach this run's own last-used loader, not a constant.
     assert load_last_used_callbacks[0]() is None
-    # One call, and with the run's own Options -- the template emmykit's
-    # loader fills in. It is the last thing in run() that still takes one;
-    # phase 4b replaces it with a LastUsed record.
+    # One call, and with the run's OWN Options by identity -- the template
+    # emmykit's loader fills in. A fresh one would still yield a record
+    # (load_last_used_options loads *into* whatever it is handed), so only
+    # identity can tell the two apart. It is the last thing in run() that
+    # still takes an Options; phase 4b replaces it with a LastUsed record.
     assert len(loaded) == 1
-    assert isinstance(loaded[0], cli.Options)
+    assert loaded[0] is captured.options[0]
 
 
 def test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs(

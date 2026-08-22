@@ -90,9 +90,8 @@ def build_alias_index(
 
     Args:
         settings: The run's invariants; reads my_dir
-        args: The parsed command line; reads the --offline flag
-        python_command: The interpreter the resolver probes
-                 and the --offline flag.
+        args: The parsed command line; reads the --offline flag.
+        python_command: The interpreter the resolver probes.
 
     Returns:
         An index for the target interpreter, offline if the user asked for it.
@@ -663,10 +662,11 @@ def setup_virtualenv(
     # The two "load-bearing" re-narrowing asserts that stood here are gone:
     # VenvHandle's fields are non-optional Paths, so there is nothing left for
     # mypy to lose across the intervening calls.
-    # A rebind, not a mutation: Requirements is a value, so the pre-repair
-    # one still describes what was first attempted. The manifest below is
-    # written from the post-repair value on purpose -- it must record what
-    # really provided each import.
+    #
+    # What follows is a rebind, not a mutation: Requirements is a value, so
+    # the pre-repair one still describes what was first attempted. The
+    # manifest below is written from the post-repair value on purpose -- it
+    # must record what really provided each import.
     requirements = dataclasses.replace(
         requirements,
         uninstalled=frozenset(
@@ -714,7 +714,7 @@ def run(
     *,
     start_time: dt.datetime | None = None,
 ) -> int:
-    """Execute the run described by options and return the script's status.
+    """Execute the run these values describe and return the script's status.
 
     Args:
         settings: The run's invariants, built once in cli.main.

@@ -53,6 +53,11 @@ Not empty. These hunks are sanctioned; anything else is a regression:
    new one logs a message and returns 2.
 2. **A missing script is a usage error** (Task 1, closing latent defect 2).
    Layer 9: the old tree raises ``FileNotFoundError``; the new one returns 2.
+2a. **A file that is not a Python script is a usage error too.** The plan did
+   not name this one -- ``ek.ensure_file`` accepts any file, so it reaches
+   ``list_packages``, which raised ``ValueError`` before and now raises
+   ``UsageError``. Layer 13; found by the whole-branch review, and both trees
+   were run to confirm the old status was 1 and the new one is 2.
 3. **``install_succeeded`` is no longer on the Options.** Layer 4 reports it as
    ``<absent>`` on the new tree. It is a return value from
    ``setup_virtualenv`` now; the rename decision it feeds is compared through
@@ -343,6 +348,28 @@ def layer_nine_a_missing_script(harness: Any, workdir: Path) -> None:
     harness.dump()
 
 
+def layer_thirteen_not_a_python_file(harness: Any, workdir: Path) -> None:
+    """A real file that is not a Python script.
+
+    The third of the phase's sanctioned changes, and the one its plan did not
+    name: ``ek.ensure_file`` accepts any file, so this reaches
+    ``list_packages``, which raised ``ValueError`` before and now raises
+    ``UsageError``. Found by the whole-branch review, not by the plan.
+
+    Args:
+        harness: 3e's Harness, already wired.
+        workdir: The scratch directory this run owns.
+    """
+    print("=== LAYER 13: a file that is not a Python script ===")
+    _, cwd = harness.begin(workdir / "layer13")
+    not_python = cwd / "notes.txt"
+    not_python.write_text("this is not python\n")
+    argv = [os.fspath(not_python)]
+    print(f"  argv: {[harness.scrub(part) for part in argv]}")
+    print(f"  main(): {harness.drive(argv)}")
+    harness.dump()
+
+
 def layer_ten_feeling_lucky_cold(harness: Any, workdir: Path) -> None:
     """--feeling-lucky with no last-used record in the script's directory.
 
@@ -444,6 +471,7 @@ def main() -> int:
             layer_ten_feeling_lucky_cold(harness, workdir)
             layer_eleven_reqs(harness, workdir)
             layer_twelve_rawlog(harness, workdir)
+            layer_thirteen_not_a_python_file(harness, workdir)
         finally:
             os.chdir(original_cwd)
     return 0
