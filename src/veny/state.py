@@ -95,7 +95,7 @@ class VenvHandle:
 
     Frozen because the three paths must move together: repointing venv_dir
     after a rename while venv_python still names the old directory is exactly
-    the drift Options.set_venv_dir's three coupled writes existed to prevent.
+    the drift the old set_venv_dir's three coupled writes existed to prevent.
     A rename produces a new handle via for_dir, never an edit to this one.
 
     Attributes:
@@ -141,8 +141,9 @@ class LastUsed:
     Frozen, like every other product in this module: it is written once at
     the end of a successful run and only read on the next one.
 
-    Phase 4b wrote this record itself rather than persisting an ek.Options,
-    which is what coupled veny's state object to emmykit's reader and writer.
+    Phase 4b wrote this record itself rather than persisting emmykit's
+    generic options bag, which is what coupled veny's per-run state to
+    emmykit's reader and writer.
     The design's state-model listing puts LastUsed in settings.py; it lives
     here with its siblings instead, because settings.py holds the run's
     invariants and this is a product.

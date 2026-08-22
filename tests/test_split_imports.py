@@ -93,37 +93,26 @@ def test_the_offline_argument_keeps_the_index_off_the_network(monkeypatch, tmp_p
     # build() has taken an offline flag since it was written and nothing ever
     # passed True, so there was no way to stop veny opening PyPI sockets --
     # on a plane, behind a blocked index, or in a sandbox without egress.
-    # Forced construction: veny.parse_arguments(options) -> None has no way
-    # to hand back its namespace except by mutating the Options it was
-    # given, so calling it at all requires one. Task 6's signature change
-    # removes this.
-    options = veny.Options()
     monkeypatch.setattr(sys, "argv", ["veny.py", "--offline", "script.py"])
 
-    veny.parse_arguments(options)
+    args = veny.parse_arguments()
 
-    assert options.args.offline is True
+    assert args.offline is True
     assert (
-        pipeline.build_alias_index(_a_settings(my_dir=tmp_path), options.args, "").pypi
-        is None
+        pipeline.build_alias_index(_a_settings(my_dir=tmp_path), args, "").pypi is None
     )
 
 
 def test_the_index_reaches_pypi_by_default(monkeypatch, tmp_path):
     # The flag must be opt-in: defaulting to offline would silently drop the
     # only tier that can resolve a name veny has never seen before.
-    # Forced construction: veny.parse_arguments(options) -> None has no way
-    # to hand back its namespace except by mutating the Options it was
-    # given, so calling it at all requires one. Task 6's signature change
-    # removes this.
-    options = veny.Options()
     monkeypatch.setattr(sys, "argv", ["veny.py", "script.py"])
 
-    veny.parse_arguments(options)
+    args = veny.parse_arguments()
 
-    assert options.args.offline is False
+    assert args.offline is False
     assert (
-        pipeline.build_alias_index(_a_settings(my_dir=tmp_path), options.args, "").pypi
+        pipeline.build_alias_index(_a_settings(my_dir=tmp_path), args, "").pypi
         is not None
     )
 

@@ -3,6 +3,7 @@
 import argparse
 import contextlib
 import dataclasses
+import importlib.util
 import os
 import sys
 from pathlib import Path
@@ -182,6 +183,21 @@ def test_the_run_builds_exactly_one_settings(
 
     assert len(seen) == 2
     assert seen[0] is seen[1]
+
+
+def test_the_options_god_object_is_gone() -> None:
+    """There is no second place a run's state can live.
+
+    Behaviour under test: the absence of the class phase 4 exists to delete.
+
+    Concrete bug this catches: leaving `Options` alive as a `cli` re-export
+    or as an importable `veny.run_options` module -- which is exactly how it
+    survived phases 3e and 4a. A dead-but-importable god object invites the
+    next stage to write onto it again, and nothing behavioural would notice
+    until two copies of the run's state disagreed.
+    """
+    assert not hasattr(cli, "Options")
+    assert importlib.util.find_spec("veny.run_options") is None
 
 
 def test_target_is_frozen() -> None:

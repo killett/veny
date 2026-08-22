@@ -806,8 +806,9 @@ def build(
 def empty(my_dir: Path) -> AliasIndex:
     """Build an index with no interpreter evidence and no network access.
 
-    Options() is constructed before the target interpreter is known, and in
-    tests, so it must not pay for a probe. main() replaces this with build().
+    An index is needed before the target interpreter is known, and in tests,
+    so it must not pay for a probe. pipeline.build_alias_index replaces this
+    with build() once the interpreter is resolved.
 
     Args:
         my_dir: veny's own directory, where the stores live.

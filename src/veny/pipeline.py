@@ -4,20 +4,19 @@ This module owns sequencing and is the only one that knows the order. Every
 module below it does one thing and is handed what it needs; `cli.py` above it
 parses argv and maps what happens here onto an exit status.
 
-Each stage is handed the values it needs and hands back its product. Phase 4a
-replaced the `Options` god object with them: `Settings` for the run's
-invariants, `Target` for what is being run, `ImportScan` for what the scan
-found, `Requirements` for what classification decided, and `VenvHandle` for
-the environment. Nothing here writes its product onto the object it was
-handed -- the one exception is `ImportScan`, which is an accumulator by design
-and which `analysis/scan.py` mutates in place as it walks.
+Each stage is handed the values it needs and hands back its product: `Settings`
+for the run's invariants, `Target` for what is being run, `ImportScan` for what
+the scan found, `Requirements` for what classification decided, and
+`VenvHandle` for the environment. Nothing here writes its product onto the
+object it was handed -- the one exception is `ImportScan`, which is an
+accumulator by design and which `analysis/scan.py` mutates in place as it
+walks. Phase 4a introduced those values and phase 4b deleted the per-run state
+object they replaced, so this module now carries no carrier at all.
 
-`Options` no longer reaches persistence at all: `run` writes its own
-`state.LastUsed` record through `last_used.save`, and both readers --
-`_load_last_used` for the cache search's last-used pass and `feeling_lucky`
-for the `--feeling-lucky` shortcut -- take that record back. What is left of
-the class is `run`'s own parameter, which phase 4b's remaining tasks drain
-and delete.
+Persistence is veny's own too: `run` writes a `state.LastUsed` record through
+`last_used.save`, and both readers -- `_load_last_used` for the cache search's
+last-used pass and `feeling_lucky` for the `--feeling-lucky` shortcut -- take
+that record back.
 
 Everything here calls its collaborators through the module object
 (`verify.check_packages_in_venv(...)`, never `from .verify import ...`), which
@@ -48,7 +47,6 @@ from . import (
     classify,
     environment,
     last_used,
-    run_options,
     state,
     stdlib_index,
     venv_cache,
@@ -84,7 +82,7 @@ def build_alias_index(
 ) -> alias_index.AliasIndex:
     """Rebuild the alias index against the interpreter that will run the user's script.
 
-    Options() seeds it with alias_index.empty(), whose cache is tagged with
+    An index built before the target interpreter is known is tagged with
     *veny's own* interpreter version; leaving that in place would let a cache
     entry recorded under one Python version short-circuit resolution for a
     target on another.
@@ -217,8 +215,9 @@ def split_imports(
     """Classify the scan's imports and return the result.
 
     A value, not an accumulator: nothing downstream writes to it. The
-    copy-back onto Options this used to end with is gone, along with the
-    frozenset-to-set conversions it did so that later stages could mutate
+    copy-back onto the old state object this used to end with is gone, along
+    with the frozenset-to-set conversions it did so that later stages could
+    mutate
     uninstalled_imports in place. verify_and_repair_imports' result is folded
     in with dataclasses.replace instead.
 
@@ -264,7 +263,8 @@ def list_packages(
     unreachable since 3e deleted --full: the script path is produced in
     exactly one production place, resolve_target, and that goes through
     ek.ensure_file, which refuses a directory. The only test that reached the
-    directory arms did so by writing the script path onto Options directly.
+    directory arms did so by writing the script path onto the old per-run
+    state object directly.
 
     Args:
         settings: The run's invariants; reads rawlog.
@@ -697,7 +697,6 @@ def setup_virtualenv(
 def run(
     settings: Settings,
     args: argparse.Namespace,
-    options: run_options.Options,
     target: state.Target | None,
     *,
     start_time: dt.datetime | None = None,
@@ -707,9 +706,6 @@ def run(
     Args:
         settings: The run's invariants, built once in cli.main.
         args: The parsed command line.
-        options: What is left of the god object -- the template emmykit's
-            last-used reader and writer are typed against. Nothing in this
-            module reads it for anything else. Phase 4b removes it.
         target: What is being run, or None for a scriptless invocation --
             which only --blank-slate excuses.
         start_time: What the two "Elapsed time" lines are measured from.
@@ -928,7 +924,7 @@ def run(
             # A reused venv never carries a "failed-" prefix -- the cache
             # search only offers folders that dropped it -- and
             # setup_virtualenv never ran, which is what left
-            # options.install_succeeded False here before phase 4a.
+            # install_succeeded False on the state object here before phase 4a.
             install_succeeded = False
 
         if handle is not None:

@@ -1,8 +1,8 @@
 """Decide, for one run's imports, which are installed, missing, or unusable.
 
 Classification is a function: it reads an ImportScan and the run's tables and
-returns a Requirements, without touching Options and without writing anything
-back through the scan. The one environment-shaped thing it needs -- a probe
+returns a Requirements, without reaching for any per-run state object and
+without writing anything back through the scan. The one environment-shaped thing it needs -- a probe
 virtual environment to ask "does this import already work?" -- arrives as a
 context manager, so the caller owns building and tearing it down and a run
 with nothing to classify never opens one.

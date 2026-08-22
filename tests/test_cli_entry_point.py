@@ -64,23 +64,30 @@ def test_module_entry_point_reports_the_package_version():
 
 
 def test_state_directory_ignores_argv0(monkeypatch, tmp_path):
-    # Catches: restoring my_name = Path(sys.argv[0]).stem, which under
-    # `python -m veny` yields "__main__" and moves every venv, log and pickle
-    # veny owns from ~/veny to ~/__main__. No other test would notice: they
-    # all build Options under pytest, where argv[0] is already arbitrary.
-    monkeypatch.setenv("HOME", os.fspath(tmp_path))
-    monkeypatch.setattr(sys, "argv", ["/tmp/anywhere/__main__.py"])
+    """The run's identity is the fixed name "veny", never argv[0]'s stem.
 
-    # Forced construction, not a bag: Options.__init__ is currently the only
-    # place that computes my_name/my_dir, and this is a live behaviour pin,
-    # not a drain assertion -- under `python -m veny` the regression it
-    # catches moves every venv, log and record from ~/veny to ~/__main__.
-    # Task 6 must relocate this pin to wherever my_name/my_dir come to live
-    # once Options is gone, not delete it along with the class.
-    options = cli.Options()
+    Behaviour under test: the my_name and my_dir cli.main stamps onto the
+    Settings every stage below it reads. Phase 4b Task 6 deleted the Options
+    class that used to compute them, so this pin -- which is a live
+    behaviour assertion, not a drain assertion -- now reads them off the
+    Settings the run really builds.
 
-    assert options.my_name == "veny"
-    assert options.my_dir == tmp_path / "veny"
+    Concrete bug this catches: restoring my_name = Path(sys.argv[0]).stem,
+    which under `python -m veny` yields "__main__" and moves every venv, log
+    and record veny owns from ~/veny to ~/__main__. No other test would
+    notice: every other run driven here spells argv[0] "veny" already.
+    """
+    captured, _ = _drive_main(
+        monkeypatch, tmp_path, ["--justprint"], uninstalled=set(), all_imports=set()
+    )
+    # _drive_main spells argv[0] "veny"; replacing it with what
+    # `python -m veny` really passes is the whole point of this test.
+    monkeypatch.setattr(sys, "argv", ["/tmp/anywhere/__main__.py", *sys.argv[1:]])
+
+    cli.main()
+
+    assert captured.settings[0].my_name == "veny"
+    assert captured.settings[0].my_dir == tmp_path / "home" / "veny"
 
 
 @pytest.mark.parametrize(
@@ -93,13 +100,9 @@ def test_retired_alias_flags_are_rejected(argv_tail, monkeypatch):
     # parser while the functions behind them are gone -- an AttributeError at
     # the moment the flag is typed, rather than a clean argparse rejection.
     monkeypatch.setattr(sys, "argv", ["veny", *argv_tail])
-    # Forced construction: cli.parse_arguments(options) -> None has no way to
-    # hand back its namespace except by mutating the Options it was given, so
-    # calling it at all requires one. Task 6's signature change removes this.
-    options = cli.Options()
 
     with pytest.raises(SystemExit) as excinfo:
-        cli.parse_arguments(options)
+        cli.parse_arguments()
 
     assert excinfo.value.code == 2
 
@@ -902,13 +905,32 @@ def test_the_full_flag_is_gone(monkeypatch, tmp_path):
     script.write_text("import os\n")
     monkeypatch.setattr(sys, "argv", ["veny", "--full", os.fspath(script)])
 
-    # Forced construction: cli.parse_arguments(options) -> None has no way to
-    # hand back its namespace except by mutating the Options it was given, so
-    # calling it at all requires one. Task 6's signature change removes this.
     with pytest.raises(SystemExit) as exit_info:
-        cli.parse_arguments(cli.Options())
+        cli.parse_arguments()
 
     assert exit_info.value.code == 2
+
+
+def test_parse_arguments_returns_the_parsed_command_line(monkeypatch):
+    """parse_arguments hands its namespace back to the caller.
+
+    Behaviour under test: the return value the signature change introduced.
+
+    Concrete bug this catches: a parse_arguments that still writes onto a
+    passed-in object and returns None. Every caller would then read a
+    namespace that is never filled -- main() would die on the first getattr.
+    The two shapes it has to carry back are asserted together: the `script`
+    positional and a store_true flag. `--rawlog` is spelled before the
+    script because `script_args` is an argparse.REMAINDER, which swallows
+    everything typed after the script path.
+    """
+    monkeypatch.setattr(sys, "argv", ["veny", "--rawlog", "thing.py", "-x"])
+
+    parsed = cli.parse_arguments()
+
+    assert parsed.script == "thing.py"
+    assert parsed.rawlog is True
+    assert parsed.script_args == ["-x"]
 
 
 def test_a_run_with_no_script_is_a_usage_error(monkeypatch, tmp_path, caplog):
@@ -956,7 +978,7 @@ def test_main_maps_a_missing_uv_to_status_one(monkeypatch, tmp_path, capsys):
         all_imports={"thing"},
     )
 
-    def unavailable(settings, args, options, target, start_time=None):
+    def unavailable(settings, args, target, start_time=None):
         raise environment.UvUnavailable(
             "veny requires uv, which is not installed and is not on PATH.\n"
             "Reinstall veny with:  uv tool install veny"
@@ -996,7 +1018,7 @@ def test_main_maps_a_failed_venv_build_to_status_one(monkeypatch, tmp_path, capl
         all_imports={"thing"},
     )
 
-    def refused(settings, args, options, target, start_time=None):
+    def refused(settings, args, target, start_time=None):
         raise pipeline.VenvBuildFailed(
             "Could not build the throwaway environment used to check which "
             "imports are already available."
@@ -1699,18 +1721,19 @@ def test_the_run_is_timed_from_the_moment_veny_started(monkeypatch, tmp_path, ca
     handed: list[dt.datetime | None] = []
     real_run = pipeline.run
 
-    def run_spy(settings, args, options, target, start_time=None):
+    def run_spy(settings, args, target, start_time=None):
         handed.append(start_time)
-        return real_run(settings, args, options, target, start_time=start_time)
+        return real_run(settings, args, target, start_time=start_time)
 
     monkeypatch.setattr(pipeline, "run", run_spy)
 
     parsed_at: list[dt.datetime] = []
     real_parse_arguments = cli.parse_arguments
 
-    def parse_arguments_spy(options):
-        real_parse_arguments(options)
+    def parse_arguments_spy():
+        parsed = real_parse_arguments()
         parsed_at.append(dt.datetime.now())
+        return parsed
 
     monkeypatch.setattr(cli, "parse_arguments", parse_arguments_spy)
 
