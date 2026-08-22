@@ -217,11 +217,12 @@ def _drive_main(
     # existing `captured, _ = _drive_main(...)` call sites keep working.
     targets: list[state.Target] = []
 
-    def fake_list_packages(settings, options, target, **kwargs):
+    def fake_list_packages(settings, scan, options, target, **kwargs):
         options.all_imports = set(all_imports)
         options.uninstalled_imports = set(uninstalled)
         captured.append(options)
         targets.append(target)
+        return scan
 
     monkeypatch.setattr(pipeline, "list_packages", fake_list_packages)
     captured.targets = targets

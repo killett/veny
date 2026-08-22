@@ -36,14 +36,6 @@ class Options(ek.Options):
         self.uninstalled_imports: set[alias_index.ResolvedImport] = set()
         self.bad_imports: set[str] = set()
         self.all_imports: set[str] = set()
-        self.total_imports: int = 0
-        self.custom_modules: dict[
-            str, Path
-        ] = {}  # Maps custom module names to their file Paths
-        self.subfolders: list[str] = []
-        self.samedir_files: list[Path] = []
-        self.loaded_custom_modules: set[str] = set()
-        self.sys_path_hints: set[Path] = set()  # Filled by SysPathVisitor
         # The three fields ek.save_options_to_json builds its filename from,
         # alongside my_name. Target owns them for the run; pipeline.run copies
         # them across just before the save, because emmykit's writer is typed
@@ -69,9 +61,6 @@ class Options(ek.Options):
         # the interpreter that will actually run the user's script. See
         # docs/superpowers/specs/2026-08-12-stdlib-index-design.md
         self.stdlib: stdlib_index.StdlibIndex = stdlib_index.for_running_interpreter()
-        self.seen_stdlib_imports: set[str] = (
-            set()
-        )  # Standard-library imports that were skipped
         # Import-name-to-pip-name resolution. Replaced in main() once
         # the target's python_command is known, so the resolver probes the
         # interpreter that will actually run the user's script. empty()

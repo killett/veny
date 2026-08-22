@@ -8,31 +8,33 @@ from pathlib import Path
 
 import pytest
 
-from veny import alias_index, cli, pipeline, state
+from veny import alias_index, cli, pipeline, state, stdlib_index
 from veny import settings as settings_module
+from veny.analysis.scan_state import ImportScan
 
 from .test_state_values import a_settings as _a_settings
 
 
-def _scan(script: Path, custom_modules: dict[str, Path]) -> cli.Options:
-    """Run the import scan over one script and return the populated options.
+def _scan(script: Path, custom_modules: dict[str, Path]) -> ImportScan:
+    """Run the import scan over one script and return what it found.
 
     Args:
         script:         The Python file to analyze.
-        custom_modules: Local module name to file path, as main() would supply.
+        custom_modules: Local module name to file path, as the run would
+                        supply -- the seeding the scanner reads to tell a
+                        local module from a PyPI package.
 
     Returns:
-        The Options object the scan wrote its findings into.
+        The ImportScan the scanner wrote its findings into.
     """
-    options = cli.Options()
-    options.custom_modules = custom_modules
+    scan = ImportScan(custom_modules=custom_modules)
     pipeline.find_imports_in_script(
         _a_settings(cwd=script.parent, rawlog=True),
-        options,
+        scan,
         script,
-        is_stdlib=options.stdlib.__contains__,
+        is_stdlib=stdlib_index.for_running_interpreter().__contains__,
     )
-    return options
+    return scan
 
 
 def test_the_scan_adapter_lets_the_scanner_name_the_files_it_opens(
@@ -58,32 +60,30 @@ def test_the_scan_adapter_lets_the_scanner_name_the_files_it_opens(
     helper.write_text("import numpy\n")
     script = tmp_path / "s.py"
     script.write_text("import helper\n\nhelper\n")
-    options = cli.Options()
-    options.custom_modules = {"helper": helper}
+    scan = ImportScan(custom_modules={"helper": helper})
 
     with caplog.at_level(logging.INFO):
         pipeline.find_imports_in_script(
             _a_settings(cwd=tmp_path, rawlog=False),
-            options,
+            scan,
             script,
-            is_stdlib=options.stdlib.__contains__,
+            is_stdlib=stdlib_index.for_running_interpreter().__contains__,
         )
 
-    assert options.all_imports == {"numpy"}
+    assert scan.all_imports == {"numpy"}
     assert f"Processing module: {script}" in caplog.text
 
     # And the other direction: a run that asked for raw logging must stay
     # quiet, so a hardcoded `rawlog=False` in that Settings is caught too.
     caplog.clear()
-    quiet = cli.Options()
-    quiet.custom_modules = {"helper": helper}
+    quiet_scan = ImportScan(custom_modules={"helper": helper})
 
     with caplog.at_level(logging.INFO):
         pipeline.find_imports_in_script(
             _a_settings(cwd=tmp_path, rawlog=True),
-            quiet,
+            quiet_scan,
             script,
-            is_stdlib=quiet.stdlib.__contains__,
+            is_stdlib=stdlib_index.for_running_interpreter().__contains__,
         )
 
     assert "Processing module:" not in caplog.text
@@ -107,10 +107,10 @@ def test_function_body_import_in_a_custom_module_is_discovered(
         "main()\n"
     )
 
-    options = _scan(script, {"helper": helper})
+    scan = _scan(script, {"helper": helper})
 
-    assert options.all_imports == {"numpy", "pandas", "requests"}
-    assert options.loaded_custom_modules == {"helper"}
+    assert scan.all_imports == {"numpy", "pandas", "requests"}
+    assert scan.loaded_custom_modules == {"helper"}
 
 
 def test_standard_library_imports_are_not_reported_as_needing_install(
@@ -120,10 +120,10 @@ def test_standard_library_imports_are_not_reported_as_needing_install(
     script = tmp_path / "s.py"
     script.write_text("import os\nimport json\nimport requests\n\nprint(os, json)\n")
 
-    options = _scan(script, {})
+    scan = _scan(script, {})
 
-    assert options.all_imports == {"requests"}
-    assert {"os", "json"} <= options.seen_stdlib_imports
+    assert scan.all_imports == {"requests"}
+    assert {"os", "json"} <= scan.seen_stdlib_imports
 
 
 def test_a_script_with_no_third_party_imports_yields_an_empty_import_set(
@@ -133,9 +133,9 @@ def test_a_script_with_no_third_party_imports_yields_an_empty_import_set(
     script = tmp_path / "s.py"
     script.write_text("import sys\n\nprint(sys.version)\n")
 
-    options = _scan(script, {})
+    scan = _scan(script, {})
 
-    assert options.all_imports == set()
+    assert scan.all_imports == set()
 
 
 def test_a_prepopulated_custom_module_outside_the_script_dir_is_recognized(
@@ -160,10 +160,10 @@ def test_a_prepopulated_custom_module_outside_the_script_dir_is_recognized(
     script = script_dir / "s.py"
     script.write_text("import faraway\n\nfaraway.go()\n")
 
-    options = _scan(script, {"faraway": faraway})
+    scan = _scan(script, {"faraway": faraway})
 
-    assert options.all_imports == set()
-    assert options.loaded_custom_modules == {"faraway"}
+    assert scan.all_imports == set()
+    assert scan.loaded_custom_modules == {"faraway"}
 
 
 def _a_run_that_can_classify(
@@ -228,11 +228,17 @@ def test_list_packages_scans_one_script_and_classifies_what_it_found(
     )
 
     with caplog.at_level(logging.INFO):
-        pipeline.list_packages(
-            settings, options, target, is_stdlib=options.stdlib.__contains__
+        scan = pipeline.list_packages(
+            settings,
+            ImportScan(),
+            options,
+            target,
+            is_stdlib=options.stdlib.__contains__,
         )
 
     assert f"Processing a single Python script: {script}" in caplog.text
+    # The scan comes back as a value, not as writes onto the Options.
+    assert scan.all_imports == {"requests"}
     # Exactly {"requests"}: extra-pkg is an extra requirement, and without
     # --reqs it must not be folded into the imports the script needs.
     assert options.all_imports == {"requests"}
@@ -271,12 +277,12 @@ def test_report_warns_about_a_standard_library_import_that_needs_a_system_packag
         python_command="",
         timestamp="20260821-120000",
     )
-    pipeline.list_packages(
-        settings, options, target, is_stdlib=options.stdlib.__contains__
+    scan = pipeline.list_packages(
+        settings, ImportScan(), options, target, is_stdlib=options.stdlib.__contains__
     )
 
     with caplog.at_level(logging.INFO):
-        pipeline.report(settings, options)
+        pipeline.report(settings, scan, options)
 
     assert "tkinter is in the standard library but needs the" in caplog.text
 
@@ -318,11 +324,11 @@ def test_the_scan_records_the_local_files_folders_and_sys_path_it_followed(
         "print(beside, pkg)\n"
     )
 
-    options = _scan(script, {})
+    scan = _scan(script, {})
 
-    assert options.samedir_files == [project / "beside.py"]
-    assert options.subfolders == ["pkg"]
-    assert hint_dir in options.sys_path_hints
+    assert scan.samedir_files == [project / "beside.py"]
+    assert scan.subfolders == ["pkg"]
+    assert hint_dir in scan.sys_path_hints
 
 
 def test_a_directory_argument_is_a_usage_error_not_a_traceback(tmp_path: Path) -> None:
@@ -399,3 +405,44 @@ def test_a_missing_script_returns_status_2_through_main(
     monkeypatch.setattr(sys, "argv", ["veny", str(tmp_path / "no_such_script.py")])
 
     assert cli.main() == 2
+
+
+def test_the_scan_list_packages_is_handed_is_the_one_it_fills(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """list_packages must fill the seeded scan, not a fresh one of its own.
+
+    Behaviour under test: that the ImportScan handed to list_packages is the
+    object the scanner writes into, and the object list_packages returns.
+
+    Concrete bug this catches: constructing a fresh ImportScan inside
+    list_packages instead of threading the seeded one through. The scanner
+    resolves a local import by looking the name up in scan.custom_modules,
+    which dict_of_custom_modules filled before list_packages was ever
+    reached; an empty dict makes every local module look like a PyPI package,
+    so veny tries to pip install the user's own file. Expected values
+    obtained by construction: one local helper, one real import.
+    """
+    helper = tmp_path / "my_helper.py"
+    helper.write_text("import requests\n")
+    script = tmp_path / "s.py"
+    script.write_text("import my_helper\n\nmy_helper\n")
+    settings, options = _a_run_that_can_classify(tmp_path, monkeypatch)
+    target = state.Target(
+        python_script=script,
+        script_dir=tmp_path,
+        script_args=(),
+        python_command="",
+        timestamp="20260821-120000",
+    )
+    seeded = ImportScan(custom_modules={"my_helper": helper})
+
+    returned = pipeline.list_packages(
+        settings, seeded, options, target, is_stdlib=options.stdlib.__contains__
+    )
+
+    assert returned is seeded
+    # The seeding was read: my_helper resolved to the local file rather than
+    # being treated as a package, and the scan followed it to its own import.
+    assert seeded.loaded_custom_modules == {"my_helper"}
+    assert seeded.all_imports == {"requests"}

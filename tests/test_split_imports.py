@@ -23,10 +23,9 @@ from .test_state_values import a_target as _target
 
 
 def test_tkinter_produces_one_system_package_warning(caplog):
-    options = veny.Options()
-    options.seen_stdlib_imports = {"tkinter", "os"}
+    scan = ImportScan(seen_stdlib_imports={"tkinter", "os"})
     with caplog.at_level(logging.WARNING):
-        pipeline.warn_about_system_packages(options)
+        pipeline.warn_about_system_packages(scan)
     messages = [record.getMessage() for record in caplog.records]
     assert len(messages) == 1
     assert "tkinter" in messages[0]
@@ -34,10 +33,9 @@ def test_tkinter_produces_one_system_package_warning(caplog):
 
 
 def test_no_warning_when_no_hint_module_was_seen(caplog):
-    options = veny.Options()
-    options.seen_stdlib_imports = {"os", "sys"}
+    scan = ImportScan(seen_stdlib_imports={"os", "sys"})
     with caplog.at_level(logging.WARNING):
-        pipeline.warn_about_system_packages(options)
+        pipeline.warn_about_system_packages(scan)
     assert caplog.records == []
 
 
@@ -45,24 +43,16 @@ def test_process_import_records_a_stdlib_skip(tmp_path):
     options = veny.Options()
     script = tmp_path / "user_script.py"
     script.write_text("import tkinter\n")
-    # process_import now takes an ImportScan and an injected is_stdlib
-    # predicate instead of Options. scan holds the same objects options
-    # does (not copies), so asserting on options.seen_stdlib_imports below
-    # still observes what process_import wrote.
-    scan = ImportScan(
-        all_imports=options.all_imports,
-        custom_modules=options.custom_modules,
-        loaded_custom_modules=options.loaded_custom_modules,
-        samedir_files=options.samedir_files,
-        subfolders=options.subfolders,
-        sys_path_hints=options.sys_path_hints,
-        seen_stdlib_imports=options.seen_stdlib_imports,
-    )
+    # process_import takes an ImportScan and an injected is_stdlib predicate.
+    # Phase 4a stopped seeding that scan from Options -- the seven fields are
+    # the scan's own now -- so the assertion below reads the scan directly.
+    scan = ImportScan()
+
     assert (
         process_import(scan, "tkinter", script, is_stdlib=options.stdlib.__contains__)
         is False
     )
-    assert "tkinter" in options.seen_stdlib_imports
+    assert "tkinter" in scan.seen_stdlib_imports
 
 
 def test_enqueue_top_level_imports_records_stdlib_and_skips_enqueue(tmp_path):
@@ -71,17 +61,9 @@ def test_enqueue_top_level_imports_records_stdlib_and_skips_enqueue(tmp_path):
     options = veny.Options()
     module_path = tmp_path / "user_script.py"
     module_path.write_text("import tkinter\n")
-    processed_paths: set = set()
-    modules_to_process: deque = deque()
-    scan = ImportScan(
-        all_imports=options.all_imports,
-        custom_modules=options.custom_modules,
-        loaded_custom_modules=options.loaded_custom_modules,
-        samedir_files=options.samedir_files,
-        subfolders=options.subfolders,
-        sys_path_hints=options.sys_path_hints,
-        seen_stdlib_imports=options.seen_stdlib_imports,
-    )
+    processed_paths: set[Path] = set()
+    modules_to_process: deque[Path] = deque()
+    scan = ImportScan()
 
     _enqueue_top_level_imports(
         scan,
@@ -92,7 +74,7 @@ def test_enqueue_top_level_imports_records_stdlib_and_skips_enqueue(tmp_path):
         is_stdlib=options.stdlib.__contains__,
     )
 
-    assert "tkinter" in options.seen_stdlib_imports
+    assert "tkinter" in scan.seen_stdlib_imports
     assert len(modules_to_process) == 0
 
 

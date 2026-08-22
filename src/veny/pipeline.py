@@ -103,63 +103,47 @@ def build_alias_index(
 
 def find_imports_in_script(
     settings: Settings,
-    options: run_options.Options,
+    scan: ImportScan,
     first_path: str | os.PathLike[str],
     *,
     is_stdlib: Callable[[str], bool],
 ) -> None:
-    """Scan a script for imports and record what was found on options.
+    """Scan a script for imports, accumulating into the given ImportScan.
 
-    A bridge, not a design: analysis/scan.py returns an ImportScan, while
-    list_packages, split_imports and warn_about_system_packages all still read
-    these fields off Options. Task 4 of phase 4a retires this bridge by giving
-    those consumers the ImportScan directly.
+    The scan is mutated in place rather than returned: analysis/scan.py only
+    ever calls .add / .append / `d[k] = v` on it and never rebinds a field,
+    and it recurses through the script's local modules relying on all seven
+    fields carrying across those calls.
 
-    The seven fields below are handed to the scanner by reference, not by
-    value -- the same dict/set/list objects options already holds, not
-    copies -- and the scanner only ever mutates them in place (.add,
-    .append, `d[k] = v`); it never rebinds one of them to a new object. So
-    what the scanner writes through `scan` is visible through `options`
-    immediately, with no copy-back step needed afterwards. This is also why
-    the scanner must be *seeded* with this call, not just read afterwards:
-    dict_of_custom_modules() populates options.custom_modules before
-    list_packages() ever reaches this function, and the scanner reads that
-    dict to tell a local module from a PyPI package.
+    Seeding is why the scan is passed in rather than built here.
+    dict_of_custom_modules() fills scan.custom_modules before list_packages
+    ever reaches this function, and the scanner reads that dict to tell a
+    local module from a PyPI package -- an empty one makes every local module
+    look like a package veny should pip install.
 
-    The Settings is passed in rather than built here. Building a second one
-    was what made four of its five fields dead at this call site -- the
-    scanner reads only `rawlog` -- while the other consumer,
-    dict_of_custom_modules, reads the other four. One object, handed to both,
-    has no dead field at either site.
+    The Settings is passed in for the same reason. Building a second one was
+    what made four of its five fields dead at this call site: the scanner
+    reads only `rawlog`, while the other consumer reads the other four.
 
     Args:
-        settings: The run's invariants.
-        options: The run's Options; the seven scan fields are updated in place.
+        settings: The run's invariants; the scanner reads rawlog.
+        scan: The accumulator to write into.
         first_path: The script to scan.
         is_stdlib: Predicate answering whether a name is standard library.
     """
-    scan = ImportScan(
-        all_imports=options.all_imports,
-        custom_modules=options.custom_modules,
-        loaded_custom_modules=options.loaded_custom_modules,
-        samedir_files=options.samedir_files,
-        subfolders=options.subfolders,
-        sys_path_hints=options.sys_path_hints,
-        seen_stdlib_imports=options.seen_stdlib_imports,
-    )
     analysis_scan.find_imports_in_script(
         settings, first_path, is_stdlib=is_stdlib, scan=scan
     )
 
 
-def warn_about_system_packages(options: run_options.Options) -> None:
-    """Warn once for each standard-library import that needs an operating-system package.
+def warn_about_system_packages(scan: ImportScan) -> None:
+    """Warn once for each standard-library import that needs an OS package.
 
     Args:
-        options: Options object; reads options.seen_stdlib_imports.
+        scan: The run's ImportScan; reads seen_stdlib_imports.
     """
     for name, system_package in stdlib_index.hints_for(
-        options.seen_stdlib_imports
+        scan.seen_stdlib_imports
     ).items():
         logging.warning(
             "%s is in the standard library but needs the %s system package "
@@ -216,7 +200,10 @@ def _probe_venv(target: state.Target) -> Iterator[Callable[[str], bool]]:
 
 
 def split_imports(
-    settings: Settings, options: run_options.Options, target: state.Target
+    settings: Settings,
+    scan: ImportScan,
+    options: run_options.Options,
+    target: state.Target,
 ) -> None:
     """Adapter: run classification and copy its product back onto Options.
 
@@ -230,19 +217,11 @@ def split_imports(
     Args:
         settings: The run's invariants; supplies known_bad_imports,
             also_needs and rawlog.
+        scan: What the scan found. Read, never written.
         options: Options object; the four classification fields are replaced.
         target: The run's Target; the probe environment is built against its
             python_command.
     """
-    scan = ImportScan(
-        all_imports=options.all_imports,
-        custom_modules=options.custom_modules,
-        loaded_custom_modules=options.loaded_custom_modules,
-        samedir_files=options.samedir_files,
-        subfolders=options.subfolders,
-        sys_path_hints=options.sys_path_hints,
-        seen_stdlib_imports=options.seen_stdlib_imports,
-    )
     result = classify.split_imports(
         scan,
         aliases=options.aliases,
@@ -256,16 +235,16 @@ def split_imports(
     options.all_imports = set(result.all_imports)
     options.bad_imports = set(result.bad)
     options.uninstalled_imports = set(result.uninstalled)
-    options.total_imports = result.total_imports
 
 
 def list_packages(
     settings: Settings,
+    scan: ImportScan,
     options: run_options.Options,
     target: state.Target,
     *,
     is_stdlib: Callable[[str], bool],
-) -> None:
+) -> ImportScan:
     """Scan the target script for imports, then classify them.
 
     Folder scanning was deleted here on 2026-08-21 (user ruling). It had been
@@ -276,12 +255,14 @@ def list_packages(
 
     Args:
         settings: The run's invariants; reads rawlog.
-        options: Options object; the scan and classification fields are replaced.
+        scan: The accumulator, already seeded with the custom-module dict.
+        options: Options object; the classification fields are replaced.
         target: The run's Target; supplies the script to scan.
         is_stdlib: Predicate answering whether a name is standard library.
 
     Returns:
-        None - modifies options to include all imports found in the script.
+        The same ImportScan, filled. Returned as well as mutated so callers
+        read a value rather than reaching back into what they passed.
 
     Raises:
         UsageError: The target is not a Python script veny can read.
@@ -291,16 +272,17 @@ def list_packages(
         raise UsageError(f"'{os.fspath(python_file)}' is not a valid Python script.")
     if not settings.rawlog:
         logging.info("Processing a single Python script: %s", os.fspath(python_file))
-    options.loaded_custom_modules = set()
-    options.all_imports = set()
-    find_imports_in_script(settings, options, python_file, is_stdlib=is_stdlib)
+    find_imports_in_script(settings, scan, python_file, is_stdlib=is_stdlib)
 
-    # Filter out invalid imports before splitting
-    options.all_imports = {
-        imp for imp in options.all_imports if re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", imp)
+    # Filter out invalid imports before splitting. This is the one field
+    # rebound rather than mutated in place, and it is safe only because the
+    # scanner has finished by now -- do not move the filter earlier.
+    scan.all_imports = {
+        imp for imp in scan.all_imports if re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", imp)
     }
 
-    split_imports(settings, options, target)
+    split_imports(settings, scan, options, target)
+    return scan
 
 
 def run_script(
@@ -503,14 +485,14 @@ def blank_slate(settings: Settings, options: run_options.Options) -> int:
     return 0
 
 
-def report(settings: Settings, options: run_options.Options) -> None:
+def report(settings: Settings, scan: ImportScan, options: run_options.Options) -> None:
     """Log what the scan and classification found, unless --rawlog silenced it.
 
     Args:
         settings: The run's invariants; reads rawlog.
-        options: The run's Options; reads options.uninstalled_imports,
-                 options.bad_imports, options.samedir_files and
-                 options.subfolders.
+        scan: What the scan found; reads samedir_files and subfolders.
+        options: The run's Options; reads options.uninstalled_imports and
+                 options.bad_imports.
     """
     if not settings.rawlog:
         # Report the import names, which are what the user wrote in their source.
@@ -520,14 +502,14 @@ def report(settings: Settings, options: run_options.Options) -> None:
         )
         if options.bad_imports:
             logging.warning("Bad imports: %s", options.bad_imports)
-        warn_about_system_packages(options)
-        if options.samedir_files:
+        warn_about_system_packages(scan)
+        if scan.samedir_files:
             logging.info(
                 "Imported files in the same directory as the script: %s",
-                list(map(os.fspath, options.samedir_files)),
+                list(map(os.fspath, scan.samedir_files)),
             )
-        if options.subfolders:
-            logging.info("Imported subfolders: %s", options.subfolders)
+        if scan.subfolders:
+            logging.info("Imported subfolders: %s", scan.subfolders)
 
 
 def _load_last_used(
@@ -792,10 +774,12 @@ def run(
             )
 
     time1 = dt.datetime.now()
-    options.custom_modules = custom_modules.dict_of_custom_modules(
-        settings,
-        use_cache=not getattr(options.args, "rc", False)
-        and not getattr(options.args, "no_cache", False),
+    scan = ImportScan(
+        custom_modules=custom_modules.dict_of_custom_modules(
+            settings,
+            use_cache=not getattr(options.args, "rc", False)
+            and not getattr(options.args, "no_cache", False),
+        )
     )
     time2 = dt.datetime.now()
     elapsed_time = time2 - time1
@@ -807,9 +791,11 @@ def run(
     if not settings.rawlog:
         logging.info("Elapsed time: %s", elapsed_time)
 
-    list_packages(settings, options, target, is_stdlib=options.stdlib.__contains__)
+    scan = list_packages(
+        settings, scan, options, target, is_stdlib=options.stdlib.__contains__
+    )
 
-    report(settings, options)
+    report(settings, scan, options)
 
     if getattr(options.args, "justprint", False):
         return 0

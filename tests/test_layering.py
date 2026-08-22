@@ -356,14 +356,14 @@ def test_split_imports_copies_back_every_field_it_owns() -> None:
     -- which is how dbf013c survived -- is invisible. So this reads the
     assignments themselves rather than any behaviour.
 
-    The four names are written out rather than derived from Requirements'
+    The three names are written out rather than derived from Requirements'
     fields: the mapping is deliberately not one-to-one (`total_imports` is a
-    property, `seen_stdlib` and `extra_requirements` are pass-throughs that
+    property and phase 4a deleted the Options attribute that shadowed it,
+    while `seen_stdlib` and `extra_requirements` are pass-throughs that
     Options already holds and must not be re-written), so deriving them would
     only restate whatever state.py currently says. Only `ast.Attribute`
-    targets whose value is the name `options` count -- the local `scan = ...`
-    and `result = ...` bindings are names, not attributes, and must not trip
-    this guard.
+    targets whose value is the name `options` count -- the local `result = ...`
+    binding is a name, not an attribute, and must not trip this guard.
 
     This proves the copy-back is *total* -- every field split_imports owns
     gets written -- and nothing more. It does not prove the copy-back is
@@ -399,5 +399,4 @@ def test_split_imports_copies_back_every_field_it_owns() -> None:
         "all_imports",
         "bad_imports",
         "uninstalled_imports",
-        "total_imports",
     }
