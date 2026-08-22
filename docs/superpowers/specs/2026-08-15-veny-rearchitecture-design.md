@@ -324,6 +324,22 @@ class LastUsed:          # the only thing that persists between runs
 `StdlibIndex` and `AliasIndex` are already objects and are passed as
 themselves; they belong to no bundle.
 
+> **AMENDED 2026-08-21 by phase 4a.** Six corrections, measured rather than
+> designed. (1) `Settings` carries **ten** fields, not fifteen: `home` exists
+> only to derive `my_dir` and stays a construction detail in `cli.py`, and
+> `log_mode` is read once, by `ek.configure_logging`. (2) `unusual_imports`,
+> `max_checks` and `check_interval` have **no readers anywhere** and were
+> deleted rather than rehomed into `Settings`. (3) `script_name` is likewise
+> dead — written once to `""`, never read — and was deleted rather than put on
+> `Target`. (4) `total_imports` was already a property on `Requirements`; the
+> `Options` attribute shadowing it was deleted. (5) `Target.script_args` is a
+> **tuple**, so no stage can append to the run's copy of the user's command
+> line. (6) The persistence group — `python_script`, `script_dir`,
+> `timestamp`, `venv_dir`, `venv_python` and `my_name` — **stays on `Options`
+> through 4a**: `ek.save_options_to_json` builds its filename from four of
+> them and the other two are the payload the reader recovers. Phase 4b removes
+> them with the coupling this section already describes.
+
 **Deleted rather than rehomed**, fifteen attributes. With the visitor block:
 `read_files`, `write_files`, `download_urls`, `upload_urls`,
 `current_method_name`. With uv: `pip_list`, `current_pip_version`,
