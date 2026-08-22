@@ -177,11 +177,12 @@ harness is `scripts/wiring_sweep_4a.py`.
 - **Removing the probe venv from classification** (design amendment 3) and the
   **single-file reachability gap** — still unowned, and still not phase 4's.
 
-**What the whole-branch review found (self-review, 2026-08-21).** This was
-**not** the independent review 3b, 3c, 3d and 3e each got — no reviewer agent
-was available in the closing session — so its coverage should be treated as
-weaker than theirs, and 4b should not assume 4a was reviewed to the same
-standard. It found one Important issue and four Minor:
+**What the closing self-review found (2026-08-21).** Read this as the
+*first* of two passes, not as the phase's review: an independent whole-branch
+review was run afterwards and its findings are recorded below this list. The
+self-review's coverage is the weaker of the two by construction — it was the
+author reading the author's diff — and it still found one Important issue and
+four Minor, which is the argument for the second pass rather than against it:
 
 1. **IMPORTANT — a third sanctioned behaviour change nobody had recorded.**
    `veny notes.txt` — a real file that is not a Python script — used to raise
