@@ -135,7 +135,6 @@ src/veny/
                     # which must be installed, and which are unusable.
     environment.py  # The one place veny invokes uv: venv creation, package
                     # install/uninstall, and the requirements file they read.
-    json_types.py   # Registers veny's own types with emmykit's JSON registry.
     last_used.py    # The one record veny keeps between runs: which
                     # environment last ran this script. Imports nothing from
                     # veny.

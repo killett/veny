@@ -81,8 +81,9 @@ class ResolvedImport:
     went into one set and import names into another, leaving every consumer to
     guess which kind of string it was holding.
 
-    This lives here rather than in veny.cli so that json_types can register
-    its JSON handlers without importing veny.cli, which would close an import cycle.
+    This lives here rather than in veny.cli because alias_index imports
+    nothing of veny's, so it stays free to be imported from anywhere without
+    risking a cycle back through veny.cli.
 
     Attributes:
         import_name: The name as written in the user's source.

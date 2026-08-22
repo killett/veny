@@ -40,7 +40,6 @@ LAYERS: list[frozenset[str]] = [
             "venv_cache",
             "stdlib_index",
             "pypi_client",
-            "json_types",
         }
     ),
     # state.py carries the products one stage hands to the next. It sits
@@ -95,9 +94,6 @@ SANCTIONED_EXCEPTIONS: dict[str, frozenset[str]] = {
     # alias_index -> pypi_client: alias resolution ranks candidates by
     # confirming them against PyPI.
     "alias_index": frozenset({"pypi_client"}),
-    # json_types -> alias_index and json_types -> stdlib_index: it registers
-    # both modules' types for JSON serialization.
-    "json_types": frozenset({"alias_index", "stdlib_index"}),
 }
 
 

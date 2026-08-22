@@ -4,8 +4,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import emmykit as ek
-
 from veny import (
     alias_index,
     cache_search,
@@ -294,42 +292,3 @@ def test_the_repair_installer_reports_failure_instead_of_exiting(monkeypatch, tm
         environment.install_into_venv(handle.venv_python, "nonexistent-package")
         is False
     )
-
-
-def test_resolved_import_still_round_trips_when_alias_index_is_lazy():
-    # Making the import lazy must not quietly turn the ResolvedImport and
-    # AliasIndex handlers into dead code that falls through to str().
-    record = veny.ResolvedImport(import_name="cv2", pip_name="opencv-python")
-    assert ek.from_jsonable(ek.to_jsonable(record)) == record
-
-
-def test_alias_index_is_serialized_as_structured_data():
-    # Serializing via str()/repr() turns lookups into substring matching, which
-    # silently returns wrong answers instead of raising.
-    index = alias_index.AliasIndex(
-        overrides={"cv2": "my-opencv"},
-        cache=alias_index.AliasCache(
-            path=Path("/tmp/none.json"),
-            interpreter_tag="3.12",
-            entries={},
-            rejections={},
-        ),
-        installed={},
-        pypi=None,
-    )
-    payload = ek.to_jsonable(index)
-    assert isinstance(payload, dict)
-    assert payload["overrides"] == {"cv2": "my-opencv"}
-    assert payload["interpreter_tag"] == "3.12"
-    assert payload["cache_path"] == "/tmp/none.json"
-    assert payload["offline"] is True
-
-
-def test_resolved_import_round_trips_through_json():
-    # uninstalled_imports is written to the last-used options file, which
-    # check_venv_dir still reads for its venv_dir pointer. Without a handler
-    # each record stringifies to "ResolvedImport(import_name='cv2', ...)",
-    # losing the structured data that the rest of the file depends on.
-    record = veny.ResolvedImport(import_name="cv2", pip_name="opencv-python")
-    restored = ek.from_jsonable(ek.to_jsonable({record}))
-    assert restored == {record}

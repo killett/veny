@@ -22,22 +22,44 @@ except ImportError as exc:  # stdlib only: none of emmykit's helpers exist yet.
         "veny requires the emmykit package (>=0.4.0), which is not installed.\n"
         "Install it with:  pip install 'emmykit>=0.4.0'"
     ) from exc
-if not hasattr(ek, "register_json_type"):
+
+_MINIMUM_EMMYKIT: Final[tuple[int, int, int]] = (0, 4, 0)
+
+
+def _emmykit_version() -> tuple[int, ...]:
+    """The installed emmykit's version, as far as it can be read.
+
+    Returns:
+        The leading numeric components of ``ek.__version__``, or an empty
+        tuple when it is absent or unreadable -- which compares less than any
+        real version, so an emmykit that will not say what it is is refused.
+    """
+    parts: list[int] = []
+    for piece in str(getattr(ek, "__version__", "")).split("."):
+        digits = ""
+        for character in piece:
+            if not character.isdigit():
+                break
+            digits += character
+        if not digits:
+            break
+        parts.append(int(digits))
+    return tuple(parts)
+
+
+if _emmykit_version() < _MINIMUM_EMMYKIT:
     raise SystemExit(
         f"veny requires emmykit >= 0.4.0; found {getattr(ek, '__version__', 'unknown')}.\n"
         f"Upgrade it with:  pip install -U 'emmykit>=0.4.0'"
     )
-from . import environment, json_types, pipeline, settings
+# Below the version guard on purpose: an emmykit too old to trust should not
+# even see the rest of veny's modules imported.
+from . import environment, pipeline, settings  # noqa: E402
 
 # An import name paired with the pip package that provides it. Defined in
 # alias_index, which imports nothing of veny's, and re-exported here because
-# veny is where it is used. Its JSON handlers live in json_types.
+# veny is where it is used.
 ResolvedImport = alias_index.ResolvedImport
-
-# Registers veny's own types with emmykit's JSON registry. At module scope, not
-# inside main(), so that anything importing veny -- including every test -- gets
-# the same serialization behaviour production does. The call is idempotent.
-json_types.register_types()
 
 # The installed command's name, fixed rather than derived from argv[0]: under
 # `python -m veny` the stem is "__main__", which would move every venv, log
