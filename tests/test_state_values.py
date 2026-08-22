@@ -2,11 +2,17 @@
 
 import argparse
 import dataclasses
+import os
+import sys
 from pathlib import Path
 
+import emmykit as ek
 import pytest
 
 from veny import cli, pipeline, state
+from veny import settings as settings_module
+from veny.analysis import custom_modules
+from veny.analysis import scan as analysis_scan
 
 
 def a_target(**overrides: object) -> state.Target:
@@ -36,6 +42,115 @@ def a_target(**overrides: object) -> state.Target:
 
 
 _a_target = a_target
+
+
+def a_settings(**overrides: object) -> settings_module.Settings:
+    """A Settings with every invariant set, for tests that vary one of them.
+
+    Public for the same reason a_target is: the stages that used to read these
+    ten fields off Options now take a Settings, and spelling all ten out in
+    every test would bury what the test is varying.
+
+    Args:
+        **overrides: Field values to replace on the returned Settings.
+
+    Returns:
+        A fully-populated Settings.
+    """
+    base = settings_module.Settings(
+        my_name="veny",
+        my_dir=Path("/tmp/veny-under-test"),
+        cwd=Path("/tmp"),
+        venv_name="myenv",
+        stay_out_list=settings_module.DEFAULT_STAY_OUT_LIST,
+        search_above_this_dir=True,
+        rawlog=True,
+        known_bad_imports=settings_module.DEFAULT_KNOWN_BAD_IMPORTS,
+        also_needs=settings_module.DEFAULT_ALSO_NEEDS,
+        extra_requirements_file="extra_requirements.txt",
+    )
+    return dataclasses.replace(base, **overrides)  # type: ignore[arg-type]
+
+
+_a_settings = a_settings
+
+
+def test_settings_collections_cannot_be_mutated_by_a_consumer() -> None:
+    """A stage must not be able to add to the run's own stay-out list.
+
+    Behaviour under test: the types of Settings' three collection fields.
+
+    Concrete bug this catches: declaring stay_out_list as list[str],
+    known_bad_imports as set[str] and also_needs as a plain dict. Freezing a
+    dataclass freezes the bindings, not the objects behind them, so a stage
+    could still call .append and change what every later stage searches --
+    a stay_out_list that grew mid-run would silently stop veny finding the
+    user's own modules, and each stage would disagree about which.
+    """
+    settings = a_settings()
+
+    with pytest.raises(AttributeError):
+        settings.stay_out_list.append("nope")  # type: ignore[attr-defined]
+    with pytest.raises(AttributeError):
+        settings.known_bad_imports.add("nope")  # type: ignore[attr-defined]
+    with pytest.raises(TypeError):
+        settings.also_needs["nope"] = ()  # type: ignore[index]
+
+
+def test_settings_is_frozen() -> None:
+    """The run's invariants are invariant.
+
+    Behaviour under test: Settings' immutability.
+
+    Concrete bug this catches: a plain @dataclass lets a stage rebind rawlog
+    halfway through a run, so veny's commentary appears for some stages and
+    not others -- which reads as a logging bug rather than as the ownership
+    violation it is.
+    """
+    settings = a_settings()
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        settings.rawlog = False  # type: ignore[misc]
+
+
+def test_the_run_builds_exactly_one_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One Settings object must serve the custom-module walk and the scan.
+
+    Behaviour under test: that cli.main builds the Settings and both
+    consumers below it receive that same object.
+
+    Concrete bug this catches: leaving find_imports_in_script to build its
+    own. 3e's wiring index measured four of that site's five fields dead,
+    because the scanner reads only `rawlog`; two constructions is what made
+    them dead. One construction, shared, is what closes those rows -- and a
+    second construction built from defaults would quietly ignore whatever
+    this run configured, so the scan would search directories the run asked
+    it to stay out of.
+    """
+    script = tmp_path / "s.py"
+    script.write_text("import os\n")
+    seen: list[object] = []
+    monkeypatch.setattr(sys, "argv", ["veny", "--justprint", os.fspath(script)])
+    monkeypatch.setattr(ek, "configure_logging", lambda *a, **k: None)
+    monkeypatch.setattr(ek, "print_all_errors", lambda *a, **k: None)
+
+    def record_walk(settings: object, **kwargs: object) -> dict[str, Path]:
+        seen.append(settings)
+        return {}
+
+    monkeypatch.setattr(custom_modules, "dict_of_custom_modules", record_walk)
+    monkeypatch.setattr(
+        analysis_scan,
+        "find_imports_in_script",
+        lambda settings, path, **kwargs: seen.append(settings),
+    )
+
+    cli.main()
+
+    assert len(seen) == 2
+    assert seen[0] is seen[1]
 
 
 def test_target_is_frozen() -> None:

@@ -1,6 +1,7 @@
 """Pin how veny locates the uv binary it drives its environment layer with."""
 
 import argparse
+import dataclasses
 import logging
 import os
 import shutil
@@ -20,6 +21,7 @@ from veny import (
     verify,
 )
 
+from .test_state_values import a_settings as _a_settings
 from .test_state_values import a_target as _target
 
 
@@ -149,8 +151,9 @@ def test_setup_virtualenv_builds_the_venv_before_writing_requirements_txt(
         cache_search, "record_venv_state", lambda venv_dir, **kwargs: venv_dir
     )
 
+    settings = _a_settings(my_dir=tmp_path)
     target = _target()
-    assert pipeline.setup_virtualenv(options, target) is True
+    assert pipeline.setup_virtualenv(settings, options, target) is True
 
     assert options.venv_dir is not None
     assert (options.venv_dir / "requirements.txt").read_text() == "thing-pkg\n"
@@ -211,8 +214,9 @@ def test_setup_virtualenv_writes_the_extra_requirements_version_specifiers(
         cache_search, "record_venv_state", lambda venv_dir, **kwargs: venv_dir
     )
 
+    settings = _a_settings(my_dir=tmp_path)
     target = _target()
-    pipeline.setup_virtualenv(options, target)
+    pipeline.setup_virtualenv(settings, options, target)
 
     assert options.venv_dir is not None
     assert (
@@ -238,13 +242,13 @@ def test_setup_virtualenv_reports_failure_when_uv_refuses_to_build(
     obtained from the new contract: False means "no environment", and the
     message names the directory so the user can see which build was refused.
     """
-    options, target = _a_wired_run(tmp_path)
+    settings, options, target = _a_wired_run(tmp_path)
     _stub_the_venv_away(monkeypatch)
     monkeypatch.setattr(environment, "create_venv", lambda target, python="": False)
 
     with caplog.at_level(logging.ERROR):
         target = _target()
-        built = pipeline.setup_virtualenv(options, target)
+        built = pipeline.setup_virtualenv(settings, options, target)
 
     assert built is False
     assert options.venv_dir is not None
@@ -301,7 +305,7 @@ def test_create_venv_is_given_a_resolved_interpreter_path_not_a_bare_command(
 
 
 def _a_wired_run(tmp_path):
-    """Build an Options and Target whose every setup_virtualenv argument is distinguishable.
+    """Build the Settings, Options and Target whose every setup_virtualenv argument is distinguishable.
 
     Each field carries a value no other field could supply -- a venv name, a
     timestamp, an interpreter tag, a pip name, an import name and a --reqs
@@ -309,11 +313,10 @@ def _a_wired_run(tmp_path):
     the wrong one cannot produce the expected result by coincidence.
 
     Returns:
-        The Options and the Target, in that order.
+        The Settings, the Options and the Target, in that order.
     """
     options = cli.Options()
-    options.my_dir = tmp_path
-    options.venv_name = "wiredenv"
+    settings = _a_settings(my_dir=tmp_path, venv_name="wiredenv", rawlog=True)
     target = _target(
         timestamp="20260101-010203",
         python_command="python-under-test-not-on-path",
@@ -327,7 +330,6 @@ def _a_wired_run(tmp_path):
     options.all_imports = {"thing", "extra-pkg"}
     options.extra_requirements = {"extra-pkg": ">=2.0"}
     options.args = argparse.Namespace(reqs=True)
-    options.rawlog = True
     options.aliases = alias_index.AliasIndex(
         overrides={},
         cache=alias_index.AliasCache(
@@ -340,7 +342,7 @@ def _a_wired_run(tmp_path):
         pypi=None,
         seed={},
     )
-    return options, target
+    return settings, options, target
 
 
 def _stub_the_venv_away(monkeypatch, uninstalled_after_repair=None):
@@ -392,10 +394,10 @@ def test_the_venv_folder_name_and_build_interpreter_come_from_this_run(
     exact defect PROGRESS records from phase 2 task 9, where a script
     importing `cgi` was classified installed under 3.12 and died under 3.13.
     """
-    options, target = _a_wired_run(tmp_path)
+    settings, options, target = _a_wired_run(tmp_path)
     created = _stub_the_venv_away(monkeypatch)
 
-    assert pipeline.setup_virtualenv(options, target) is True
+    assert pipeline.setup_virtualenv(settings, options, target) is True
 
     assert options.venv_dir is not None
     assert options.venv_dir.name == "failed-wiredenv-py3.12-20260101-010203-thing-pkg"
@@ -424,7 +426,7 @@ def test_verify_and_repair_imports_is_handed_the_whole_description_of_the_run(
     but is a --reqs pip spelling, so source_import_names must drop it. That
     pins the three arguments of the source_import_names call too.
     """
-    options, target = _a_wired_run(tmp_path)
+    settings, options, target = _a_wired_run(tmp_path)
     _stub_the_venv_away(monkeypatch)
     seen: list[dict[str, object]] = []
 
@@ -434,7 +436,7 @@ def test_verify_and_repair_imports_is_handed_the_whole_description_of_the_run(
 
     monkeypatch.setattr(verify, "verify_and_repair_imports", spy)
 
-    assert pipeline.setup_virtualenv(options, target) is True
+    assert pipeline.setup_virtualenv(settings, options, target) is True
 
     # Literal paths, not options.venv_python / options.requirements_file:
     # setup_virtualenv writes those two fields itself (via set_venv_dir), so
@@ -472,7 +474,7 @@ def test_the_manifest_and_the_final_check_describe_the_venv_after_repair(
     manifest, finds nothing it needs, and rebuilds the environment from
     scratch every single time.
     """
-    options, target = _a_wired_run(tmp_path)
+    settings, options, target = _a_wired_run(tmp_path)
     repaired = {cli.ResolvedImport(import_name="thing", pip_name="repaired-pkg")}
     _stub_the_venv_away(monkeypatch, uninstalled_after_repair=repaired)
     recorded: list[dict[str, object]] = []
@@ -496,7 +498,7 @@ def test_the_manifest_and_the_final_check_describe_the_venv_after_repair(
     monkeypatch.setattr(cache_search, "record_venv_state", record_spy)
     monkeypatch.setattr(verify, "check_packages_in_venv", check_spy)
 
-    assert pipeline.setup_virtualenv(options, target) is True
+    assert pipeline.setup_virtualenv(settings, options, target) is True
 
     # Literal paths, not options.venv_dir / options.venv_python, for the same
     # reason the sibling test above spells them out: record_spy echoes its
@@ -600,24 +602,24 @@ def test_setup_virtualenv_lets_the_repair_pass_name_the_package_it_settled_on(
     Expected message obtained from repair_unsatisfied_import's contract:
     "<pip name> provides the import <import name> (<evidence>)".
     """
-    options, target = _a_wired_run(tmp_path)
-    options.rawlog = False
+    settings, options, target = _a_wired_run(tmp_path)
+    settings = dataclasses.replace(settings, rawlog=False)
     _a_repair_that_succeeds(monkeypatch)
 
     with caplog.at_level(logging.INFO):
-        pipeline.setup_virtualenv(options, target)
+        pipeline.setup_virtualenv(settings, options, target)
 
     assert "repaired-pkg provides the import thing (the seed named it)" in caplog.text
 
     # The other direction: a --rawlog run must stay quiet, so a hardcoded
     # rawlog=False at this call site dies too.
     caplog.clear()
-    quiet, target = _a_wired_run(tmp_path)
-    quiet.rawlog = True
+    quiet_settings, quiet, target = _a_wired_run(tmp_path)
+    quiet_settings = dataclasses.replace(quiet_settings, rawlog=True)
     _a_repair_that_succeeds(monkeypatch)
 
     with caplog.at_level(logging.INFO):
-        pipeline.setup_virtualenv(quiet, target)
+        pipeline.setup_virtualenv(quiet_settings, quiet, target)
 
     assert "provides the import" not in caplog.text
 
@@ -671,12 +673,12 @@ def test_setup_virtualenv_lets_the_manifest_pass_explain_a_rename(
     folder it is renaming to.
     """
     repaired = {cli.ResolvedImport(import_name="thing", pip_name="repaired-pkg")}
-    options, target = _a_wired_run(tmp_path / "normal")
-    options.rawlog = False
+    settings, options, target = _a_wired_run(tmp_path / "normal")
+    settings = dataclasses.replace(settings, rawlog=False)
     _a_manifest_pass_that_renames(monkeypatch, tmp_path, repaired)
 
     with caplog.at_level(logging.INFO):
-        pipeline.setup_virtualenv(options, target)
+        pipeline.setup_virtualenv(settings, options, target)
 
     assert (
         "renaming it to failed-wiredenv-py3.12-20260101-010203-repaired-pkg"
@@ -686,11 +688,11 @@ def test_setup_virtualenv_lets_the_manifest_pass_explain_a_rename(
     # The other direction: --rawlog must reach it, so a hardcoded rawlog=False
     # at this call site dies too.
     caplog.clear()
-    quiet, target = _a_wired_run(tmp_path / "raw")
-    quiet.rawlog = True
+    quiet_settings, quiet, target = _a_wired_run(tmp_path / "raw")
+    quiet_settings = dataclasses.replace(quiet_settings, rawlog=True)
     _a_manifest_pass_that_renames(monkeypatch, tmp_path, repaired)
 
     with caplog.at_level(logging.INFO):
-        pipeline.setup_virtualenv(quiet, target)
+        pipeline.setup_virtualenv(quiet_settings, quiet, target)
 
     assert "renaming it to" not in caplog.text

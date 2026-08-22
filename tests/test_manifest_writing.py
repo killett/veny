@@ -16,6 +16,10 @@ from veny.alias_index import ResolvedImport
 # argument, so these tests name it here rather than staging it on an Options.
 PYTHON_COMMAND = "/usr/bin/python3.12"
 
+# The venv-name prefix cached folder names are built from. Phase 4a moved it
+# onto the Settings; record_venv_state takes it as an explicit argument.
+VENV_NAME = "myenv"
+
 
 def an_options() -> veny.Options:
     """Build an Options carrying the fields manifest_for reads."""
@@ -146,7 +150,7 @@ def test_record_venv_state_renames_before_writing_the_manifest(monkeypatch, tmp_
     options = an_options()
     run_tag = cache_search.interpreter_tag(options.stdlib)
     old_name = "failed-" + venv_cache.build_folder_name(
-        venv_name=options.venv_name,
+        venv_name=VENV_NAME,
         interpreter_tag=run_tag,
         timestamp=options.timestamp,
         pip_names=["yaml"],  # The pre-repair pip name the folder was built with.
@@ -178,7 +182,7 @@ def test_record_venv_state_renames_before_writing_the_manifest(monkeypatch, tmp_
         # out because record_venv_state takes it as a real argument now. The
         # probe that would read it is stubbed, so only its type matters here.
         venv_python=old_dir / "bin" / "python",
-        venv_name=options.venv_name,
+        venv_name=VENV_NAME,
         timestamp=options.timestamp,
         run_tag=run_tag,
         python_command=PYTHON_COMMAND,
@@ -188,7 +192,7 @@ def test_record_venv_state_renames_before_writing_the_manifest(monkeypatch, tmp_
     )
 
     wanted_name = venv_cache.build_folder_name(
-        venv_name=options.venv_name,
+        venv_name=VENV_NAME,
         interpreter_tag=run_tag,
         timestamp=options.timestamp,
         pip_names=[record.pip_name for record in options.uninstalled_imports],
@@ -231,7 +235,7 @@ def test_record_venv_state_renames_into_agreement_when_the_venvs_tag_differs_fro
     options = an_options()  # classifies against "3.12"
     run_tag = cache_search.interpreter_tag(options.stdlib)  # "3.12", the run's tag
     old_name = "failed-" + venv_cache.build_folder_name(
-        venv_name=options.venv_name,
+        venv_name=VENV_NAME,
         interpreter_tag=run_tag,
         timestamp=options.timestamp,
         pip_names=[record.pip_name for record in options.uninstalled_imports],
@@ -253,7 +257,7 @@ def test_record_venv_state_renames_into_agreement_when_the_venvs_tag_differs_fro
         # out because record_venv_state takes it as a real argument now. The
         # probe that would read it is stubbed, so only its type matters here.
         venv_python=old_dir / "bin" / "python",
-        venv_name=options.venv_name,
+        venv_name=VENV_NAME,
         timestamp=options.timestamp,
         run_tag=run_tag,
         python_command=PYTHON_COMMAND,
@@ -263,7 +267,7 @@ def test_record_venv_state_renames_into_agreement_when_the_venvs_tag_differs_fro
     )
 
     wanted_name = venv_cache.build_folder_name(
-        venv_name=options.venv_name,
+        venv_name=VENV_NAME,
         interpreter_tag="3.13",
         timestamp=options.timestamp,
         pip_names=[record.pip_name for record in options.uninstalled_imports],
@@ -422,7 +426,7 @@ def test_record_venv_state_probes_the_given_venv_and_records_the_runs_own_fields
     options = an_options()
     run_tag = cache_search.interpreter_tag(options.stdlib)
     stale_name = "failed-" + venv_cache.build_folder_name(
-        venv_name=options.venv_name,
+        venv_name=VENV_NAME,
         interpreter_tag=run_tag,
         timestamp=options.timestamp,
         pip_names=["yaml"],
@@ -440,7 +444,7 @@ def test_record_venv_state_probes_the_given_venv_and_records_the_runs_own_fields
     recorded = cache_search.record_venv_state(
         old_dir,
         venv_python=old_dir / "bin" / "python",
-        venv_name=options.venv_name,
+        venv_name=VENV_NAME,
         timestamp=options.timestamp,
         run_tag=run_tag,
         python_command=PYTHON_COMMAND,
@@ -451,7 +455,7 @@ def test_record_venv_state_probes_the_given_venv_and_records_the_runs_own_fields
 
     assert probed == [old_dir / "bin" / "python"]
     assert recorded.name == "failed-" + venv_cache.build_folder_name(
-        venv_name=options.venv_name,
+        venv_name=VENV_NAME,
         interpreter_tag="3.12",
         timestamp=options.timestamp,
         pip_names=["PyYAML", "numpy"],

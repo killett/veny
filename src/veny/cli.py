@@ -25,7 +25,7 @@ if not hasattr(ek, "register_json_type"):
         f"veny requires emmykit >= 0.4.0; found {getattr(ek, '__version__', 'unknown')}.\n"
         f"Upgrade it with:  pip install -U 'emmykit>=0.4.0'"
     )
-from . import environment, json_types, pipeline, run_options
+from . import environment, json_types, pipeline, run_options, settings
 
 # An import name paired with the pip package that provides it. Defined in
 # alias_index, which imports nothing of veny's, and re-exported here because
@@ -176,6 +176,22 @@ def main() -> int:
     options = Options()
     parse_arguments(options)
     options.rawlog = getattr(options.args, "rawlog", False)
+    # The run's invariants, built exactly once and handed down. `home` is a
+    # construction detail rather than a field: it exists only to derive
+    # my_dir. `log_mode` stays on Options because ek.configure_logging below
+    # is the only reader.
+    run_settings = settings.Settings(
+        my_name=options.my_name,
+        my_dir=options.home / options.my_name,
+        cwd=options.cwd,
+        venv_name="myenv",
+        stay_out_list=settings.DEFAULT_STAY_OUT_LIST,
+        search_above_this_dir=True,
+        rawlog=options.rawlog,
+        known_bad_imports=settings.DEFAULT_KNOWN_BAD_IMPORTS,
+        also_needs=settings.DEFAULT_ALSO_NEEDS,
+        extra_requirements_file="extra_requirements.txt",
+    )
     memory_handler = None
     try:
         target = pipeline.resolve_target(options.args)
@@ -191,7 +207,9 @@ def main() -> int:
         memory_handler = ek.configure_logging(
             options.my_name, log_level=options.log_mode, rawlog=options.rawlog
         )
-        script_exit_code = pipeline.run(options, target, start_time=start_time)
+        script_exit_code = pipeline.run(
+            run_settings, options, target, start_time=start_time
+        )
     except pipeline.UsageError as exc:
         logging.info("%s", exc)
         return 2

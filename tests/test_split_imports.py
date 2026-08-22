@@ -18,6 +18,7 @@ from veny.analysis.imports import process_import
 from veny.analysis.scan import _enqueue_top_level_imports
 from veny.analysis.scan_state import ImportScan
 
+from .test_state_values import a_settings as _a_settings
 from .test_state_values import a_target as _target
 
 
@@ -133,7 +134,10 @@ def test_the_offline_argument_keeps_the_index_off_the_network(monkeypatch, tmp_p
     veny.parse_arguments(options)
 
     assert options.args.offline is True
-    assert pipeline.build_alias_index(options, "").pypi is None
+    assert (
+        pipeline.build_alias_index(_a_settings(my_dir=tmp_path), options, "").pypi
+        is None
+    )
 
 
 def test_the_index_reaches_pypi_by_default(monkeypatch, tmp_path):
@@ -146,7 +150,10 @@ def test_the_index_reaches_pypi_by_default(monkeypatch, tmp_path):
     veny.parse_arguments(options)
 
     assert options.args.offline is False
-    assert pipeline.build_alias_index(options, "").pypi is not None
+    assert (
+        pipeline.build_alias_index(_a_settings(my_dir=tmp_path), options, "").pypi
+        is not None
+    )
 
 
 def _run_check_against_fake_venv(monkeypatch, importable: set[str], errors=None):
@@ -291,7 +298,12 @@ def test_setup_virtualenv_verifies_every_import_before_reporting_success(
         cache_search, "record_venv_state", lambda venv_dir, **kwargs: venv_dir
     )
 
-    assert pipeline.setup_virtualenv(options, _target()) is True
+    assert (
+        pipeline.setup_virtualenv(
+            _a_settings(my_dir=options.my_dir), options, _target()
+        )
+        is True
+    )
     # Verification has to happen before the gate that drops the "failed-"
     # prefix, or its repairs cannot affect the answer.
     assert calls == ["verify", "check"]

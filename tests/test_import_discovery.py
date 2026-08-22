@@ -9,6 +9,9 @@ from pathlib import Path
 import pytest
 
 from veny import alias_index, cli, pipeline, state
+from veny import settings as settings_module
+
+from .test_state_values import a_settings as _a_settings
 
 
 def _scan(script: Path, custom_modules: dict[str, Path]) -> cli.Options:
@@ -22,9 +25,13 @@ def _scan(script: Path, custom_modules: dict[str, Path]) -> cli.Options:
         The Options object the scan wrote its findings into.
     """
     options = cli.Options()
-    options.rawlog = True
     options.custom_modules = custom_modules
-    pipeline.find_imports_in_script(options, script)
+    pipeline.find_imports_in_script(
+        _a_settings(cwd=script.parent, rawlog=True),
+        options,
+        script,
+        is_stdlib=options.stdlib.__contains__,
+    )
     return options
 
 
@@ -52,11 +59,15 @@ def test_the_scan_adapter_lets_the_scanner_name_the_files_it_opens(
     script = tmp_path / "s.py"
     script.write_text("import helper\n\nhelper\n")
     options = cli.Options()
-    options.rawlog = False
     options.custom_modules = {"helper": helper}
 
     with caplog.at_level(logging.INFO):
-        pipeline.find_imports_in_script(options, script)
+        pipeline.find_imports_in_script(
+            _a_settings(cwd=tmp_path, rawlog=False),
+            options,
+            script,
+            is_stdlib=options.stdlib.__contains__,
+        )
 
     assert options.all_imports == {"numpy"}
     assert f"Processing module: {script}" in caplog.text
@@ -65,13 +76,15 @@ def test_the_scan_adapter_lets_the_scanner_name_the_files_it_opens(
     # quiet, so a hardcoded `rawlog=False` in that Settings is caught too.
     caplog.clear()
     quiet = cli.Options()
-    quiet.rawlog = True
-    quiet.python_script = script
-    quiet.script_dir = tmp_path
     quiet.custom_modules = {"helper": helper}
 
     with caplog.at_level(logging.INFO):
-        pipeline.find_imports_in_script(quiet, script)
+        pipeline.find_imports_in_script(
+            _a_settings(cwd=tmp_path, rawlog=True),
+            quiet,
+            script,
+            is_stdlib=quiet.stdlib.__contains__,
+        )
 
     assert "Processing module:" not in caplog.text
 
@@ -155,25 +168,27 @@ def test_a_prepopulated_custom_module_outside_the_script_dir_is_recognized(
 
 def _a_run_that_can_classify(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> cli.Options:
-    """An Options list_packages can be driven with, off the network and off uv.
+) -> tuple[settings_module.Settings, cli.Options]:
+    """A Settings and Options list_packages can be driven with, off the network and off uv.
 
     Only two boundaries are replaced: the throwaway probe environment (a uv
-    subprocess) and the alias index's network access. The scan, the directory
-    walk, the stay-out filter and the classification copy-back are all real.
+    subprocess) and the alias index's network access. The scan, the stay-out
+    filter and the classification copy-back are all real.
+
+    Returns:
+        The Settings and the Options, in that order.
     """
     options = cli.Options()
-    options.rawlog = False
     options.aliases = alias_index.empty(tmp_path / "index")
-    # Not the default list: a substitution that reaches for a fresh Options
+    # Not the default list: a substitution that reaches for a fresh Settings
     # would still exclude "myenv", and would look correct.
-    options.stay_out_list = ["keepout"]
+    settings = _a_settings(cwd=tmp_path, rawlog=False, stay_out_list=("keepout",))
     monkeypatch.setattr(
         pipeline,
         "_probe_venv",
-        lambda options: contextlib.nullcontext(lambda import_name: False),
+        lambda target: contextlib.nullcontext(lambda import_name: False),
     )
-    return options
+    return settings, options
 
 
 def test_list_packages_scans_one_script_and_classifies_what_it_found(
@@ -202,7 +217,7 @@ def test_list_packages_scans_one_script_and_classifies_what_it_found(
     project.mkdir()
     script = project / "s.py"
     script.write_text("import requests\n")
-    options = _a_run_that_can_classify(tmp_path, monkeypatch)
+    settings, options = _a_run_that_can_classify(tmp_path, monkeypatch)
     options.extra_requirements = {"extra-pkg": ">=2.0"}
     target = state.Target(
         python_script=script,
@@ -213,7 +228,9 @@ def test_list_packages_scans_one_script_and_classifies_what_it_found(
     )
 
     with caplog.at_level(logging.INFO):
-        pipeline.list_packages(options, target)
+        pipeline.list_packages(
+            settings, options, target, is_stdlib=options.stdlib.__contains__
+        )
 
     assert f"Processing a single Python script: {script}" in caplog.text
     # Exactly {"requests"}: extra-pkg is an extra requirement, and without
@@ -246,7 +263,7 @@ def test_report_warns_about_a_standard_library_import_that_needs_a_system_packag
     project.mkdir()
     script = project / "s.py"
     script.write_text("import tkinter\n")
-    options = _a_run_that_can_classify(tmp_path, monkeypatch)
+    settings, options = _a_run_that_can_classify(tmp_path, monkeypatch)
     target = state.Target(
         python_script=script,
         script_dir=project,
@@ -254,10 +271,12 @@ def test_report_warns_about_a_standard_library_import_that_needs_a_system_packag
         python_command="",
         timestamp="20260821-120000",
     )
-    pipeline.list_packages(options, target)
+    pipeline.list_packages(
+        settings, options, target, is_stdlib=options.stdlib.__contains__
+    )
 
     with caplog.at_level(logging.INFO):
-        pipeline.report(options)
+        pipeline.report(settings, options)
 
     assert "tkinter is in the standard library but needs the" in caplog.text
 

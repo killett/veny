@@ -372,7 +372,6 @@ def test_find_match_dir_in_cache_returns_a_manifest_match(
     options = an_options({ResolvedImport("thing", "thing-pkg")})
     options.all_imports = {"thing"}
     options.my_dir = tmp_path
-    options.venv_name = "myenv"
     options.args = argparse.Namespace(
         latest=True, oldest=False, last_used=False, smallest=False
     )
@@ -387,7 +386,7 @@ def test_find_match_dir_in_cache_returns_a_manifest_match(
         cache_search.find_match_dir_in_cache(
             options.args,
             my_dir=options.my_dir,
-            venv_name=options.venv_name,
+            venv_name="myenv",
             uninstalled=options.uninstalled_imports,
             extra_requirements=options.extra_requirements,
             source_names=verify.source_import_names(
@@ -423,7 +422,7 @@ def test_find_match_dir_in_cache_tolerates_a_last_used_options_without_venv_dir(
         cache_search.find_match_dir_in_cache(
             options.args,
             my_dir=options.my_dir,
-            venv_name=options.venv_name,
+            venv_name="myenv",
             uninstalled=options.uninstalled_imports,
             extra_requirements=options.extra_requirements,
             source_names=verify.source_import_names(
@@ -483,7 +482,6 @@ def test_a_cache_hit_reads_and_matches_each_manifest_once(
     options = an_options({ResolvedImport("thing", "thing-pkg")})
     options.all_imports = {"thing"}
     options.my_dir = tmp_path
-    options.venv_name = "myenv"
     options.args = argparse.Namespace(
         latest=True, oldest=False, last_used=False, smallest=False
     )
@@ -515,7 +513,7 @@ def test_a_cache_hit_reads_and_matches_each_manifest_once(
     result = cache_search.find_match_dir_in_cache(
         options.args,
         my_dir=options.my_dir,
-        venv_name=options.venv_name,
+        venv_name="myenv",
         uninstalled=options.uninstalled_imports,
         extra_requirements=options.extra_requirements,
         source_names=verify.source_import_names(
@@ -695,7 +693,6 @@ def test_a_last_used_hit_still_reads_and_matches_its_own_manifest(
     options = an_options({ResolvedImport("thing", "thing-pkg")})
     options.all_imports = {"thing"}
     options.my_dir = tmp_path
-    options.venv_name = "myenv"
     options.args = argparse.Namespace(
         latest=False, oldest=False, last_used=True, smallest=False
     )
@@ -730,7 +727,7 @@ def test_a_last_used_hit_still_reads_and_matches_its_own_manifest(
     result = cache_search.find_match_dir_in_cache(
         options.args,
         my_dir=options.my_dir,
-        venv_name=options.venv_name,
+        venv_name="myenv",
         uninstalled=options.uninstalled_imports,
         extra_requirements=options.extra_requirements,
         source_names=verify.source_import_names(
@@ -770,7 +767,6 @@ def _a_run_with_a_pinned_package(tmp_path: Path) -> tuple[veny.Options, Path]:
     )
     options = an_options({ResolvedImport("thing", "thing-pkg")})
     options.my_dir = tmp_path
-    options.venv_name = "myenv"
     options.all_imports = {"thing", "other"}
     options.extra_requirements = {"thing-pkg": ">=2.0"}
     options.rawlog = True
@@ -847,7 +843,7 @@ def test_every_branch_hands_check_venv_dir_the_same_description_of_the_run(
     result = cache_search.find_match_dir_in_cache(
         options.args,
         my_dir=options.my_dir,
-        venv_name=options.venv_name,
+        venv_name="myenv",
         uninstalled=options.uninstalled_imports,
         extra_requirements=options.extra_requirements,
         source_names=verify.source_import_names(
@@ -905,7 +901,7 @@ def test_every_branch_hands_check_venv_dir_the_same_description_of_the_run(
         cache_search.find_match_dir_in_cache(
             options.args,
             my_dir=liar_dir,
-            venv_name=options.venv_name,
+            venv_name="myenv",
             uninstalled=options.uninstalled_imports,
             extra_requirements=options.extra_requirements,
             source_names=verify.source_import_names(
@@ -1090,7 +1086,7 @@ def test_the_cache_search_filters_the_folders_against_this_run_not_a_blank_one(
         cache_search.find_match_dir_in_cache(
             options.args,
             my_dir=options.my_dir,
-            venv_name=options.venv_name,
+            venv_name="myenv",
             uninstalled=options.uninstalled_imports,
             extra_requirements=options.extra_requirements,
             source_names=verify.source_import_names(

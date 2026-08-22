@@ -73,7 +73,7 @@ class VenvBuildFailed(Exception):
 
 
 def build_alias_index(
-    options: run_options.Options, python_command: str
+    settings: Settings, options: run_options.Options, python_command: str
 ) -> alias_index.AliasIndex:
     """Rebuild the alias index against the interpreter that will run the user's script.
 
@@ -83,7 +83,8 @@ def build_alias_index(
     target on another.
 
     Args:
-        options: Options object; reads options.my_dir
+        settings: The run's invariants; reads my_dir
+        options: Options object; reads the --offline flag off options.args
         python_command: The interpreter the resolver probes
                  and the --offline flag.
 
@@ -95,19 +96,23 @@ def build_alias_index(
     """
     return alias_index.build(
         python_command,
-        options.my_dir,
+        settings.my_dir,
         offline=getattr(options.args, "offline", False),
     )
 
 
 def find_imports_in_script(
-    options: run_options.Options, first_path: str | os.PathLike[str]
+    settings: Settings,
+    options: run_options.Options,
+    first_path: str | os.PathLike[str],
+    *,
+    is_stdlib: Callable[[str], bool],
 ) -> None:
     """Scan a script for imports and record what was found on options.
 
     A bridge, not a design: analysis/scan.py returns an ImportScan, while
     list_packages, split_imports and warn_about_system_packages all still read
-    these fields off Options. Phase 3c and 3e retire this bridge by giving
+    these fields off Options. Task 4 of phase 4a retires this bridge by giving
     those consumers the ImportScan directly.
 
     The seven fields below are handed to the scanner by reference, not by
@@ -119,25 +124,20 @@ def find_imports_in_script(
     the scanner must be *seeded* with this call, not just read afterwards:
     dict_of_custom_modules() populates options.custom_modules before
     list_packages() ever reaches this function, and the scanner reads that
-    dict to tell a local module from a PyPI package. Passing options' own
-    objects in as `scan` is what makes that work. (Until 2026-08-21 a second
-    reason stood here: the deleted folder-scanning helper called this once
-    per file in a directory walk and relied on all seven fields accumulating
-    across calls. Folder scanning is gone, so accumulation now spans one
-    script's import graph rather than a tree of files -- but the fields still
-    accumulate across the recursive walk of that graph.)
+    dict to tell a local module from a PyPI package.
+
+    The Settings is passed in rather than built here. Building a second one
+    was what made four of its five fields dead at this call site -- the
+    scanner reads only `rawlog` -- while the other consumer,
+    dict_of_custom_modules, reads the other four. One object, handed to both,
+    has no dead field at either site.
 
     Args:
+        settings: The run's invariants.
         options: The run's Options; the seven scan fields are updated in place.
         first_path: The script to scan.
+        is_stdlib: Predicate answering whether a name is standard library.
     """
-    settings = Settings(
-        my_name=options.my_name,
-        cwd=options.cwd,
-        stay_out_list=tuple(options.stay_out_list),
-        search_above_this_dir=options.search_above_this_dir,
-        rawlog=options.rawlog,
-    )
     scan = ImportScan(
         all_imports=options.all_imports,
         custom_modules=options.custom_modules,
@@ -148,7 +148,7 @@ def find_imports_in_script(
         seen_stdlib_imports=options.seen_stdlib_imports,
     )
     analysis_scan.find_imports_in_script(
-        settings, first_path, is_stdlib=options.stdlib.__contains__, scan=scan
+        settings, first_path, is_stdlib=is_stdlib, scan=scan
     )
 
 
@@ -215,7 +215,9 @@ def _probe_venv(target: state.Target) -> Iterator[Callable[[str], bool]]:
         yield is_importable
 
 
-def split_imports(options: run_options.Options, target: state.Target) -> None:
+def split_imports(
+    settings: Settings, options: run_options.Options, target: state.Target
+) -> None:
     """Adapter: run classification and copy its product back onto Options.
 
     The copy-back is total -- these four fields are the complete set the old
@@ -226,6 +228,8 @@ def split_imports(options: run_options.Options, target: state.Target) -> None:
     still mutate options.uninstalled_imports.
 
     Args:
+        settings: The run's invariants; supplies known_bad_imports,
+            also_needs and rawlog.
         options: Options object; the four classification fields are replaced.
         target: The run's Target; the probe environment is built against its
             python_command.
@@ -242,12 +246,12 @@ def split_imports(options: run_options.Options, target: state.Target) -> None:
     result = classify.split_imports(
         scan,
         aliases=options.aliases,
-        known_bad_imports=options.known_bad_imports,
-        also_needs=options.also_needs,
+        known_bad_imports=settings.known_bad_imports,
+        also_needs=settings.also_needs,
         extra_requirements=options.extra_requirements,
         use_reqs=getattr(options.args, "reqs", False),
         probe=_probe_venv(target),
-        rawlog=options.rawlog,
+        rawlog=settings.rawlog,
     )
     options.all_imports = set(result.all_imports)
     options.bad_imports = set(result.bad)
@@ -255,7 +259,13 @@ def split_imports(options: run_options.Options, target: state.Target) -> None:
     options.total_imports = result.total_imports
 
 
-def list_packages(options: run_options.Options, target: state.Target) -> None:
+def list_packages(
+    settings: Settings,
+    options: run_options.Options,
+    target: state.Target,
+    *,
+    is_stdlib: Callable[[str], bool],
+) -> None:
     """Scan the target script for imports, then classify them.
 
     Folder scanning was deleted here on 2026-08-21 (user ruling). It had been
@@ -265,9 +275,10 @@ def list_packages(options: run_options.Options, target: state.Target) -> None:
     directory arms did so by writing the script path onto Options directly.
 
     Args:
-        options: Options object containing command line arguments and settings.
-            Reads rawlog; the scan and classification fields are replaced.
+        settings: The run's invariants; reads rawlog.
+        options: Options object; the scan and classification fields are replaced.
         target: The run's Target; supplies the script to scan.
+        is_stdlib: Predicate answering whether a name is standard library.
 
     Returns:
         None - modifies options to include all imports found in the script.
@@ -278,18 +289,18 @@ def list_packages(options: run_options.Options, target: state.Target) -> None:
     python_file = target.python_script
     if not ek.safe_is_file(python_file) or not ek.is_python_script(python_file):
         raise UsageError(f"'{os.fspath(python_file)}' is not a valid Python script.")
-    if not options.rawlog:
+    if not settings.rawlog:
         logging.info("Processing a single Python script: %s", os.fspath(python_file))
     options.loaded_custom_modules = set()
     options.all_imports = set()
-    find_imports_in_script(options, python_file)
+    find_imports_in_script(settings, options, python_file, is_stdlib=is_stdlib)
 
     # Filter out invalid imports before splitting
     options.all_imports = {
         imp for imp in options.all_imports if re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", imp)
     }
 
-    split_imports(options, target)
+    split_imports(settings, options, target)
 
 
 def run_script(
@@ -433,7 +444,7 @@ def feeling_lucky(
     return None
 
 
-def blank_slate(options: run_options.Options) -> int:
+def blank_slate(settings: Settings, options: run_options.Options) -> int:
     """Delete veny's state directory and its own dotfiles in the current directory.
 
     The filter is four OR'd name tests rather than a glob so that only files
@@ -441,8 +452,8 @@ def blank_slate(options: run_options.Options) -> int:
     directory must survive.
 
     Args:
-        options: The run's Options; reads options.my_dir, options.my_name,
-                 options.cwd and the -y flag.
+        settings: The run's invariants; reads my_name, my_dir and cwd.
+        options: The run's Options; reads the -y flag off options.args.
 
     Returns:
         0, whether the user confirmed or declined -- both are a complete run
@@ -450,37 +461,37 @@ def blank_slate(options: run_options.Options) -> int:
     """
     if not getattr(options.args, "y", False):
         if not ek.prompt_then_confirm(
-            f"Are you sure you want to delete everything in ~/{options.my_name}/"
-            f" and all {options.my_name} .json files in the current directory? (y/n) "
+            f"Are you sure you want to delete everything in ~/{settings.my_name}/"
+            f" and all {settings.my_name} .json files in the current directory? (y/n) "
         ):
             logging.info("Exiting without deleting anything.")
             return 0
     logging.info(
         "Deleting everything in ~/%s/ and all %s .out and .err and .json and .pkl files in the current directory.",
-        options.my_name,
-        options.my_name,
+        settings.my_name,
+        settings.my_name,
     )
-    shutil.rmtree(options.my_dir, ignore_errors=True)
-    for file in options.cwd.iterdir():
+    shutil.rmtree(settings.my_dir, ignore_errors=True)
+    for file in settings.cwd.iterdir():
         if logging.getLogger().isEnabledFor(logging.DEBUG):
             logging.debug("Checking %s", file)
         if ek.safe_is_file(file):
             if (
                 (
-                    file.name.startswith(f".{options.my_name}-")
+                    file.name.startswith(f".{settings.my_name}-")
                     and file.suffix.casefold() == ".out"
                 )
                 or (
-                    file.name.startswith(f".{options.my_name}-")
+                    file.name.startswith(f".{settings.my_name}-")
                     and file.suffix.casefold() == ".err"
                 )
                 or (
-                    file.name.startswith(f".{options.my_name}_custom_modules_")
+                    file.name.startswith(f".{settings.my_name}_custom_modules_")
                     and file.suffix.casefold() == ".pkl"
                 )
                 or (
                     file.name.startswith(".")
-                    and f"-{options.my_name}-" in file.name
+                    and f"-{settings.my_name}-" in file.name
                     and file.suffix.casefold() == ".json"
                 )
             ):
@@ -492,15 +503,16 @@ def blank_slate(options: run_options.Options) -> int:
     return 0
 
 
-def report(options: run_options.Options) -> None:
+def report(settings: Settings, options: run_options.Options) -> None:
     """Log what the scan and classification found, unless --rawlog silenced it.
 
     Args:
+        settings: The run's invariants; reads rawlog.
         options: The run's Options; reads options.uninstalled_imports,
-                 options.bad_imports, options.samedir_files,
-                 options.subfolders and options.rawlog.
+                 options.bad_imports, options.samedir_files and
+                 options.subfolders.
     """
-    if not options.rawlog:
+    if not settings.rawlog:
         # Report the import names, which are what the user wrote in their source.
         logging.info(
             "Uninstalled imports: %s",
@@ -554,10 +566,13 @@ def _load_last_used(
     )
 
 
-def setup_virtualenv(options: run_options.Options, target: state.Target) -> bool:
+def setup_virtualenv(
+    settings: Settings, options: run_options.Options, target: state.Target
+) -> bool:
     """Setup a virtual environment and install packages.
 
     Args:
+        settings: The run's invariants; supplies my_dir, venv_name and rawlog.
         options: The run's state; the venv it builds is recorded on it.
         target: The run's Target; supplies python_command and timestamp.
 
@@ -571,15 +586,15 @@ def setup_virtualenv(options: run_options.Options, target: state.Target) -> bool
     # hyphenated pip name cannot be mistaken for a field separator.
     run_tag = cache_search.interpreter_tag(options.stdlib)
     folder_name = venv_cache.build_folder_name(
-        venv_name=options.venv_name,
+        venv_name=settings.venv_name,
         interpreter_tag=run_tag,
         timestamp=target.timestamp,
         pip_names=[record.pip_name for record in options.uninstalled_imports],
     )
     # Create a virtual environment directory that starts with "failed" in case the process fails. Only remove the "failed" part if this process completes successfully.
-    options.set_venv_dir(options.my_dir / f"failed-{folder_name}")
+    options.set_venv_dir(settings.my_dir / f"failed-{folder_name}")
 
-    if not options.rawlog:
+    if not settings.rawlog:
         logging.info("Creating virtual environment...")
     assert options.venv_dir is not None, "options.venv_dir must be set"
     if not environment.create_venv(
@@ -589,7 +604,7 @@ def setup_virtualenv(options: run_options.Options, target: state.Target) -> bool
             "uv could not create the virtual environment at %s.", options.venv_dir
         )
         return False
-    if not options.rawlog:
+    if not settings.rawlog:
         logging.info("Virtual environment created.")
 
     # `uv venv` refuses to build into a directory that already exists AND is
@@ -650,7 +665,7 @@ def setup_virtualenv(options: run_options.Options, target: state.Target) -> bool
             extra_requirements=options.extra_requirements,
             source_names=source_names,
             index=options.aliases,
-            rawlog=options.rawlog,
+            rawlog=settings.rawlog,
         )
     )
     # The manifest records the venv's final state, so it is written after any
@@ -661,13 +676,13 @@ def setup_virtualenv(options: run_options.Options, target: state.Target) -> bool
         cache_search.record_venv_state(
             options.venv_dir,
             venv_python=options.venv_python,
-            venv_name=options.venv_name,
+            venv_name=settings.venv_name,
             timestamp=target.timestamp,
             run_tag=run_tag,
             python_command=target.python_command,
             uninstalled=options.uninstalled_imports,
             extra_requirements=options.extra_requirements,
-            rawlog=options.rawlog,
+            rawlog=settings.rawlog,
         )
     )
     # Check that all packages can be imported in the venv.
@@ -680,6 +695,7 @@ def setup_virtualenv(options: run_options.Options, target: state.Target) -> bool
 
 
 def run(
+    settings: Settings,
     options: run_options.Options,
     target: state.Target | None,
     *,
@@ -688,6 +704,7 @@ def run(
     """Execute the run described by options and return the script's status.
 
     Args:
+        settings: The run's invariants, built once in cli.main.
         options: The run's state, with argv already parsed onto it.
         target: What is being run, or None for a scriptless invocation --
             which only --blank-slate excuses.
@@ -735,7 +752,7 @@ def run(
             options.stdlib.source,
         )
     # This must happen before anything resolves, i.e. before list_packages() below.
-    options.aliases = build_alias_index(options, python_command or "")
+    options.aliases = build_alias_index(settings, options, python_command or "")
     if logging.getLogger().isEnabledFor(logging.DEBUG):
         logging.debug(
             "Alias index: %d overrides, %d cached names, tagged %s",
@@ -744,18 +761,18 @@ def run(
             options.aliases.cache.interpreter_tag,
         )
 
-    if not ek.safe_is_dir(options.my_dir):
-        if not options.rawlog:
+    if not ek.safe_is_dir(settings.my_dir):
+        if not settings.rawlog:
             logging.info(
                 "Directory %s does not exist yet, so it is being created.",
-                options.my_dir,
+                settings.my_dir,
             )
-        options.my_dir.mkdir(parents=True, exist_ok=True)
+        settings.my_dir.mkdir(parents=True, exist_ok=True)
 
     if target is not None:
         pass  # If a script was provided as an argument, skip the rest of these checks.
     elif getattr(options.args, "blank_slate", False):
-        return blank_slate(options)
+        return blank_slate(settings, options)
     else:
         raise UsageError(
             "You must specify either a script to run or --blank-slate (be "
@@ -765,23 +782,16 @@ def run(
 
     if getattr(options.args, "reqs", False):
         options.extra_requirements = environment.parse_extra_requirements(
-            options.extra_requirements_file, rawlog=options.rawlog
+            settings.extra_requirements_file, rawlog=settings.rawlog
         )
-        if not options.rawlog:
+        if not settings.rawlog:
             logging.info(
                 "Loaded extra requirements from ./%s: %s",
-                options.extra_requirements_file,
+                settings.extra_requirements_file,
                 options.extra_requirements,
             )
 
     time1 = dt.datetime.now()
-    settings = Settings(
-        my_name=options.my_name,
-        cwd=options.cwd,
-        stay_out_list=tuple(options.stay_out_list),
-        search_above_this_dir=options.search_above_this_dir,
-        rawlog=options.rawlog,
-    )
     options.custom_modules = custom_modules.dict_of_custom_modules(
         settings,
         use_cache=not getattr(options.args, "rc", False)
@@ -789,36 +799,36 @@ def run(
     )
     time2 = dt.datetime.now()
     elapsed_time = time2 - time1
-    if not options.rawlog:
+    if not settings.rawlog:
         logging.info("dict_of_custom_modules() took %s", elapsed_time)
 
     start_list_packages_time = dt.datetime.now()
     elapsed_time = start_list_packages_time - start_time
-    if not options.rawlog:
+    if not settings.rawlog:
         logging.info("Elapsed time: %s", elapsed_time)
 
-    list_packages(options, target)
+    list_packages(settings, options, target, is_stdlib=options.stdlib.__contains__)
 
-    report(options)
+    report(settings, options)
 
     if getattr(options.args, "justprint", False):
         return 0
 
     if not options.uninstalled_imports:
-        if not options.rawlog:
+        if not settings.rawlog:
             logging.info("All required packages are already installed.")
         start_raw_time = dt.datetime.now()
         script_exit_code = run_script(
             sys.executable,
             target.python_script,
             list(target.script_args),
-            rawlog=options.rawlog,
+            rawlog=settings.rawlog,
         )
         elapsed_raw_time = dt.datetime.now() - start_raw_time
-        if not options.rawlog:
+        if not settings.rawlog:
             logging.info("Runtime: %s", elapsed_raw_time)
     elif last_used.is_virtualenv():
-        if not options.rawlog:
+        if not settings.rawlog:
             logging.info("Already in a virtual environment.")
         active_venv = last_used.active_virtualenv_dir()
         if verify.check_packages_in_venv(
@@ -835,16 +845,16 @@ def run(
                 sys.executable,
                 target.python_script,
                 list(target.script_args),
-                rawlog=options.rawlog,
+                rawlog=settings.rawlog,
             )
             elapsed_raw_time = dt.datetime.now() - start_raw_time
-            if not options.rawlog:
+            if not settings.rawlog:
                 logging.info("Runtime: %s", elapsed_raw_time)
         else:
             logging.error(
                 "The current virtual environment does not have all the required packages."
             )
-            if not options.rawlog:
+            if not settings.rawlog:
                 logging.info(
                     "Please deactivate the current virtual environment and run the script again."
                 )
@@ -855,8 +865,8 @@ def run(
         else:
             match_dir = cache_search.find_match_dir_in_cache(
                 options.args,
-                my_dir=options.my_dir,
-                venv_name=options.venv_name,
+                my_dir=settings.my_dir,
+                venv_name=settings.venv_name,
                 uninstalled=options.uninstalled_imports,
                 extra_requirements=options.extra_requirements,
                 source_names=verify.source_import_names(
@@ -865,20 +875,20 @@ def run(
                     getattr(options.args, "reqs", False),
                 ),
                 tag=cache_search.interpreter_tag(options.stdlib),
-                rawlog=options.rawlog,
+                rawlog=settings.rawlog,
                 load_last_used=lambda: _load_last_used(
                     options,
                     target,
                     pathlibcutoff=options.pathlibcutoff,
-                    rawlog=options.rawlog,
+                    rawlog=settings.rawlog,
                 ),
             )
         if match_dir is None:
-            if not options.rawlog:
+            if not settings.rawlog:
                 logging.info(
-                    "Creating new virtual environment '%s'...", options.venv_name
+                    "Creating new virtual environment '%s'...", settings.venv_name
                 )
-            if setup_virtualenv(options, target):
+            if setup_virtualenv(settings, options, target):
                 match_dir = options.venv_dir
             else:
                 # This was emmykit's critical-error helper, called with
@@ -892,30 +902,30 @@ def run(
                 logging.critical("Failed to create a virtual environment.")
                 script_exit_code = 1
         else:
-            if not options.rawlog:
+            if not settings.rawlog:
                 logging.info("Using existing virtual environment: %s", match_dir)
 
         if match_dir:
             options.set_venv_dir(match_dir)
             start_venv_time = dt.datetime.now()
             elapsed_time = start_venv_time - start_time
-            if not options.rawlog:
+            if not settings.rawlog:
                 logging.info("Elapsed time: %s", elapsed_time)
             script_exit_code = run_script(
                 options.venv_python,
                 target.python_script,
                 list(target.script_args),
-                rawlog=options.rawlog,
+                rawlog=settings.rawlog,
                 announce=True,
             )
             end_time = dt.datetime.now()
             elapsed_time = end_time - start_venv_time
-            if not options.rawlog:
+            if not settings.rawlog:
                 logging.info(
                     "Elapsed time since activating virtual environment: %s",
                     elapsed_time,
                 )
-            if script_exit_code != 0 and not options.rawlog:
+            if script_exit_code != 0 and not settings.rawlog:
                 logging.error("Script exited with status %d", script_exit_code)
             assert options.venv_dir is not None, "options.venv_dir must be set"
             if (

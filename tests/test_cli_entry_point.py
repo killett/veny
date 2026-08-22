@@ -27,6 +27,8 @@ from veny import (
 )
 from veny.analysis import custom_modules
 
+from .test_state_values import a_settings as _a_settings
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Captured before any test can monkeypatch it, so a test that needs the real
@@ -189,7 +191,9 @@ def _drive_main(
         ),
     )
     monkeypatch.setattr(
-        pipeline, "build_alias_index", lambda options, python_command: _offline_index()
+        pipeline,
+        "build_alias_index",
+        lambda settings, options, python_command: _offline_index(),
     )
     monkeypatch.setattr(
         custom_modules, "dict_of_custom_modules", lambda settings, use_cache: {}
@@ -213,7 +217,7 @@ def _drive_main(
     # existing `captured, _ = _drive_main(...)` call sites keep working.
     targets: list[state.Target] = []
 
-    def fake_list_packages(options, target):
+    def fake_list_packages(settings, options, target, **kwargs):
         options.all_imports = set(all_imports)
         options.uninstalled_imports = set(uninstalled)
         captured.append(options)
@@ -263,7 +267,9 @@ def test_main_describes_the_run_to_the_cache_search(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", find_spy)
     monkeypatch.setattr(pipeline, "_load_last_used", load_last_used_spy)
-    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options, target: False)
+    monkeypatch.setattr(
+        pipeline, "setup_virtualenv", lambda settings, options, target: False
+    )
 
     cli.main()
 
@@ -272,7 +278,7 @@ def test_main_describes_the_run_to_the_cache_search(monkeypatch, tmp_path):
     call = seen[0]
     assert call["args"] is options.args
     assert call["my_dir"] == tmp_path / "home" / "veny"
-    assert call["venv_name"] == cli.Options().venv_name
+    assert call["venv_name"] == _a_settings().venv_name
     assert call["uninstalled"] == {
         cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")
     }
@@ -314,7 +320,9 @@ def test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs
         all_imports={"thing"},
     )
     (tmp_path / "home" / "veny").mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options, target: False)
+    monkeypatch.setattr(
+        pipeline, "setup_virtualenv", lambda settings, options, target: False
+    )
 
     with caplog.at_level(logging.INFO):
         cli.main()
@@ -338,7 +346,9 @@ def test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs
         uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
         all_imports={"thing"},
     )
-    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options, target: False)
+    monkeypatch.setattr(
+        pipeline, "setup_virtualenv", lambda settings, options, target: False
+    )
     with caplog.at_level(logging.INFO):
         cli.main()
 
@@ -369,7 +379,9 @@ def test_main_lets_the_feeling_lucky_loader_speak_on_a_run_that_did_not_ask_for_
         all_imports={"thing"},
     )
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", lambda *a, **k: None)
-    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options, target: False)
+    monkeypatch.setattr(
+        pipeline, "setup_virtualenv", lambda settings, options, target: False
+    )
 
     with caplog.at_level(logging.INFO):
         cli.main()
@@ -385,7 +397,9 @@ def test_main_lets_the_feeling_lucky_loader_speak_on_a_run_that_did_not_ask_for_
         all_imports={"thing"},
     )
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", lambda *a, **k: None)
-    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options, target: False)
+    monkeypatch.setattr(
+        pipeline, "setup_virtualenv", lambda settings, options, target: False
+    )
     with caplog.at_level(logging.INFO):
         cli.main()
 
@@ -431,11 +445,13 @@ def test_main_loads_the_requirements_file_and_keeps_its_names_out_of_the_import_
         return None
 
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", find_spy)
-    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options, target: False)
+    monkeypatch.setattr(
+        pipeline, "setup_virtualenv", lambda settings, options, target: False
+    )
 
     cli.main()
 
-    assert parsed == [{"path": cli.Options().extra_requirements_file, "rawlog": True}]
+    assert parsed == [{"path": _a_settings().extra_requirements_file, "rawlog": True}]
     assert captured[0].extra_requirements == {"extra-pkg": ">=2.0"}
     assert seen[0]["extra_requirements"] == {"extra-pkg": ">=2.0"}
     assert seen[0]["source_names"] == {"thing"}
@@ -523,7 +539,7 @@ def test_main_drops_the_failed_prefix_from_the_venv_it_just_built(
     )
     built = tmp_path / "home" / "veny" / "failed-myenv-py3.12-20260101-010203-thing-pkg"
 
-    def fake_setup(options, target):
+    def fake_setup(settings, options, target):
         options.set_venv_dir(built)
         options.install_succeeded = True
         return True
@@ -573,7 +589,9 @@ def test_main_asks_the_last_used_loader_about_this_script(monkeypatch, tmp_path)
         return None
 
     monkeypatch.setattr(last_used, "load_last_used_venv_python", spy)
-    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options, target: False)
+    monkeypatch.setattr(
+        pipeline, "setup_virtualenv", lambda settings, options, target: False
+    )
     monkeypatch.setattr(
         cache_search, "find_match_dir_in_cache", lambda args, **kwargs: None
     )
@@ -685,7 +703,7 @@ def test_main_builds_an_environment_when_the_cache_misses(monkeypatch, tmp_path)
     )
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", lambda *a, **k: None)
 
-    def fake_setup(options, target):
+    def fake_setup(settings, options, target):
         options.set_venv_dir(built_dir)
         return True
 
@@ -894,7 +912,7 @@ def test_main_maps_a_missing_uv_to_status_one(monkeypatch, tmp_path, capsys):
         all_imports={"thing"},
     )
 
-    def unavailable(options, target, start_time=None):
+    def unavailable(settings, options, target, start_time=None):
         raise environment.UvUnavailable(
             "veny requires uv, which is not installed and is not on PATH.\n"
             "Reinstall veny with:  uv tool install veny"
@@ -934,7 +952,7 @@ def test_main_maps_a_failed_venv_build_to_status_one(monkeypatch, tmp_path, capl
         all_imports={"thing"},
     )
 
-    def refused(options, target, start_time=None):
+    def refused(settings, options, target, start_time=None):
         raise pipeline.VenvBuildFailed(
             "Could not build the throwaway environment used to check which "
             "imports are already available."
@@ -978,7 +996,9 @@ def test_a_failed_build_reports_at_critical_and_returns_one_without_a_debugger(
         all_imports={"thing"},
     )
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", lambda *a, **k: None)
-    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options, target: False)
+    monkeypatch.setattr(
+        pipeline, "setup_virtualenv", lambda settings, options, target: False
+    )
 
     with caplog.at_level(logging.CRITICAL):
         status = cli.main()
@@ -1454,7 +1474,9 @@ def test_the_run_reports_the_imports_it_decided_are_missing(
         all_imports={"thing"},
     )
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", lambda *a, **k: None)
-    monkeypatch.setattr(pipeline, "setup_virtualenv", lambda options, target: False)
+    monkeypatch.setattr(
+        pipeline, "setup_virtualenv", lambda settings, options, target: False
+    )
 
     with caplog.at_level(logging.INFO):
         cli.main()
@@ -1493,7 +1515,7 @@ def test_no_cache_skips_the_cache_search_entirely(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", find_spy)
 
-    def fake_setup(options, target):
+    def fake_setup(settings, options, target):
         options.set_venv_dir(built)
         return True
 
@@ -1583,7 +1605,9 @@ def test_build_alias_index_reads_this_runs_own_directory_and_interpreter(
     options.my_dir = tmp_path
     options.args = argparse.Namespace(offline=True)
 
-    index = pipeline.build_alias_index(options, sys.executable)
+    index = pipeline.build_alias_index(
+        _a_settings(my_dir=tmp_path), options, sys.executable
+    )
 
     assert index.cache.path == tmp_path / "module_aliases_cache.json"
     # The probe really ran against the interpreter named above, so it knows
@@ -1632,9 +1656,9 @@ def test_the_run_is_timed_from_the_moment_veny_started(monkeypatch, tmp_path, ca
     handed: list[dt.datetime | None] = []
     real_run = pipeline.run
 
-    def run_spy(options, target, start_time=None):
+    def run_spy(settings, options, target, start_time=None):
         handed.append(start_time)
-        return real_run(options, target, start_time=start_time)
+        return real_run(settings, options, target, start_time=start_time)
 
     monkeypatch.setattr(pipeline, "run", run_spy)
 
