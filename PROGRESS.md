@@ -50,8 +50,8 @@ task tracker is its `.tasks.json` beside it. Tasks 1-8 are complete on branch
 `last-used-persistence`, off `main` @ `240767b`. Task 8's STANDING CHECK is
 `scripts/wiring_sweep_4b.py` and
 `docs/superpowers/plans/2026-08-21-last-used-persistence-wiring-index.md`:
-154 arguments, 141 killed, 3 measured by driving, 6 dead, 4 open holes each
-with its reason, and 25 holes closed by `tests/test_wiring_4b.py`. The plan's five design
+172 arguments, 158 killed, 3 measured by driving, 8 dead, 3 open holes each
+with its reason, and 28 holes closed by `tests/test_wiring_4b.py`. The plan's five design
 rulings are already in the design doc's Persistence section, amended at
 `83fd14c`; 4b's inheritance is listed below. Task 7 deleted `json_types.py`
 and repointed the emmykit guard to an `ek.__version__` comparison (deviating
@@ -1712,6 +1712,33 @@ wiring rationale and for two Minors deliberately left unfixed.
   behaviour change.
 
 ## Deferred items
+
+- **The 4b wiring index goes stale if Task 9 edits any of the four swept
+  modules** (recorded 2026-08-22, phase 4b Task 8).
+  `docs/superpowers/plans/2026-08-21-last-used-persistence-wiring-index.md`
+  keys all 172 of its rows on `file:line`, and
+  `scripts/wiring_sweep_4b.py` rewrites expressions by source position. If the
+  differential (Task 9) changes a single line in `last_used.py`,
+  `pipeline.py`, `cache_search.py` or `cli.py`, every line number below the
+  edit is wrong and the index must be regenerated —
+  `pixi run python scripts/wiring_sweep_4b.py`, about twelve minutes — before
+  the phase closes. The caveat is repeated in the index's own header.
+
+- **The dead-argument list for 4c is split across two indexes and must be
+  reconciled** (recorded 2026-08-22, phase 4b Task 8). This file's phase-4a
+  entry says "Task 8's list is five", meaning 4a's five. 4b's Task 8 found
+  **eight more**, listed in
+  `docs/superpowers/plans/2026-08-21-last-used-persistence-wiring-index.md`:
+  five unreachable `getattr(args, …, False)` defaults (all veny's flags are
+  `action="store_true"`, so argparse always defines the dest), the
+  provably-redundant `last_used` term inside `cache_search.py:596`'s
+  `explicit` (confirmed exhaustively across all 16 flag combinations), and a
+  **fourth** site of 3e's latent defect 3 — `run_script(rawlog=…)` in
+  `feeling_lucky`, where `announce` is False so the value cannot reach
+  anything. 4c needs one list, not two, and none of the eight is a
+  delete-the-argument fix: in every case the argument dies with the construct
+  around it, and removing only the argument would break the hand-built
+  `argparse.Namespace()` objects the unit tests pass.
 
 - **Two inaccuracies in the approved re-architecture design doc**, found while
   planning phase 3a on 2026-08-16. Neither invalidates the design; both mislead

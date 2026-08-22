@@ -505,8 +505,8 @@ def test_the_manifest_and_the_final_check_describe_the_venv_after_repair(
     """record_venv_state, the final import check and uv all get the repaired state.
 
     verify_and_repair_imports can replace a record whose pip name was wrong,
-    and setup_virtualenv assigns its result back onto
-    options.uninstalled_imports. Everything after it -- the manifest, the
+    and setup_virtualenv folds its result back into the Requirements it
+    returns, with dataclasses.replace. Everything after it -- the manifest, the
     folder-name refresh inside record_venv_state, and the check that decides
     whether this venv drops its "failed-" prefix -- must therefore describe
     the repaired set, not the set the install was attempted with.

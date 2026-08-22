@@ -183,7 +183,7 @@ def test_a_custom_module_is_classified_as_neither_installed_nor_uninstalled(
 
     The three-way branch is what makes all_imports a strict superset of
     installed | uninstalled. Concrete bug this catches: drop the
-    ``if imp in options.custom_modules.keys()`` branch and the user's own
+    ``if imp in scan.custom_modules.keys()`` branch and the user's own
     local module falls through to the venv check, fails it, gets resolved
     against the alias index and lands in uninstalled_imports -- so veny asks
     pip to install the script sitting next to the one being run.

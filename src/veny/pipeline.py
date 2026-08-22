@@ -215,11 +215,11 @@ def split_imports(
     """Classify the scan's imports and return the result.
 
     A value, not an accumulator: nothing downstream writes to it. The
-    copy-back onto the old state object this used to end with is gone, along
+    copy-back onto the old `Options` this used to end with is gone, along
     with the frozenset-to-set conversions it did so that later stages could
-    mutate
-    uninstalled_imports in place. verify_and_repair_imports' result is folded
-    in with dataclasses.replace instead.
+    mutate that object's uninstalled-imports set in place.
+    verify_and_repair_imports' result is folded in with dataclasses.replace
+    instead.
 
     Args:
         settings: The run's invariants; supplies known_bad_imports,

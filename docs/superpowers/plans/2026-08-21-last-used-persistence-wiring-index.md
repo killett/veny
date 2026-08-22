@@ -1,10 +1,17 @@
 # Phase 4b wiring index — every argument, measured
 
 **What was swept.** Every argument at every call site phase 4b created or
-changed — **154 arguments across 35 distinct callees** in
+changed — **172 arguments across 39 distinct callees** in
 `src/veny/last_used.py`, `src/veny/pipeline.py`, `src/veny/cache_search.py`
 and `src/veny/cli.py`. The harness is `scripts/wiring_sweep_4b.py`, a retarget
 of phase 4a's.
+
+> **If Task 9 (the differential) changes any line in those four modules, every
+> line number below goes stale and this sweep must be re-run before the phase
+> closes.** The table is keyed on `file:line`, and the harness rewrites
+> expressions by source position. Re-running is cheap — one `pixi run python
+> scripts/wiring_sweep_4b.py`, about twelve minutes — and reading a stale
+> table is not.
 
 **Which code counts as "this phase".** Decided from the structure of the
 modules, in `scoped_calls()`, not from a hand-written list of names — 3e's
@@ -18,24 +25,32 @@ exists partly so that cannot recur. The four rules are:
    `load_last_used`) and `last_used.save(...)` (which replaced the five
    copy-backs onto `Options` and `ek.save_options_to_json`).
 3. **`cache_search.find_match_dir_in_cache`'s last-used pass** — from the top
-   of the function down to the statement that spends the pass. Everything
-   below that is the `--latest`/`--oldest`/`--smallest` ranking, which phase
-   4a already swept.
-4. **`cli.main`'s `settings.Settings(...)` construction and its three calls
-   into `pipeline`** (`resolve_target`, `feeling_lucky`, `run`).
+   of the function down to the statement that spends the pass. Below that is
+   the `--latest`/`--oldest`/`--smallest` ranking, swept by **phase 3d**:
+   `docs/superpowers/plans/2026-08-18-verify-cache-search-last-used-wiring-index.md`.
+   (Not phase 4a — 4a's index has no `cache_search.py` rows at all.)
+4. **`cli.main` entire.** This rule originally admitted only
+   `settings.Settings` and the `pipeline.*` calls, and measured 154 arguments.
+   That dropped four sites this phase rewired — `ek.configure_logging` (all
+   three arguments moved off `options.*`), `ek.print_all_errors` (both), and
+   the two `getattr(args, …)` reads introduced at the top of `main` — and
+   **both of `print_all_errors`' arguments turned out to be open holes**. The
+   rule is now "every call in `main`", with no name filter.
 
 Within those four scopes *every* call is swept, including `logging` and
 `print` arguments. Veny's commentary on a record it decided to ignore is the
 only thing standing between "the pointer was stale" and "--feeling-lucky
 silently stopped working", so it is behaviour, not decoration — and eighteen
-of the twenty-five holes closed in this task are exactly that.
+of the twenty-eight holes closed in this task are exactly that.
 
 **How each row was measured.** The argument's expression is replaced, in
 place, with a type-correct but wrong value; the four modules are
 import-checked; then the whole suite runs. The first test to fail is the named
 killer. Nothing fails: **OPEN HOLE**. The callee cannot read it, or no input
 can reach it: **DEAD ARGUMENT**, listed separately from the holes so the
-headline cannot blur the two.
+headline cannot blur the two. `apply()` refuses to run a substitution that
+reproduces the original text — such a row would score as an OPEN HOLE with no
+signal in it at all.
 
 **The trap, recorded again because it cost phase 4a a whole sweep.**
 `pixi run` sets `PYTHONPATH=src`, and `tests/test_import_guard.py` spawns its
@@ -55,27 +70,34 @@ table spells the current signature instead.
 
 ## The headline
 
+What the sweep printed on 2026-08-22: **172 rows — 157 KILLED, 12 OPEN HOLE,
+3 MULTILINE.** Classified:
+
 | | |
 |---|---|
-| Arguments swept | **154** |
-| Killed by a named test | **141** |
+| Arguments swept | **172** |
+| Killed by a named test | **158** (157 on the first substitution, 1 on a second) |
 | Measured by driving rather than substitution | **3** |
-| DEAD ARGUMENT | **6** |
-| OPEN HOLE | **4** |
+| DEAD ARGUMENT | **6 + 2** = **8** |
+| OPEN HOLE | **3** |
 
-The 141 include **one** that only a *second* substitution could kill
-(`pipeline.py:971`, marked `KILLED*` in the table): the first pass's probe
-script is also called `script.py`, and `record_path` reads only
-`python_script.name`, so the substitution produced the same filename. Measured
-again on 2026-08-22 with a probe named `other_name.py`, it dies at
+157 + 1 + 3 + 8 + 3 = 172.
+
+The one row that needed a *second* substitution is `pipeline.py:971`, marked
+`KILLED*` in the table: the first pass's probe script is also called
+`script.py`, and `record_path` reads only `python_script.name`, so the
+substitution produced the same filename. Measured again with a probe named
+`other_name.py`, it dies at
 `test_wiring_4a::test_the_saved_record_carries_the_venv_the_run_actually_used`.
 The weak substitution is not counted as evidence of anything.
 
-**25 holes were closed inside this task** by `tests/test_wiring_4b.py`. The
-first full sweep — run with this task's three named tests already in place —
-reported 36 OPEN HOLE; the eleven further test functions in that file (14
-cases, with two parametrized) take it to 4, plus the 6 dead arguments and the
-one weak substitution below.
+**28 rows that were OPEN HOLE under some measurement are now killed by tests
+written in this task** — count them in the table by their `test_wiring_4b`
+killers. The history: the first full sweep (narrow rule 4, 154 arguments, with
+this task's three required tests already in place) reported **36 OPEN HOLE**;
+eleven further test functions took that to 4 open, 6 dead and 1 weak. The
+review then widened rule 4, adding 18 rows and 5 more open ones; one further
+test closed 2 of those. Final: 3 open, 8 dead, 1 weak.
 
 ## The three tests the brief required, and what they cover
 
@@ -96,27 +118,32 @@ Task 2 wrote them next to the 4a rows they also cover:
 `test_the_saved_record_names_the_post_rename_venv_dir`. They are cited in the
 table rather than duplicated.
 
-## The 4 OPEN HOLEs, each with its reason
+## The 3 OPEN HOLEs, each with its reason
 
-1. **`last_used.py:87` `path.write_text(encoding='utf-8')`** and
-2. **`last_used.py:120` `path.read_text(encoding='utf-8')`.** Provably
-   indistinguishable: `json.dumps` escapes non-ASCII by default, so the bytes
-   on disk are ASCII whatever the paths contain, and utf-8 and latin-1 agree
-   on ASCII. No payload can tell them apart.
-   `test_wiring_4b::test_a_record_survives_a_venv_path_that_is_not_ascii`
-   pins the round trip these arguments exist to protect — the property, not
-   the arguments — and says in its docstring that it does not close these two
-   rows. They stay open, correctly: the arguments are right, and removing
-   them would leave the record at the mercy of the platform default.
-3. **`last_used.py:87` `json.dumps(indent=4)`.** Cosmetics. The only reader is
+1. **`last_used.py:87` `path.write_text(encoding='utf-8')`** — the **writer**
+   only. Everything `save` writes is ASCII, because `json.dumps` escapes
+   non-ASCII by default, and utf-8 and latin-1 agree on ASCII. No payload
+   `save` can produce distinguishes them, so no test can kill this row.
+   The argument is still right and must stay: it is what keeps the file
+   independent of the platform default should `ensure_ascii=False` ever be
+   set for readability.
+   **The read side is a different question and is not open.** `load` reads
+   files veny did not necessarily write — a hand-edited record, one copied
+   between machines, one written by a later veny that stopped escaping — so
+   `last_used.py:120`'s encoding *is* observable and *is* killed, by
+   `test_wiring_4b::test_a_record_veny_did_not_write_is_decoded_as_utf_8`,
+   which plants a UTF-8 record with a non-ASCII `venv_dir`. Decoded as
+   latin-1 it comes back as mojibake naming a directory that does not exist:
+   a permanent silent cache miss, no rejection and no log line.
+2. **`last_used.py:87` `json.dumps(indent=4)`.** Cosmetics. The only reader is
    `json.loads`, which does not care. Pinning it would assert on the file's
    whitespace.
-4. **`cli.py:201` `Path.cwd().expanduser().resolve(strict=True)`.** `strict`
+3. **`cli.py:201` `Path.cwd().expanduser().resolve(strict=True)`.** `strict`
    only bites on a working directory that does not exist — a process whose
    cwd was deleted under it. No portable way to create that state in a test,
    and the failure it produces is the desired one either way.
 
-## The 6 DEAD ARGUMENTS
+## The 8 DEAD ARGUMENTS
 
 Passed and never readable. Deletion candidates for phase 4c, not test gaps.
 **None should be deleted on its own** — in every case what is dead is the
@@ -125,28 +152,30 @@ argument would break the hand-built `argparse.Namespace()` objects the unit
 tests pass.
 
 - **`pipeline.py:422` `getattr(args, 'feeling_lucky', False)`**,
-  **`pipeline.py:888` `getattr(args, 'reqs', False)`** and
-  **`cache_search.py:602` `getattr(args, 'last_used', False)`** — the third
-  argument, the default. All six of veny's selection flags are
-  `action="store_true"`, so argparse always defines the dest and no real run
-  can reach the default. It is reachable only from a hand-built Namespace,
-  which pins the `getattr` rather than any behaviour.
+  **`pipeline.py:888` `getattr(args, 'reqs', False)`**,
+  **`cache_search.py:602` `getattr(args, 'last_used', False)`**,
+  **`cli.py:191` `getattr(args, 'rawlog', False)`** and
+  **`cli.py:194` `getattr(args, 'debug', False)`** — the third argument, the
+  default. All of veny's flags are `action="store_true"`, so argparse always
+  defines the dest and no real run can reach the default. It is reachable
+  only from a hand-built Namespace, which pins the `getattr` rather than any
+  behaviour.
 - **`cache_search.py:596` `getattr(args, 'last_used', False)`** — both
   arguments, and the whole term. `explicit` is used at exactly one place,
   `try_last_used = not explicit or getattr(args, 'last_used', False)`. If
   `last_used` is true the second disjunct decides on its own; if it is false
   the term contributes nothing to `explicit`. The `last_used` term inside
-  `explicit` therefore cannot change any outcome, for any command line.
-  Deleting it would leave `explicit = latest or oldest or smallest`, which is
-  also what the comment above it describes.
+  `explicit` therefore cannot change any outcome, for any command line —
+  confirmed exhaustively across all 16 flag combinations in review. Deleting
+  it would leave `explicit = latest or oldest or smallest`, which is also what
+  the comment above it describes.
 - **`pipeline.py:435` `run_script(rawlog=rawlog)`** — 3e's latent defect 3,
   found again at a fourth site. `run_script` reads `rawlog` only to guard its
   announce line, and this call leaves `announce` False, so the value cannot
-  reach anything. 4a re-confirmed the same finding at `pipeline.py:434`,
-  `:846` and `:869` (now `:435`, `:832` and `:855`). As 4a's index says, this
-  is a behaviour question as much as a finding: if the lucky launch is ever
-  meant to announce itself, `rawlog` becomes live and the row closes on its
-  own.
+  reach anything. 4a re-confirmed the same finding at three sibling sites
+  (now `:832` and `:855`, plus this one). As 4a's index says, this is a
+  behaviour question as much as a finding: if the lucky launch is ever meant
+  to announce itself, `rawlog` becomes live and the row closes on its own.
 
 ## Measured by driving rather than substitution (3)
 
@@ -182,7 +211,7 @@ the one row that needed a second substitution; see the headline.
 | `last_used.py:118` (record_path) | `positional 1` | `python_script` | `__import__("pathlib").Path("/tmp/veny-wiring…` | KILLED | `test_last_used::test_the_last_used_adapter_returns_the_record_this_run_is_entitled_to` |
 | `last_used.py:118` (record_path) | `positional 2` | `my_name` | `"wiring-probe"` | KILLED | `test_last_used::test_the_last_used_adapter_returns_the_record_this_run_is_entitled_to` |
 | `last_used.py:120` (json.loads) | `positional 0` | `path.read_text(encoding='utf-8')` | `"{}"` | KILLED | `test_cli_entry_point::test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs` |
-| `last_used.py:120` (path.read_text) | `encoding` | `'utf-8'` | `"latin-1"` | OPEN HOLE | **see below** |
+| `last_used.py:120` (path.read_text) | `encoding` | `'utf-8'` | `"latin-1"` | KILLED | `test_wiring_4b::test_a_record_veny_did_not_write_is_decoded_as_utf_8` |
 | `last_used.py:123` (logging.info) | `positional 0` | `'No usable last-used record for %s.'` | `"wiring-probe"` | KILLED | `test_cli_entry_point::test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs` |
 | `last_used.py:123` (logging.info) | `positional 1` | `os.fspath(python_script)` | `"/tmp/veny-wiring-probe"` | KILLED | `test_last_used::test_the_venv_python_loader_lets_the_record_search_explain_itself` |
 | `last_used.py:123` (os.fspath) | `positional 0` | `python_script` | `__import__("pathlib").Path("/tmp/veny-wiring…` | KILLED | `test_last_used::test_the_venv_python_loader_lets_the_record_search_explain_itself` |
@@ -300,6 +329,12 @@ the one row that needed a second substitution; see the headline.
 | `cache_search.py:612` (check_venv_dir) | `rawlog` | `rawlog` | `True` | KILLED | `test_cache_search::test_every_branch_lets_check_venv_dir_report_a_venv_that_vanished[last_used]` |
 | `cache_search.py:614` (ek.ensure_path) | `positional 0` | `record.venv_dir` | `__import__("pathlib").Path("/tmp/veny-wiring…` | KILLED | `test_cache_search::test_the_last_used_pointer_selects_the_recorded_venv` |
 | `cache_search.py:616` (logging.info) | `positional 0` | `'Trying to load the latest matching venv now.'` | `"wiring-probe"` | KILLED | `test_wiring_4b::test_a_pointer_that_does_not_match_says_it_is_trying_the_latest` |
+| `cli.py:191` (getattr) | `positional 0` | `args` | `argparse.Namespace()` | KILLED | `test_cli_entry_point::test_main_describes_the_run_to_the_cache_search` |
+| `cli.py:191` (getattr) | `positional 1` | `'rawlog'` | `"wiring-probe"` | KILLED | `test_cli_entry_point::test_main_describes_the_run_to_the_cache_search` |
+| `cli.py:191` (getattr) | `positional 2` | `False` | `True` | DEAD | **see below** |
+| `cli.py:194` (getattr) | `positional 0` | `args` | `argparse.Namespace()` | KILLED | `test_cli_entry_point::test_configure_logging_is_told_when_the_run_wants_normal_output_and_debug` |
+| `cli.py:194` (getattr) | `positional 1` | `'debug'` | `"wiring-probe"` | KILLED | `test_cli_entry_point::test_configure_logging_is_told_when_the_run_wants_normal_output_and_debug` |
+| `cli.py:194` (getattr) | `positional 2` | `False` | `True` | DEAD | **see below** |
 | `cli.py:199` (settings.Settings) | `my_name` | `MY_NAME` | `"wiring-probe"` | KILLED | `test_cli_entry_point::test_state_directory_ignores_argv0` |
 | `cli.py:200` (settings.Settings) | `my_dir` | `Path.home() / MY_NAME` | `__import__("pathlib").Path("/tmp/veny-wiring…` | KILLED | `test_cli_entry_point::test_state_directory_ignores_argv0` |
 | `cli.py:201` (settings.Settings) | `cwd` | `Path.cwd().expanduser().resolve(strict=True)` | `__import__("pathlib").Path("/tmp/veny-wiring…` | KILLED | `test_cli_entry_point::test_blank_slate_deletes_the_state_directory_and_leaves_other_files_alone` |
@@ -316,7 +351,19 @@ the one row that needed a second substitution; see the headline.
 | `cli.py:215` (pipeline.feeling_lucky) | `positional 1` | `target` | `__import__("veny.state", fromlist=["Target"]…` | KILLED | `test_cli_entry_point::test_main_asks_the_last_used_loader_about_this_script` |
 | `cli.py:216` (pipeline.feeling_lucky) | `my_name` | `MY_NAME` | `"wiring-probe"` | KILLED | `test_cli_entry_point::test_main_asks_the_last_used_loader_about_this_script` |
 | `cli.py:217` (pipeline.feeling_lucky) | `rawlog` | `rawlog` | `True` | KILLED | `test_cli_entry_point::test_main_lets_the_feeling_lucky_loader_speak_on_a_run_that_did_not_ask_for_raw_logs` |
+| `cli.py:222` (ek.configure_logging) | `positional 0` | `MY_NAME` | `"wiring-probe"` | KILLED | `test_cli_entry_point::test_configure_logging_is_told_this_runs_name_level_and_raw_output_choice` |
+| `cli.py:222` (ek.configure_logging) | `log_level` | `log_mode` | `logging.CRITICAL` | KILLED | `test_cli_entry_point::test_configure_logging_is_told_this_runs_name_level_and_raw_output_choice` |
+| `cli.py:222` (ek.configure_logging) | `rawlog` | `rawlog` | `True` | KILLED | `test_cli_entry_point::test_configure_logging_is_told_when_the_run_wants_normal_output_and_debug` |
 | `cli.py:225` (pipeline.run) | `positional 0` | `run_settings` | `__import__("veny.settings", fromlist=["Setti…` | KILLED | `test_cli_entry_point::test_state_directory_ignores_argv0` |
 | `cli.py:225` (pipeline.run) | `positional 1` | `args` | `argparse.Namespace()` | KILLED | `test_cli_entry_point::test_main_loads_the_requirements_file_and_keeps_its_names_out_of_the_import_check` |
 | `cli.py:225` (pipeline.run) | `positional 2` | `target` | `__import__("veny.state", fromlist=["Target"]…` | KILLED | `test_cli_entry_point::test_main_describes_the_run_to_the_cache_search` |
 | `cli.py:225` (pipeline.run) | `start_time` | `start_time` | `__import__("datetime").datetime(2000, 1, 1)` | KILLED | `test_cli_entry_point::test_the_run_is_timed_from_the_moment_veny_started` |
+| `cli.py:228` (logging.info) | `positional 0` | `'%s'` | `"wiring-probe"` | KILLED | `test_cli_entry_point::test_a_run_with_no_script_is_a_usage_error` |
+| `cli.py:228` (logging.info) | `positional 1` | `exc` | `"wiring-probe"` | KILLED | `test_cli_entry_point::test_a_run_with_no_script_is_a_usage_error` |
+| `cli.py:231` (logging.error) | `positional 0` | `'%s'` | `"wiring-probe"` | KILLED | `test_cli_entry_point::test_main_maps_a_failed_venv_build_to_status_one` |
+| `cli.py:231` (logging.error) | `positional 1` | `exc` | `"wiring-probe"` | KILLED | `test_cli_entry_point::test_main_maps_a_failed_venv_build_to_status_one` |
+| `cli.py:238` (print) | `positional 0` | `str(exc)` | `"wiring-probe"` | KILLED | `test_cli_entry_point::test_main_maps_a_missing_uv_to_status_one` |
+| `cli.py:238` (print) | `file` | `sys.stderr` | `sys.stdout` | KILLED | `test_cli_entry_point::test_main_maps_a_missing_uv_to_status_one` |
+| `cli.py:238` (str) | `positional 0` | `exc` | `"wiring-probe"` | KILLED | `test_cli_entry_point::test_main_maps_a_missing_uv_to_status_one` |
+| `cli.py:240` (ek.print_all_errors) | `positional 0` | `memory_handler` | `None` | KILLED | `test_wiring_4b::test_the_error_dump_gets_this_runs_handler_and_this_runs_rawlog[rawlog]` |
+| `cli.py:240` (ek.print_all_errors) | `positional 1` | `rawlog` | `True` | KILLED | `test_wiring_4b::test_the_error_dump_gets_this_runs_handler_and_this_runs_rawlog[normal]` |

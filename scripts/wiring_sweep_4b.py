@@ -16,14 +16,21 @@ needs it. Without it that one test fails under EVERY mutation and reports a
 spurious kill for each, hiding every real hole behind it. ENV below is what
 stops that, and every mutation is import-checked before a failure is believed.
 
-MEASURED 2026-08-22, on the tree this script was committed with: 154
-arguments across 35 distinct callees; 140 killed by a named test, 3 multi-line
-expressions measured by driving instead, 6 dead arguments and 4 open holes,
-each recorded with its reason in the index. Zero INVALID and zero ERROR rows,
-which is what the import check below buys. One further row
-(``pipeline.py:971``) needed a second substitution: the probe script is also
-called script.py and ``record_path`` reads only ``python_script.name``, so the
-first pass produced the same filename.
+MEASURED 2026-08-22, on the tree this script was committed with: **172
+arguments across 39 distinct callees**, printed as 157 KILLED, 12 OPEN HOLE
+and 3 MULTILINE. Classified in the index those 172 are: 157 killed by a named
+test on the first substitution, 1 more killed on a second (``pipeline.py:971``
+-- the probe script is also called script.py and ``record_path`` reads only
+``python_script.name``, so the first pass produced the same filename), 3
+multi-line expressions measured by driving instead, 8 dead arguments and 3
+open holes, each carrying its reason. 157 + 1 + 3 + 8 + 3 = 172. Zero INVALID
+and zero ERROR rows, which is what the import check below buys.
+
+An earlier scope for rule 4 admitted only ``settings.Settings`` and the
+``pipeline.*`` calls inside ``cli.main``, and measured 154 arguments. It
+dropped ``ek.configure_logging``, ``ek.print_all_errors`` and the two
+``getattr(args, ...)`` reads -- and both of ``print_all_errors``' arguments
+were open holes. Widen, do not narrow.
 
 Usage:
     pixi run python scripts/wiring_sweep_4b.py
@@ -123,6 +130,11 @@ BY_EXPR = {
     "MY_NAME": '"wiring-probe"',
     "rawlog": "True",
     "start_time": '__import__("datetime").datetime(2000, 1, 1)',
+    "log_mode": "logging.CRITICAL",
+    "memory_handler": "None",
+    "exc": '"wiring-probe"',
+    "str(exc)": '"wiring-probe"',
+    "sys.stderr": "sys.stdout",
     "run_settings": PROBE_SETTINGS,
     "stdlib": "stdlib_index.for_running_interpreter()",
     "requirements.all_imports": "frozenset()",
@@ -265,7 +277,9 @@ def scoped_calls() -> list[tuple[str, ast.Call]]:
 
     # 3. cache_search.py: the last-used pass inside find_match_dir_in_cache,
     #    down to the statement that spends it. Everything below that line is
-    #    the --latest/--oldest/--smallest ranking phase 4a already swept.
+    #    the --latest/--oldest/--smallest ranking, swept by phase 3d --
+    #    docs/superpowers/plans/2026-08-18-verify-cache-search-last-used-wiring-index.md.
+    #    (NOT phase 4a: 4a's index has no cache_search.py rows at all.)
     tree = ast.parse((REPO / "src/veny/cache_search.py").read_text())
     search = _defs(tree)["find_match_dir_in_cache"]
     cutoff = max(
@@ -279,13 +293,14 @@ def scoped_calls() -> list[tuple[str, ast.Call]]:
         if c.lineno <= cutoff
     ]
 
-    # 4. cli.py: main's construction of the run and its calls into pipeline.
+    # 4. cli.py: the whole of main. An earlier version of this rule admitted
+    #    only settings.Settings and the pipeline.* calls, and dropped four
+    #    sites this phase rewired: ek.configure_logging (all three arguments
+    #    moved off options.*), ek.print_all_errors (both), and the two
+    #    getattr(args, ...) reads this phase introduced at the top. Two of
+    #    those turned out to be open holes. Whole function, no name filter.
     tree = ast.parse((REPO / "src/veny/cli.py").read_text())
-    for call in _calls_under(_defs(tree)["main"]):
-        name = _func_name(call) or ""
-        if name == "settings.Settings" or name.startswith("pipeline."):
-            out.append(("src/veny/cli.py", call))
-            out += [("src/veny/cli.py", c) for c in _calls_under(call)]
+    out += [("src/veny/cli.py", c) for c in _calls_under(_defs(tree)["main"])]
 
     seen: set[tuple[str, int, int]] = set()
     unique: list[tuple[str, ast.Call]] = []
@@ -339,6 +354,13 @@ def apply(site: dict[str, Any], original: str) -> str | None:
     Returns:
         The mutated source, or None for a multi-line expression this cannot
         rewrite in place.
+
+    Raises:
+        RuntimeError: If the substitution reproduced the original text. Such
+            a row would score as an OPEN HOLE with no signal in it at all --
+            the suite passes because nothing changed. None of the rows
+            measured here is a no-op; the guard is for the next retarget of
+            the substitution table.
     """
     if site["line"] != site["end_line"]:
         return None
@@ -347,7 +369,17 @@ def apply(site: dict[str, Any], original: str) -> str | None:
     lines[site["line"] - 1] = (
         line[: site["col"]] + site["sub"] + line[site["end_col"] :]
     )
-    return "\n".join(lines)
+    mutated = "\n".join(lines)
+    # A substitution that reproduces the original text scores as an OPEN HOLE
+    # with no signal in it at all -- the suite passes because nothing changed.
+    # None of the rows measured here is a no-op; this guard is so the next
+    # retarget of the substitution table finds out at once if one of its is.
+    if mutated == original:
+        raise RuntimeError(
+            f"no-op substitution at {site['file']}:{site['line']} "
+            f"{site['call']}({site['arg']}): {site['expr']} -> {site['sub']}"
+        )
+    return mutated
 
 
 def main() -> None:

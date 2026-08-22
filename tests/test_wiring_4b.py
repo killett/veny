@@ -29,6 +29,7 @@ cites them there rather than duplicating them here.
 import argparse
 import json
 import logging
+import logging.handlers
 import os
 import subprocess
 import sys
@@ -330,6 +331,68 @@ def test_feeling_lucky_reads_the_same_record_the_run_writes(monkeypatch, tmp_pat
     ]
 
 
+@pytest.mark.parametrize("rawlog", [True, False], ids=["rawlog", "normal"])
+def test_the_error_dump_gets_this_runs_handler_and_this_runs_rawlog(
+    monkeypatch, tmp_path, rawlog
+):
+    """cli.main hands the error dump the handler it configured, and its rawlog.
+
+    Behaviour under test: ``ek.print_all_errors(memory_handler, rawlog)`` on
+    the last line of an ordinary run. Both arguments were open holes in the
+    first sweep of this phase -- the sweep's ``cli.main`` scope originally
+    admitted only ``settings.Settings`` and the ``pipeline.*`` calls, and this
+    site was outside it.
+
+    Concrete bugs this catches. **The handler:** passing anything but the one
+    ``ek.configure_logging`` returned -- ``None``, or a second handler -- and
+    the run ends having collected every error into a buffer it then never
+    prints. Nothing fails; the user simply never sees the summary. **The
+    rawlog:** hardcoding it True suppresses that summary on every ordinary
+    run; hardcoding it False prints veny's own error dump into what
+    ``--rawlog`` exists to keep clean, which is the script's output as the
+    user would have seen it without veny. Both directions are driven here,
+    because either constant passes a test that only drives the other.
+
+    How the expected value was determined: the handler is a sentinel this
+    test's ``configure_logging`` stub returns, asserted by ``is`` -- so the
+    only way to pass is to carry that object through. The rawlog is the flag
+    this run was given on its command line.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    script = tmp_path / "script.py"
+    script.write_text("import thing\n")
+    _stub_boundaries(monkeypatch, home)
+    argv = ["veny", "--no-cache", os.fspath(script)]
+    if rawlog:
+        argv.insert(1, "--rawlog")
+    monkeypatch.setattr(sys, "argv", argv)
+    handler = logging.handlers.MemoryHandler(1)
+    dumped: list[tuple[object, bool]] = []
+    monkeypatch.setattr(ek, "configure_logging", lambda *a, **k: handler)
+    monkeypatch.setattr(
+        ek,
+        "print_all_errors",
+        lambda given, given_rawlog: dumped.append((given, given_rawlog)),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "setup_virtualenv",
+        lambda settings, target, requirements, **kwargs: (
+            requirements,
+            state.VenvHandle.for_dir(home / "veny" / "myenv-1"),
+            True,
+        ),
+    )
+
+    cli.main()
+
+    assert len(dumped) == 1
+    # Identity: the handler this run configured, not an equal or empty one.
+    assert dumped[0][0] is handler
+    assert dumped[0][1] is rawlog
+
+
 # --- The diagnostics a degraded record produces -------------------------
 #
 # Every one of these paths already returns None, and
@@ -509,6 +572,54 @@ def test_a_record_survives_a_venv_path_that_is_not_ascii(tmp_path):
     )
 
 
+def test_a_record_veny_did_not_write_is_decoded_as_utf_8(tmp_path):
+    """A UTF-8 record with a non-ASCII path must decode to that path.
+
+    Behaviour under test: the ``encoding="utf-8"`` on ``read_text`` in
+    ``last_used.load``. ``load`` reads files veny did not necessarily write --
+    a hand-edited record, one copied between machines, or one written by a
+    later veny that stopped escaping -- so the read encoding is not implied by
+    the write encoding. This record is written here with
+    ``ensure_ascii=False``, which is what ``save`` does not do.
+
+    Concrete bug this catches: leaving the read to the platform default, or
+    fixing it at a byte encoding. Decoded as latin-1, a UTF-8 ``venv_dir``
+    comes back as mojibake -- a directory that does not exist -- so
+    ``--feeling-lucky`` and the cache search's last-used pass both miss,
+    silently and permanently, for every user whose project or home directory
+    is not ASCII. The record is not rejected and nothing is logged: the reader
+    simply points at the wrong place. The scenario that makes this reachable
+    is somebody setting ``ensure_ascii=False`` in ``save`` for readability;
+    ``test_a_record_survives_a_venv_path_that_is_not_ascii`` cannot see it,
+    because everything ``save`` writes today is ASCII.
+
+    How the expected value was determined: the path is written into the file
+    as UTF-8 bytes here, so the assertion is that the reader returns what the
+    bytes say -- not what any veny code computed.
+    """
+    script = tmp_path / "thing.py"
+    venv = tmp_path / "myenv-日本語-Ünïcøde"
+    payload = json.dumps(
+        {
+            "venv_dir": os.fspath(venv),
+            "venv_python": os.fspath(venv / "bin" / "python"),
+            "timestamp": "20200101-000000",
+        },
+        ensure_ascii=False,
+    )
+    path = last_used.record_path(tmp_path, script, "veny")
+    path.write_bytes(payload.encode("utf-8"))
+    assert not payload.isascii()
+
+    record = last_used.load(
+        script_dir=tmp_path, python_script=script, my_name="veny", rawlog=True
+    )
+
+    assert record is not None
+    assert record.venv_dir == venv
+    assert record.venv_python == venv / "bin" / "python"
+
+
 def test_the_lucky_reader_says_when_there_is_no_record_at_all(tmp_path, caplog):
     """No record: load_venv_python says so rather than returning None silently.
 
@@ -603,7 +714,7 @@ def test_the_lucky_reader_names_the_interpreter_it_found(tmp_path, caplog):
     assert f"Last used venv_python found: {os.fspath(interpreter)}" in caplog.text
 
 
-def test_feeling_lucky_says_so_when_there_is_no_record(monkeypatch, tmp_path, capsys):
+def test_feeling_lucky_says_so_when_there_is_no_record(tmp_path, capsys):
     """With no record, the lucky path says why it is carrying on as normal.
 
     Behaviour under test: ``feeling_lucky``'s second ``print``. It prints
