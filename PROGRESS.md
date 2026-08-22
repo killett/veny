@@ -1970,8 +1970,10 @@ wiring rationale and for two Minors deliberately left unfixed.
   about twelve minutes. The caveat is repeated in the index's own header,
   where it still names Task 9 specifically.
   **Checked at Task 10 (2026-08-22): Task 9 did not edit any of the four.**
-  `e1a5a9e` and `0c5324a` touch `scripts/` and `docs/` only, and the last
-  commit to reach each swept module is `823d6a7` (`last_used.py`,
+  `e1a5a9e` touches `scripts/differential_4b.py` and `pyproject.toml` (a
+  per-file ruff ignore), and `0c5324a` touches `docs/` only — neither reaches
+  a swept module. The last commit to reach each swept module is `823d6a7`
+  (`last_used.py`,
   `cache_search.py`), `8651b20` (`pipeline.py`) and `94cdcea` (`cli.py`) —
   all inside Tasks 3, 7 and 8. **The index is valid as it stands at HEAD, and
   4c is the first phase that can invalidate it.**
@@ -3560,6 +3562,30 @@ wiring rationale and for two Minors deliberately left unfixed.
     intersection is unexercised; `install_into_venv`'s success predicate is
     never compared, because the driver's fake `subprocess.run` always returns
     `returncode=1` and the return value is discarded (see the 3d list below).
+
+- **Five findings from phase 4b's final whole-branch review, deferred to 4c**
+  (recorded 2026-08-22). Each would edit one of the four swept modules
+  (`last_used.py`, `pipeline.py`, `cache_search.py`, `cli.py`) and restale
+  `docs/superpowers/plans/2026-08-21-last-used-persistence-wiring-index.md`,
+  so none is fixed here.
+  - `cli.py`'s `_emmykit_version()` rejects a two-component version equal to
+    the floor: `"0.4"` parses to `(0, 4)`, and `(0, 4) < (0, 4, 0)`, so an
+    emmykit released as `0.4` rather than `0.4.0` is refused with "requires
+    emmykit >= 0.4.0; found 0.4". Every other shape compares correctly
+    (`0.4.0rc1`, `0.4.0.dev1`, `0.10.0`, `1.0`). Fix is to zero-pad to the
+    floor's length.
+  - `cache_search.py`'s "invalid combination of flags" message prints the
+    internal locals `prefer_latest` and `try_last_used` rather than the flag
+    spellings the user typed; reachable with `--latest --last-used`.
+  - `cli.py`'s `ResolvedImport` re-export says it is "re-exported here
+    because veny is where it is used", but no module under `src/` reads it —
+    it is a test-only alias since `json_types` died.
+  - `tests/test_alias_index.py:651` still says "Options() is constructed
+    before the target interpreter is known"; the class no longer exists. Its
+    mirror in `alias_index.py`'s docstring was already fixed.
+  - `scripts/differential_3e.py` was reworded this phase but carries no note
+    that it is no longer runnable against HEAD, unlike `differential_3d.py`,
+    which this branch did annotate.
 
 ## Open questions
 

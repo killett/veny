@@ -387,9 +387,16 @@ through `main()`, invisibly to every in-process test.
 >    accepts only veny's own `LastUsed` file. A script whose only record is an
 >    old whole-`Options` dump misses the last-used pointer once and falls back
 >    to the cache scan, which normally finds the same environment; the next
->    save writes the new format. Old files are left on disk, not deleted. This
->    is what lets the reader be plain `json.loads` with `Path(...)` on two
->    string fields, with no tagged-payload decoding anywhere. (User ruling.)
+>    save writes the new format. One case is a bounded exception, a
+>    consequence of this ruling rather than a defect in it: `pipeline.run`
+>    renames a `failed-`-prefixed venv only once its install succeeds, and
+>    `cache_search`'s folder enumeration only accepts names starting with the
+>    venv name, so a venv that installed partially but verified after repair
+>    is reachable *only* through the last-used pointer -- for that script,
+>    missing the pointer once costs a rebuild, not a scan. Old files are left
+>    on disk, not deleted. This is what lets the reader be plain `json.loads`
+>    with `Path(...)` on two string fields, with no tagged-payload decoding
+>    anywhere. (User ruling.)
 > 4. **`pathlibcutoff` dies with the glob, and so does the pickle cutoff.**
 >    With one fixed filename there is no timestamp to compare, so the
 >    `last_used` reader loses the cutoff outright. Its second reader,

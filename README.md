@@ -137,7 +137,8 @@ src/veny/
     last_used.py    # The one record veny keeps between runs: which
                     # environment last ran this script. One fixed file per
                     # script, `.<script>-veny-last-used.json`, written beside
-                    # it and overwritten each run. Imports nothing from veny.
+                    # it and overwritten each run. Imports only `state` from
+                    # veny, for `LastUsed`.
     pypi_client.py  # Confirms a project provides an import name by reading a
                     # wheel's central directory over an HTTP range request.
     state.py        # The frozen per-run values: Target, VenvHandle,

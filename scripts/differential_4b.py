@@ -127,8 +127,10 @@ empty afterwards and the number returned to 240.
 
 Two of them taught the driver something:
 
-* **M2 was a no-op until the reader probe existed.** Every line it moves is a
-  ``last_used ... reader ->`` note. ``ek.ensure_path`` on the way out of
+* **M2 was a no-op until the reader probe existed.** Of the 17 lines it
+  moves, only 6 are substantive -- ``last_used ... reader ->`` notes; the
+  rest are 5 ``@@`` hunk headers and 6 lines of surrounding context.
+  ``ek.ensure_path`` on the way out of
   ``last_used.load`` changes no message veny prints, no argv it builds and no
   status it returns, because ``run_script``, ``check_venv_dir`` and
   ``safe_is_file`` all accept a ``str``. Without ``spy_on_the_readers`` the
@@ -218,13 +220,16 @@ are this phase's.
    one- and two-import scripts.
 6. **Manifest content.** The folder *name* is compared; the JSON inside the
    venv is not.
-7. **The three latent defects 3e recorded, all still live.** ``-y``/``--yes``
-   still never reaches ``blank_slate`` -- ``pipeline.blank_slate`` reads
-   ``getattr(args, "y", False)`` and argparse writes ``yes`` -- so layer 18
-   above goes through the confirmation prompt, which the harness answers yes
-   to. ``run_script(rawlog=...)`` is still dead at three of its four call
-   sites, because ``rawlog`` is read only in ``if announce and not rawlog``
-   and only one site passes ``announce=True``. Both are unchanged by 4b.
+7. **Two of the three latent defects 3e recorded, still live.** ``-y``/
+   ``--yes`` still never reaches ``blank_slate`` -- ``pipeline.blank_slate``
+   reads ``getattr(args, "y", False)`` and argparse writes ``yes`` -- so
+   layer 18 above goes through the confirmation prompt, which the harness
+   answers yes to. ``run_script(rawlog=...)`` is still dead at three of its
+   four call sites, because ``rawlog`` is read only in
+   ``if announce and not rawlog`` and only one site passes
+   ``announce=True``. Both are unchanged by 4b. The third, a missing script
+   leaving ``FileNotFoundError`` travelling uncaught out of ``main``, was
+   fixed by phase 4a's Task 1 and is no longer live.
 8. **Concurrency.** One process, one run at a time.
 9. **A degraded record.** ``last_used.load`` has five "no record" branches --
    unreadable, not JSON, not an object, either path missing, either path
