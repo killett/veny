@@ -825,7 +825,7 @@ git commit -m "refactor: read the last-used record instead of an emmykit Options
 - [ ] `PATHLIB_CUTOFF` appears nowhere in the repository.
 - [ ] The log line the old branch emitted ("...Converting all paths to pathlib.Path objects.") is gone with it; nothing else in the function's output changes.
 
-**Verify:** `pixi run test tests/test_import_discovery.py -v` → all pass; `rg -ni 'pathlib_?cutoff' .` → no matches.
+**Verify:** `pixi run test tests/test_import_discovery.py -v` → all pass; `rg -n 'PATHLIB_CUTOFF' .` → no matches. (**Narrowed 2026-08-21 after Task 4's review**: the case-insensitive form also matches `Options.pathlibcutoff`, an unrelated field on the god object Task 6 deletes with the file.)
 
 **Steps:**
 
@@ -990,7 +990,7 @@ git commit -m "test: build the values under test directly instead of an Options 
 - [ ] `src/veny/run_options.py` and `tests/test_options_surface.py` are deleted; `run_options` leaves `tests/test_layering.py`'s `state` layer, and the comment there stops promising a phase-4 deletion that has happened.
 - [ ] `tests/test_state_values.py` carries one new test asserting the class is gone, replacing the seven `not hasattr(cli.Options(), ...)` drain assertions Task 5 deleted.
 - [ ] `pixi run typecheck` is at or below 23 errors in 6 files — deleting a dynamically-attributed class should reduce it. Record the new number; it becomes the baseline for 4c.
-- [ ] **Carried here from Tasks 2 and 3's reviews:** `rg -n 'ek\.Options|save_options_to_json' src/` returns nothing. Task 2 left three `save_options_to_json` mentions in `run_options.py`'s prose and Task 3 left the `class Options(ek.Options)` base, both deferred here because this task deletes the file. If either survives the deletion, strip it.
+- [ ] **Carried here from Tasks 2, 3 and 4's reviews:** `rg -ni 'ek\.Options|save_options_to_json|pathlib_?cutoff' src/` returns nothing. Task 2 left three `save_options_to_json` mentions in `run_options.py`'s prose and Task 3 left the `class Options(ek.Options)` base, both deferred here because this task deletes the file. If either survives the deletion, strip it.
 
 **Verify:** `pixi run test` → green; `rg -n 'run_options|Options' src/` → no matches except `argparse` internals.
 

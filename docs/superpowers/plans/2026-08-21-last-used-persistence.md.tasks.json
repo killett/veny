@@ -28,7 +28,7 @@
     {
       "id": 4,
       "subject": "Task 4: The pickle cutoff",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** `analysis/custom_modules.PATHLIB_CUTOFF` and its comparison are deleted; the path coercion it selected between stays.\n\n**Files:**\n- Modify: `src/veny/analysis/custom_modules.py:18`, `:169-187`\n- Test: `tests/test_import_discovery.py`\n\n**Acceptance Criteria:**\n- [ ] A pickle written with `str` paths loads as `Path` values, whatever its filename's timestamp.\n- [ ] `PATHLIB_CUTOFF` appears nowhere in the repository.\n- [ ] The log line the old branch emitted (\"...Converting all paths to pathlib.Path objects.\") is gone with it; nothing else in the function's output changes.\n\n**Verify:** `pixi run test tests/test_import_discovery.py -v` \u2192 all pass; `rg -ni 'pathlib_?cutoff' .` \u2192 no matches.\n\nFull steps: `docs/superpowers/plans/2026-08-21-last-used-persistence.md` \u00a7 Task 4.\n\n```json:metadata\n{\"files\": [\"src/veny/analysis/custom_modules.py\", \"tests/test_import_discovery.py\"], \"verifyCommand\": \"pixi run test tests/test_import_discovery.py -v\", \"modelTier\": \"mechanical\", \"acceptanceCriteria\": [\"A pickle written with str paths loads as Path values, whatever its filename's timestamp.\", \"PATHLIB_CUTOFF appears nowhere in the repository.\", \"The log line the old branch emitted (\\\"...Converting all paths to pathlib.Path objects.\\\") is gone with it; nothing else in the function's output changes.\"]}\n```"
     },
     {
