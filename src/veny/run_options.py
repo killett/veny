@@ -31,11 +31,6 @@ class Options(ek.Options):
         # Instead, it's the directory where this script will store its virtual environments and packages.
         self.my_dir: Path = self.home / self.my_name
         self.cwd: Path = Path.cwd().expanduser().resolve(strict=True)
-        # Both sets hold ResolvedImport records, so every consumer can pick the
-        # right name instead of guessing which kind of string it was handed.
-        self.uninstalled_imports: set[alias_index.ResolvedImport] = set()
-        self.bad_imports: set[str] = set()
-        self.all_imports: set[str] = set()
         # The three fields ek.save_options_to_json builds its filename from,
         # alongside my_name. Target owns them for the run; pipeline.run copies
         # them across just before the save, because emmykit's writer is typed
@@ -53,7 +48,6 @@ class Options(ek.Options):
         self.venv_dir: Path | None = None
         self.venv_python: Path | None = None
         self.requirements_file: Path | None = None
-        self.extra_requirements: dict[str, str | None] = {}
         self.install_succeeded: bool = False
         self.rawlog: bool = False
         # Standard-library membership is derived from a real interpreter, never hardcoded.

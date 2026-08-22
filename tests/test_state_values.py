@@ -1,6 +1,7 @@
 """Direct tests of the frozen values phase 4 passes between stages."""
 
 import argparse
+import contextlib
 import dataclasses
 import os
 import sys
@@ -9,10 +10,12 @@ from pathlib import Path
 import emmykit as ek
 import pytest
 
-from veny import cli, pipeline, state
+from veny import alias_index, cli, pipeline, state
 from veny import settings as settings_module
+from veny.alias_index import ResolvedImport
 from veny.analysis import custom_modules
 from veny.analysis import scan as analysis_scan
+from veny.analysis.scan_state import ImportScan
 
 
 def a_target(**overrides: object) -> state.Target:
@@ -73,6 +76,34 @@ def a_settings(**overrides: object) -> settings_module.Settings:
 
 
 _a_settings = a_settings
+
+
+def a_requirements(**overrides: object) -> state.Requirements:
+    """A Requirements with every field set, for tests that vary one of them.
+
+    Public for the same reason a_target and a_settings are: classification's
+    product is a value now, so the stages that consume it need one built at
+    the call site.
+
+    Args:
+        **overrides: Field values to replace on the returned Requirements.
+
+    Returns:
+        A fully-populated Requirements. Empty by default -- a test that cares
+        about a particular import names it.
+    """
+    base = state.Requirements(
+        all_imports=frozenset(),
+        bad=frozenset(),
+        installed=frozenset(),
+        uninstalled=frozenset(),
+        seen_stdlib=frozenset(),
+        extra_requirements={},
+    )
+    return dataclasses.replace(base, **overrides)  # type: ignore[arg-type]
+
+
+_a_requirements = a_requirements
 
 
 def test_settings_collections_cannot_be_mutated_by_a_consumer() -> None:
@@ -284,3 +315,74 @@ def test_resolve_target_stamps_the_run(tmp_path: Path) -> None:
     assert len(target.timestamp) == 15
     assert target.timestamp[8] == "-"
     assert target.timestamp.replace("-", "").isdigit()
+
+
+def test_repairing_imports_rebinds_rather_than_mutating_requirements() -> None:
+    """The repair pass must produce a NEW Requirements, not edit the old one.
+
+    Behaviour under test: that Requirements is a value, so
+    dataclasses.replace is the only way to fold a repair in.
+
+    Concrete bug this catches: `requirements.uninstalled = frozenset(...)`,
+    which a frozen dataclass refuses, or reaching around it with
+    object.__setattr__, which it does not. Under a mutation the manifest
+    written before the repair and the check run after it would describe the
+    same object, so a repair that changed everything would be
+    indistinguishable from one that changed nothing -- and the manifest would
+    claim the venv holds whatever was first attempted rather than what
+    actually provided each import.
+    """
+    before = a_requirements(
+        all_imports=frozenset({"cv2"}),
+        uninstalled=frozenset({ResolvedImport(import_name="cv2", pip_name="cv2")}),
+    )
+
+    after = dataclasses.replace(
+        before,
+        uninstalled=frozenset(
+            {ResolvedImport(import_name="cv2", pip_name="opencv-python")}
+        ),
+    )
+
+    assert {r.pip_name for r in before.uninstalled} == {"cv2"}
+    assert {r.pip_name for r in after.uninstalled} == {"opencv-python"}
+    assert before is not after
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        before.uninstalled = frozenset()  # type: ignore[misc]
+
+
+def test_split_imports_returns_requirements_and_writes_nothing_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Classification's product is a return value, not four Options writes.
+
+    Behaviour under test: pipeline.split_imports' contract.
+
+    Concrete bug this catches: keeping the copy-back that stood at the old
+    pipeline.py:235-238. It turned each frozenset back into a set precisely
+    so a later stage could mutate it -- the accumulator shape the design
+    rules out ("ImportScan and Requirements are values, not accumulators").
+    With both spellings live, a stage reading the stale Options field gets
+    whatever the last writer left there.
+    """
+    monkeypatch.setattr(
+        pipeline,
+        "_probe_venv",
+        lambda target: contextlib.nullcontext(lambda import_name: False),
+    )
+    scan = ImportScan(all_imports={"widgetlib"})
+
+    result = pipeline.split_imports(
+        a_settings(rawlog=True),
+        scan,
+        a_target(),
+        args=argparse.Namespace(reqs=False),
+        aliases=alias_index.empty(tmp_path / "index"),
+        extra_requirements={},
+    )
+
+    assert isinstance(result, state.Requirements)
+    assert {r.import_name for r in result.uninstalled} == {"widgetlib"}
+    assert not hasattr(cli.Options(), "uninstalled_imports")
+    assert not hasattr(cli.Options(), "bad_imports")
+    assert not hasattr(cli.Options(), "all_imports")

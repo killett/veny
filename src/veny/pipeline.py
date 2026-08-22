@@ -31,7 +31,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 
 import emmykit as ek
 
@@ -202,49 +202,56 @@ def _probe_venv(target: state.Target) -> Iterator[Callable[[str], bool]]:
 def split_imports(
     settings: Settings,
     scan: ImportScan,
-    options: run_options.Options,
     target: state.Target,
-) -> None:
-    """Adapter: run classification and copy its product back onto Options.
+    *,
+    args: argparse.Namespace,
+    aliases: alias_index.AliasIndex,
+    extra_requirements: Mapping[str, str | None],
+) -> state.Requirements:
+    """Classify the scan's imports and return the result.
 
-    The copy-back is total -- these four fields are the complete set the old
-    split_imports wrote. See the plan's "Why the ImportScan bridge is not
-    touched" section: classify reads the scan and writes nothing through it,
-    so nothing here depends on in-place mutation. Each frozenset becomes a set
-    again on the way back, because later stages (verify_and_repair_imports)
-    still mutate options.uninstalled_imports.
+    A value, not an accumulator: nothing downstream writes to it. The
+    copy-back onto Options this used to end with is gone, along with the
+    frozenset-to-set conversions it did so that later stages could mutate
+    uninstalled_imports in place. verify_and_repair_imports' result is folded
+    in with dataclasses.replace instead.
 
     Args:
         settings: The run's invariants; supplies known_bad_imports,
             also_needs and rawlog.
         scan: What the scan found. Read, never written.
-        options: Options object; the four classification fields are replaced.
         target: The run's Target; the probe environment is built against its
             python_command.
+        args: The parsed command line; reads --reqs.
+        aliases: The alias index. Mutable and injected by design -- it is a
+            cache with disk backing plus a separate session-rejection store.
+        extra_requirements: The --reqs file's entries, or {}.
+
+    Returns:
+        What classification decided about this run's imports.
     """
-    result = classify.split_imports(
+    return classify.split_imports(
         scan,
-        aliases=options.aliases,
+        aliases=aliases,
         known_bad_imports=settings.known_bad_imports,
         also_needs=settings.also_needs,
-        extra_requirements=options.extra_requirements,
-        use_reqs=getattr(options.args, "reqs", False),
+        extra_requirements=extra_requirements,
+        use_reqs=getattr(args, "reqs", False),
         probe=_probe_venv(target),
         rawlog=settings.rawlog,
     )
-    options.all_imports = set(result.all_imports)
-    options.bad_imports = set(result.bad)
-    options.uninstalled_imports = set(result.uninstalled)
 
 
 def list_packages(
     settings: Settings,
     scan: ImportScan,
-    options: run_options.Options,
     target: state.Target,
     *,
+    args: argparse.Namespace,
+    aliases: alias_index.AliasIndex,
+    extra_requirements: Mapping[str, str | None],
     is_stdlib: Callable[[str], bool],
-) -> ImportScan:
+) -> tuple[ImportScan, state.Requirements]:
     """Scan the target script for imports, then classify them.
 
     Folder scanning was deleted here on 2026-08-21 (user ruling). It had been
@@ -256,13 +263,16 @@ def list_packages(
     Args:
         settings: The run's invariants; reads rawlog.
         scan: The accumulator, already seeded with the custom-module dict.
-        options: Options object; the classification fields are replaced.
         target: The run's Target; supplies the script to scan.
+        args: The parsed command line; reads --reqs.
+        aliases: The run's alias index.
+        extra_requirements: The --reqs file's entries, or {}.
         is_stdlib: Predicate answering whether a name is standard library.
 
     Returns:
-        The same ImportScan, filled. Returned as well as mutated so callers
-        read a value rather than reaching back into what they passed.
+        The filled ImportScan -- the same object, so callers read a value
+        rather than reaching back into what they passed -- and what
+        classification decided about it.
 
     Raises:
         UsageError: The target is not a Python script veny can read.
@@ -281,8 +291,15 @@ def list_packages(
         imp for imp in scan.all_imports if re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", imp)
     }
 
-    split_imports(settings, scan, options, target)
-    return scan
+    requirements = split_imports(
+        settings,
+        scan,
+        target,
+        args=args,
+        aliases=aliases,
+        extra_requirements=extra_requirements,
+    )
+    return scan, requirements
 
 
 def run_script(
@@ -485,23 +502,24 @@ def blank_slate(settings: Settings, options: run_options.Options) -> int:
     return 0
 
 
-def report(settings: Settings, scan: ImportScan, options: run_options.Options) -> None:
+def report(
+    settings: Settings, scan: ImportScan, requirements: state.Requirements
+) -> None:
     """Log what the scan and classification found, unless --rawlog silenced it.
 
     Args:
         settings: The run's invariants; reads rawlog.
         scan: What the scan found; reads samedir_files and subfolders.
-        options: The run's Options; reads options.uninstalled_imports and
-                 options.bad_imports.
+        requirements: What classification decided; reads uninstalled and bad.
     """
     if not settings.rawlog:
         # Report the import names, which are what the user wrote in their source.
         logging.info(
             "Uninstalled imports: %s",
-            sorted(record.import_name for record in options.uninstalled_imports),
+            sorted(record.import_name for record in requirements.uninstalled),
         )
-        if options.bad_imports:
-            logging.warning("Bad imports: %s", options.bad_imports)
+        if requirements.bad:
+            logging.warning("Bad imports: %s", set(requirements.bad))
         warn_about_system_packages(scan)
         if scan.samedir_files:
             logging.info(
@@ -549,19 +567,25 @@ def _load_last_used(
 
 
 def setup_virtualenv(
-    settings: Settings, options: run_options.Options, target: state.Target
-) -> bool:
+    settings: Settings,
+    options: run_options.Options,
+    target: state.Target,
+    requirements: state.Requirements,
+) -> tuple[state.Requirements, bool]:
     """Setup a virtual environment and install packages.
 
     Args:
         settings: The run's invariants; supplies my_dir, venv_name and rawlog.
         options: The run's state; the venv it builds is recorded on it.
         target: The run's Target; supplies python_command and timestamp.
+        requirements: What classification decided. Read for what to install,
+            and returned again with the repair pass folded in.
 
     Returns:
-        True if the environment was built and every requirement installed and
-        verified. False if uv refused to build it, or a requirement could not
-        be made importable in it -- `pipeline.run` reports that and returns 1.
+        The requirements after the repair pass, and whether the environment
+        was built with every one of them installed and verified. False there
+        means uv refused to build it, or a requirement could not be made
+        importable in it -- `pipeline.run` reports that and returns 1.
     """
     # The folder name is a cheap prefilter for the cache search; veny_manifest.json
     # inside the venv is the authority. venv_cache owns the encoding so a
@@ -571,7 +595,7 @@ def setup_virtualenv(
         venv_name=settings.venv_name,
         interpreter_tag=run_tag,
         timestamp=target.timestamp,
-        pip_names=[record.pip_name for record in options.uninstalled_imports],
+        pip_names=[record.pip_name for record in requirements.uninstalled],
     )
     # Create a virtual environment directory that starts with "failed" in case the process fails. Only remove the "failed" part if this process completes successfully.
     options.set_venv_dir(settings.my_dir / f"failed-{folder_name}")
@@ -585,7 +609,7 @@ def setup_virtualenv(
         logging.error(
             "uv could not create the virtual environment at %s.", options.venv_dir
         )
-        return False
+        return requirements, False
     if not settings.rawlog:
         logging.info("Virtual environment created.")
 
@@ -597,16 +621,10 @@ def setup_virtualenv(
     assert options.requirements_file is not None, (
         "options.requirements_file must be set"
     )
-    assert options.uninstalled_imports is not None, (
-        "options.uninstalled_imports must be set"
-    )
-    assert options.extra_requirements is not None, (
-        "options.extra_requirements must be set"
-    )
     environment.write_requirements_file_with_extras(
         options.requirements_file,
-        (record.pip_name for record in options.uninstalled_imports),
-        options.extra_requirements,
+        (record.pip_name for record in requirements.uninstalled),
+        requirements.extra_requirements,
     )
 
     result = environment.run_uv_pip(
@@ -628,8 +646,8 @@ def setup_virtualenv(
     # "failed-" prefix. This is also the only place that ever writes the alias
     # cache, so it must run on the successful path too, not just on failure.
     source_names = verify.source_import_names(
-        options.all_imports,
-        options.extra_requirements,
+        set(requirements.all_imports),
+        requirements.extra_requirements,
         getattr(options.args, "reqs", False),
     )
     # Re-narrows: mypy loses the narrowing established above across the
@@ -639,16 +657,23 @@ def setup_virtualenv(
         "options.requirements_file must be set"
     )
     assert options.venv_python is not None, "options.venv_python must be set"
-    options.uninstalled_imports = set(
-        verify.verify_and_repair_imports(
-            venv_python=options.venv_python,
-            requirements_file=options.requirements_file,
-            uninstalled=options.uninstalled_imports,
-            extra_requirements=options.extra_requirements,
-            source_names=source_names,
-            index=options.aliases,
-            rawlog=settings.rawlog,
-        )
+    # A rebind, not a mutation: Requirements is a value, so the pre-repair
+    # one still describes what was first attempted. The manifest below is
+    # written from the post-repair value on purpose -- it must record what
+    # really provided each import.
+    requirements = dataclasses.replace(
+        requirements,
+        uninstalled=frozenset(
+            verify.verify_and_repair_imports(
+                venv_python=options.venv_python,
+                requirements_file=options.requirements_file,
+                uninstalled=set(requirements.uninstalled),
+                extra_requirements=requirements.extra_requirements,
+                source_names=source_names,
+                index=options.aliases,
+                rawlog=settings.rawlog,
+            )
+        ),
     )
     # The manifest records the venv's final state, so it is written after any
     # repair -- it must describe what really provided each import, not what was
@@ -662,16 +687,16 @@ def setup_virtualenv(
             timestamp=target.timestamp,
             run_tag=run_tag,
             python_command=target.python_command,
-            uninstalled=options.uninstalled_imports,
-            extra_requirements=options.extra_requirements,
+            uninstalled=set(requirements.uninstalled),
+            extra_requirements=requirements.extra_requirements,
             rawlog=settings.rawlog,
         )
     )
     # Check that all packages can be imported in the venv.
     assert options.venv_dir is not None, "options.venv_dir must be set"
-    return verify.check_packages_in_venv(
+    return requirements, verify.check_packages_in_venv(
         environment.venv_python_for(options.venv_dir),
-        uninstalled=options.uninstalled_imports,
+        uninstalled=set(requirements.uninstalled),
         source_names=source_names,
     )
 
@@ -762,15 +787,16 @@ def run(
             "environments, among other things!)."
         )
 
+    extra_requirements: Mapping[str, str | None] = {}
     if getattr(options.args, "reqs", False):
-        options.extra_requirements = environment.parse_extra_requirements(
+        extra_requirements = environment.parse_extra_requirements(
             settings.extra_requirements_file, rawlog=settings.rawlog
         )
         if not settings.rawlog:
             logging.info(
                 "Loaded extra requirements from ./%s: %s",
                 settings.extra_requirements_file,
-                options.extra_requirements,
+                extra_requirements,
             )
 
     time1 = dt.datetime.now()
@@ -791,16 +817,22 @@ def run(
     if not settings.rawlog:
         logging.info("Elapsed time: %s", elapsed_time)
 
-    scan = list_packages(
-        settings, scan, options, target, is_stdlib=options.stdlib.__contains__
+    scan, requirements = list_packages(
+        settings,
+        scan,
+        target,
+        args=options.args,
+        aliases=options.aliases,
+        extra_requirements=extra_requirements,
+        is_stdlib=options.stdlib.__contains__,
     )
 
-    report(settings, scan, options)
+    report(settings, scan, requirements)
 
     if getattr(options.args, "justprint", False):
         return 0
 
-    if not options.uninstalled_imports:
+    if not requirements.uninstalled:
         if not settings.rawlog:
             logging.info("All required packages are already installed.")
         start_raw_time = dt.datetime.now()
@@ -819,10 +851,10 @@ def run(
         active_venv = last_used.active_virtualenv_dir()
         if verify.check_packages_in_venv(
             environment.venv_python_for(active_venv),
-            uninstalled=options.uninstalled_imports,
+            uninstalled=set(requirements.uninstalled),
             source_names=verify.source_import_names(
-                options.all_imports,
-                options.extra_requirements,
+                set(requirements.all_imports),
+                requirements.extra_requirements,
                 getattr(options.args, "reqs", False),
             ),
         ):
@@ -853,11 +885,11 @@ def run(
                 options.args,
                 my_dir=settings.my_dir,
                 venv_name=settings.venv_name,
-                uninstalled=options.uninstalled_imports,
-                extra_requirements=options.extra_requirements,
+                uninstalled=set(requirements.uninstalled),
+                extra_requirements=requirements.extra_requirements,
                 source_names=verify.source_import_names(
-                    options.all_imports,
-                    options.extra_requirements,
+                    set(requirements.all_imports),
+                    requirements.extra_requirements,
                     getattr(options.args, "reqs", False),
                 ),
                 tag=cache_search.interpreter_tag(options.stdlib),
@@ -874,7 +906,10 @@ def run(
                 logging.info(
                     "Creating new virtual environment '%s'...", settings.venv_name
                 )
-            if setup_virtualenv(settings, options, target):
+            requirements, built = setup_virtualenv(
+                settings, options, target, requirements
+            )
+            if built:
                 match_dir = options.venv_dir
             else:
                 # This was emmykit's critical-error helper, called with

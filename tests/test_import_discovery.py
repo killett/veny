@@ -218,7 +218,6 @@ def test_list_packages_scans_one_script_and_classifies_what_it_found(
     script = project / "s.py"
     script.write_text("import requests\n")
     settings, options = _a_run_that_can_classify(tmp_path, monkeypatch)
-    options.extra_requirements = {"extra-pkg": ">=2.0"}
     target = state.Target(
         python_script=script,
         script_dir=project,
@@ -228,11 +227,13 @@ def test_list_packages_scans_one_script_and_classifies_what_it_found(
     )
 
     with caplog.at_level(logging.INFO):
-        scan = pipeline.list_packages(
+        scan, requirements = pipeline.list_packages(
             settings,
             ImportScan(),
-            options,
             target,
+            args=options.args,
+            aliases=options.aliases,
+            extra_requirements={"extra-pkg": ">=2.0"},
             is_stdlib=options.stdlib.__contains__,
         )
 
@@ -241,10 +242,8 @@ def test_list_packages_scans_one_script_and_classifies_what_it_found(
     assert scan.all_imports == {"requests"}
     # Exactly {"requests"}: extra-pkg is an extra requirement, and without
     # --reqs it must not be folded into the imports the script needs.
-    assert options.all_imports == {"requests"}
-    assert {record.import_name for record in options.uninstalled_imports} == {
-        "requests"
-    }
+    assert requirements.all_imports == {"requests"}
+    assert {record.import_name for record in requirements.uninstalled} == {"requests"}
 
 
 def test_report_warns_about_a_standard_library_import_that_needs_a_system_package(
@@ -277,12 +276,18 @@ def test_report_warns_about_a_standard_library_import_that_needs_a_system_packag
         python_command="",
         timestamp="20260821-120000",
     )
-    scan = pipeline.list_packages(
-        settings, ImportScan(), options, target, is_stdlib=options.stdlib.__contains__
+    scan, requirements = pipeline.list_packages(
+        settings,
+        ImportScan(),
+        target,
+        args=options.args,
+        aliases=options.aliases,
+        extra_requirements={},
+        is_stdlib=options.stdlib.__contains__,
     )
 
     with caplog.at_level(logging.INFO):
-        pipeline.report(settings, scan, options)
+        pipeline.report(settings, scan, requirements)
 
     assert "tkinter is in the standard library but needs the" in caplog.text
 
@@ -437,8 +442,14 @@ def test_the_scan_list_packages_is_handed_is_the_one_it_fills(
     )
     seeded = ImportScan(custom_modules={"my_helper": helper})
 
-    returned = pipeline.list_packages(
-        settings, seeded, options, target, is_stdlib=options.stdlib.__contains__
+    returned, _ = pipeline.list_packages(
+        settings,
+        seeded,
+        target,
+        args=options.args,
+        aliases=options.aliases,
+        extra_requirements={},
+        is_stdlib=options.stdlib.__contains__,
     )
 
     assert returned is seeded

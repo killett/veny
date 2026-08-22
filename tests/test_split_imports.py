@@ -18,6 +18,7 @@ from veny.analysis.imports import process_import
 from veny.analysis.scan import _enqueue_top_level_imports
 from veny.analysis.scan_state import ImportScan
 
+from .test_state_values import a_requirements as _a_requirements
 from .test_state_values import a_settings as _a_settings
 from .test_state_values import a_target as _target
 
@@ -191,8 +192,9 @@ def test_check_venv_dir_rejects_a_manifest_match_whose_import_does_not_actually_
     cached_dir.mkdir()
     record = veny.ResolvedImport(import_name="thing", pip_name="thing-pkg")
     options = veny.Options()
-    options.all_imports = {"thing"}
-    options.uninstalled_imports = {record}
+    requirements = _a_requirements(
+        all_imports=frozenset({"thing"}), uninstalled=frozenset({record})
+    )
     venv_cache.write_manifest(
         cached_dir,
         venv_cache.Manifest(
@@ -217,16 +219,16 @@ def test_check_venv_dir_rejects_a_manifest_match_whose_import_does_not_actually_
         cache_search.check_venv_dir(
             cached_dir,
             wanted=cache_search.wanted_packages(
-                options.uninstalled_imports, options.extra_requirements
+                set(requirements.uninstalled), requirements.extra_requirements
             ),
             tag=cache_search.interpreter_tag(options.stdlib),
-            uninstalled=options.uninstalled_imports,
+            uninstalled=set(requirements.uninstalled),
             source_names=verify.source_import_names(
-                options.all_imports,
-                options.extra_requirements,
+                set(requirements.all_imports),
+                requirements.extra_requirements,
                 getattr(options.args, "reqs", False),
             ),
-            rawlog=options.rawlog,
+            rawlog=True,
         )
         is False
     )
@@ -240,10 +242,11 @@ def test_setup_virtualenv_verifies_every_import_before_reporting_success(
     # and two of the five evidence tiers were unreachable. Nothing inside
     # either function could catch that -- only a test of the join can.
     options = veny.Options()
-    options.my_dir = tmp_path
-    options.uninstalled_imports = {
-        veny.ResolvedImport(import_name="thing", pip_name="thing-pkg")
-    }
+    requirements = _a_requirements(
+        uninstalled=frozenset(
+            {veny.ResolvedImport(import_name="thing", pip_name="thing-pkg")}
+        )
+    )
     calls = []
     monkeypatch.setattr(
         environment, "write_requirements_file_with_extras", lambda *args: None
@@ -282,8 +285,8 @@ def test_setup_virtualenv_verifies_every_import_before_reporting_success(
 
     assert (
         pipeline.setup_virtualenv(
-            _a_settings(my_dir=options.my_dir), options, _target()
-        )
+            _a_settings(my_dir=tmp_path), options, _target(), requirements
+        )[1]
         is True
     )
     # Verification has to happen before the gate that drops the "failed-"
