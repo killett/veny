@@ -151,11 +151,6 @@ class _CapturedRun(list):  # type: ignore[type-arg]
         self.settings: list[settings_module.Settings] = []
         self.targets: list[state.Target] = []
         self.requirements: list[state.Requirements] = []
-        # The Options main() built. Phase 4a drained it out of every hook the
-        # run passes through, so the only place left to catch it is
-        # parse_arguments -- which is also the only thing that still writes to
-        # it before the persistence save.
-        self.options: list[cli.Options] = []
 
 
 def _drive_main(
@@ -181,13 +176,14 @@ def _drive_main(
             a separate argument rather than part of `argv`.
 
     Returns:
-        A pair: the one-element list that receives the Options object main()
-        built, so a test can assert against the very fields main() wired from,
-        and a list that receives one entry per script launch -- the exact
-        command main() handed subprocess.run, as strings. The second is what
-        lets a branch test tell "ran under sys.executable" apart from "ran
-        under the venv's interpreter"; the old stub discarded its arguments,
-        so no test could see which interpreter ran the script.
+        A pair: the _CapturedRun that receives the parsed namespace and its
+        Settings/Target/Requirements side channels, so a test can assert
+        against the very values main() wired through, and a list that
+        receives one entry per script launch -- the exact command main()
+        handed subprocess.run, as strings. The second is what lets a branch
+        test tell "ran under sys.executable" apart from "ran under the
+        venv's interpreter"; the old stub discarded its arguments, so no test
+        could see which interpreter ran the script.
     """
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
@@ -216,14 +212,6 @@ def _drive_main(
         return _offline_index()
 
     monkeypatch.setattr(pipeline, "build_alias_index", capture_the_run)
-
-    real_parse = cli.parse_arguments
-
-    def parse_spy(options):
-        real_parse(options)
-        captured.options.append(options)
-
-    monkeypatch.setattr(cli, "parse_arguments", parse_spy)
     monkeypatch.setattr(
         custom_modules, "dict_of_custom_modules", lambda settings, use_cache: {}
     )
@@ -1646,12 +1634,10 @@ def test_build_alias_index_reads_this_runs_own_directory_and_interpreter(
     read off the returned index rather than from a spy: the cache's own path
     and the tag the probe produced.
     """
-    options = cli.Options()
-    options.my_dir = tmp_path
-    options.args = argparse.Namespace(offline=True)
+    args = argparse.Namespace(offline=True)
 
     index = pipeline.build_alias_index(
-        _a_settings(my_dir=tmp_path), options.args, sys.executable
+        _a_settings(my_dir=tmp_path), args, sys.executable
     )
 
     assert index.cache.path == tmp_path / "module_aliases_cache.json"

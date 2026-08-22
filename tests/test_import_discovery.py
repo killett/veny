@@ -209,18 +209,25 @@ def test_a_prepopulated_custom_module_outside_the_script_dir_is_recognized(
 
 def _a_run_that_can_classify(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> tuple[settings_module.Settings, cli.Options]:
-    """A Settings and Options list_packages can be driven with, off the network and off uv.
+) -> tuple[
+    settings_module.Settings,
+    argparse.Namespace,
+    alias_index.AliasIndex,
+    stdlib_index.StdlibIndex,
+]:
+    """A Settings, args, aliases and stdlib index list_packages can be driven with, off the network and off uv.
 
     Only two boundaries are replaced: the throwaway probe environment (a uv
     subprocess) and the alias index's network access. The scan, the stay-out
     filter and the classification copy-back are all real.
 
     Returns:
-        The Settings and the Options, in that order.
+        The Settings, the args, the aliases and the stdlib index, in that
+        order.
     """
-    options = cli.Options()
-    options.aliases = alias_index.empty(tmp_path / "index")
+    args = argparse.Namespace()
+    aliases = alias_index.empty(tmp_path / "index")
+    stdlib = stdlib_index.for_running_interpreter()
     # Not the default list: a substitution that reaches for a fresh Settings
     # would still exclude "myenv", and would look correct.
     settings = _a_settings(cwd=tmp_path, rawlog=False, stay_out_list=("keepout",))
@@ -229,7 +236,7 @@ def _a_run_that_can_classify(
         "_probe_venv",
         lambda target: contextlib.nullcontext(lambda import_name: False),
     )
-    return settings, options
+    return settings, args, aliases, stdlib
 
 
 def test_list_packages_scans_one_script_and_classifies_what_it_found(
@@ -258,7 +265,7 @@ def test_list_packages_scans_one_script_and_classifies_what_it_found(
     project.mkdir()
     script = project / "s.py"
     script.write_text("import requests\n")
-    settings, options = _a_run_that_can_classify(tmp_path, monkeypatch)
+    settings, args, aliases, stdlib = _a_run_that_can_classify(tmp_path, monkeypatch)
     target = state.Target(
         python_script=script,
         script_dir=project,
@@ -272,10 +279,10 @@ def test_list_packages_scans_one_script_and_classifies_what_it_found(
             settings,
             ImportScan(),
             target,
-            args=options.args,
-            aliases=options.aliases,
+            args=args,
+            aliases=aliases,
             extra_requirements={"extra-pkg": ">=2.0"},
-            is_stdlib=options.stdlib.__contains__,
+            is_stdlib=stdlib.__contains__,
         )
 
     assert f"Processing a single Python script: {script}" in caplog.text
@@ -309,7 +316,7 @@ def test_report_warns_about_a_standard_library_import_that_needs_a_system_packag
     project.mkdir()
     script = project / "s.py"
     script.write_text("import tkinter\n")
-    settings, options = _a_run_that_can_classify(tmp_path, monkeypatch)
+    settings, args, aliases, stdlib = _a_run_that_can_classify(tmp_path, monkeypatch)
     target = state.Target(
         python_script=script,
         script_dir=project,
@@ -321,10 +328,10 @@ def test_report_warns_about_a_standard_library_import_that_needs_a_system_packag
         settings,
         ImportScan(),
         target,
-        args=options.args,
-        aliases=options.aliases,
+        args=args,
+        aliases=aliases,
         extra_requirements={},
-        is_stdlib=options.stdlib.__contains__,
+        is_stdlib=stdlib.__contains__,
     )
 
     with caplog.at_level(logging.INFO):
@@ -473,7 +480,7 @@ def test_the_scan_list_packages_is_handed_is_the_one_it_fills(
     helper.write_text("import requests\n")
     script = tmp_path / "s.py"
     script.write_text("import my_helper\n\nmy_helper\n")
-    settings, options = _a_run_that_can_classify(tmp_path, monkeypatch)
+    settings, args, aliases, stdlib = _a_run_that_can_classify(tmp_path, monkeypatch)
     target = state.Target(
         python_script=script,
         script_dir=tmp_path,
@@ -487,10 +494,10 @@ def test_the_scan_list_packages_is_handed_is_the_one_it_fills(
         settings,
         seeded,
         target,
-        args=options.args,
-        aliases=options.aliases,
+        args=args,
+        aliases=aliases,
         extra_requirements={},
-        is_stdlib=options.stdlib.__contains__,
+        is_stdlib=stdlib.__contains__,
     )
 
     assert returned is seeded

@@ -171,8 +171,8 @@ def test_alias_index_serializes_as_a_snapshot_and_returns_a_plain_dict(tmp_path)
 
 def test_register_types_is_idempotent():
     # Catches: registering without guarding against a second call -- emmykit
-    # raises on a duplicate tag, so the second veny.Options() in a test session
-    # (or a second main() call) would die at import time.
+    # raises on a duplicate tag, so a second import of this module in a test
+    # session (or a second main() call) would die at import time.
     veny_json_types.register_types()
     veny_json_types.register_types()
 
