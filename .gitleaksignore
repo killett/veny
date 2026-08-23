@@ -1,0 +1,21 @@
+# gitleaks allowlist.
+#
+# Every entry below is a confirmed false positive, affirmed individually
+# during the repository's publication audit on 2026-08-23 (gitleaks 8.30.1).
+#
+# All three are the same string: "lib2to3.pygram", a Python standard-library
+# module name appearing inside a hard-coded list of stdlib module names, e.g.
+#
+#     "lib2to3.pgen2.tokenize", "lib2to3.pygram"
+#
+# gitleaks' generic-api-key rule flags it on Shannon entropy (3.807), not on
+# any credential-shaped context. It is not a secret and there is nothing to
+# rotate.
+#
+# The fingerprints are commit-scoped, so they were regenerated after the
+# git-filter-repo mailmap pass that rewrote every commit SHA. If history is
+# ever rewritten again, re-run gitleaks and refresh these three lines.
+
+8e2b34fb1095b8c11c25835772746d069bbb3e69:veny.py:generic-api-key:486
+29b95077d93d63f5db4d430801e0fb5b80d39d27:mypy.py:generic-api-key:476
+380df7d401ceb83b77e9458329a80970ed6af02f:mypy.py:generic-api-key:447
