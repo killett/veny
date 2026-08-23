@@ -593,13 +593,14 @@ def find_match_dir_in_cache(
     explicit = (
         getattr(args, "latest", False)
         or getattr(args, "oldest", False)
-        or getattr(args, "last_used", False)
         or getattr(args, "smallest", False)
     )
     # No flag at all means "the one you used last time" -- a local now, not a
     # write onto args. It was a write only because args was serialized into
-    # the options JSON, which veny no longer keeps.
-    try_last_used = not explicit or getattr(args, "last_used", False)
+    # the options JSON, which veny no longer keeps. The --last-used term is
+    # only in try_last_used: inside `explicit` it could not change any
+    # outcome, for any of the 16 flag combinations (phase 4b, measured).
+    try_last_used = not explicit or args.last_used
     prefer_latest = getattr(args, "latest", False)
     if try_last_used and not prefer_latest and not getattr(args, "smallest", False):
         record = load_last_used()

@@ -94,29 +94,6 @@ def test_the_venv_python_loader_lets_the_record_search_explain_itself(
     assert "No usable last-used record" not in caplog.text
 
 
-def test_is_virtualenv_reflects_prefix_vs_base_prefix(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Both branches of the sys.prefix / sys.base_prefix comparison are pinned.
-
-    A bug that would make this fail: inverting the comparison (`==` instead
-    of `!=`), or comparing the wrong pair of attributes (e.g. sys.prefix to
-    itself, always True, or sys.base_prefix to itself, always False) — any
-    of which would make veny take the already-in-a-virtualenv path on a bare
-    interpreter and skip building a venv at all, or vice versa.
-
-    Both branches are exercised so a mutation that only breaks one of them
-    (e.g. hard-coding True) cannot slip through unnoticed.
-    """
-    monkeypatch.setattr(sys, "prefix", "/fake/venv")
-    monkeypatch.setattr(sys, "base_prefix", "/fake/base")
-    assert last_used.is_virtualenv() is True
-
-    monkeypatch.setattr(sys, "prefix", "/fake/same")
-    monkeypatch.setattr(sys, "base_prefix", "/fake/same")
-    assert last_used.is_virtualenv() is False
-
-
 def test_active_virtualenv_dir_prefers_the_environment_variable(monkeypatch, tmp_path):
     """VIRTUAL_ENV names the environment the user activated.
 
@@ -133,17 +110,56 @@ def test_active_virtualenv_dir_prefers_the_environment_variable(monkeypatch, tmp
     assert last_used.active_virtualenv_dir() == tmp_path / "activated"
 
 
-def test_active_virtualenv_dir_falls_back_to_sys_prefix(monkeypatch):
-    """With no VIRTUAL_ENV, sys.prefix is the environment in use.
+def test_active_virtualenv_dir_is_none_when_nothing_is_activated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No VIRTUAL_ENV means no activated environment, whatever sys.prefix says.
 
-    Concrete bug this catches: returning None (or raising) here would put the
-    branch straight back to the crash phase 3e is removing -- is_virtualenv()
-    is true whenever sys.prefix differs from sys.base_prefix, including for
-    environments activated without the activate script.
+    A bug that would make this fail: answering from sys.prefix, the way veny
+    did until phase 4c. veny's own documented install (`uv tool install veny`)
+    puts veny inside a virtualenv, so a sys.prefix answer is True on every
+    such install -- and pipeline.run then import-checks veny's own tool venv,
+    fails, and tells the user to deactivate an environment they never
+    activated, with the cache search unreachable behind it.
     """
     monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setattr(sys, "prefix", "/fake/venv")
+    monkeypatch.setattr(sys, "base_prefix", "/fake/base")
 
-    assert last_used.active_virtualenv_dir() == Path(sys.prefix)
+    assert last_used.active_virtualenv_dir() is None
+
+
+def test_active_virtualenv_dir_is_none_when_the_variable_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty VIRTUAL_ENV is not an activated environment.
+
+    A bug that would make this fail: `os.environ.get("VIRTUAL_ENV") is not
+    None` instead of a truthiness test, which would make an exported-but-empty
+    variable name Path("") -- the current working directory -- as the
+    environment to import-check.
+    """
+    monkeypatch.setenv("VIRTUAL_ENV", "")
+
+    assert last_used.active_virtualenv_dir() is None
+
+
+def test_active_virtualenv_dir_answers_with_a_path_not_a_string(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The answer is a Path, because its caller joins bin/python onto it.
+
+    A bug that would make this fail: returning the raw environment string.
+    environment.venv_python_for does `venv_dir / "bin" / "python"`, which
+    raises TypeError on a str -- but only on the branch this value reaches,
+    which no other test in this file drives.
+    """
+    monkeypatch.setenv("VIRTUAL_ENV", os.fspath(tmp_path / "activated"))
+
+    answer = last_used.active_virtualenv_dir()
+
+    assert isinstance(answer, Path)
+    assert answer == tmp_path / "activated"
 
 
 def test_the_last_used_adapter_returns_the_record_this_run_is_entitled_to(
@@ -437,6 +453,6 @@ def test_blank_slate_deletes_the_new_last_used_record(tmp_path, monkeypatch):
     assert record.exists()
     settings_for_run = a_settings(my_dir=tmp_path / "veny-home", cwd=tmp_path)
 
-    pipeline.blank_slate(settings_for_run, argparse.Namespace(y=True))
+    pipeline.blank_slate(settings_for_run, argparse.Namespace(yes=True))
 
     assert not record.exists()

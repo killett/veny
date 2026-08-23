@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import sys
 from pathlib import Path
 from typing import Final
 
@@ -14,27 +13,31 @@ import emmykit as ek
 from . import state
 
 
-def is_virtualenv() -> bool:
-    """Check if currently running in a virtual environment."""
-    return sys.prefix != sys.base_prefix
+def active_virtualenv_dir() -> Path | None:
+    """The virtual environment the user activated, if there is one.
 
+    Deliberately not `sys.prefix != sys.base_prefix`: that describes veny's
+    own interpreter, and veny's documented install (`uv tool install veny`)
+    puts veny inside a virtualenv. Under that install the prefix test was
+    always true, so every run with a missing import checked veny's own tool
+    environment, failed, and told the user to deactivate something they had
+    never activated -- with the cache search unreachable behind it.
+    VIRTUAL_ENV is what an activate script exports, and is the user's own
+    statement of which environment they meant.
 
-def active_virtualenv_dir() -> Path:
-    """Return the virtual environment this process is running inside.
-
-    is_virtualenv() answers *whether*; this answers *which*. VIRTUAL_ENV is
-    what an activate script exports and is the user's own statement of which
-    environment they meant; sys.prefix is the fallback for an environment
-    entered by running its interpreter directly, where no activation happened.
+    One function rather than a whether/which pair, so the two answers cannot
+    disagree: a caller that gets a directory back knows the user activated it.
 
     Returns:
-        The environment's root directory. Meaningful only when
-        is_virtualenv() is true.
+        The activated environment's root directory, or None when the user has
+        not activated one. A virtualenv entered by running its interpreter
+        directly, without activation, reads as None -- veny treats that as
+        "no environment declared" and uses its own cache instead.
     """
     declared = os.environ.get("VIRTUAL_ENV")
-    if declared:
-        return ek.ensure_path(declared)
-    return Path(sys.prefix)
+    if not declared:
+        return None
+    return ek.ensure_path(declared)
 
 
 RECORD_SUFFIX: Final[str] = "-last-used.json"

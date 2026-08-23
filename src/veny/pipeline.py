@@ -324,8 +324,9 @@ def run_script(
         script_args: Everything after the script on veny's command line.
         rawlog: True suppresses veny's own commentary, so the output is what
             the user would have seen without veny.
-        announce: True logs the command before running it, as the venv path
-            has always done and the bare-interpreter paths never have.
+        announce: True logs the command before running it. Every call site
+            passes True since phase 4c; the default stays False so a new
+            caller has to say what it wants.
 
     Returns:
         The child's returncode, negative if it was killed by a signal.
@@ -419,7 +420,7 @@ def feeling_lucky(
         The script's exit status if the lucky path ran it, or None meaning
         "no luck, carry on with the normal run".
     """
-    if not getattr(args, "feeling_lucky", False) or target is None:
+    if not args.feeling_lucky or target is None:
         return None
     last_used_venv_python = last_used.load_venv_python(
         script_dir=target.script_dir,
@@ -433,6 +434,7 @@ def feeling_lucky(
             target.python_script,
             list(target.script_args),
             rawlog=rawlog,
+            announce=True,
         )
         if returncode != 0 and not rawlog:
             print(f"Script exited with status {returncode}")
@@ -453,13 +455,13 @@ def blank_slate(settings: Settings, args: argparse.Namespace) -> int:
 
     Args:
         settings: The run's invariants; reads my_name, my_dir and cwd.
-        args: The parsed command line; reads the -y flag.
+        args: The parsed command line; reads the --yes flag.
 
     Returns:
         0, whether the user confirmed or declined -- both are a complete run
         that was never going to launch a script.
     """
-    if not getattr(args, "y", False):
+    if not args.yes:
         if not ek.prompt_then_confirm(
             f"Are you sure you want to delete everything in ~/{settings.my_name}/"
             f" and all {settings.my_name} .json files in the current directory? (y/n) "
@@ -834,14 +836,14 @@ def run(
             target.python_script,
             list(target.script_args),
             rawlog=settings.rawlog,
+            announce=True,
         )
         elapsed_raw_time = dt.datetime.now() - start_raw_time
         if not settings.rawlog:
             logging.info("Runtime: %s", elapsed_raw_time)
-    elif last_used.is_virtualenv():
+    elif (active_venv := last_used.active_virtualenv_dir()) is not None:
         if not settings.rawlog:
             logging.info("Already in a virtual environment.")
-        active_venv = last_used.active_virtualenv_dir()
         if verify.check_packages_in_venv(
             environment.venv_python_for(active_venv),
             uninstalled=set(requirements.uninstalled),
@@ -857,6 +859,7 @@ def run(
                 target.python_script,
                 list(target.script_args),
                 rawlog=settings.rawlog,
+                announce=True,
             )
             elapsed_raw_time = dt.datetime.now() - start_raw_time
             if not settings.rawlog:
@@ -885,7 +888,7 @@ def run(
                 source_names=verify.source_import_names(
                     set(requirements.all_imports),
                     requirements.extra_requirements,
-                    getattr(args, "reqs", False),
+                    args.reqs,
                 ),
                 tag=cache_search.interpreter_tag(stdlib),
                 rawlog=settings.rawlog,

@@ -542,7 +542,6 @@ def test_main_checks_the_surrounding_virtualenv_against_this_runs_imports(
         "parse_extra_requirements",
         lambda path, *, rawlog: {"extra-pkg": ">=2.0"},
     )
-    monkeypatch.setattr(last_used, "is_virtualenv", lambda: True)
     seen: list[dict[str, object]] = []
 
     def check_spy(venv_python, **kwargs):
@@ -562,6 +561,53 @@ def test_main_checks_the_surrounding_virtualenv_against_this_runs_imports(
             "source_names": {"thing"},
         }
     ]
+
+
+def test_main_ignores_venys_own_virtualenv_and_goes_to_the_cache(monkeypatch, tmp_path):
+    """veny installed in a venv is not the user standing in one.
+
+    Behaviour under test: with no VIRTUAL_ENV exported, a run with a missing
+    import must reach the cache search, whatever sys.prefix says about veny's
+    own interpreter.
+
+    Concrete bug this catches: the pre-4c guard, `sys.prefix !=
+    sys.base_prefix`. veny's documented install is `uv tool install veny`,
+    which puts veny in a venv, so that guard was True on every such install:
+    the run import-checked veny's own tool environment, failed, logged
+    "Please deactivate the current virtual environment and run the script
+    again." and returned 1 -- with find_match_dir_in_cache never called.
+    """
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setattr(sys, "prefix", "/fake/venv")
+    monkeypatch.setattr(sys, "base_prefix", "/fake/base")
+    _drive_main(
+        monkeypatch,
+        tmp_path,
+        [],
+        uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
+        all_imports={"thing"},
+    )
+    seen: list[dict[str, object]] = []
+
+    def search_spy(args, **kwargs):
+        seen.append({"args": args, **kwargs})
+        return None
+
+    monkeypatch.setattr(cache_search, "find_match_dir_in_cache", search_spy)
+    # A cache miss would otherwise fall through to a real setup_virtualenv,
+    # which shells out to uv -- unrelated to this test, which only pins that
+    # the search is reached once. The established pattern for this exact
+    # cache-miss shape (see test_main_describes_the_run_to_the_cache_search
+    # above) stubs it out.
+    monkeypatch.setattr(
+        pipeline,
+        "setup_virtualenv",
+        lambda settings, target, requirements, **kwargs: (requirements, None, False),
+    )
+
+    cli.main()
+
+    assert len(seen) == 1
 
 
 def test_main_drops_the_failed_prefix_from_the_venv_it_just_built(
@@ -780,7 +826,6 @@ def test_main_checks_the_virtualenv_it_is_running_inside(monkeypatch, tmp_path):
         uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing")},
         all_imports={"thing"},
     )
-    monkeypatch.setattr(last_used, "is_virtualenv", lambda: True)
     checked: list[object] = []
 
     def check_spy(interpreter, **kwargs):
@@ -837,16 +882,16 @@ def test_blank_slate_deletes_the_state_directory_and_leaves_other_files_alone(
     matches the fourth (dot prefix, "-veny-" inside, ".json" suffix);
     keep.json does not start with a dot and so matches none of them.
 
-    The confirmation prompt is stubbed rather than answered by -y, because
-    measured 2026-08-19 the flag does not reach this branch: argparse gives
-    `-y/--yes` the dest `yes`, while the branch reads
-    `getattr(args, "y", False)`, which is never set and so is always
-    False. That is a pre-existing bug, recorded here rather than fixed,
-    because this phase is behaviour-preserving; -y is kept in argv so this
-    test keeps working unchanged once the dest is corrected and the prompt
-    stops being reached at all. Stubbing the
-    prompt is a stdin boundary stub, not a stub of the code under test: the
-    deletion loop below still runs for real, against real files.
+    The confirmation prompt is stubbed as a regression trap, not because it
+    is expected to fire: as of phase 4c Task 3, -y suppresses this branch's
+    prompt entirely, because blank_slate now reads args.yes, the dest
+    argparse actually writes for `-y`/`--yes` (until this task it read
+    `getattr(args, "y", False)`, an attribute that never existed, so every
+    --blank-slate -y run prompted anyway). Leaving the stub in place means a
+    future regression that reintroduces a getattr-based read would surface
+    here as a prompt call, not as a silent revert. Stubbing the prompt is a
+    stdin boundary stub, not a stub of the code under test: the deletion
+    loop below still runs for real, against real files.
     """
     home = tmp_path / "home"
     state_dir = home / "veny"
@@ -877,14 +922,9 @@ def test_blank_slate_deletes_the_state_directory_and_leaves_other_files_alone(
     status = cli.main()
 
     assert status == 0
-    # The prompt must name what is about to be deleted, in this run's own
-    # terms: measured 2026-08-19, replacing it with any other string left the
-    # whole suite green, and a prompt that does not say what it will destroy
-    # is a prompt nobody can answer responsibly.
-    assert prompts == [
-        "Are you sure you want to delete everything in ~/veny/ and all veny"
-        " .json files in the current directory? (y/n) "
-    ]
+    # -y means the prompt is never asked at all: phase 4c Task 3 fixed the
+    # dest read that used to make this branch prompt regardless of -y.
+    assert prompts == []
     assert not state_dir.exists()
     assert not (workdir / ".veny-run.out").exists()
     assert not (workdir / ".script.py-veny-last-used-on-20260101-000000.json").exists()
@@ -1329,7 +1369,6 @@ def _an_active_virtualenv_that_satisfies_the_run(
         all_imports={"thing"},
         script_args=script_args,
     )
-    monkeypatch.setattr(last_used, "is_virtualenv", lambda: True)
     monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: True)
     return launched
 
@@ -1350,68 +1389,86 @@ def _a_lucky_run(monkeypatch, tmp_path, argv, script_args=()):
     return lucky_python, launched
 
 
-def test_only_the_venv_launch_announces_the_command_it_is_about_to_run(
+def test_every_launch_announces_the_command_it_is_about_to_run(
     monkeypatch, tmp_path, caplog
 ):
-    """`announce` is set at exactly one of run_script's four call sites.
+    """All four of run_script's call sites announce, and --rawlog silences all four.
 
-    Behaviour under test: which launches log "Running command: ...". The venv
-    launch has always announced itself; the three bare-interpreter launches
-    never have, and run_script's `announce` argument is what preserves that
-    difference now that all four go through one function.
+    Behaviour under test: which launches log "Running command: ...". Until
+    phase 4c only the venv launch did; the other three passed run_script a
+    `rawlog` argument that nothing could read, because `announce` was False
+    there and `rawlog` guards only the announce line.
 
-    Measured by substitution: adding `announce=True` at any of the other
-    three sites, and removing it from the venv site, left the whole suite
-    green -- the driver records the argv a launch produced, not the lines it
-    logged. Concrete bug this catches: `announce=True` everywhere prints a
-    command line before every run, including the one that needed no
-    environment at all, which is exactly the noise --rawlog exists to remove
-    and which veny has never emitted on those paths; dropping it from the
-    venv site removes the only record of which interpreter a cached
-    environment actually launched, which is the first thing anyone debugging
-    a wrong-venv run looks for.
+    Concrete bug this catches: dropping announce=True from any one site,
+    which removes the only record of which interpreter that path launched --
+    the first thing anyone debugging a wrong-environment run looks for, and
+    the one thing the differential cannot recover after the fact. A second
+    bug this catches: announcing regardless of rawlog, which puts veny's own
+    commentary into output whose contract is "the same output you would see
+    without veny".
     """
+    script = os.fspath(tmp_path / "script.py")
+
+    # 1. The venv launch.
     venv_dir, _ = _a_cache_hit(monkeypatch, tmp_path, [])
-
     with caplog.at_level(logging.INFO):
         cli.main()
-
-    expected = (
-        f"Running command: {os.fspath(venv_dir / 'bin' / 'python')} "
-        f"{os.fspath(tmp_path / 'script.py')}"
+    assert (
+        f"Running command: {os.fspath(venv_dir / 'bin' / 'python')} {script}"
+        in caplog.text
     )
-    assert expected in caplog.text
 
-    # --rawlog silences it: run_script's rawlog argument must be this run's own.
-    caplog.clear()
-    _a_cache_hit(monkeypatch, tmp_path, ["--rawlog"])
-    with caplog.at_level(logging.INFO):
-        cli.main()
-
-    assert "Running command" not in caplog.text
-
-    # The three launches that must stay quiet, each on a run that did not ask
-    # for raw logs -- so silence is the announce argument, not the flag.
+    # 2. Nothing to install: the bare interpreter launch.
     caplog.clear()
     _drive_main(monkeypatch, tmp_path, [], uninstalled=set(), all_imports={"os"})
     with caplog.at_level(logging.INFO):
         cli.main()
+    assert f"Running command: {sys.executable} {script}" in caplog.text
 
-    assert "Running command" not in caplog.text
-
+    # 3. The activated virtualenv satisfied the run.
     caplog.clear()
     _an_active_virtualenv_that_satisfies_the_run(monkeypatch, tmp_path, [])
     with caplog.at_level(logging.INFO):
         cli.main()
+    assert f"Running command: {sys.executable} {script}" in caplog.text
 
-    assert "Running command" not in caplog.text
-
+    # 4. --feeling-lucky, which reports with print() rather than logging for
+    #    everything else it says, because it runs before logging is
+    #    configured -- but run_script's announce line is a log line on every
+    #    path, and caplog sees it.
     caplog.clear()
-    _a_lucky_run(monkeypatch, tmp_path, [])
+    lucky_python, _ = _a_lucky_run(monkeypatch, tmp_path, [])
     with caplog.at_level(logging.INFO):
         cli.main()
+    assert f"Running command: {os.fspath(lucky_python)} {script}" in caplog.text
 
-    assert "Running command" not in caplog.text
+    # --rawlog silences every one of them: run_script's rawlog argument is
+    # this run's own, at all four sites. Case 3 above left VIRTUAL_ENV set
+    # (monkeypatch.setenv, function-scoped, never undone until the test
+    # ends) -- without clearing it here, the first setup below would still
+    # find an "activated" environment and take that branch instead of the
+    # cache-hit branch it is meant to drive, leaving the venv-launch site's
+    # own rawlog handling unexercised under --rawlog.
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    for setup in (
+        lambda: _a_cache_hit(monkeypatch, tmp_path, ["--rawlog"]),
+        lambda: _drive_main(
+            monkeypatch,
+            tmp_path,
+            ["--rawlog"],
+            uninstalled=set(),
+            all_imports={"os"},
+        ),
+        lambda: _an_active_virtualenv_that_satisfies_the_run(
+            monkeypatch, tmp_path, ["--rawlog"]
+        ),
+        lambda: _a_lucky_run(monkeypatch, tmp_path, ["--rawlog"]),
+    ):
+        caplog.clear()
+        setup()
+        with caplog.at_level(logging.INFO):
+            cli.main()
+        assert "Running command" not in caplog.text
 
 
 def test_every_launch_path_passes_the_scripts_own_arguments_through(
@@ -1515,6 +1572,45 @@ def test_feeling_lucky_launches_the_interpreter_the_loader_named(monkeypatch, tm
     assert launched == [[os.fspath(lucky_python), os.fspath(tmp_path / "script.py")]]
 
 
+def test_a_lucky_run_killed_by_a_signal_reports_the_shell_status(monkeypatch, tmp_path):
+    """--feeling-lucky normalizes a signal death like every other path.
+
+    Behaviour under test: a child killed by SIGKILL returns -9 from
+    subprocess, and a process exiting with -9 wraps around to 247 in the
+    shell. Every other veny path turns that into 137 (128 + 9).
+
+    Concrete bug this catches: returning pipeline.feeling_lucky's status
+    from the middle of main(), which is what veny did until phase 4c -- so
+    the same script killed the same way reported 247 under --feeling-lucky
+    and 137 without it, and a wrapper script keying on 137 silently stopped
+    seeing kills the moment a user added the flag.
+    """
+    lucky_python, _ = _a_lucky_run(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(pipeline, "run_script", lambda *args, **kwargs: -9)
+
+    assert cli.main() == 137
+
+
+def test_an_ordinary_run_killed_by_a_signal_reports_the_shell_status(
+    monkeypatch, tmp_path
+):
+    """The ordinary path normalizes a signal death too, not just --feeling-lucky.
+
+    Behaviour under test: main()'s tail, which is the other of the two call
+    sites _shell_status must cover. Concrete bug this catches: dropping the
+    _shell_status call from the tail and returning script_exit_code bare --
+    which would leave this suite green everywhere else, since no other test
+    in this file drives an ordinary run's child to a negative returncode and
+    checks the status main() returns. That regression would recreate the
+    exact asymmetry this task removed, just with the two paths swapped:
+    --feeling-lucky normalized and the ordinary path not.
+    """
+    _a_cache_hit(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(pipeline, "run_script", lambda *args, **kwargs: -9)
+
+    assert cli.main() == 137
+
+
 def test_the_run_reports_the_imports_it_decided_are_missing(
     monkeypatch, tmp_path, caplog
 ):
@@ -1615,6 +1711,87 @@ def test_the_state_directory_is_only_announced_when_it_has_to_be_created(
         cli.main()
 
     assert "does not exist yet" not in caplog.text
+
+
+def test_yes_skips_the_blank_slate_confirmation(monkeypatch, tmp_path):
+    """--yes means veny must not stop to ask.
+
+    Behaviour under test: the flag documented as "automatically say yes to
+    any prompts to allow this program to run without the need for user
+    interaction" must suppress the only prompt veny has.
+
+    Concrete bug this catches: reading `getattr(args, "y", False)`, which is
+    what veny did until phase 4c. argparse writes the dest `yes` for
+    "-y", "--yes", so the read was of an attribute that never existed and
+    the default False always won: every --blank-slate -y run blocked on a
+    prompt, which is exactly the unattended use the flag exists for.
+    """
+    state_dir = tmp_path / "home" / "veny"
+    _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--blank-slate", "-y"],
+        uninstalled=set(),
+        all_imports=set(),
+    )
+    monkeypatch.setattr(sys, "argv", ["veny", "--blank-slate", "-y"])
+    state_dir.mkdir(parents=True)
+    asked: list[str] = []
+
+    def confirm_spy(prompt):
+        asked.append(prompt)
+        return True
+
+    monkeypatch.setattr(ek, "prompt_then_confirm", confirm_spy)
+
+    status = cli.main()
+
+    assert status == 0
+    assert asked == []
+    assert not state_dir.exists()
+
+
+def test_declining_the_blank_slate_confirmation_deletes_nothing(monkeypatch, tmp_path):
+    """Without -y, --blank-slate still asks, and a decline still exits 0.
+
+    Behaviour under test: the other half of the same guard covered by
+    test_yes_skips_the_blank_slate_confirmation -- the prompt path must
+    still fire when --yes is absent, and answering it "no" must be a
+    complete, successful run rather than an error.
+
+    Concrete bug this catches: a decline that deletes anyway (the `if not
+    args.yes:` guard short-circuiting past the confirm check, or the confirm
+    result being ignored), and a decline that reports a non-zero status for
+    a run that was never going to launch a script -- both would pass every
+    other blank-slate test in this file, since the other three all stub the
+    prompt to return True.
+    """
+    state_dir = tmp_path / "home" / "veny"
+    _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--blank-slate"],
+        uninstalled=set(),
+        all_imports=set(),
+    )
+    monkeypatch.setattr(sys, "argv", ["veny", "--blank-slate"])
+    state_dir.mkdir(parents=True)
+    asked: list[str] = []
+
+    def confirm_spy(prompt):
+        asked.append(prompt)
+        return False
+
+    monkeypatch.setattr(ek, "prompt_then_confirm", confirm_spy)
+
+    status = cli.main()
+
+    assert status == 0
+    assert asked == [
+        "Are you sure you want to delete everything in ~/veny/ and all veny"
+        " .json files in the current directory? (y/n) "
+    ]
+    assert state_dir.exists()
 
 
 def test_blank_slate_with_no_state_directory_still_completes(monkeypatch, tmp_path):

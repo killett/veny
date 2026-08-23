@@ -656,6 +656,46 @@ def test_asking_for_both_the_latest_and_the_last_used_venv_selects_nothing(
     assert _search(args, my_dir=tmp_path, load_last_used=lambda: None) is None
 
 
+@pytest.mark.parametrize(
+    "flags",
+    [
+        {"latest": a, "oldest": b, "last_used": c, "smallest": d}
+        for a in (False, True)
+        for b in (False, True)
+        for c in (False, True)
+        for d in (False, True)
+    ],
+)
+def test_the_last_used_pass_is_tried_for_exactly_the_same_flag_combinations(
+    tmp_path: Path, flags: dict[str, bool]
+) -> None:
+    """All 16 flag combinations decide the last-used pass the same way.
+
+    Behaviour under test: whether find_match_dir_in_cache consults the
+    last-used record. The rule is "no explicit choice, or an explicit
+    --last-used, and neither --latest nor --smallest overriding it".
+
+    Concrete bug this catches: dropping the wrong term while simplifying
+    `explicit`. Removing `--oldest` from it, for example, makes a bare
+    `--oldest` run consult the last-used record first and quietly return the
+    last environment rather than the oldest matching one -- a wrong venv, on
+    a flag whose whole purpose is to name which venv.
+    """
+    args = argparse.Namespace(**flags)
+    consulted: list[bool] = []
+
+    def load() -> None:
+        consulted.append(True)
+        return None
+
+    _search(args, my_dir=tmp_path, load_last_used=load)
+
+    expected = not (flags["latest"] or flags["oldest"] or flags["smallest"]) or (
+        flags["last_used"] and not flags["latest"] and not flags["smallest"]
+    )
+    assert bool(consulted) is expected
+
+
 def test_a_cache_hit_reads_and_matches_each_manifest_once(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
