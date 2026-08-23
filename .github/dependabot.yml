@@ -1,0 +1,10 @@
+version: 2
+
+updates:
+  # Keeps the SHA-pinned third-party action in release.yml current without
+  # anybody having to remember it exists. Dependabot rewrites the pin and
+  # updates the trailing version comment in the same PR.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

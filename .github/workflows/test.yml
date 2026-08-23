@@ -1,0 +1,79 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      # Pinned rather than floating. A new ruff minor can add rules that were
+      # not in the ruleset when main last went green, which would turn the
+      # default branch red without anybody changing any code. Bump this
+      # deliberately, alongside the pixi environment.
+      - name: Install ruff
+        run: python -m pip install --disable-pip-version-check ruff==0.16.1
+
+      - name: ruff check
+        run: ruff check .
+
+      - name: ruff format --check
+        run: ruff format --check .
+
+  # mypy is deliberately absent from this workflow. It does not currently pass
+  # on this tree, so gating CI on it would leave main permanently red and make
+  # every genuine failure invisible. Reinstate it as a job here once the
+  # outstanding errors are cleared.
+
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every supported minor on Linux; the ceiling only on macOS.
+        #
+        # windows-latest is not in this matrix. environment.py resolves
+        # Scripts/python.exe correctly, but state.py builds its venv
+        # interpreter path as `bin/python` unconditionally, so the suite would
+        # not pass there. Adding Windows is a one-line change here once that
+        # is fixed -- leaving it out is honest, leaving it in would be red.
+        os: [ubuntu-latest]
+        python-version: ["3.12", "3.13"]
+        include:
+          - os: macos-latest
+            python-version: "3.13"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # Installing the project (rather than only putting src/ on the path)
+      # brings in emmykit and uv, which the suite needs: the environment and
+      # verify tests drive a real uv, and cli.py's import-time guard reads
+      # emmykit.__version__.
+      - name: Install veny and pytest
+        run: |
+          python -m pip install --disable-pip-version-check --upgrade pip
+          python -m pip install --disable-pip-version-check -e .
+          python -m pip install --disable-pip-version-check pytest
+
+      - name: Run the test suite
+        run: python -m pytest
