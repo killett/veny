@@ -44,14 +44,28 @@ gotchas ledger.
   | **4b** `docs/superpowers/plans/2026-08-21-last-used-persistence.md` (executed, complete on branch `last-used-persistence`) | The `LastUsed` persistence change (design amendment 9), which breaks the `ek.Options` coupling and deletes `run_options.py`, the `cli.Options` re-export, `pathlibcutoff` and its two readers, and the test references in both spellings. Also deletes `json_types.py` and the pickle `PATHLIB_CUTOFF`, and stops `find_match_dir_in_cache` mutating the `argparse.Namespace` (user rulings, 2026-08-21). |
   | **4c** (not yet written) | The remaining behaviour changes: the in-virtualenv guard (USER RULING 2026-08-20), `--feeling-lucky`'s missing signal normalization, latent defects 1 and 3, and the residual dead arguments. |
 
-**Next action:** **write plan 4c.** Plan 4b is complete on branch
-`last-used-persistence` (off `main` @ `240767b`); its ten tasks are all
-committed and its tracker
+**Next action:** **write plan 4c.** Plan 4b is **finished and merged to
+`main` at `99f5320`** (a `--no-ff` merge; branch `last-used-persistence`, off
+`main` @ `240767b`, deleted after merging -- it was at `5e81355`) on
+2026-08-22. Its ten tasks are all committed and its tracker
 (`docs/superpowers/plans/2026-08-21-last-used-persistence.md.tasks.json`)
-matches. What remains before the merge is the **whole-branch review** against
-`main..last-used-persistence`, then a `--no-ff` merge. 3b, 3c, 3d and 3e each
-turned up Important issues per-task review had missed; 4a's came back clean,
-which is one data point and not a reason to skip it.
+matches. Gates re-measured on `main` after the merge: `pixi run test`
+**455 passed**, `pixi run lint` zero, `ruff format --check .` **58 files**,
+`pixi run typecheck` **23 errors in 6 files** over 55 source files.
+
+**The whole-branch review found one Important issue**, which per-task review
+structurally could not see: Task 1 added `from . import state` to
+`last_used.py`, falsifying the "imports nothing from veny at all" claim that
+`tests/test_layering.py` and `README.md` both still made. That file's comments
+*are* the layer-graph specification, so the next phase could have read "needs
+nothing from its peers" and demoted the module. Fixed at `5e81355`, along with
+three documentation corrections; five further Minor findings and all seven
+deferred minors were triaged as safe to travel and are in Deferred items
+below. The reviewer re-derived the phase's own evidence rather than trusting
+it -- the differential reproduces at 240 lines and eleven hunks, the sweep at
+172 rows, and the rewritten flag algebra was brute-forced over all 16 flag
+combinations x 2 pointer states with **zero divergences** from the code it
+replaced.
 
 **4c's scope, restated from the phase-4 table above, and everything 4b handed
 it:** the in-virtualenv guard (USER RULING 2026-08-20), `--feeling-lucky`'s
