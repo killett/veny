@@ -85,6 +85,17 @@ What the sweep printed on 2026-08-22: **172 rows — 157 KILLED, 12 OPEN HOLE,
 
 157 + 1 + 3 + 8 + 3 = 172.
 
+> **NOTE added 2026-08-23 by phase 4c's Task 9.** The "8" above counts
+> *arguments*, not *sites* — `cache_search.py:596`'s `getattr(args,
+> 'last_used', False)` is one call site carrying two dead arguments ("both
+> arguments, and the whole term" in "The 8 DEAD ARGUMENTS" below), so it
+> contributes 2 to this headline while naming only 1 distinct site. The
+> section below actually enumerates **seven** distinct sites. Combined with
+> 4a's five (`docs/superpowers/plans/2026-08-21-state-model-values-wiring-index.md`
+> § "The 5 DEAD ARGUMENTS"), the true distinct total across both indexes is
+> **12**, not the 13 a naive 5 + 8 sum gives. This headline is left as the
+> sweep printed it; only this note is new.
+
 The one row that needed a *second* substitution is `pipeline.py:971`, marked
 `KILLED*` in the table: the first pass's probe script is also called
 `script.py`, and `record_path` reads only `python_script.name`, so the

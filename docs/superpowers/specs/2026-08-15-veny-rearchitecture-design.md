@@ -431,6 +431,60 @@ through `main()`, invisibly to every in-process test.
 > `last-used-persistence`; the ledger of commits is in `PROGRESS.md`'s
 > phase-4b entry.
 
+> **AMENDED 2026-08-23 by phase 4c.** Four behaviour changes — the only phase
+> of the program that is not behaviour-preserving — plus the four user
+> decisions that authorized them, quoted from the plan's header
+> (`docs/superpowers/plans/2026-08-23-behaviour-changes-4c.md`).
+>
+> 1. **The in-virtualenv guard reads `VIRTUAL_ENV`, not veny's own prefix**
+>    (Task 1, `d162cc6`). `last_used.is_virtualenv()` — `sys.prefix !=
+>    sys.base_prefix`, which is true of veny's own interpreter under its
+>    documented install and made the guard's branch a dead end — is deleted.
+>    `active_virtualenv_dir() -> Path | None` reads `VIRTUAL_ENV` and
+>    `pipeline.run`'s middle branch takes that value by walrus
+>    (`elif (active_venv := last_used.active_virtualenv_dir()) is not None:`).
+> 2. **`--feeling-lucky` shares `main`'s exit-status arithmetic** (Task 2,
+>    `c0867cb`; test pinned in `bf55b1f`). `cli._shell_status` is now the only
+>    place `128 - script_exit_code` is written, and both of `main`'s exit
+>    paths call it, so a lucky run killed by a signal returns `128 + signal`
+>    exactly as the ordinary path does, instead of a raw negative status.
+> 3. **`blank_slate` reads `args.yes`** (Task 3, `7d5adad`; decline path
+>    covered in `6af273f`), the dest argparse actually writes for `-y`/
+>    `--yes`, instead of `args.y`, which never existed — so `-y` finally
+>    suppresses the confirmation prompt.
+> 4. **All four `run_script` call sites pass `announce=True`** (Task 4,
+>    `b6c7782`). Three launches that were silent now log `Running command:
+>    …` unless `--rawlog` is given, and `rawlog` becomes live at every site
+>    instead of dead at three of four.
+>
+> **User decisions (quoted from the plan's header):**
+>
+> - **2026-08-23 — the in-virtualenv guard gates on `VIRTUAL_ENV` only.** A
+>   veny installed the documented way (`uv tool install veny`) no longer
+>   believes the user is inside a virtualenv, so runs fall through to the
+>   cache search. An activated environment is still import-checked. The
+>   accepted cost: a virtualenv entered by running its interpreter directly,
+>   without activation and therefore without `VIRTUAL_ENV`, stops being
+>   checked and gets a cached environment instead.
+> - **2026-08-23 — every launch announces the command it is about to run.**
+>   `announce=True` at all four `run_script` call sites. `rawlog` becomes
+>   live at all four and the four dead rows close. The accepted cost: three
+>   extra `Running command: …` INFO lines on runs that did not pass
+>   `--rawlog` and did not previously emit them.
+> - **2026-08-23 — the five unreachable `getattr(args, …, False)` defaults
+>   become direct attribute access.** The accepted cost: hand-built
+>   `argparse.Namespace()` objects in the unit tests that omit those flags
+>   start raising `AttributeError` and must be given the attribute
+>   explicitly.
+> - **2026-08-23 — the live end-to-end check is built by the executing
+>   agent**, in a throwaway virtualenv, in both shapes (activated with
+>   `VIRTUAL_ENV` set; unactivated with it unset), with the output captured
+>   into the task report. No action is required from the user.
+>
+> **Executed 2026-08-23.** All four changes and the dead-argument
+> reconciliation landed on branch `behaviour-changes-4c`; the ledger of
+> commits is in `PROGRESS.md`'s phase-4c entry.
+
 ## Error handling
 
 Stated per layer, unchanged in spirit from current behaviour.

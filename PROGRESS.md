@@ -2008,6 +2008,44 @@ wiring rationale and for two Minors deliberately left unfixed.
   around it, and removing only the argument would break the hand-built
   `argparse.Namespace()` objects the unit tests pass.
 
+  **Arithmetic correction (found and fixed by phase 4c's Task 9,
+  2026-08-23): the combined count was 12 distinct sites, not 13.** 4b's
+  headline in the index above reads "DEAD ARGUMENT | **6 + 2** = **8**",
+  but that counts *arguments*, not *sites*: `cache_search.py:596`'s
+  `getattr(args, 'last_used', False)` is one call site carrying two dead
+  arguments ("both arguments, and the whole term"), so it is counted twice
+  in the "8". The distinct sites the 4b list actually names are **seven**:
+  the five single-argument `getattr(..., False)` defaults, the one
+  `cache_search.py:596` site (counted once as a site), and the
+  `pipeline.py:435` `run_script(rawlog=…)` site. Combined with 4a's five
+  (no overlap — 4a's `run_script(rawlog=…)` findings are three *different*
+  sites from 4b's fourth), the true distinct total is **5 + 7 = 12**. A
+  note was added beside 4b's index headline
+  (`docs/superpowers/plans/2026-08-21-last-used-persistence-wiring-index.md`)
+  recording the same arithmetic; the index's original "8" is left standing
+  as what the sweep literally printed. `docs/superpowers/plans/2026-08-23-behaviour-changes-4c-dead-arguments.md`
+  (Task 5's reconciled list) is unaffected by this correction — it already
+  lists ten rows, one per distinct finding, and never asserted a combined
+  "13" itself.
+
+- **NEW FINDING, recorded not fixed: a second dead `getattr` default Task 5's
+  sweep did not cover** (found by phase 4c's Task 6, 2026-08-23; full detail
+  in `docs/superpowers/plans/2026-08-23-behaviour-changes-4c-wiring-index.md`,
+  "NEW FINDING: a dead argument default Task 5's list does not cover").
+  `pipeline.py:853` `getattr(args, "reqs", False)`'s third argument (the
+  default) is dead by the same reasoning Task 5 used to close its sibling in
+  `run`'s final `else` branch: every one of veny's flags is
+  `action="store_true"`, so argparse always defines `args.reqs` and no real
+  command line can reach the `False` default. This occurrence is inside
+  `run`'s `elif` branch (the already-in-an-activated-virtualenv path) — the
+  `else` branch's sibling is what Task 5 closed; this one is a different
+  branch of the same `if`/`elif`/`else`, and Task 5's sweep (scoped to the
+  five sites 4a and 4b had already found) never named it, so it fell outside
+  what the user ruled on. Not fixed here: Task 6 was measurement only, and
+  fixing it would mean converting `getattr(args, "reqs", False)` to
+  `args.reqs` at this second site too, which is in scope for a future task,
+  not this one. No owner assigned.
+
 - **Design ledger item 5 is a documentation defect, not open work** (found
   2026-08-22, phase 4b Task 10). The design doc's ledger item 5 says
   `check_venv_dir`'s `issubset()` self-heal against options files predating
@@ -2026,6 +2064,17 @@ wiring rationale and for two Minors deliberately left unfixed.
   rebuilds the venv a single time; it is self-healing after that one rebuild"
   — that behaviour has not existed for several phases. **No owner needed:
   there is no code to change.**
+
+  **CLOSED 2026-08-22, before this entry's ink dried: both lines were fixed
+  the same day, in the same close-out, by `500c9ee` ("docs: close phase 4b
+  with measured gates and its ledger") — on `main`, before phase 4c's branch
+  existed. Verified by phase 4c's Task 9 (2026-08-23) rather than assumed:**
+  the design doc's ledger item 5 now reads "**CORRECTED 2026-08-22, at phase
+  4b's close: this item was already closed when the design was written, and
+  phase 4 had nothing to do,**" and this file's Gotchas entry now reads
+  "**RETIRED 2026-08-22 (phase 4b Task 10). This has described nothing for
+  several phases.**" Phase 4c owed this file nothing; it only had to notice
+  the debt was already paid.
 
 - **Four minors from phase 4b's Task 8 and Task 9 reviews, recorded rather
   than fixed** (2026-08-22). Each is a weakness in the *evidence*, not in the
@@ -2061,6 +2110,21 @@ wiring rationale and for two Minors deliberately left unfixed.
      `FileNotFoundError` travelling uncaught out of `main` — was **fixed by
      4a's own Task 1**, so it was already wrong when 4a wrote it. Two are
      live, both 4c's. 4c should write "two" when it writes its own driver.
+
+     **CLOSED, and stale itself by the time phase 4c read it (checked by
+     Task 9, 2026-08-23).** `scripts/differential_4b.py:223` was corrected
+     the same day this bullet was written, in the same commit (`5e81355`):
+     it reads "**Two of the three** latent defects 3e recorded, still live"
+     and already names defect 2 as closed by 4a's own Task 1 — the fix this
+     bullet asks for was already in the tree. `rg -n 'three latent defects'
+     scripts/` still matches `differential_4a.py:132` (correct: that file
+     describes 3e's *original*, three-defect finding, unchanged) and the
+     substring inside `differential_4b.py:223`'s "Two of the **three**
+     latent defects" (also correct: it is naming how many 3e originally
+     recorded, not claiming three are still live). Neither is a defect, so
+     no `scripts/` file was touched. `scripts/differential_4c.py:249`
+     ("Two latent defects were live at this phase's start; both are closed
+     now") was written correctly from the start, by Task 7.
 
 - **Two inaccuracies in the approved re-architecture design doc**, found while
   planning phase 3a on 2026-08-16. Neither invalidates the design; both mislead
