@@ -3,8 +3,43 @@ name = "veny"
 dynamic = ["version"]  # Single-sourced from src/veny/__init__.py by hatchling.
 description = "Run a Python script in a virtual environment built from its imports."
 readme = "README.md"
-requires-python = ">=3.12,<3.14"
+# Floor only, deliberately no upper cap. The real ceiling today is 3.13,
+# because emmykit declares `requires-python = ">=3.12,<3.14"` and pip enforces
+# that when it resolves the dependency. Repeating the cap here would add
+# nothing and would make veny the thing that has to be re-released before a
+# 3.14-capable emmykit could be used. The floor is emmykit's, not veny's own:
+# vermin puts this source tree at 3.11 (tomllib, in alias_index.py).
+requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Emmy Killett", email = "57272627+killett@users.noreply.github.com" },
+]
+# No `Operating System :: OS Independent`: state.py builds venv interpreter
+# paths as `bin/python` unconditionally, so Windows is not supported today
+# even though environment.py knows about `Scripts/python.exe`.
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: System :: Software Distribution",
+    "Typing :: Typed",
+]
+# Caps, not pins: `<1.0` on emmykit is a deliberate major-version guard on a
+# first-party dependency veny is coupled to, and uv's CLI surface is what veny
+# drives. Neither is an `==` pin.
 dependencies = ["emmykit>=0.4.0,<1.0", "uv>=0.9,<1.0"]
+
+[project.urls]
+Homepage = "https://github.com/killett/veny"
+Repository = "https://github.com/killett/veny"
+Issues = "https://github.com/killett/veny/issues"
 
 [build-system]
 requires = ["hatchling"]
