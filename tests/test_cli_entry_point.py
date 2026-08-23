@@ -1733,6 +1733,49 @@ def test_yes_skips_the_blank_slate_confirmation(monkeypatch, tmp_path):
     assert not state_dir.exists()
 
 
+def test_declining_the_blank_slate_confirmation_deletes_nothing(monkeypatch, tmp_path):
+    """Without -y, --blank-slate still asks, and a decline still exits 0.
+
+    Behaviour under test: the other half of the same guard covered by
+    test_yes_skips_the_blank_slate_confirmation -- the prompt path must
+    still fire when --yes is absent, and answering it "no" must be a
+    complete, successful run rather than an error.
+
+    Concrete bug this catches: a decline that deletes anyway (the `if not
+    args.yes:` guard short-circuiting past the confirm check, or the confirm
+    result being ignored), and a decline that reports a non-zero status for
+    a run that was never going to launch a script -- both would pass every
+    other blank-slate test in this file, since the other three all stub the
+    prompt to return True.
+    """
+    state_dir = tmp_path / "home" / "veny"
+    _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--blank-slate"],
+        uninstalled=set(),
+        all_imports=set(),
+    )
+    monkeypatch.setattr(sys, "argv", ["veny", "--blank-slate"])
+    state_dir.mkdir(parents=True)
+    asked: list[str] = []
+
+    def confirm_spy(prompt):
+        asked.append(prompt)
+        return False
+
+    monkeypatch.setattr(ek, "prompt_then_confirm", confirm_spy)
+
+    status = cli.main()
+
+    assert status == 0
+    assert asked == [
+        "Are you sure you want to delete everything in ~/veny/ and all veny"
+        " .json files in the current directory? (y/n) "
+    ]
+    assert state_dir.exists()
+
+
 def test_blank_slate_with_no_state_directory_still_completes(monkeypatch, tmp_path):
     """--blank-slate on a machine that has never run veny must not blow up.
 
