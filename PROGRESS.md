@@ -119,13 +119,21 @@ after. Per-file breakdown, measured here: `tests/test_verify.py` **15**,
 `src/veny/cli.py` **1**, `src/veny/analysis/literals.py` **1**,
 `src/veny/analysis/call_graph.py` **1** — the identical six files and
 identical per-file counts as 4b's close. The checked-file count went
-55 → **57**: `git diff --name-status 9af1f09..HEAD` shows two files added
-(`scripts/differential_4c.py`, `scripts/wiring_sweep_4c.py`) and none
-deleted; neither new file contributes an error, so the ceiling held exactly.
+55 → **57**: `git diff --name-status 9af1f09..HEAD` shows four files added
+(`scripts/differential_4c.py`, `scripts/wiring_sweep_4c.py`, and the two
+plan docs `docs/superpowers/plans/2026-08-23-behaviour-changes-4c-wiring-index.md`
+and `docs/superpowers/plans/2026-08-23-behaviour-changes-4c-dead-arguments.md`)
+and none deleted; mypy counts only the two `.py` files among those four, and
+neither contributes an error, so the ceiling held exactly.
 
-**Twelve commits, not eleven.** The task-10 brief's summary table under-counts
-by one; re-verified against `git log --oneline 9af1f09..HEAD` rather than
-trusted: `d162cc6` (Task 1, the guard reads `VIRTUAL_ENV` — `last_used.
+**Twelve commits, not eleven — for the ten numbered tasks.** The task-10
+brief's summary table under-counts by one; re-verified against
+`git log --oneline 9af1f09..HEAD` rather than trusted. That command's own
+output grows past twelve as the branch closes: it also carries this entry's
+own closing commit and, after it, whatever later commits a review pass adds
+(such as this fix wave's) — none of those are among the ten numbered tasks
+enumerated below, so do not read a later recount of that command as
+contradicting "twelve": `d162cc6` (Task 1, the guard reads `VIRTUAL_ENV` — `last_used.
 is_virtualenv` deleted, `active_virtualenv_dir() -> Path | None`,
 `pipeline.run`'s middle branch takes it by walrus), `c0867cb` (Task 2,
 `cli._shell_status` owns the `128 - returncode` arithmetic, both of `main`'s
@@ -267,11 +275,18 @@ would otherwise let it go unsaid a second time.
   tool install") is exactly what this phase's layer 20 now drives and is
   retired rather than renumbered, so **fifteen carry forward unchanged**
   (renumbered 1-15), plus **four new** (16-19: `args` still not round-tripped
-  onto disk, `sys.prefix` monkeypatching being process-global to layer 20,
-  layer 19/20's stubbed `check_packages_in_venv` never probing a real
-  `site-packages`, and message ordering already covered by 4b's item 21 —
-  see the script for exact wording). **Nineteen residual risks total**,
-  inherited by whatever phase next touches this code.
+  onto disk, `sys.prefix` monkeypatching being process-global to the
+  harness's own process, layer 19's `harness.in_virtualenv` being able to
+  disagree with the real `is_virtualenv` — layer 19 sets the harness's flag
+  directly rather than restoring the real function the way layer 20 does, so
+  a regression in the old tree's real `is_virtualenv` itself would only be
+  caught by layer 20, and only for the one input it drives — and layers
+  19/20's stubbed `check_packages_in_venv` never probing a real
+  `site-packages`; see the script's items 16-19 for exact wording).
+  **Nineteen residual risks total**, inherited by whatever phase next
+  touches this code. (There is no item 21 in 4b's docstring — it carries
+  sixteen items total; the "message ordering" caveat this entry previously
+  attributed to it does not exist there.)
 - **The two OPEN rows in
   `docs/superpowers/plans/2026-08-23-behaviour-changes-4c-dead-arguments.md`
   stay open, with their reasons, unchanged by this phase:** the probe
@@ -2272,23 +2287,37 @@ wiring rationale and for two Minors deliberately left unfixed.
   lists ten rows, one per distinct finding, and never asserted a combined
   "13" itself.
 
-- **NEW FINDING, recorded not fixed: a second dead `getattr` default Task 5's
-  sweep did not cover** (found by phase 4c's Task 6, 2026-08-23; full detail
-  in `docs/superpowers/plans/2026-08-23-behaviour-changes-4c-wiring-index.md`,
+- **NEW FINDING, recorded not fixed: one more dead `getattr` default Task 5's
+  sweep did not cover, representative of others still outside any sweep's
+  scope, not the only one left** (found by phase 4c's Task 6, 2026-08-23;
+  full detail in
+  `docs/superpowers/plans/2026-08-23-behaviour-changes-4c-wiring-index.md`,
   "NEW FINDING: a dead argument default Task 5's list does not cover").
   `pipeline.py:853` `getattr(args, "reqs", False)`'s third argument (the
   default) is dead by the same reasoning Task 5 used to close its sibling in
-  `run`'s final `else` branch: every one of veny's flags is
-  `action="store_true"`, so argparse always defines `args.reqs` and no real
-  command line can reach the `False` default. This occurrence is inside
-  `run`'s `elif` branch (the already-in-an-activated-virtualenv path) — the
-  `else` branch's sibling is what Task 5 closed; this one is a different
-  branch of the same `if`/`elif`/`else`, and Task 5's sweep (scoped to the
-  five sites 4a and 4b had already found) never named it, so it fell outside
-  what the user ruled on. Not fixed here: Task 6 was measurement only, and
-  fixing it would mean converting `getattr(args, "reqs", False)` to
-  `args.reqs` at this second site too, which is in scope for a future task,
-  not this one. No owner assigned.
+  `run`'s final `else` branch (closed at `pipeline.py:891`, now `args.reqs`):
+  every one of veny's flags is `action="store_true"`, so argparse always
+  defines `args.reqs` and no real command line can reach the `False`
+  default. This occurrence is inside `run`'s `elif` branch (the
+  already-in-an-activated-virtualenv path) — the `else` branch's sibling is
+  what Task 5 closed; this one is a different branch of the same
+  `if`/`elif`/`else`, and Task 5's sweep (scoped to the five sites 4a and 4b
+  had already found) never named it, so it fell outside what the user ruled
+  on. Not fixed here: Task 6 was measurement only, and fixing it would mean
+  converting `getattr(args, "reqs", False)` to `args.reqs` at this site too,
+  which is in scope for a future task, not this one. No owner assigned.
+  **This is not the only sibling left standing**: `getattr(args, "reqs",
+  False)` with the identical unreachable default also appears at
+  `pipeline.py:244` (`split_imports`), `:650` (`setup_virtualenv`) and
+  `:786` (`run`'s own gate on whether to parse extra requirements at all) —
+  verified by reading the file, not assumed — and every other flag
+  `getattr(args, …, False/None)` in `pipeline.py` and `cache_search.py`
+  (`offline`, `script`, `script_args`, `blank_slate`, `rc`, `no_cache`,
+  `justprint`, `latest`, `oldest`, `smallest`, …) has the same shape. All of
+  them are simply outside the 4c sweep's scope, which
+  `2026-08-23-behaviour-changes-4c-wiring-index.md` states explicitly. A
+  future coverage pass should not read this bullet as "one site remains" —
+  it should re-run the sweep with a wider scope.
 
 - **Design ledger item 5 is a documentation defect, not open work** (found
   2026-08-22, phase 4b Task 10). The design doc's ledger item 5 says
@@ -3940,6 +3969,33 @@ wiring rationale and for two Minors deliberately left unfixed.
   - `scripts/differential_3e.py` was reworded this phase but carries no note
     that it is no longer runnable against HEAD, unlike `differential_3d.py`,
     which this branch did annotate.
+
+- **The activated-virtualenv branch's success path launches under veny's own
+  interpreter, not necessarily the activated environment's** (found in
+  phase 4c's final review, 2026-08-23; pre-existing, not introduced by 4c —
+  4c only added `announce=True` to this branch's `run_script` call). In
+  `src/veny/pipeline.py`'s `run`, the `elif (active_venv :=
+  last_used.active_virtualenv_dir()) is not None:` branch (around lines
+  846-867) import-checks `environment.venv_python_for(active_venv)` via
+  `verify.check_packages_in_venv(...)`, then on success launches with
+  `run_script(sys.executable, …)` — `sys.executable`, not
+  `environment.venv_python_for(active_venv)`. Those are the same
+  interpreter only when veny itself is installed *inside* the activated
+  venv. Under the documented `uv tool install veny` shape they differ: veny
+  runs from its own tool environment's interpreter, so a passing
+  package check on the *activated* environment is followed by a launch
+  under an interpreter that does not have the packages just verified.
+  4c's guard fix (`d162cc6`) makes this newly reachable and newly visible —
+  before it, a `uv tool install`ed veny could not reach this branch at all,
+  and now that branch prints `Running command: <veny's own python> …`,
+  which reads as if it launched the activated environment when it did not.
+  Task 8's live check (`.superpowers/sdd/2026-08-23-behaviour-changes-4c/task-8-report.md`)
+  exercised only the *failing* side of this branch (missing packages, the
+  deactivate message) — the success side has no end-to-end evidence under a
+  tool-install shape. **No owner assigned.** Do not fix without a live run
+  from a tool-install shape with the package actually present in the
+  activated venv but not in veny's own tool environment — this needs its
+  own plan and its own user ruling, not a fix folded into this review pass.
 
 ## Open questions
 
