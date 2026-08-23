@@ -102,6 +102,15 @@ ignore = [
 # re-exec: each re-execs its own __file__, which would silently run that
 # phase's layers instead of these eighteen.)
 "scripts/differential_4b.py" = ["ANN401", "S606"]
+# The 4c differential reuses 4b's driver, which reuses 4a's and 3e's, so it
+# inherits both reasons a fourth time: `Any` for every object it reaches
+# through those module handles -- and one more attribute to speak to across
+# two shapes, since 4c deletes `last_used.is_virtualenv` -- and one os.execv
+# that re-runs this same file to get PYTHONHASHSEED=0 before the interpreter
+# starts. (It cannot call 4b's, 4a's or 3e's re-exec: each re-execs its own
+# __file__, which would silently run that phase's layers instead of these
+# twenty-two.)
+"scripts/differential_4c.py" = ["ANN401", "S606"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
