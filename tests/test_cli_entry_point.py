@@ -1559,6 +1559,25 @@ def test_feeling_lucky_launches_the_interpreter_the_loader_named(monkeypatch, tm
     assert launched == [[os.fspath(lucky_python), os.fspath(tmp_path / "script.py")]]
 
 
+def test_a_lucky_run_killed_by_a_signal_reports_the_shell_status(monkeypatch, tmp_path):
+    """--feeling-lucky normalizes a signal death like every other path.
+
+    Behaviour under test: a child killed by SIGKILL returns -9 from
+    subprocess, and a process exiting with -9 wraps around to 247 in the
+    shell. Every other veny path turns that into 137 (128 + 9).
+
+    Concrete bug this catches: returning pipeline.feeling_lucky's status
+    from the middle of main(), which is what veny did until phase 4c -- so
+    the same script killed the same way reported 247 under --feeling-lucky
+    and 137 without it, and a wrapper script keying on 137 silently stopped
+    seeing kills the moment a user added the flag.
+    """
+    lucky_python, _ = _a_lucky_run(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(pipeline, "run_script", lambda *args, **kwargs: -9)
+
+    assert cli.main() == 137
+
+
 def test_the_run_reports_the_imports_it_decided_are_missing(
     monkeypatch, tmp_path, caplog
 ):

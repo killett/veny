@@ -171,20 +171,40 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _shell_status(script_exit_code: int) -> int:
+    """Map a child's returncode onto the status veny exits with.
+
+    A script killed by a signal yields a negative returncode (e.g. -9 for
+    SIGKILL). Exiting a process with a negative status wraps around to the
+    wrong shell status (-9 becomes 247), so it is reported as the
+    conventional 128 + signal number (-9 becomes 137) instead.
+
+    One function rather than two copies of the arithmetic: until phase 4c
+    the --feeling-lucky path returned from the middle of main() and skipped
+    the tail that did this, so the same signal produced two different
+    statuses depending on one flag.
+
+    Args:
+        script_exit_code: The child's returncode, negative if it was killed.
+
+    Returns:
+        The status veny should exit with.
+    """
+    if script_exit_code < 0:
+        return 128 - script_exit_code
+    return script_exit_code
+
+
 def main() -> int:
     """Parse the command line, run veny, and map the result to an exit status.
 
     Returns:
         The wrapped script's exit status; 0 when nothing was meant to run
         (--justprint, --blank-slate); 1 when veny could not find or build an
-        environment; 2 for a usage error. On the ordinary path -- the one that
-        goes through pipeline.run -- a child killed by a signal is reported as
-        128 + signal rather than as a negative status, which the shell would
-        wrap around to the wrong number. --feeling-lucky does NOT get that
-        normalization: it returns pipeline.feeling_lucky's status directly, so
-        a lucky run killed by SIGKILL still returns -9. That asymmetry is
-        pre-existing behaviour, unchanged by phase 3e and deliberately left
-        alone by its whole-branch review; see PROGRESS.md's deferred items.
+        environment; 2 for a usage error. A child killed by a signal is
+        reported as 128 + signal rather than as a negative status, which the
+        shell would wrap around to the wrong number -- on every path,
+        --feeling-lucky included, since phase 4c.
     """
     start_time = dt.datetime.now()
     args = parse_arguments()
@@ -217,7 +237,7 @@ def main() -> int:
             rawlog=rawlog,
         )
         if lucky_status is not None:
-            return lucky_status
+            return _shell_status(lucky_status)
         memory_handler = ek.configure_logging(
             MY_NAME, log_level=log_mode, rawlog=rawlog
         )
@@ -239,10 +259,4 @@ def main() -> int:
         return 1
     ek.print_all_errors(memory_handler, rawlog)
     logging.shutdown()
-    # A script killed by a signal yields a negative returncode (e.g. -9 for
-    # SIGKILL). Exiting a process with a negative status wraps around to the
-    # wrong shell status (-9 becomes 247), so normalize to the conventional
-    # 128 + signal number (-9 becomes 137) instead.
-    if script_exit_code < 0:
-        script_exit_code = 128 - script_exit_code
-    return script_exit_code
+    return _shell_status(script_exit_code)
