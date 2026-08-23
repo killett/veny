@@ -4,19 +4,19 @@ This module owns sequencing and is the only one that knows the order. Every
 module below it does one thing and is handed what it needs; `cli.py` above it
 parses argv and maps what happens here onto an exit status.
 
-Each stage is handed the values it needs and hands back its product. Phase 4a
-replaced the `Options` god object with them: `Settings` for the run's
-invariants, `Target` for what is being run, `ImportScan` for what the scan
-found, `Requirements` for what classification decided, and `VenvHandle` for
-the environment. Nothing here writes its product onto the object it was
-handed -- the one exception is `ImportScan`, which is an accumulator by design
-and which `analysis/scan.py` mutates in place as it walks.
+Each stage is handed the values it needs and hands back its product: `Settings`
+for the run's invariants, `Target` for what is being run, `ImportScan` for what
+the scan found, `Requirements` for what classification decided, and
+`VenvHandle` for the environment. Nothing here writes its product onto the
+object it was handed -- the one exception is `ImportScan`, which is an
+accumulator by design and which `analysis/scan.py` mutates in place as it
+walks. Phase 4a introduced those values and phase 4b deleted the per-run state
+object they replaced, so this module now carries no carrier at all.
 
-`Options` survives in exactly two places, both of them persistence:
-`_load_last_used` hands it to emmykit's reader as a template, and `run` copies
-five fields onto it just before `ek.save_options_to_json`. Both are typed
-against `ek.Options` rather than against a payload, which is the whole of why
-the class is still alive; phase 4b breaks that coupling and deletes it.
+Persistence is veny's own too: `run` writes a `state.LastUsed` record through
+`last_used.save`, and both readers -- `_load_last_used` for the cache search's
+last-used pass and `feeling_lucky` for the `--feeling-lucky` shortcut -- take
+that record back.
 
 Everything here calls its collaborators through the module object
 (`verify.check_packages_in_venv(...)`, never `from .verify import ...`), which
@@ -47,7 +47,6 @@ from . import (
     classify,
     environment,
     last_used,
-    run_options,
     state,
     stdlib_index,
     venv_cache,
@@ -83,7 +82,7 @@ def build_alias_index(
 ) -> alias_index.AliasIndex:
     """Rebuild the alias index against the interpreter that will run the user's script.
 
-    Options() seeds it with alias_index.empty(), whose cache is tagged with
+    An index built before the target interpreter is known is tagged with
     *veny's own* interpreter version; leaving that in place would let a cache
     entry recorded under one Python version short-circuit resolution for a
     target on another.
@@ -216,10 +215,11 @@ def split_imports(
     """Classify the scan's imports and return the result.
 
     A value, not an accumulator: nothing downstream writes to it. The
-    copy-back onto Options this used to end with is gone, along with the
-    frozenset-to-set conversions it did so that later stages could mutate
-    uninstalled_imports in place. verify_and_repair_imports' result is folded
-    in with dataclasses.replace instead.
+    copy-back onto the old `Options` this used to end with is gone, along
+    with the frozenset-to-set conversions it did so that later stages could
+    mutate that object's uninstalled-imports set in place.
+    verify_and_repair_imports' result is folded in with dataclasses.replace
+    instead.
 
     Args:
         settings: The run's invariants; supplies known_bad_imports,
@@ -263,7 +263,8 @@ def list_packages(
     unreachable since 3e deleted --full: the script path is produced in
     exactly one production place, resolve_target, and that goes through
     ek.ensure_file, which refuses a directory. The only test that reached the
-    directory arms did so by writing the script path onto Options directly.
+    directory arms did so by writing the script path onto the old per-run
+    state object directly.
 
     Args:
         settings: The run's invariants; reads rawlog.
@@ -399,8 +400,7 @@ def feeling_lucky(
     args: argparse.Namespace,
     target: state.Target | None,
     *,
-    options: run_options.Options,
-    pathlibcutoff: str,
+    my_name: str,
     rawlog: bool,
 ) -> int | None:
     """Try the previous run's virtual environment without analyzing anything.
@@ -412,10 +412,7 @@ def feeling_lucky(
     Args:
         args: The parsed command line; reads the --feeling-lucky flag.
         target: The run's Target, or None for a scriptless run.
-        options: The template ek.Options load_last_used_venv_python fills in.
-            Still an Options because emmykit's loader is typed against one;
-            phase 4b replaces it with a LastUsed record.
-        pathlibcutoff: JSON files stamped before this are ignored.
+        my_name: The program's own name, for the record's filename.
         rawlog: True suppresses veny's own commentary.
 
     Returns:
@@ -424,11 +421,10 @@ def feeling_lucky(
     """
     if not getattr(args, "feeling_lucky", False) or target is None:
         return None
-    last_used_venv_python = last_used.load_last_used_venv_python(
-        options,
+    last_used_venv_python = last_used.load_venv_python(
         script_dir=target.script_dir,
         python_script=target.python_script,
-        pathlibcutoff=pathlibcutoff,
+        my_name=my_name,
         rawlog=rawlog,
     )
     if last_used_venv_python:
@@ -536,37 +532,29 @@ def report(
 
 
 def _load_last_used(
-    options: run_options.Options,
     target: state.Target,
     *,
-    pathlibcutoff: str,
+    my_name: str,
     rawlog: bool,
-) -> ek.Options | None:
-    """Load the previous run's options JSON, for the cache search's last-used pass.
+) -> state.LastUsed | None:
+    """Load the previous run's record, for the cache search's last-used pass.
 
     find_match_dir_in_cache takes this as an injected callable rather than
-    reaching for last_used itself, so nothing below pipeline has to know what
-    an Options is.
-
-    The two asserts this carried before phase 4a are gone: Target's fields are
-    non-optional, so there is nothing left to assert.
+    reaching for last_used itself, so nothing below pipeline has to know
+    where the record lives.
 
     Args:
-        options: The template ek.Options the loader fills in. Phase 4b
-            replaces it with a LastUsed record.
-        target: The run's Target; supplies script_dir and python_script.
-        pathlibcutoff: JSON files stamped before this are ignored.
-        rawlog: True suppresses veny's own commentary.
+        target:  The run's Target; supplies script_dir and python_script.
+        my_name: The program's own name, for the record's filename.
+        rawlog:  True suppresses veny's own commentary.
 
     Returns:
-        The previous run's options, or None when there is no usable last-used
-        JSON in the script's directory.
+        The previous run's record, or None when there is no usable one.
     """
-    return last_used.load_last_used_options(
-        options,
+    return last_used.load(
         script_dir=target.script_dir,
         python_script=target.python_script,
-        pathlibcutoff=pathlibcutoff,
+        my_name=my_name,
         rawlog=rawlog,
     )
 
@@ -709,7 +697,6 @@ def setup_virtualenv(
 def run(
     settings: Settings,
     args: argparse.Namespace,
-    options: run_options.Options,
     target: state.Target | None,
     *,
     start_time: dt.datetime | None = None,
@@ -719,9 +706,6 @@ def run(
     Args:
         settings: The run's invariants, built once in cli.main.
         args: The parsed command line.
-        options: What is left of the god object -- the template emmykit's
-            last-used reader and writer are typed against. Nothing in this
-            module reads it for anything else. Phase 4b removes it.
         target: What is being run, or None for a scriptless invocation --
             which only --blank-slate excuses.
         start_time: What the two "Elapsed time" lines are measured from.
@@ -906,10 +890,7 @@ def run(
                 tag=cache_search.interpreter_tag(stdlib),
                 rawlog=settings.rawlog,
                 load_last_used=lambda: _load_last_used(
-                    options,
-                    target,
-                    pathlibcutoff=options.pathlibcutoff,
-                    rawlog=settings.rawlog,
+                    target, my_name=settings.my_name, rawlog=settings.rawlog
                 ),
             )
         if match_dir is None:
@@ -943,7 +924,7 @@ def run(
             # A reused venv never carries a "failed-" prefix -- the cache
             # search only offers folders that dropped it -- and
             # setup_virtualenv never ran, which is what left
-            # options.install_succeeded False here before phase 4a.
+            # install_succeeded False on the state object here before phase 4a.
             install_succeeded = False
 
         if handle is not None:
@@ -976,18 +957,19 @@ def run(
                     )
                 )
 
-            # emmykit's writer builds its filename off the Options, not off a
-            # payload, so the five fields the record is made of are copied
-            # across here -- at the save, not carried on Options for the whole
-            # run. The first three name the file; the last two ARE the payload
-            # the reader recovers, and leaving them out is what phase 4a's
-            # differential caught. Phase 4b replaces all of this with veny's
-            # own LastUsed record.
-            options.python_script = target.python_script
-            options.script_dir = target.script_dir
-            options.timestamp = target.timestamp
-            options.venv_dir = handle.venv_dir
-            options.venv_python = handle.venv_python
-            ek.save_options_to_json(options)
+            # What the next run needs, and nothing else: which environment
+            # ran this script and which interpreter is inside it. Written
+            # after the failed- rename above, so the recorded folder is the
+            # one that exists on disk.
+            last_used.save(
+                state.LastUsed(
+                    venv_dir=handle.venv_dir,
+                    venv_python=handle.venv_python,
+                    timestamp=target.timestamp,
+                ),
+                script_dir=target.script_dir,
+                python_script=target.python_script,
+                my_name=settings.my_name,
+            )
 
     return script_exit_code

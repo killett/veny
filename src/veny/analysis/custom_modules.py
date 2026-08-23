@@ -12,11 +12,6 @@ import emmykit as ek
 
 from ..settings import Settings
 
-# Before this moment, veny pickled custom-module paths as strings; after it, as
-# pathlib.Path. A pickle older than this needs its values converted on load.
-# A historical fact about veny's own on-disk format, not a setting.
-PATHLIB_CUTOFF = "20250810-224900"
-
 STANDARD_LIB_PATHS: tuple[Path, ...] = (
     Path("/") / "usr" / "lib",
     Path("/") / "usr" / "local" / "lib",
@@ -156,7 +151,6 @@ def dict_of_custom_modules(settings: Settings, *, use_cache: bool) -> dict[str, 
                         key=lambda x: x[1], reverse=True
                     )
                     most_recent_file = potential_files_with_timestamps[0][0]
-                    most_recent_timestamp = potential_files_with_timestamps[0][1]
                     if not settings.rawlog:
                         logging.info(
                             "Loading custom modules from most recent pickle file: %s",
@@ -166,26 +160,14 @@ def dict_of_custom_modules(settings: Settings, *, use_cache: bool) -> dict[str, 
                         # This pickle is veny's own module cache, written and read
                         # by veny alone -- not untrusted input.
                         loaded_modules = pickle.load(f)  # noqa: S301
-                    if most_recent_timestamp < PATHLIB_CUTOFF:
-                        if not settings.rawlog:
-                            logging.info(
-                                "Custom modules file %s is from date %s "
-                                "which is older than the point when "
-                                "paths were stored as Paths (which happened on %s). "
-                                "Converting all paths to pathlib.Path objects.",
-                                most_recent_file,
-                                most_recent_timestamp,
-                                PATHLIB_CUTOFF,
-                            )
-                        normalized: dict[str, Path] = {
-                            k: ek.ensure_path(v) for k, v in loaded_modules.items()
-                        }
-                    else:
-                        # If the pickle already contains Paths, narrow the type for mypy
-                        normalized = {
-                            k: (v if isinstance(v, Path) else ek.ensure_path(v))
-                            for k, v in loaded_modules.items()
-                        }
+                    # Pickles written before 2025-08-10 hold str, later ones
+                    # hold Path; ek.ensure_path answers for both, which is why
+                    # the date comparison that used to pick between two arms
+                    # was deleted with veny's other pathlib cutoff.
+                    normalized: dict[str, Path] = {
+                        k: (v if isinstance(v, Path) else ek.ensure_path(v))
+                        for k, v in loaded_modules.items()
+                    }
                     return normalized
         except Exception:
             logging.exception("Error loading custom modules from pickle file.")

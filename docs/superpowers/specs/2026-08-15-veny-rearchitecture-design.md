@@ -371,6 +371,66 @@ and nothing in emmykit requires an instance of it.
 would make `save_options_to_json` write repr strings for any consumer not going
 through `main()`, invisibly to every in-process test.
 
+> **AMENDED 2026-08-21 by phase 4b.** Five rulings, four of them the user's,
+> settling how the persistence change is actually made.
+>
+> 1. **`LastUsed` lives in `state.py`, not `settings.py`.** The state-model
+>    listing above puts all four frozen values in `settings.py`; phase 4a in
+>    fact put `Target`, `VenvHandle` and `Requirements` in `state.py` and left
+>    `settings.py` holding `Settings` alone. `LastUsed` follows its siblings.
+> 2. **One fixed file per script, not one per run.** The record is written to
+>    `.{script}-{my_name}-last-used.json` and overwritten each run, replacing
+>    today's `.{script}-{my_name}-last-used-on-{timestamp}.json` and the glob,
+>    regex and newest-wins sort that read it. veny stops leaving one JSON per
+>    run in the user's script directory. (User ruling.)
+> 3. **Records written by earlier veny are ignored, not migrated.** The reader
+>    accepts only veny's own `LastUsed` file. A script whose only record is an
+>    old whole-`Options` dump misses the last-used pointer once and falls back
+>    to the cache scan, which normally finds the same environment; the next
+>    save writes the new format. One case is a bounded exception, a
+>    consequence of this ruling rather than a defect in it: `pipeline.run`
+>    renames a `failed-`-prefixed venv only once its install succeeds, and
+>    `cache_search`'s folder enumeration only accepts names starting with the
+>    venv name, so a venv that installed partially but verified after repair
+>    is reachable *only* through the last-used pointer -- for that script,
+>    missing the pointer once costs a rebuild, not a scan. Old files are left
+>    on disk, not deleted. This is what lets the reader be plain `json.loads`
+>    with `Path(...)` on two string fields, with no tagged-payload decoding
+>    anywhere. (User ruling.)
+> 4. **`pathlibcutoff` dies with the glob, and so does the pickle cutoff.**
+>    With one fixed filename there is no timestamp to compare, so the
+>    `last_used` reader loses the cutoff outright. Its second reader,
+>    `analysis/custom_modules.PATHLIB_CUTOFF`, goes too: both arms of the
+>    comparison it guards call `ek.ensure_path`, so it selects a log message
+>    and nothing else.
+> 5. **`json_types.py` is deleted**, with its module-scope call and its tests.
+>    The saved options file was its only consumer -- `alias_index` writes its
+>    cache with plain `json`, and no other `to_jsonable` call exists under
+>    `src/`. The paragraph above is thereby retired, not violated. The emmykit
+>    version guard that protected the call is repointed at a name veny still
+>    calls, so an old emmykit still fails at import with an install hint rather
+>    than mid-run with an `AttributeError`. (User ruling.)
+> 6. **The emmykit guard compares `ek.__version__`; it does not probe a
+>    name.** Added 2026-08-22, at phase 4b's close — this is the one amendment
+>    the phase's *execution* forced beyond the five rulings above. Ruling 5
+>    says the guard is "repointed at a name veny still calls". Task 7 found
+>    that unmeetable as written: `register_json_type` was the **only** symbol
+>    new in emmykit 0.4.0, so a `hasattr` probe on any other name veny calls
+>    would pass under a 0.3.x and let the run reach an `AttributeError`
+>    mid-flight — exactly what the guard exists to prevent. The guard is now a
+>    version comparison against `ek.__version__`, which keeps the ruling's
+>    intent (fail at import, with an install hint) at the cost of its letter.
+>    Recorded in the plan's Task 7 deviation note.
+>
+> One consequence outside the record itself: `cache_search.find_match_dir_in_cache`
+> stops mutating the `argparse.Namespace`. Its `last_used`/`latest` writes were
+> writes because they reached disk through `save_options_to_json`; with nothing
+> serializing `args`, they become locals. (User ruling.)
+>
+> **Executed and closed 2026-08-22.** All six landed on branch
+> `last-used-persistence`; the ledger of commits is in `PROGRESS.md`'s
+> phase-4b entry.
+
 ## Error handling
 
 Stated per layer, unchanged in spirit from current behaviour.
@@ -435,7 +495,16 @@ assigned to the phase that closes it.
    table above, once `cli.py` is their sole owner.
 5. **`check_venv_dir`'s `issubset()` self-heal** against options files written
    before `options.aliases` existed becomes unnecessary, since `LastUsed` never
-   carries an `AliasIndex`. Closed in phase 4 with the persistence change.
+   carries an `AliasIndex`. ~~Closed in phase 4 with the persistence change.~~
+   **CORRECTED 2026-08-22, at phase 4b's close: this item was already closed
+   when the design was written, and phase 4 had nothing to do.** Checked, not
+   assumed — `rg -n 'issubset' src/ tests/` returns nothing, and
+   `git log -S issubset` puts the last source change in `7640f1c`
+   ("refactor: judge every cached venv, last-used included, by its manifest"),
+   on the venv-cache branch, well before phase 3. That commit replaced the
+   `uninstalled_imports.issubset(...)` comparison against a loaded options
+   file with manifest-based matching. Phase 4b deleted the *options file the
+   check used to read*, not the check. **Nothing here is owed to phase 4c.**
 
 ## Testing strategy
 

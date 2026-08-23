@@ -3,6 +3,7 @@
 import argparse
 import contextlib
 import dataclasses
+import importlib.util
 import os
 import sys
 from pathlib import Path
@@ -184,6 +185,21 @@ def test_the_run_builds_exactly_one_settings(
     assert seen[0] is seen[1]
 
 
+def test_the_options_god_object_is_gone() -> None:
+    """There is no second place a run's state can live.
+
+    Behaviour under test: the absence of the class phase 4 exists to delete.
+
+    Concrete bug this catches: leaving `Options` alive as a `cli` re-export
+    or as an importable `veny.run_options` module -- which is exactly how it
+    survived phases 3e and 4a. A dead-but-importable god object invites the
+    next stage to write onto it again, and nothing behavioural would notice
+    until two copies of the run's state disagreed.
+    """
+    assert not hasattr(cli, "Options")
+    assert importlib.util.find_spec("veny.run_options") is None
+
+
 def test_target_is_frozen() -> None:
     """A stage must not be able to write its product back onto the target.
 
@@ -251,13 +267,6 @@ def test_resolve_target_returns_a_target_built_from_the_namespace(
     returning a Target built from them. That leaves both spellings live, and
     a stage reading the stale Options field gets whatever the last writer
     left there rather than what this run resolved.
-
-    Options keeps `python_script`, `script_dir` and `timestamp` through phase
-    4a, because ek.save_options_to_json builds its filename off them and is
-    typed against ek.Options rather than a payload. pipeline.run copies them
-    across at the save and nowhere else; phase 4b removes them with the
-    coupling. What resolve_target must no longer produce is a *run-time*
-    reader of them, which is what the two assertions below pin.
     """
     script = tmp_path / "s.py"
     script.write_text("import os\n")
@@ -270,12 +279,6 @@ def test_resolve_target_returns_a_target_built_from_the_namespace(
     assert target.script_dir == script.parent.absolute()
     assert target.script_args == ("-x",)
     assert target.python_command == ""
-    # Drained outright: nothing reads either off Options any more.
-    assert not hasattr(cli.Options(), "script_args")
-    assert not hasattr(cli.Options(), "python_command")
-    # Still present, and still empty: resolve_target must not write to them.
-    assert cli.Options().python_script is None
-    assert cli.Options().timestamp == ""
 
 
 def test_resolve_target_returns_none_for_a_scriptless_run() -> None:
@@ -383,9 +386,6 @@ def test_split_imports_returns_requirements_and_writes_nothing_back(
 
     assert isinstance(result, state.Requirements)
     assert {r.import_name for r in result.uninstalled} == {"widgetlib"}
-    assert not hasattr(cli.Options(), "uninstalled_imports")
-    assert not hasattr(cli.Options(), "bad_imports")
-    assert not hasattr(cli.Options(), "all_imports")
 
 
 def test_venv_handle_does_not_resolve_the_interpreter_symlink(tmp_path: Path) -> None:

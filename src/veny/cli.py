@@ -9,6 +9,8 @@ import argparse
 import datetime as dt
 import logging
 import sys
+from pathlib import Path
+from typing import Final
 
 from . import __version__ as __version__
 from . import alias_index
@@ -20,46 +22,61 @@ except ImportError as exc:  # stdlib only: none of emmykit's helpers exist yet.
         "veny requires the emmykit package (>=0.4.0), which is not installed.\n"
         "Install it with:  pip install 'emmykit>=0.4.0'"
     ) from exc
-if not hasattr(ek, "register_json_type"):
+
+_MINIMUM_EMMYKIT: Final[tuple[int, int, int]] = (0, 4, 0)
+
+
+def _emmykit_version() -> tuple[int, ...]:
+    """The installed emmykit's version, as far as it can be read.
+
+    Returns:
+        The leading numeric components of ``ek.__version__``, or an empty
+        tuple when it is absent or unreadable -- which compares less than any
+        real version, so an emmykit that will not say what it is is refused.
+    """
+    parts: list[int] = []
+    for piece in str(getattr(ek, "__version__", "")).split("."):
+        digits = ""
+        for character in piece:
+            if not character.isdigit():
+                break
+            digits += character
+        if not digits:
+            break
+        parts.append(int(digits))
+    return tuple(parts)
+
+
+if _emmykit_version() < _MINIMUM_EMMYKIT:
     raise SystemExit(
         f"veny requires emmykit >= 0.4.0; found {getattr(ek, '__version__', 'unknown')}.\n"
         f"Upgrade it with:  pip install -U 'emmykit>=0.4.0'"
     )
-from . import environment, json_types, pipeline, run_options, settings
+# Below the version guard on purpose: an emmykit too old to trust should not
+# even see the rest of veny's modules imported.
+from . import environment, pipeline, settings  # noqa: E402
 
 # An import name paired with the pip package that provides it. Defined in
 # alias_index, which imports nothing of veny's, and re-exported here because
-# veny is where it is used. Its JSON handlers live in json_types.
+# veny is where it is used.
 ResolvedImport = alias_index.ResolvedImport
 
-# Registers veny's own types with emmykit's JSON registry. At module scope, not
-# inside main(), so that anything importing veny -- including every test -- gets
-# the same serialization behaviour production does. The call is idempotent.
-json_types.register_types()
+# The installed command's name, fixed rather than derived from argv[0]: under
+# `python -m veny` the stem is "__main__", which would move every venv, log
+# and last-used record veny owns from ~/veny to ~/__main__. Pinned by
+# test_state_directory_ignores_argv0.
+MY_NAME: Final[str] = "veny"
 
 
-# Phase 3e moved the class itself to run_options.py so pipeline.py can be
-# handed one without importing the module above it. This name stays for the
-# suite's references -- 49 spelled `cli.Options` and 24 spelled `veny.Options`,
-# re-measured on 2026-08-21 -- and dies with the class in phase 4b.
-Options = run_options.Options
-
-
-def parse_arguments(options: Options) -> None:
-    """Parse command-line arguments.
-
-    Args:
-        options: Options object to store parsed arguments. Contains:
-            - my_name:             Name of the program.
-            - log_mode:            Logging mode (default is logging.INFO).
-            - args:                Parsed arguments will be stored here.
+def parse_arguments() -> argparse.Namespace:
+    """Parse the command line.
 
     Returns:
-        None, but updates options.args with parsed arguments.
+        The parsed arguments. `--help` with no arguments at all prints the
+        guide and exits 0 rather than returning.
 
     Raises:
-        SystemExit: If the "-version" flag is provided, the program will print the version and exit.
-        ValueError: If any of the arguments are invalid.
+        SystemExit: --version or a bare invocation; argparse's own behaviour.
     """
     parser = argparse.ArgumentParser(
         prog="veny", description="Run a python script with optional flags."
@@ -81,7 +98,7 @@ def parse_arguments(options: Options) -> None:
     parser.add_argument(
         "--blank-slate",
         action="store_true",
-        help=f"Delete ~/{options.my_name}/ and all {options.my_name} .out and .err and .json and .pkl files in the current directory.",
+        help=f"Delete ~/{MY_NAME}/ and all {MY_NAME} .out and .err and .json and .pkl files in the current directory.",
     )
     parser.add_argument(
         "-y",
@@ -127,7 +144,7 @@ def parse_arguments(options: Options) -> None:
     parser.add_argument(
         "--rawlog",
         action="store_true",
-        help=f"Do not add timestamps or INFO level to log messages, and do not add extra INFO level log statements. Just produce the same output that would be seen when running the program without {options.my_name}.",
+        help=f"Do not add timestamps or INFO level to log messages, and do not add extra INFO level log statements. Just produce the same output that would be seen when running the program without {MY_NAME}.",
     )
     parser.add_argument(
         "--justprint",
@@ -151,11 +168,7 @@ def parse_arguments(options: Options) -> None:
         parser.print_help()
         sys.exit(0)
 
-    # Otherwise, parse the arguments and store them in options.args for later use.
-    options.args = parser.parse_args()
-
-    if getattr(options.args, "debug", False):
-        options.log_mode = logging.DEBUG
+    return parser.parse_args()
 
 
 def main() -> int:
@@ -174,42 +187,42 @@ def main() -> int:
         alone by its whole-branch review; see PROGRESS.md's deferred items.
     """
     start_time = dt.datetime.now()
-    options = Options()
-    parse_arguments(options)
-    options.rawlog = getattr(options.args, "rawlog", False)
-    # The run's invariants, built exactly once and handed down. `home` is a
+    args = parse_arguments()
+    rawlog = getattr(args, "rawlog", False)
+    # Only ek.configure_logging below reads this, so it is a local rather
+    # than a field on anything.
+    log_mode = logging.DEBUG if getattr(args, "debug", False) else logging.INFO
+    # The run's invariants, built exactly once and handed down. Home is a
     # construction detail rather than a field: it exists only to derive
-    # my_dir. `log_mode` stays on Options because ek.configure_logging below
-    # is the only reader.
+    # my_dir.
     run_settings = settings.Settings(
-        my_name=options.my_name,
-        my_dir=options.home / options.my_name,
-        cwd=options.cwd,
+        my_name=MY_NAME,
+        my_dir=Path.home() / MY_NAME,
+        cwd=Path.cwd().expanduser().resolve(strict=True),
         venv_name="myenv",
         stay_out_list=settings.DEFAULT_STAY_OUT_LIST,
         search_above_this_dir=True,
-        rawlog=options.rawlog,
+        rawlog=rawlog,
         known_bad_imports=settings.DEFAULT_KNOWN_BAD_IMPORTS,
         also_needs=settings.DEFAULT_ALSO_NEEDS,
         extra_requirements_file="extra_requirements.txt",
     )
     memory_handler = None
     try:
-        target = pipeline.resolve_target(options.args)
+        target = pipeline.resolve_target(args)
         lucky_status = pipeline.feeling_lucky(
-            options.args,
+            args,
             target,
-            options=options,
-            pathlibcutoff=options.pathlibcutoff,
-            rawlog=options.rawlog,
+            my_name=MY_NAME,
+            rawlog=rawlog,
         )
         if lucky_status is not None:
             return lucky_status
         memory_handler = ek.configure_logging(
-            options.my_name, log_level=options.log_mode, rawlog=options.rawlog
+            MY_NAME, log_level=log_mode, rawlog=rawlog
         )
         script_exit_code = pipeline.run(
-            run_settings, options.args, options, target, start_time=start_time
+            run_settings, args, target, start_time=start_time
         )
     except pipeline.UsageError as exc:
         logging.info("%s", exc)
@@ -224,7 +237,7 @@ def main() -> int:
         # does the status -- users have both in their shell history.
         print(str(exc), file=sys.stderr)
         return 1
-    ek.print_all_errors(memory_handler, options.rawlog)
+    ek.print_all_errors(memory_handler, rawlog)
     logging.shutdown()
     # A script killed by a signal yields a negative returncode (e.g. -9 for
     # SIGKILL). Exiting a process with a negative status wraps around to the

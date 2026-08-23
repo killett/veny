@@ -123,8 +123,6 @@ def test_setup_virtualenv_builds_the_venv_before_writing_requirements_txt(
     would need the network or a probed venv interpreter (the actual package
     install, import verification/repair, and manifest recording) are stubbed.
     """
-    options = cli.Options()
-    options.my_dir = tmp_path
     requirements = _a_requirements(
         uninstalled=frozenset(
             {cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")}
@@ -160,9 +158,9 @@ def test_setup_virtualenv_builds_the_venv_before_writing_requirements_txt(
         settings,
         target,
         requirements,
-        args=options.args,
-        aliases=options.aliases,
-        stdlib=options.stdlib,
+        args=argparse.Namespace(),
+        aliases=alias_index.empty(tmp_path),
+        stdlib=stdlib_index.for_running_interpreter(),
     )
 
     assert handle is not None
@@ -190,8 +188,6 @@ def test_setup_virtualenv_writes_the_extra_requirements_version_specifiers(
     line, a specifier appended only where extra_requirements supplies a
     non-empty one), not from re-running the writer.
     """
-    options = cli.Options()
-    options.my_dir = tmp_path
     requirements = _a_requirements(
         uninstalled=frozenset(
             {
@@ -234,9 +230,9 @@ def test_setup_virtualenv_writes_the_extra_requirements_version_specifiers(
         settings,
         target,
         requirements,
-        args=options.args,
-        aliases=options.aliases,
-        stdlib=options.stdlib,
+        args=argparse.Namespace(),
+        aliases=alias_index.empty(tmp_path),
+        stdlib=stdlib_index.for_running_interpreter(),
     )
 
     assert handle is not None
@@ -263,7 +259,7 @@ def test_setup_virtualenv_reports_failure_when_uv_refuses_to_build(
     obtained from the new contract: False means "no environment", and the
     message names the directory so the user can see which build was refused.
     """
-    settings, options, target, requirements = _a_wired_run(tmp_path)
+    settings, args, aliases, stdlib, target, requirements = _a_wired_run(tmp_path)
     _stub_the_venv_away(monkeypatch)
     monkeypatch.setattr(environment, "create_venv", lambda target, python="": False)
 
@@ -272,9 +268,9 @@ def test_setup_virtualenv_reports_failure_when_uv_refuses_to_build(
             settings,
             target,
             requirements,
-            args=options.args,
-            aliases=options.aliases,
-            stdlib=options.stdlib,
+            args=args,
+            aliases=aliases,
+            stdlib=stdlib,
         )
 
     # No handle at all: there is no usable environment, which is what
@@ -334,7 +330,7 @@ def test_create_venv_is_given_a_resolved_interpreter_path_not_a_bare_command(
 
 
 def _a_wired_run(tmp_path):
-    """Build the Settings, Options and Target whose every setup_virtualenv argument is distinguishable.
+    """Build the Settings, args, aliases, stdlib index and Target whose every setup_virtualenv argument is distinguishable.
 
     Each field carries a value no other field could supply -- a venv name, a
     timestamp, an interpreter tag, a pip name, an import name and a --reqs
@@ -342,16 +338,15 @@ def _a_wired_run(tmp_path):
     the wrong one cannot produce the expected result by coincidence.
 
     Returns:
-        The Settings, the Options, the Target and the Requirements, in that
-        order.
+        The Settings, the args, the aliases, the stdlib index, the Target and
+        the Requirements, in that order.
     """
-    options = cli.Options()
     settings = _a_settings(my_dir=tmp_path, venv_name="wiredenv", rawlog=True)
     target = _target(
         timestamp="20260101-010203",
         python_command="python-under-test-not-on-path",
     )
-    options.stdlib = stdlib_index.StdlibIndex(
+    stdlib = stdlib_index.StdlibIndex(
         names=frozenset({"os"}), python_version=(3, 12), source="test"
     )
     requirements = _a_requirements(
@@ -361,8 +356,8 @@ def _a_wired_run(tmp_path):
         all_imports=frozenset({"thing", "extra-pkg"}),
         extra_requirements={"extra-pkg": ">=2.0"},
     )
-    options.args = argparse.Namespace(reqs=True)
-    options.aliases = alias_index.AliasIndex(
+    args = argparse.Namespace(reqs=True)
+    aliases = alias_index.AliasIndex(
         overrides={},
         cache=alias_index.AliasCache(
             path=Path("/nonexistent/alias_cache.json"),
@@ -374,7 +369,7 @@ def _a_wired_run(tmp_path):
         pypi=None,
         seed={},
     )
-    return settings, options, target, requirements
+    return settings, args, aliases, stdlib, target, requirements
 
 
 def _stub_the_venv_away(monkeypatch, uninstalled_after_repair=None):
@@ -426,16 +421,16 @@ def test_the_venv_folder_name_and_build_interpreter_come_from_this_run(
     exact defect PROGRESS records from phase 2 task 9, where a script
     importing `cgi` was classified installed under 3.12 and died under 3.13.
     """
-    settings, options, target, requirements = _a_wired_run(tmp_path)
+    settings, args, aliases, stdlib, target, requirements = _a_wired_run(tmp_path)
     created = _stub_the_venv_away(monkeypatch)
 
     _, handle, _ = pipeline.setup_virtualenv(
         settings,
         target,
         requirements,
-        args=options.args,
-        aliases=options.aliases,
-        stdlib=options.stdlib,
+        args=args,
+        aliases=aliases,
+        stdlib=stdlib,
     )
 
     assert handle is not None
@@ -465,7 +460,7 @@ def test_verify_and_repair_imports_is_handed_the_whole_description_of_the_run(
     but is a --reqs pip spelling, so source_import_names must drop it. That
     pins the three arguments of the source_import_names call too.
     """
-    settings, options, target, requirements = _a_wired_run(tmp_path)
+    settings, args, aliases, stdlib, target, requirements = _a_wired_run(tmp_path)
     _stub_the_venv_away(monkeypatch)
     seen: list[dict[str, object]] = []
 
@@ -480,9 +475,9 @@ def test_verify_and_repair_imports_is_handed_the_whole_description_of_the_run(
             settings,
             target,
             requirements,
-            args=options.args,
-            aliases=options.aliases,
-            stdlib=options.stdlib,
+            args=args,
+            aliases=aliases,
+            stdlib=stdlib,
         )[1]
         is not None
     )
@@ -499,7 +494,7 @@ def test_verify_and_repair_imports_is_handed_the_whole_description_of_the_run(
         "uninstalled": {cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
         "extra_requirements": {"extra-pkg": ">=2.0"},
         "source_names": {"thing"},
-        "index": options.aliases,
+        "index": aliases,
         "rawlog": True,
     }
 
@@ -510,8 +505,8 @@ def test_the_manifest_and_the_final_check_describe_the_venv_after_repair(
     """record_venv_state, the final import check and uv all get the repaired state.
 
     verify_and_repair_imports can replace a record whose pip name was wrong,
-    and setup_virtualenv assigns its result back onto
-    options.uninstalled_imports. Everything after it -- the manifest, the
+    and setup_virtualenv folds its result back into the Requirements it
+    returns, with dataclasses.replace. Everything after it -- the manifest, the
     folder-name refresh inside record_venv_state, and the check that decides
     whether this venv drops its "failed-" prefix -- must therefore describe
     the repaired set, not the set the install was attempted with.
@@ -523,7 +518,7 @@ def test_the_manifest_and_the_final_check_describe_the_venv_after_repair(
     manifest, finds nothing it needs, and rebuilds the environment from
     scratch every single time.
     """
-    settings, options, target, requirements = _a_wired_run(tmp_path)
+    settings, args, aliases, stdlib, target, requirements = _a_wired_run(tmp_path)
     repaired = {cli.ResolvedImport(import_name="thing", pip_name="repaired-pkg")}
     _stub_the_venv_away(monkeypatch, uninstalled_after_repair=repaired)
     recorded: list[dict[str, object]] = []
@@ -552,9 +547,9 @@ def test_the_manifest_and_the_final_check_describe_the_venv_after_repair(
             settings,
             target,
             requirements,
-            args=options.args,
-            aliases=options.aliases,
-            stdlib=options.stdlib,
+            args=args,
+            aliases=aliases,
+            stdlib=stdlib,
         )[1]
         is not None
     )
@@ -661,7 +656,7 @@ def test_setup_virtualenv_lets_the_repair_pass_name_the_package_it_settled_on(
     Expected message obtained from repair_unsatisfied_import's contract:
     "<pip name> provides the import <import name> (<evidence>)".
     """
-    settings, options, target, requirements = _a_wired_run(tmp_path)
+    settings, args, aliases, stdlib, target, requirements = _a_wired_run(tmp_path)
     settings = dataclasses.replace(settings, rawlog=False)
     _a_repair_that_succeeds(monkeypatch)
 
@@ -670,9 +665,9 @@ def test_setup_virtualenv_lets_the_repair_pass_name_the_package_it_settled_on(
             settings,
             target,
             requirements,
-            args=options.args,
-            aliases=options.aliases,
-            stdlib=options.stdlib,
+            args=args,
+            aliases=aliases,
+            stdlib=stdlib,
         )
 
     assert "repaired-pkg provides the import thing (the seed named it)" in caplog.text
@@ -680,7 +675,9 @@ def test_setup_virtualenv_lets_the_repair_pass_name_the_package_it_settled_on(
     # The other direction: a --rawlog run must stay quiet, so a hardcoded
     # rawlog=False at this call site dies too.
     caplog.clear()
-    quiet_settings, quiet, target, requirements = _a_wired_run(tmp_path)
+    quiet_settings, quiet_args, quiet_aliases, quiet_stdlib, target, requirements = (
+        _a_wired_run(tmp_path)
+    )
     quiet_settings = dataclasses.replace(quiet_settings, rawlog=True)
     _a_repair_that_succeeds(monkeypatch)
 
@@ -689,9 +686,9 @@ def test_setup_virtualenv_lets_the_repair_pass_name_the_package_it_settled_on(
             quiet_settings,
             target,
             requirements,
-            args=quiet.args,
-            aliases=quiet.aliases,
-            stdlib=quiet.stdlib,
+            args=quiet_args,
+            aliases=quiet_aliases,
+            stdlib=quiet_stdlib,
         )
 
     assert "provides the import" not in caplog.text
@@ -746,7 +743,9 @@ def test_setup_virtualenv_lets_the_manifest_pass_explain_a_rename(
     folder it is renaming to.
     """
     repaired = {cli.ResolvedImport(import_name="thing", pip_name="repaired-pkg")}
-    settings, options, target, requirements = _a_wired_run(tmp_path / "normal")
+    settings, args, aliases, stdlib, target, requirements = _a_wired_run(
+        tmp_path / "normal"
+    )
     settings = dataclasses.replace(settings, rawlog=False)
     _a_manifest_pass_that_renames(monkeypatch, tmp_path, repaired)
 
@@ -755,9 +754,9 @@ def test_setup_virtualenv_lets_the_manifest_pass_explain_a_rename(
             settings,
             target,
             requirements,
-            args=options.args,
-            aliases=options.aliases,
-            stdlib=options.stdlib,
+            args=args,
+            aliases=aliases,
+            stdlib=stdlib,
         )
 
     assert (
@@ -768,7 +767,9 @@ def test_setup_virtualenv_lets_the_manifest_pass_explain_a_rename(
     # The other direction: --rawlog must reach it, so a hardcoded rawlog=False
     # at this call site dies too.
     caplog.clear()
-    quiet_settings, quiet, target, requirements = _a_wired_run(tmp_path / "raw")
+    quiet_settings, quiet_args, quiet_aliases, quiet_stdlib, target, requirements = (
+        _a_wired_run(tmp_path / "raw")
+    )
     quiet_settings = dataclasses.replace(quiet_settings, rawlog=True)
     _a_manifest_pass_that_renames(monkeypatch, tmp_path, repaired)
 
@@ -777,9 +778,9 @@ def test_setup_virtualenv_lets_the_manifest_pass_explain_a_rename(
             quiet_settings,
             target,
             requirements,
-            args=quiet.args,
-            aliases=quiet.aliases,
-            stdlib=quiet.stdlib,
+            args=quiet_args,
+            aliases=quiet_aliases,
+            stdlib=quiet_stdlib,
         )
 
     assert "renaming it to" not in caplog.text

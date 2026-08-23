@@ -53,7 +53,7 @@ scaffold baseline — none of it is a runtime dependency of veny. `pixi run veny
 runs the working tree directly through `python -m veny`; no editable install is
 involved. veny's runtime dependencies are
 [emmykit](https://pypi.org/project/emmykit/) (`pip install 'emmykit>=0.4.0'`),
-which provides its utility layer and the base `Options` class, and
+which provides its utility layer, and
 [uv](https://pypi.org/project/uv/), installed alongside it as a PyPI
 dependency and located through `uv.find_uv_bin()`; beyond that it must run on
 a bare interpreter, since its job is to bootstrap environments for other
@@ -107,7 +107,6 @@ src/veny/
                     # the run itself belongs to pipeline.py.
     pipeline.py     # The run: analyze -> classify -> acquire an environment
                     # -> run the script. The only module that knows the order.
-    run_options.py  # The transitional per-run state object, on its way out.
     cache_search.py # Picks a cached virtual environment for this run
                     # (last-used / latest / oldest / smallest), confirms it
                     # by import-checking it, and records the state of a
@@ -135,14 +134,15 @@ src/veny/
                     # which must be installed, and which are unusable.
     environment.py  # The one place veny invokes uv: venv creation, package
                     # install/uninstall, and the requirements file they read.
-    json_types.py   # Registers veny's own types with emmykit's JSON registry.
     last_used.py    # The one record veny keeps between runs: which
-                    # environment last ran this script. Imports nothing from
-                    # veny.
+                    # environment last ran this script. One fixed file per
+                    # script, `.<script>-veny-last-used.json`, written beside
+                    # it and overwritten each run. Imports only `state` from
+                    # veny, for `LastUsed`.
     pypi_client.py  # Confirms a project provides an import name by reading a
                     # wheel's central directory over an HTTP range request.
-    state.py        # Requirements, the frozen product classification hands
-                    # to the stages after it.
+    state.py        # The frozen per-run values: Target, VenvHandle,
+                    # Requirements, and LastUsed.
     stdlib_index.py # Standard-library membership for the target interpreter.
     venv_cache.py   # Folder naming, manifests, and matching for cached
                     # virtual environments.
@@ -150,8 +150,11 @@ src/veny/
                     # repairs what it does not (import checks, candidate
                     # resolution, attributable confirmation).
 scripts/            # smoke-install.sh: wheel + console-script verification.
-                    # differential_3d.py: the phase-3d old-vs-new differential.
-                    # differential_3e.py: the phase-3e old-vs-new differential.
+                    # differential_3d/3e/4a/4b.py: the per-phase old-vs-new
+                    # behavioural differentials, each reusing the one before.
+                    # wiring_sweep_4a/4b.py: the per-phase STANDING CHECK,
+                    # which mutates every argument at every call site the
+                    # phase touched and names the test that dies.
 tests/              # pytest test suite; wheels.py builds the wheel the live
                     # environment/verify tests install.
 docs/               # Design docs and implementation plans.

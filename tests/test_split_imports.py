@@ -1,9 +1,8 @@
+import argparse
 import logging
 import subprocess
 import sys
 from pathlib import Path
-
-import emmykit as ek
 
 from veny import (
     alias_index,
@@ -11,6 +10,7 @@ from veny import (
     environment,
     pipeline,
     state,
+    stdlib_index,
     venv_cache,
     verify,
 )
@@ -42,7 +42,7 @@ def test_no_warning_when_no_hint_module_was_seen(caplog):
 
 
 def test_process_import_records_a_stdlib_skip(tmp_path):
-    options = veny.Options()
+    stdlib = stdlib_index.for_running_interpreter()
     script = tmp_path / "user_script.py"
     script.write_text("import tkinter\n")
     # process_import takes an ImportScan and an injected is_stdlib predicate.
@@ -51,8 +51,7 @@ def test_process_import_records_a_stdlib_skip(tmp_path):
     scan = ImportScan()
 
     assert (
-        process_import(scan, "tkinter", script, is_stdlib=options.stdlib.__contains__)
-        is False
+        process_import(scan, "tkinter", script, is_stdlib=stdlib.__contains__) is False
     )
     assert "tkinter" in scan.seen_stdlib_imports
 
@@ -60,7 +59,7 @@ def test_process_import_records_a_stdlib_skip(tmp_path):
 def test_enqueue_top_level_imports_records_stdlib_and_skips_enqueue(tmp_path):
     from collections import deque
 
-    options = veny.Options()
+    stdlib = stdlib_index.for_running_interpreter()
     module_path = tmp_path / "user_script.py"
     module_path.write_text("import tkinter\n")
     processed_paths: set[Path] = set()
@@ -73,30 +72,11 @@ def test_enqueue_top_level_imports_records_stdlib_and_skips_enqueue(tmp_path):
         {"tkinter"},
         processed_paths,
         modules_to_process,
-        is_stdlib=options.stdlib.__contains__,
+        is_stdlib=stdlib.__contains__,
     )
 
     assert "tkinter" in scan.seen_stdlib_imports
     assert len(modules_to_process) == 0
-
-
-def test_options_no_longer_carries_an_alias_table():
-    # The whole point of the change: the 1,219-line literal is gone, and with
-    # it the reverse map whose {v: k} inversion silently dropped every import
-    # name that shared a pip name with another.
-    options = veny.Options()
-    assert not hasattr(options, "module_aliases")
-    assert not hasattr(options, "reversed_module_aliases")
-
-
-def test_options_alias_index_is_offline_and_unprobed():
-    # Options() is built in every test and on every --help run, before the
-    # target interpreter is even known. If this were alias_index.build(), each
-    # construction would fork a probe subprocess and open PyPI sockets.
-    options = veny.Options()
-    assert isinstance(options.aliases, alias_index.AliasIndex)
-    assert options.aliases.pypi is None
-    assert options.aliases.installed == {}
 
 
 def test_resolved_import_record_carries_both_names():
@@ -111,31 +91,26 @@ def test_the_offline_argument_keeps_the_index_off_the_network(monkeypatch, tmp_p
     # build() has taken an offline flag since it was written and nothing ever
     # passed True, so there was no way to stop veny opening PyPI sockets --
     # on a plane, behind a blocked index, or in a sandbox without egress.
-    options = veny.Options()
-    options.my_dir = tmp_path
     monkeypatch.setattr(sys, "argv", ["veny.py", "--offline", "script.py"])
 
-    veny.parse_arguments(options)
+    args = veny.parse_arguments()
 
-    assert options.args.offline is True
+    assert args.offline is True
     assert (
-        pipeline.build_alias_index(_a_settings(my_dir=tmp_path), options.args, "").pypi
-        is None
+        pipeline.build_alias_index(_a_settings(my_dir=tmp_path), args, "").pypi is None
     )
 
 
 def test_the_index_reaches_pypi_by_default(monkeypatch, tmp_path):
     # The flag must be opt-in: defaulting to offline would silently drop the
     # only tier that can resolve a name veny has never seen before.
-    options = veny.Options()
-    options.my_dir = tmp_path
     monkeypatch.setattr(sys, "argv", ["veny.py", "script.py"])
 
-    veny.parse_arguments(options)
+    args = veny.parse_arguments()
 
-    assert options.args.offline is False
+    assert args.offline is False
     assert (
-        pipeline.build_alias_index(_a_settings(my_dir=tmp_path), options.args, "").pypi
+        pipeline.build_alias_index(_a_settings(my_dir=tmp_path), args, "").pypi
         is not None
     )
 
@@ -192,7 +167,7 @@ def test_check_venv_dir_rejects_a_manifest_match_whose_import_does_not_actually_
     cached_dir = tmp_path / "cached-venv"
     cached_dir.mkdir()
     record = veny.ResolvedImport(import_name="thing", pip_name="thing-pkg")
-    options = veny.Options()
+    stdlib = stdlib_index.for_running_interpreter()
     requirements = _a_requirements(
         all_imports=frozenset({"thing"}), uninstalled=frozenset({record})
     )
@@ -202,7 +177,7 @@ def test_check_venv_dir_rejects_a_manifest_match_whose_import_does_not_actually_
             schema_version=venv_cache.SCHEMA_VERSION,
             created="20260814-091500",
             veny_version="0.2.2",
-            interpreter_tag=cache_search.interpreter_tag(options.stdlib),
+            interpreter_tag=cache_search.interpreter_tag(stdlib),
             interpreter_path="/usr/bin/python3",
             packages=(venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None),),
         ),
@@ -222,12 +197,12 @@ def test_check_venv_dir_rejects_a_manifest_match_whose_import_does_not_actually_
             wanted=cache_search.wanted_packages(
                 set(requirements.uninstalled), requirements.extra_requirements
             ),
-            tag=cache_search.interpreter_tag(options.stdlib),
+            tag=cache_search.interpreter_tag(stdlib),
             uninstalled=set(requirements.uninstalled),
             source_names=verify.source_import_names(
                 set(requirements.all_imports),
                 requirements.extra_requirements,
-                getattr(options.args, "reqs", False),
+                False,
             ),
             rawlog=True,
         )
@@ -242,7 +217,6 @@ def test_setup_virtualenv_verifies_every_import_before_reporting_success(
     # tested but never called from production, so the cache was never written
     # and two of the five evidence tiers were unreachable. Nothing inside
     # either function could catch that -- only a test of the join can.
-    options = veny.Options()
     requirements = _a_requirements(
         uninstalled=frozenset(
             {veny.ResolvedImport(import_name="thing", pip_name="thing-pkg")}
@@ -289,9 +263,9 @@ def test_setup_virtualenv_verifies_every_import_before_reporting_success(
             _a_settings(my_dir=tmp_path),
             _target(),
             requirements,
-            args=options.args,
-            aliases=options.aliases,
-            stdlib=options.stdlib,
+            args=argparse.Namespace(),
+            aliases=alias_index.empty(tmp_path),
+            stdlib=stdlib_index.for_running_interpreter(),
         )[1]
         is not None
     )
@@ -318,42 +292,3 @@ def test_the_repair_installer_reports_failure_instead_of_exiting(monkeypatch, tm
         environment.install_into_venv(handle.venv_python, "nonexistent-package")
         is False
     )
-
-
-def test_resolved_import_still_round_trips_when_alias_index_is_lazy():
-    # Making the import lazy must not quietly turn the ResolvedImport and
-    # AliasIndex handlers into dead code that falls through to str().
-    record = veny.ResolvedImport(import_name="cv2", pip_name="opencv-python")
-    assert ek.from_jsonable(ek.to_jsonable(record)) == record
-
-
-def test_alias_index_is_serialized_as_structured_data():
-    # Serializing via str()/repr() turns lookups into substring matching, which
-    # silently returns wrong answers instead of raising.
-    index = alias_index.AliasIndex(
-        overrides={"cv2": "my-opencv"},
-        cache=alias_index.AliasCache(
-            path=Path("/tmp/none.json"),
-            interpreter_tag="3.12",
-            entries={},
-            rejections={},
-        ),
-        installed={},
-        pypi=None,
-    )
-    payload = ek.to_jsonable(index)
-    assert isinstance(payload, dict)
-    assert payload["overrides"] == {"cv2": "my-opencv"}
-    assert payload["interpreter_tag"] == "3.12"
-    assert payload["cache_path"] == "/tmp/none.json"
-    assert payload["offline"] is True
-
-
-def test_resolved_import_round_trips_through_json():
-    # uninstalled_imports is written to the last-used options file, which
-    # check_venv_dir still reads for its venv_dir pointer. Without a handler
-    # each record stringifies to "ResolvedImport(import_name='cv2', ...)",
-    # losing the structured data that the rest of the file depends on.
-    record = veny.ResolvedImport(import_name="cv2", pip_name="opencv-python")
-    restored = ek.from_jsonable(ek.to_jsonable({record}))
-    assert restored == {record}

@@ -81,8 +81,9 @@ class ResolvedImport:
     went into one set and import names into another, leaving every consumer to
     guess which kind of string it was holding.
 
-    This lives here rather than in veny.cli so that json_types can register
-    its JSON handlers without importing veny.cli, which would close an import cycle.
+    This lives here rather than in veny.cli because alias_index imports
+    nothing of veny's, so it stays free to be imported from anywhere without
+    risking a cycle back through veny.cli.
 
     Attributes:
         import_name: The name as written in the user's source.
@@ -806,8 +807,9 @@ def build(
 def empty(my_dir: Path) -> AliasIndex:
     """Build an index with no interpreter evidence and no network access.
 
-    Options() is constructed before the target interpreter is known, and in
-    tests, so it must not pay for a probe. main() replaces this with build().
+    An index is needed before the target interpreter is known, and in tests,
+    so it must not pay for a probe. pipeline.build_alias_index replaces this
+    with build() once the interpreter is resolved.
 
     Args:
         my_dir: veny's own directory, where the stores live.

@@ -340,6 +340,8 @@ def an_options(tree: Tree, my_dir: Path) -> Any:
     Returns:
         A fresh Options object.
     """
+    # tree.cli.Options belongs to the older tree this script drives, not to
+    # this checkout -- phase 4b's removal of cli.Options here does not apply.
     options = tree.cli.Options()
     options.my_dir = my_dir
     options.python_command = ""

@@ -33,7 +33,6 @@ import pytest
 from veny import (
     alias_index,
     classify,
-    cli,
     environment,
     pipeline,
     stdlib_index,
@@ -184,14 +183,12 @@ def test_a_custom_module_is_classified_as_neither_installed_nor_uninstalled(
 
     The three-way branch is what makes all_imports a strict superset of
     installed | uninstalled. Concrete bug this catches: drop the
-    ``if imp in options.custom_modules.keys()`` branch and the user's own
+    ``if imp in scan.custom_modules.keys()`` branch and the user's own
     local module falls through to the venv check, fails it, gets resolved
     against the alias index and lands in uninstalled_imports -- so veny asks
     pip to install the script sitting next to the one being run.
     """
-    options = cli.Options()
     index = _RecordingIndex({"uninst": "uninst-pypi"})
-    options.aliases = index
     extra_requirements: dict[str, str | None] = {}
     scan = ImportScan(
         all_imports={"mymod", "inst", "uninst"},
@@ -205,8 +202,8 @@ def test_a_custom_module_is_classified_as_neither_installed_nor_uninstalled(
         _a_settings(rawlog=False),
         scan,
         target,
-        args=options.args,
-        aliases=options.aliases,
+        args=argparse.Namespace(),
+        aliases=index,
         extra_requirements=extra_requirements,
     )
 
@@ -235,8 +232,7 @@ def test_no_source_imports_means_no_probe_venv_is_built(
     ValueError on the empty set -- and, were that survivable, would pay for a
     real ``uv venv`` on a run with no imports at all.
     """
-    options = cli.Options()
-    options.aliases = _RecordingIndex()
+    aliases = _RecordingIndex()
     extra_requirements: dict[str, str | None] = {}
     scan = ImportScan(all_imports=set())
     created, probed = _stub_probe(monkeypatch)
@@ -247,8 +243,8 @@ def test_no_source_imports_means_no_probe_venv_is_built(
         _a_settings(rawlog=False),
         scan,
         target,
-        args=options.args,
-        aliases=options.aliases,
+        args=argparse.Namespace(),
+        aliases=aliases,
         extra_requirements=extra_requirements,
     )
 
@@ -269,8 +265,7 @@ def test_a_run_whose_every_import_is_bad_builds_no_probe_venv(
     run reports two imports, builds a probe venv, and asks it about
     ``httplib`` -- a Python 2 name that can only ever fail.
     """
-    options = cli.Options()
-    options.aliases = _RecordingIndex()
+    aliases = _RecordingIndex()
     extra_requirements: dict[str, str | None] = {}
     scan = ImportScan(all_imports={"httplib", "DQN"})
     created, probed = _stub_probe(monkeypatch)
@@ -280,8 +275,8 @@ def test_a_run_whose_every_import_is_bad_builds_no_probe_venv(
         _a_settings(rawlog=False),
         scan,
         target,
-        args=options.args,
-        aliases=options.aliases,
+        args=argparse.Namespace(),
+        aliases=aliases,
         extra_requirements=extra_requirements,
     )
 
@@ -302,9 +297,7 @@ def test_bad_imports_never_reach_the_probe_venv_or_the_resolver(
     project's known-bad ``DQN`` are all probed, resolved through the alias
     index, and handed to pip as install targets.
     """
-    options = cli.Options()
     index = _RecordingIndex({"widgetlib": "widget-lib-pypi"})
-    options.aliases = index
     extra_requirements: dict[str, str | None] = {}
     scan = ImportScan(all_imports={"httplib", "_private", "DQN", "widgetlib"})
     created, probed = _stub_probe(monkeypatch)
@@ -314,8 +307,8 @@ def test_bad_imports_never_reach_the_probe_venv_or_the_resolver(
         _a_settings(rawlog=False),
         scan,
         target,
-        args=options.args,
-        aliases=options.aliases,
+        args=argparse.Namespace(),
+        aliases=index,
         extra_requirements=extra_requirements,
     )
 
@@ -341,11 +334,10 @@ def test_reqs_requirements_are_counted_before_the_zero_import_early_return(
     requirements are never probed, never classified, and silently install
     nothing.
     """
-    options = cli.Options()
-    options.aliases = _RecordingIndex()
+    aliases = _RecordingIndex()
     scan = ImportScan(all_imports=set())
     extra_requirements = {"requests": None, "rich": "==13.0"}
-    options.args = argparse.Namespace(reqs=True)
+    args = argparse.Namespace(reqs=True)
     created, probed = _stub_probe(monkeypatch)
 
     target = _target()
@@ -353,8 +345,8 @@ def test_reqs_requirements_are_counted_before_the_zero_import_early_return(
         _a_settings(rawlog=False),
         scan,
         target,
-        args=options.args,
-        aliases=options.aliases,
+        args=args,
+        aliases=aliases,
         extra_requirements=extra_requirements,
     )
 
@@ -379,11 +371,10 @@ def test_reqs_records_are_unioned_in_after_the_loop_with_import_name_as_pip_name
     after) and the verbatim record disappears, so the exact string the user
     pinned in extra_requirements.txt is never the string handed to pip.
     """
-    options = cli.Options()
-    options.aliases = _RecordingIndex({"widgetlib": "widget-lib-pypi"})
+    aliases = _RecordingIndex({"widgetlib": "widget-lib-pypi"})
     scan = ImportScan(all_imports=set())
     extra_requirements = {"widgetlib": None}
-    options.args = argparse.Namespace(reqs=True)
+    args = argparse.Namespace(reqs=True)
     _stub_probe(monkeypatch)
 
     target = _target()
@@ -391,8 +382,8 @@ def test_reqs_records_are_unioned_in_after_the_loop_with_import_name_as_pip_name
         _a_settings(rawlog=False),
         scan,
         target,
-        args=options.args,
-        aliases=options.aliases,
+        args=args,
+        aliases=aliases,
         extra_requirements=extra_requirements,
     )
 
@@ -414,11 +405,10 @@ def test_a_requirement_already_importable_in_the_probe_is_recorded_in_both_sets(
     record vanishes from uninstalled_imports -- which would drop a package the
     user explicitly pinned from the requirements file veny writes.
     """
-    options = cli.Options()
-    options.aliases = _RecordingIndex()
+    aliases = _RecordingIndex()
     scan = ImportScan(all_imports=set())
     extra_requirements = {"reqonly": None}
-    options.args = argparse.Namespace(reqs=True)
+    args = argparse.Namespace(reqs=True)
     _stub_probe(monkeypatch, installed=frozenset({"reqonly"}))
     results = _capture_split_imports_result(monkeypatch)
 
@@ -427,8 +417,8 @@ def test_a_requirement_already_importable_in_the_probe_is_recorded_in_both_sets(
         _a_settings(rawlog=False),
         scan,
         target,
-        args=options.args,
-        aliases=options.aliases,
+        args=args,
+        aliases=aliases,
         extra_requirements=extra_requirements,
     )
 
@@ -452,14 +442,13 @@ def test_total_imports_equals_the_size_of_all_imports_when_split_imports_returns
     imports there -- makes the progress display count to the wrong total and
     breaks the equality task 4 turns into a property.
     """
-    options = cli.Options()
-    options.aliases = _RecordingIndex({"uninst": "uninst-pypi"})
+    aliases = _RecordingIndex({"uninst": "uninst-pypi"})
     scan = ImportScan(
         all_imports={"mymod", "inst", "uninst", "httplib"},
         custom_modules={"mymod": Path("/x/mymod.py")},
     )
     extra_requirements = {"reqpkg": None}
-    options.args = argparse.Namespace(reqs=True)
+    args = argparse.Namespace(reqs=True)
     _stub_probe(monkeypatch, installed=frozenset({"inst"}))
     results = _capture_split_imports_result(monkeypatch)
 
@@ -468,8 +457,8 @@ def test_total_imports_equals_the_size_of_all_imports_when_split_imports_returns
         _a_settings(rawlog=False),
         scan,
         target,
-        args=options.args,
-        aliases=options.aliases,
+        args=args,
+        aliases=aliases,
         extra_requirements=extra_requirements,
     )
 
@@ -571,8 +560,7 @@ def test_split_imports_expands_also_needs_onto_the_uninstalled_records(
     ``while added`` fixed point is otherwise never exercised on the path a
     user takes.
     """
-    options = cli.Options()
-    options.aliases = _index({"uninst": "uninst-pypi", "deepdep": "deep-dep-pypi"})
+    aliases = _index({"uninst": "uninst-pypi", "deepdep": "deep-dep-pypi"})
     extra_requirements: dict[str, str | None] = {}
     scan = ImportScan(all_imports={"uninst"})
     settings = _a_settings(
@@ -586,8 +574,8 @@ def test_split_imports_expands_also_needs_onto_the_uninstalled_records(
         settings,
         scan,
         target,
-        args=options.args,
-        aliases=options.aliases,
+        args=argparse.Namespace(),
+        aliases=aliases,
         extra_requirements=extra_requirements,
     )
 
@@ -642,7 +630,6 @@ def test_seaborn_tkinter_and_msvcrt_are_no_longer_blocked():
 
 
 def test_split_imports_wires_python2_table_end_to_end():
-    options = cli.Options()
     extra_requirements: dict[str, str | None] = {}
     scan = ImportScan(all_imports={"httplib", "_private_thing"})
     target = _target()
@@ -650,8 +637,8 @@ def test_split_imports_wires_python2_table_end_to_end():
         _a_settings(rawlog=False),
         scan,
         target,
-        args=options.args,
-        aliases=options.aliases,
+        args=argparse.Namespace(),
+        aliases=_index(),
         extra_requirements=extra_requirements,
     )
     assert requirements.bad == {"httplib", "_private_thing"}
@@ -662,8 +649,7 @@ def test_split_imports_stores_both_names_on_the_record(monkeypatch):
     # The bug this retires: split_imports used to add the *pip* name to
     # uninstalled_imports, so downstream import checks were handed
     # "widget-lib-pypi" when they needed "widgetlib".
-    options = cli.Options()
-    options.aliases = _index({"widgetlib": "widget-lib-pypi"})
+    aliases = _index({"widgetlib": "widget-lib-pypi"})
     extra_requirements: dict[str, str | None] = {}
     scan = ImportScan(all_imports={"widgetlib"})
     _stub_probe(monkeypatch)
@@ -674,8 +660,8 @@ def test_split_imports_stores_both_names_on_the_record(monkeypatch):
         _a_settings(rawlog=False),
         scan,
         target,
-        args=options.args,
-        aliases=options.aliases,
+        args=argparse.Namespace(),
+        aliases=aliases,
         extra_requirements=extra_requirements,
     )
 
@@ -688,8 +674,7 @@ def test_split_imports_stores_both_names_on_the_record(monkeypatch):
 def test_split_imports_falls_back_to_the_import_name_when_nothing_resolves(monkeypatch):
     # An unresolvable import must still be recorded, not crash on
     # candidates[0] and not vanish from the install list.
-    options = cli.Options()
-    options.aliases = _index({})
+    aliases = _index({})
     extra_requirements: dict[str, str | None] = {}
     scan = ImportScan(all_imports={"mysterylib"})
     _stub_probe(monkeypatch)
@@ -699,8 +684,8 @@ def test_split_imports_falls_back_to_the_import_name_when_nothing_resolves(monke
         _a_settings(rawlog=False),
         scan,
         target,
-        args=options.args,
-        aliases=options.aliases,
+        args=argparse.Namespace(),
+        aliases=aliases,
         extra_requirements=extra_requirements,
     )
 
@@ -724,9 +709,8 @@ def test_split_imports_probe_venv_is_given_the_classified_interpreter(monkeypatc
     to create_venv(venv_dir) with no second argument, the captured uv
     command below carries no --python flag at all and this test fails.
     """
-    options = cli.Options()
     target = _target(python_command="python3")
-    options.aliases = _index({})
+    aliases = _index({})
     extra_requirements: dict[str, str | None] = {}
     scan = ImportScan(all_imports={"widgetlib"})
     monkeypatch.setattr(
@@ -745,8 +729,8 @@ def test_split_imports_probe_venv_is_given_the_classified_interpreter(monkeypatc
         _a_settings(rawlog=False),
         scan,
         target,
-        args=options.args,
-        aliases=options.aliases,
+        args=argparse.Namespace(),
+        aliases=aliases,
         extra_requirements=extra_requirements,
     )
 
@@ -775,8 +759,7 @@ def test_the_classification_adapter_lets_classify_report_each_import(
     unresolved name) is happening. A user watching a stalled terminal has no
     way to tell which import it is stuck on.
     """
-    options = cli.Options()
-    options.aliases = _index({"uninst": "uninst-pypi"})
+    aliases = _index({"uninst": "uninst-pypi"})
     extra_requirements: dict[str, str | None] = {}
     scan = ImportScan(all_imports={"uninst"})
     _stub_probe(monkeypatch)
@@ -787,8 +770,8 @@ def test_the_classification_adapter_lets_classify_report_each_import(
             _a_settings(rawlog=False),
             scan,
             target,
-            args=options.args,
-            aliases=options.aliases,
+            args=argparse.Namespace(),
+            aliases=aliases,
             extra_requirements=extra_requirements,
         )
 
@@ -797,8 +780,7 @@ def test_the_classification_adapter_lets_classify_report_each_import(
     # And the other direction: a run that asked for raw logging must stay
     # quiet, so a hardcoded `rawlog=False` at that call site is caught too.
     caplog.clear()
-    quiet = cli.Options()
-    quiet.aliases = _index({"uninst": "uninst-pypi"})
+    quiet_aliases = _index({"uninst": "uninst-pypi"})
     scan = ImportScan(all_imports={"uninst"})
 
     with caplog.at_level(logging.INFO):
@@ -806,8 +788,8 @@ def test_the_classification_adapter_lets_classify_report_each_import(
             _a_settings(rawlog=True),
             scan,
             target,
-            args=quiet.args,
-            aliases=quiet.aliases,
+            args=argparse.Namespace(),
+            aliases=quiet_aliases,
             extra_requirements=extra_requirements,
         )
 
@@ -821,9 +803,7 @@ def test_only_genuinely_uninstalled_imports_are_resolved(monkeypatch):
     # lookups (the name plus five mutations), each a metadata request plus up
     # to two ranged wheel reads, at a 10 s read timeout. A local custom module
     # never needs a pip name, and neither does an import that is installed.
-    options = cli.Options()
     index = _RecordingIndex({"missingthing": "missing-thing-pypi"})
-    options.aliases = index
     extra_requirements: dict[str, str | None] = {}
     scan = ImportScan(
         all_imports={"mycustom", "alreadyhere", "missingthing"},
@@ -836,8 +816,8 @@ def test_only_genuinely_uninstalled_imports_are_resolved(monkeypatch):
         _a_settings(rawlog=False),
         scan,
         target,
-        args=options.args,
-        aliases=options.aliases,
+        args=argparse.Namespace(),
+        aliases=index,
         extra_requirements=extra_requirements,
     )
 
@@ -869,8 +849,7 @@ def test_a_refused_probe_venv_stops_classification_instead_of_probing_nothing(
     would mean the guard did not stop the probe, and the assertion below would
     not be what failed.
     """
-    options = cli.Options()
-    options.aliases = _index({})
+    aliases = _index({})
     extra_requirements: dict[str, str | None] = {}
     scan = ImportScan(all_imports={"widgetlib"})
     monkeypatch.setattr(environment, "create_venv", lambda target, python="": False)
@@ -881,8 +860,8 @@ def test_a_refused_probe_venv_stops_classification_instead_of_probing_nothing(
             _a_settings(rawlog=False),
             scan,
             target,
-            args=options.args,
-            aliases=options.aliases,
+            args=argparse.Namespace(),
+            aliases=aliases,
             extra_requirements=extra_requirements,
         )
 
@@ -909,8 +888,7 @@ def test_the_probe_venv_is_asked_about_the_interpreter_it_just_built(
     defect as the 3.12/3.13 `cgi` mismatch PROGRESS records, but total rather
     than version-dependent.
     """
-    options = cli.Options()
-    options.aliases = _index({})
+    aliases = _index({})
     extra_requirements: dict[str, str | None] = {}
     scan = ImportScan(all_imports={"widgetlib"})
     created: list[Path] = []
@@ -935,8 +913,8 @@ def test_the_probe_venv_is_asked_about_the_interpreter_it_just_built(
         _a_settings(rawlog=False),
         scan,
         target,
-        args=options.args,
-        aliases=options.aliases,
+        args=argparse.Namespace(),
+        aliases=aliases,
         extra_requirements=extra_requirements,
     )
 

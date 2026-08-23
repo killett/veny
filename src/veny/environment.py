@@ -1,9 +1,9 @@
 """The one place veny invokes ``uv``.
 
 Every virtual environment veny builds, and every package it installs into one,
-goes through this module. Nothing here has heard of ``Options``: each function
-takes the paths, names and flags it actually reads, so the environment layer
-can be driven -- and tested -- without constructing the CLI's state object.
+goes through this module. Nothing here is handed a per-run state object: each
+function takes the paths, names and flags it actually reads, so the environment
+layer can be driven -- and tested -- without building the run first.
 
 It sits above the index layer and below ``cli``; it imports nothing of veny's.
 """

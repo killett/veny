@@ -4,16 +4,56 @@ import argparse
 import contextlib
 import logging
 import os
+import pickle
 import sys
 from pathlib import Path
 
+import emmykit as ek
 import pytest
 
 from veny import alias_index, cli, pipeline, state, stdlib_index
 from veny import settings as settings_module
+from veny.analysis import custom_modules
 from veny.analysis.scan_state import ImportScan
 
 from .test_state_values import a_settings as _a_settings
+
+
+@pytest.mark.parametrize(
+    "timestamp",
+    ["20240101-010101", "20260101-010101"],
+    ids=["before-old-cutoff", "after-old-cutoff"],
+)
+def test_a_pickle_of_string_paths_loads_as_paths(
+    tmp_path: Path, timestamp: str
+) -> None:
+    """A custom-modules pickle written with str paths loads back as Path values.
+
+    Behaviour under test: dict_of_custom_modules() coerces every value it
+    reads out of a cached pickle to a pathlib.Path, regardless of the
+    timestamp encoded in the pickle's own filename.
+
+    Concrete bug this catches: the removed date-comparison used to pick
+    between two arms that both coerced str to Path -- one unconditionally,
+    one only for values that were not already a Path. If the coercion were
+    deleted along with the comparison (rather than just the comparison),
+    this would come back with the plain str veny pickled, not a Path, and
+    every consumer that compares these values against a Path -- like the
+    same-directory import checks -- would silently stop matching. The two
+    timestamps pin that the fix does not depend on the now-removed cutoff
+    date: one predates the old cutoff, one postdates it, and both must
+    coerce identically.
+    """
+    helper = tmp_path / "helper.py"
+    cache = tmp_path / f".veny_custom_modules_{ek.COMPUTER_NAME}_{timestamp}.pkl"
+    cache.write_bytes(pickle.dumps({"helper": str(helper)}))
+
+    loaded = custom_modules.dict_of_custom_modules(
+        _a_settings(cwd=tmp_path), use_cache=True
+    )
+
+    assert loaded == {"helper": helper}
+    assert all(isinstance(v, Path) for v in loaded.values())
 
 
 def _scan(script: Path, custom_modules: dict[str, Path]) -> ImportScan:
@@ -142,9 +182,9 @@ def test_a_script_with_no_third_party_imports_yields_an_empty_import_set(
 def test_a_prepopulated_custom_module_outside_the_script_dir_is_recognized(
     tmp_path: Path,
 ) -> None:
-    """options.custom_modules is seeded before the scan is ever reached.
+    """scan.custom_modules is seeded before the scan is ever reached.
 
-    dict_of_custom_modules() populates options.custom_modules before
+    dict_of_custom_modules() populates scan.custom_modules before
     list_packages() reaches find_imports_in_script -- the scanner must see
     that prior state from its very first call. faraway.py lives outside the
     script's own directory and is not a package, so the only way it can
@@ -169,18 +209,25 @@ def test_a_prepopulated_custom_module_outside_the_script_dir_is_recognized(
 
 def _a_run_that_can_classify(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> tuple[settings_module.Settings, cli.Options]:
-    """A Settings and Options list_packages can be driven with, off the network and off uv.
+) -> tuple[
+    settings_module.Settings,
+    argparse.Namespace,
+    alias_index.AliasIndex,
+    stdlib_index.StdlibIndex,
+]:
+    """A Settings, args, aliases and stdlib index list_packages can be driven with, off the network and off uv.
 
     Only two boundaries are replaced: the throwaway probe environment (a uv
     subprocess) and the alias index's network access. The scan, the stay-out
     filter and the classification copy-back are all real.
 
     Returns:
-        The Settings and the Options, in that order.
+        The Settings, the args, the aliases and the stdlib index, in that
+        order.
     """
-    options = cli.Options()
-    options.aliases = alias_index.empty(tmp_path / "index")
+    args = argparse.Namespace()
+    aliases = alias_index.empty(tmp_path / "index")
+    stdlib = stdlib_index.for_running_interpreter()
     # Not the default list: a substitution that reaches for a fresh Settings
     # would still exclude "myenv", and would look correct.
     settings = _a_settings(cwd=tmp_path, rawlog=False, stay_out_list=("keepout",))
@@ -189,7 +236,7 @@ def _a_run_that_can_classify(
         "_probe_venv",
         lambda target: contextlib.nullcontext(lambda import_name: False),
     )
-    return settings, options
+    return settings, args, aliases, stdlib
 
 
 def test_list_packages_scans_one_script_and_classifies_what_it_found(
@@ -208,9 +255,9 @@ def test_list_packages_scans_one_script_and_classifies_what_it_found(
 
     Concrete bugs this catches: scanning a path other than the one the user
     named finds another script's imports, so veny builds an environment for
-    the wrong program; handing the classification copy-back a different
-    Options leaves options.uninstalled_imports empty, so veny decides nothing
-    needs installing and runs the script under an interpreter that cannot
+    the wrong program; dropping the classification's result instead of
+    returning it leaves requirements.uninstalled empty, so veny decides
+    nothing needs installing and runs the script under an interpreter that cannot
     import what it needs. `extra-pkg` is asserted absent because --reqs was
     not given: use_reqs must be read from the flag, not assumed true.
     """
@@ -218,7 +265,7 @@ def test_list_packages_scans_one_script_and_classifies_what_it_found(
     project.mkdir()
     script = project / "s.py"
     script.write_text("import requests\n")
-    settings, options = _a_run_that_can_classify(tmp_path, monkeypatch)
+    settings, args, aliases, stdlib = _a_run_that_can_classify(tmp_path, monkeypatch)
     target = state.Target(
         python_script=script,
         script_dir=project,
@@ -232,10 +279,10 @@ def test_list_packages_scans_one_script_and_classifies_what_it_found(
             settings,
             ImportScan(),
             target,
-            args=options.args,
-            aliases=options.aliases,
+            args=args,
+            aliases=aliases,
             extra_requirements={"extra-pkg": ">=2.0"},
-            is_stdlib=options.stdlib.__contains__,
+            is_stdlib=stdlib.__contains__,
         )
 
     assert f"Processing a single Python script: {script}" in caplog.text
@@ -269,7 +316,7 @@ def test_report_warns_about_a_standard_library_import_that_needs_a_system_packag
     project.mkdir()
     script = project / "s.py"
     script.write_text("import tkinter\n")
-    settings, options = _a_run_that_can_classify(tmp_path, monkeypatch)
+    settings, args, aliases, stdlib = _a_run_that_can_classify(tmp_path, monkeypatch)
     target = state.Target(
         python_script=script,
         script_dir=project,
@@ -281,10 +328,10 @@ def test_report_warns_about_a_standard_library_import_that_needs_a_system_packag
         settings,
         ImportScan(),
         target,
-        args=options.args,
-        aliases=options.aliases,
+        args=args,
+        aliases=aliases,
         extra_requirements={},
-        is_stdlib=options.stdlib.__contains__,
+        is_stdlib=stdlib.__contains__,
     )
 
     with caplog.at_level(logging.INFO):
@@ -433,7 +480,7 @@ def test_the_scan_list_packages_is_handed_is_the_one_it_fills(
     helper.write_text("import requests\n")
     script = tmp_path / "s.py"
     script.write_text("import my_helper\n\nmy_helper\n")
-    settings, options = _a_run_that_can_classify(tmp_path, monkeypatch)
+    settings, args, aliases, stdlib = _a_run_that_can_classify(tmp_path, monkeypatch)
     target = state.Target(
         python_script=script,
         script_dir=tmp_path,
@@ -447,10 +494,10 @@ def test_the_scan_list_packages_is_handed_is_the_one_it_fills(
         settings,
         seeded,
         target,
-        args=options.args,
-        aliases=options.aliases,
+        args=args,
+        aliases=aliases,
         extra_requirements={},
-        is_stdlib=options.stdlib.__contains__,
+        is_stdlib=stdlib.__contains__,
     )
 
     assert returned is seeded

@@ -9,9 +9,9 @@ import logging
 import os
 import shutil
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
-import emmykit as ek
 import pytest
 
 from veny import (
@@ -23,28 +23,25 @@ from veny import (
     venv_cache,
     verify,
 )
-from veny import cli as veny
 from veny.alias_index import ResolvedImport
 
 from .test_state_values import a_requirements as _a_requirements
 
 
-def an_options(records: set[ResolvedImport]) -> veny.Options:
-    """Build an Options carrying what the cache search still reads off one.
+def a_stdlib() -> stdlib_index.StdlibIndex:
+    """Build the StdlibIndex the cache search still reads.
 
     Phase 4a moved uninstalled_imports, all_imports and extra_requirements
     onto Requirements; a_reqs below builds the matching value. Only the
-    stdlib index is left here.
+    stdlib index is a bag of its own here.
     """
-    options = veny.Options()
-    options.stdlib = stdlib_index.StdlibIndex(
+    return stdlib_index.StdlibIndex(
         names=frozenset({"os"}), python_version=(3, 12), source="test"
     )
-    return options
 
 
 def a_reqs(records: set[ResolvedImport], **overrides: object) -> state.Requirements:
-    """The Requirements matching an_options' run description.
+    """The Requirements matching a_stdlib's run description.
 
     Args:
         records: What the run still has to install.
@@ -57,14 +54,14 @@ def a_reqs(records: set[ResolvedImport], **overrides: object) -> state.Requireme
 
 
 def candidates(
-    options: veny.Options,
+    stdlib: stdlib_index.StdlibIndex,
     requirements: state.Requirements,
     folders: list[Path],
 ) -> list[cache_search.CacheCandidate]:
     """cache_candidates wired the way find_match_dir_in_cache wires it.
 
     cache_candidates takes no Options any more: what this run needs and which
-    interpreter it needs it for are explicit arguments. This keeps an_options
+    interpreter it needs it for are explicit arguments. This keeps a_stdlib
     above as the single description of the run under test.
     """
     return cache_search.cache_candidates(
@@ -72,30 +69,35 @@ def candidates(
         wanted=cache_search.wanted_packages(
             set(requirements.uninstalled), requirements.extra_requirements
         ),
-        tag=cache_search.interpreter_tag(options.stdlib),
+        tag=cache_search.interpreter_tag(stdlib),
         rawlog=True,
     )
 
 
 def check(
-    options: veny.Options, requirements: state.Requirements, venv_dir: Path
+    stdlib: stdlib_index.StdlibIndex,
+    requirements: state.Requirements,
+    venv_dir: Path,
 ) -> bool:
     """check_venv_dir wired the way find_match_dir_in_cache wires it.
 
     source_names is computed once by main() now and passed down, rather than
-    rebuilt inside check_venv_dir; this reproduces that one wiring.
+    rebuilt inside check_venv_dir; this reproduces that one wiring. No caller
+    here ever sets --reqs, so the getattr(args, "reqs", False) this used to
+    read off an Options is always False -- inlined rather than threaded
+    through as a never-set parameter.
     """
     return cache_search.check_venv_dir(
         venv_dir,
         wanted=cache_search.wanted_packages(
             set(requirements.uninstalled), requirements.extra_requirements
         ),
-        tag=cache_search.interpreter_tag(options.stdlib),
+        tag=cache_search.interpreter_tag(stdlib),
         uninstalled=set(requirements.uninstalled),
         source_names=verify.source_import_names(
             set(requirements.all_imports),
             requirements.extra_requirements,
-            getattr(options.args, "reqs", False),
+            False,
         ),
         rawlog=True,
     )
@@ -128,9 +130,9 @@ def test_a_hyphenated_package_does_not_disqualify_its_own_venv(tmp_path: Path) -
         "myenv-py3.12-20260814-091500-ruamel-yaml",
         [venv_cache.PackageRecord("ruamel.yaml", "ruamel-yaml", "0.18.6", None)],
     )
-    options = an_options({ResolvedImport("ruamel.yaml", "ruamel-yaml")})
+    stdlib = a_stdlib()
     requirements = a_reqs({ResolvedImport("ruamel.yaml", "ruamel-yaml")})
-    assert [c.folder for c in candidates(options, requirements, [venv_dir])] == [
+    assert [c.folder for c in candidates(stdlib, requirements, [venv_dir])] == [
         venv_dir
     ]
 
@@ -139,9 +141,9 @@ def test_a_venv_without_a_manifest_is_skipped(tmp_path: Path) -> None:
     """Pre-manifest venvs must be rebuilt, not matched on their names alone."""
     venv_dir = tmp_path / "myenv-py3.12-20260814-091500-numpy"
     venv_dir.mkdir()
-    options = an_options({ResolvedImport("numpy", "numpy")})
+    stdlib = a_stdlib()
     requirements = a_reqs({ResolvedImport("numpy", "numpy")})
-    assert candidates(options, requirements, [venv_dir]) == []
+    assert candidates(stdlib, requirements, [venv_dir]) == []
 
 
 def test_a_venv_for_another_interpreter_is_skipped(tmp_path: Path) -> None:
@@ -152,9 +154,9 @@ def test_a_venv_for_another_interpreter_is_skipped(tmp_path: Path) -> None:
         [venv_cache.PackageRecord("numpy", "numpy", "2.1.3", None)],
         tag="3.13",
     )
-    options = an_options({ResolvedImport("numpy", "numpy")})
+    stdlib = a_stdlib()
     requirements = a_reqs({ResolvedImport("numpy", "numpy")})
-    assert candidates(options, requirements, [venv_dir]) == []
+    assert candidates(stdlib, requirements, [venv_dir]) == []
 
 
 def test_a_venv_missing_a_package_is_skipped(tmp_path: Path) -> None:
@@ -165,10 +167,10 @@ def test_a_venv_missing_a_package_is_skipped(tmp_path: Path) -> None:
         [venv_cache.PackageRecord("numpy", "numpy", "2.1.3", None)],
     )
     wanted = {ResolvedImport("numpy", "numpy"), ResolvedImport("scipy", "scipy")}
-    options = an_options(wanted)
+    stdlib = a_stdlib()
     requirements = a_reqs(wanted)
 
-    assert candidates(options, requirements, [venv_dir]) == []
+    assert candidates(stdlib, requirements, [venv_dir]) == []
 
 
 def test_a_venv_whose_name_allows_it_but_manifest_disagrees_is_skipped(
@@ -181,10 +183,10 @@ def test_a_venv_whose_name_allows_it_but_manifest_disagrees_is_skipped(
         [venv_cache.PackageRecord("numpy", "numpy", "2.1.3", None)],
     )
     wanted = {ResolvedImport("numpy", "numpy"), ResolvedImport("scipy", "scipy")}
-    options = an_options(wanted)
+    stdlib = a_stdlib()
     requirements = a_reqs(wanted)
 
-    assert candidates(options, requirements, [venv_dir]) == []
+    assert candidates(stdlib, requirements, [venv_dir]) == []
 
 
 def test_a_pin_is_checked_against_the_installed_version(tmp_path: Path) -> None:
@@ -194,16 +196,16 @@ def test_a_pin_is_checked_against_the_installed_version(tmp_path: Path) -> None:
         "myenv-py3.12-20260814-091500-numpy",
         [venv_cache.PackageRecord("numpy", "numpy", "1.0.0", ">=1.2")],
     )
-    options = an_options({ResolvedImport("numpy", "numpy")})
+    stdlib = a_stdlib()
     requirements = a_reqs({ResolvedImport("numpy", "numpy")})
     requirements = dataclasses.replace(
         requirements, extra_requirements={"numpy": ">=1.2"}
     )
-    assert candidates(options, requirements, [venv_dir]) == []
+    assert candidates(stdlib, requirements, [venv_dir]) == []
     requirements = dataclasses.replace(
         requirements, extra_requirements={"numpy": ">=0.9"}
     )
-    assert [c.folder for c in candidates(options, requirements, [venv_dir])] == [
+    assert [c.folder for c in candidates(stdlib, requirements, [venv_dir])] == [
         venv_dir
     ]
 
@@ -230,13 +232,13 @@ def test_a_folder_that_loses_its_manifest_between_calls_is_dropped_not_raised(
         "myenv-py3.12-20260814-091500-numpy",
         [venv_cache.PackageRecord("numpy", "numpy", "2.1.3", None)],
     )
-    options = an_options({ResolvedImport("numpy", "numpy")})
+    stdlib = a_stdlib()
     requirements = a_reqs({ResolvedImport("numpy", "numpy")})
-    assert [c.folder for c in candidates(options, requirements, [venv_dir])] == [
+    assert [c.folder for c in candidates(stdlib, requirements, [venv_dir])] == [
         venv_dir
     ]
     (venv_dir / venv_cache.MANIFEST_FILENAME).unlink()
-    assert candidates(options, requirements, [venv_dir]) == []
+    assert candidates(stdlib, requirements, [venv_dir]) == []
 
 
 def test_wanted_packages_carries_the_requested_specs() -> None:
@@ -263,16 +265,16 @@ def test_check_venv_dir_rejects_a_directory_with_no_manifest(tmp_path: Path) -> 
     """The last-used pointer can outlive the venv it points at."""
     venv_dir = tmp_path / "myenv-py3.12-20260814-091500-numpy"
     venv_dir.mkdir()
-    options = an_options({ResolvedImport("numpy", "numpy")})
+    stdlib = a_stdlib()
     requirements = a_reqs({ResolvedImport("numpy", "numpy")})
-    assert check(options, requirements, venv_dir) is False
+    assert check(stdlib, requirements, venv_dir) is False
 
 
 def test_check_venv_dir_rejects_a_missing_directory(tmp_path: Path) -> None:
     """A deleted venv must be a cache miss, not an exception."""
-    options = an_options({ResolvedImport("numpy", "numpy")})
+    stdlib = a_stdlib()
     requirements = a_reqs({ResolvedImport("numpy", "numpy")})
-    assert check(options, requirements, tmp_path / "gone") is False
+    assert check(stdlib, requirements, tmp_path / "gone") is False
 
 
 def test_check_venv_dir_rejects_a_manifest_that_does_not_match(tmp_path: Path) -> None:
@@ -282,9 +284,9 @@ def test_check_venv_dir_rejects_a_manifest_that_does_not_match(tmp_path: Path) -
         "myenv-py3.12-20260814-091500-numpy",
         [venv_cache.PackageRecord("numpy", "numpy", "2.1.3", None)],
     )
-    options = an_options({ResolvedImport("scipy", "scipy")})
+    stdlib = a_stdlib()
     requirements = a_reqs({ResolvedImport("scipy", "scipy")})
-    assert check(options, requirements, venv_dir) is False
+    assert check(stdlib, requirements, venv_dir) is False
 
 
 def _stub_successful_import_check(
@@ -341,7 +343,7 @@ def test_check_venv_dir_accepts_a_manifest_match_whose_import_actually_imports(
         "myenv-py3.12-20260814-091500-thing-pkg",
         [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
     )
-    options = an_options({ResolvedImport("thing", "thing-pkg")})
+    stdlib = a_stdlib()
     requirements = a_reqs({ResolvedImport("thing", "thing-pkg")})
     requirements = dataclasses.replace(requirements, all_imports=frozenset({"thing"}))
     monkeypatch.setattr(
@@ -351,7 +353,7 @@ def test_check_venv_dir_accepts_a_manifest_match_whose_import_actually_imports(
     )
     _stub_successful_import_check(monkeypatch, importable={"thing"})
 
-    assert check(options, requirements, venv_dir) is True
+    assert check(stdlib, requirements, venv_dir) is True
 
 
 def test_check_venv_dir_checks_the_name_the_user_wrote_not_the_distributions_others(
@@ -378,7 +380,7 @@ def test_check_venv_dir_checks_the_name_the_user_wrote_not_the_distributions_oth
         "myenv-py3.12-20260814-091500-thing-pkg",
         [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
     )
-    options = an_options({ResolvedImport("thing", "thing-pkg")})
+    stdlib = a_stdlib()
     requirements = a_reqs({ResolvedImport("thing", "thing-pkg")})
     requirements = dataclasses.replace(requirements, all_imports=frozenset({"thing"}))
     # thing-pkg installs a top-level `_hack`, not `thing`.
@@ -389,10 +391,10 @@ def test_check_venv_dir_checks_the_name_the_user_wrote_not_the_distributions_oth
     )
     _stub_successful_import_check(monkeypatch, importable={"_hack"})
 
-    assert check(options, requirements, venv_dir) is False
+    assert check(stdlib, requirements, venv_dir) is False
 
 
-def _never_called() -> ek.Options | None:
+def _never_called() -> state.LastUsed | None:
     """A load_last_used the --latest path must never reach.
 
     --latest short-circuits the last-used pass, so consulting the previous
@@ -417,11 +419,10 @@ def test_find_match_dir_in_cache_returns_a_manifest_match(
         "myenv-py3.12-20260814-091500-thing-pkg",
         [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
     )
-    options = an_options({ResolvedImport("thing", "thing-pkg")})
+    stdlib = a_stdlib()
     requirements = a_reqs({ResolvedImport("thing", "thing-pkg")})
     requirements = dataclasses.replace(requirements, all_imports=frozenset({"thing"}))
-    options.my_dir = tmp_path
-    options.args = argparse.Namespace(
+    args = argparse.Namespace(
         latest=True, oldest=False, last_used=False, smallest=False
     )
     monkeypatch.setattr(
@@ -433,17 +434,17 @@ def test_find_match_dir_in_cache_returns_a_manifest_match(
 
     assert (
         cache_search.find_match_dir_in_cache(
-            options.args,
-            my_dir=options.my_dir,
+            args,
+            my_dir=tmp_path,
             venv_name="myenv",
             uninstalled=set(requirements.uninstalled),
             extra_requirements=requirements.extra_requirements,
             source_names=verify.source_import_names(
                 set(requirements.all_imports),
                 requirements.extra_requirements,
-                getattr(options.args, "reqs", False),
+                getattr(args, "reqs", False),
             ),
-            tag=cache_search.interpreter_tag(options.stdlib),
+            tag=cache_search.interpreter_tag(stdlib),
             rawlog=True,
             load_last_used=_never_called,
         )
@@ -451,41 +452,208 @@ def test_find_match_dir_in_cache_returns_a_manifest_match(
     )
 
 
-def test_find_match_dir_in_cache_tolerates_a_last_used_options_without_venv_dir(
+def test_find_match_dir_in_cache_treats_no_record_at_all_as_a_cache_miss(
     tmp_path: Path,
 ) -> None:
-    """A last-used JSON restored as a bare emmykit.Options must be a cache miss, not an AttributeError.
+    """A run with no readable last-used record must be a miss, not a crash.
 
-    venv_dir is declared only in veny.Options.__init__, not in the
-    emmykit.Options base class load_last_used_options builds from, so an
-    options JSON written before that field existed (or otherwise missing
-    the key) must not crash the run.
+    This replaces the "a bare emmykit.Options has no venv_dir" tolerance
+    test: the reader now hands back a state.LastUsed, whose venv_dir always
+    exists, or None. None is the one degraded input left -- no record, an
+    unreadable one, or one naming no environment, all of which last_used.load
+    turns into None -- and the last-used pass must fall through it to the
+    ordinary scan rather than raising on the missing attribute.
     """
-    options = an_options({ResolvedImport("numpy", "numpy")})
+    stdlib = a_stdlib()
     requirements = a_reqs({ResolvedImport("numpy", "numpy")})
-    options.my_dir = tmp_path
-    options.args = argparse.Namespace(
+    args = argparse.Namespace(
         latest=False, oldest=False, last_used=False, smallest=False
     )
 
     assert (
         cache_search.find_match_dir_in_cache(
-            options.args,
-            my_dir=options.my_dir,
+            args,
+            my_dir=tmp_path,
             venv_name="myenv",
             uninstalled=set(requirements.uninstalled),
             extra_requirements=requirements.extra_requirements,
             source_names=verify.source_import_names(
                 set(requirements.all_imports),
                 requirements.extra_requirements,
-                getattr(options.args, "reqs", False),
+                getattr(args, "reqs", False),
             ),
-            tag=cache_search.interpreter_tag(options.stdlib),
-            rawlog=options.rawlog,
-            load_last_used=lambda: ek.Options(),
+            tag=cache_search.interpreter_tag(stdlib),
+            rawlog=False,
+            load_last_used=lambda: None,
         )
         is None
     )
+
+
+def _a_satisfying_venv(
+    monkeypatch: pytest.MonkeyPatch, root: Path, timestamp: str
+) -> Path:
+    """One cached venv folder the run under test can legitimately reuse.
+
+    Args:
+        monkeypatch: pytest's monkeypatch fixture, for the interpreter probe
+                     and the import-level check the selection runs for real.
+        root:        The cache directory the folder is created in.
+        timestamp:   The "YYYYmmdd-HHMMSS" stamp in the folder's name, which
+                     is what latest_venv orders on.
+
+    Returns:
+        The folder created.
+    """
+    venv_dir = a_cached_venv(
+        root,
+        f"myenv-py3.12-{timestamp}-thing-pkg",
+        [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
+    )
+    monkeypatch.setattr(
+        alias_index,
+        "probe_interpreter",
+        lambda python, timeout=30.0: ("3.12", {"thing": ["thing-pkg"]}),
+    )
+    _stub_successful_import_check(monkeypatch, importable={"thing"})
+    return venv_dir
+
+
+def _search(
+    args: argparse.Namespace,
+    *,
+    my_dir: Path,
+    load_last_used: Callable[[], state.LastUsed | None],
+) -> Path | None:
+    """find_match_dir_in_cache wired for the one-package run the tests build.
+
+    Args:
+        args:           The parsed command line the selection reads its flags
+                        off.
+        my_dir:         The cache directory to search.
+        load_last_used: The injected reader of the previous run's record.
+
+    Returns:
+        Whatever the search selected, or None.
+    """
+    stdlib = a_stdlib()
+    requirements = dataclasses.replace(
+        a_reqs({ResolvedImport("thing", "thing-pkg")}),
+        all_imports=frozenset({"thing"}),
+    )
+    return cache_search.find_match_dir_in_cache(
+        args,
+        my_dir=my_dir,
+        venv_name="myenv",
+        uninstalled=set(requirements.uninstalled),
+        extra_requirements=requirements.extra_requirements,
+        source_names=verify.source_import_names(
+            set(requirements.all_imports),
+            requirements.extra_requirements,
+            False,
+        ),
+        tag=cache_search.interpreter_tag(stdlib),
+        rawlog=True,
+        load_last_used=load_last_used,
+    )
+
+
+def test_the_last_used_pointer_selects_the_recorded_venv(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A run with no selection flags reuses the venv the record names.
+
+    Bug caught: reading the pointer off the wrong field, or dropping the
+    last-used pass entirely -- both leave the run rebuilding an environment
+    it already had, which is invisible to a test that only asserts "some
+    venv was chosen". Here the recorded folder is the *older* of the two in
+    the cache, so a search that skipped the pointer and went straight to
+    "latest" returns the other one.
+    """
+    folder = _a_satisfying_venv(monkeypatch, tmp_path, "20260101-010101")
+    newer = a_cached_venv(
+        tmp_path,
+        "myenv-py3.12-20260814-091500-thing-pkg",
+        [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
+    )
+    record = state.LastUsed(folder, folder / "bin" / "python", "20260202-020202")
+
+    chosen = _search(
+        argparse.Namespace(), my_dir=tmp_path, load_last_used=lambda: record
+    )
+
+    assert chosen == folder
+    assert chosen != newer
+
+
+def test_a_stale_pointer_falls_through_to_the_latest_match(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A record naming a venv that is gone must not end the search.
+
+    Bug caught: returning None (rebuild) instead of falling through when the
+    recorded venv no longer satisfies the run -- the behaviour the old
+    `args.latest = True` write implemented. The cache still holds a venv this
+    run can use, and rebuilding it would be a silent waste of a whole install.
+    """
+    newest_satisfying_folder = _a_satisfying_venv(
+        monkeypatch, tmp_path, "20260814-091500"
+    )
+    a_cached_venv(
+        tmp_path,
+        "myenv-py3.12-20260101-010101-thing-pkg",
+        [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
+    )
+    record = state.LastUsed(
+        tmp_path / "gone", tmp_path / "gone" / "python", "20260101-010101"
+    )
+
+    chosen = _search(
+        argparse.Namespace(), my_dir=tmp_path, load_last_used=lambda: record
+    )
+
+    assert chosen == newest_satisfying_folder
+
+
+def test_the_cache_search_does_not_write_to_the_command_line(tmp_path: Path) -> None:
+    """The selection resolves its own defaults in locals, not on args.
+
+    Bug caught: leaving the in-place flag writes in place. They were only
+    ever writes because they reached disk through save_options_to_json;
+    with that gone, a mutated Namespace is a shared-state surprise for
+    every later reader of args.
+    """
+    args = argparse.Namespace(
+        latest=False, oldest=False, last_used=False, smallest=False
+    )
+    before = vars(args).copy()
+
+    assert _search(args, my_dir=tmp_path, load_last_used=lambda: None) is None
+
+    assert vars(args) == before
+
+
+def test_asking_for_both_the_latest_and_the_last_used_venv_selects_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """--latest --last-used is the "invalid combination" branch, and stays it.
+
+    Behaviour under test: the one flag combination the selection refuses to
+    act on. --latest suppresses the last-used pass, and the four selection
+    branches below each require the other three flags to be clear, so nothing
+    matches and the run rebuilds from scratch after logging the combination.
+
+    Bug caught: collapsing the two flag reads into a single local during the
+    de-mutation of this function -- `try_last_used and not prefer_latest`
+    reads as False here, which would quietly turn this combination into a
+    plain --latest run and hand back a cached venv where veny used to build a
+    new one. Not covered by the four single-flag paths, all of which are
+    unaffected by the difference.
+    """
+    _a_satisfying_venv(monkeypatch, tmp_path, "20260814-091500")
+    args = argparse.Namespace(latest=True, oldest=False, last_used=True, smallest=False)
+
+    assert _search(args, my_dir=tmp_path, load_last_used=lambda: None) is None
 
 
 def test_a_cache_hit_reads_and_matches_each_manifest_once(
@@ -529,11 +697,10 @@ def test_a_cache_hit_reads_and_matches_each_manifest_once(
         "myenv-py3.12-20260814-091500-thing-pkg",
         [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
     )
-    options = an_options({ResolvedImport("thing", "thing-pkg")})
+    stdlib = a_stdlib()
     requirements = a_reqs({ResolvedImport("thing", "thing-pkg")})
     requirements = dataclasses.replace(requirements, all_imports=frozenset({"thing"}))
-    options.my_dir = tmp_path
-    options.args = argparse.Namespace(
+    args = argparse.Namespace(
         latest=True, oldest=False, last_used=False, smallest=False
     )
     monkeypatch.setattr(
@@ -562,17 +729,17 @@ def test_a_cache_hit_reads_and_matches_each_manifest_once(
     monkeypatch.setattr(venv_cache, "satisfies", counting_satisfies)
 
     result = cache_search.find_match_dir_in_cache(
-        options.args,
-        my_dir=options.my_dir,
+        args,
+        my_dir=tmp_path,
         venv_name="myenv",
         uninstalled=set(requirements.uninstalled),
         extra_requirements=requirements.extra_requirements,
         source_names=verify.source_import_names(
             set(requirements.all_imports),
             requirements.extra_requirements,
-            getattr(options.args, "reqs", False),
+            getattr(args, "reqs", False),
         ),
-        tag=cache_search.interpreter_tag(options.stdlib),
+        tag=cache_search.interpreter_tag(stdlib),
         rawlog=True,
         load_last_used=_never_called,
     )
@@ -610,10 +777,10 @@ def test_check_venv_dir_survives_the_manifest_vanishing_after_it_was_already_rea
         "myenv-py3.12-20260814-091500-thing-pkg",
         [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
     )
-    options = an_options({ResolvedImport("thing", "thing-pkg")})
+    stdlib = a_stdlib()
     requirements = a_reqs({ResolvedImport("thing", "thing-pkg")})
     requirements = dataclasses.replace(requirements, all_imports=frozenset({"thing"}))
-    found = candidates(options, requirements, [venv_dir])
+    found = candidates(stdlib, requirements, [venv_dir])
     assert [c.folder for c in found] == [venv_dir]
     already_matched = found[0]
 
@@ -632,14 +799,14 @@ def test_check_venv_dir_survives_the_manifest_vanishing_after_it_was_already_rea
             wanted=cache_search.wanted_packages(
                 set(requirements.uninstalled), requirements.extra_requirements
             ),
-            tag=cache_search.interpreter_tag(options.stdlib),
+            tag=cache_search.interpreter_tag(stdlib),
             uninstalled=set(requirements.uninstalled),
             source_names=verify.source_import_names(
                 set(requirements.all_imports),
                 requirements.extra_requirements,
-                getattr(options.args, "reqs", False),
+                False,
             ),
-            rawlog=options.rawlog,
+            rawlog=False,
             candidate=already_matched,
         )
         is True
@@ -679,10 +846,10 @@ def test_check_venv_dir_refuses_a_candidate_that_describes_another_folder(
         "myenv-py3.12-20260814-091501-other-pkg",
         [venv_cache.PackageRecord("other", "other-pkg", "1.0.0", None)],
     )
-    options = an_options({ResolvedImport("thing", "thing-pkg")})
+    stdlib = a_stdlib()
     requirements = a_reqs({ResolvedImport("thing", "thing-pkg")})
     requirements = dataclasses.replace(requirements, all_imports=frozenset({"thing"}))
-    found = candidates(options, requirements, [wanted_dir])
+    found = candidates(stdlib, requirements, [wanted_dir])
     assert [c.folder for c in found] == [wanted_dir]
 
     monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: True)
@@ -693,10 +860,10 @@ def test_check_venv_dir_refuses_a_candidate_that_describes_another_folder(
             wanted=cache_search.wanted_packages(
                 set(requirements.uninstalled), requirements.extra_requirements
             ),
-            tag=cache_search.interpreter_tag(options.stdlib),
+            tag=cache_search.interpreter_tag(stdlib),
             uninstalled=set(requirements.uninstalled),
             source_names={"thing"},
-            rawlog=options.rawlog,
+            rawlog=False,
             candidate=found[0],
         )
 
@@ -712,10 +879,10 @@ def test_check_venv_dir_refuses_a_candidate_that_describes_another_folder(
             wanted=cache_search.wanted_packages(
                 set(requirements.uninstalled), requirements.extra_requirements
             ),
-            tag=cache_search.interpreter_tag(options.stdlib),
+            tag=cache_search.interpreter_tag(stdlib),
             uninstalled=set(requirements.uninstalled),
             source_names={"thing"},
-            rawlog=options.rawlog,
+            rawlog=False,
             candidate=found[0],
         )
         is True
@@ -743,11 +910,10 @@ def test_a_last_used_hit_still_reads_and_matches_its_own_manifest(
         "myenv-py3.12-20260814-091500-thing-pkg",
         [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
     )
-    options = an_options({ResolvedImport("thing", "thing-pkg")})
+    stdlib = a_stdlib()
     requirements = a_reqs({ResolvedImport("thing", "thing-pkg")})
     requirements = dataclasses.replace(requirements, all_imports=frozenset({"thing"}))
-    options.my_dir = tmp_path
-    options.args = argparse.Namespace(
+    args = argparse.Namespace(
         latest=False, oldest=False, last_used=True, smallest=False
     )
     monkeypatch.setattr(
@@ -775,23 +941,24 @@ def test_a_last_used_hit_still_reads_and_matches_its_own_manifest(
     monkeypatch.setattr(venv_cache, "read_manifest", counting_read_manifest)
     monkeypatch.setattr(venv_cache, "satisfies", counting_satisfies)
 
-    last_used_options = ek.Options()
-    last_used_options.venv_dir = venv_dir  # type: ignore[attr-defined]
+    last_used_record = state.LastUsed(
+        venv_dir, venv_dir / "bin" / "python", "20260202-020202"
+    )
 
     result = cache_search.find_match_dir_in_cache(
-        options.args,
-        my_dir=options.my_dir,
+        args,
+        my_dir=tmp_path,
         venv_name="myenv",
         uninstalled=set(requirements.uninstalled),
         extra_requirements=requirements.extra_requirements,
         source_names=verify.source_import_names(
             set(requirements.all_imports),
             requirements.extra_requirements,
-            getattr(options.args, "reqs", False),
+            getattr(args, "reqs", False),
         ),
-        tag=cache_search.interpreter_tag(options.stdlib),
+        tag=cache_search.interpreter_tag(stdlib),
         rawlog=True,
-        load_last_used=lambda: last_used_options,
+        load_last_used=lambda: last_used_record,
     )
 
     assert result == venv_dir
@@ -801,7 +968,7 @@ def test_a_last_used_hit_still_reads_and_matches_its_own_manifest(
 
 def _a_run_with_a_pinned_package(
     tmp_path: Path,
-) -> tuple[veny.Options, state.Requirements, Path]:
+) -> tuple[stdlib_index.StdlibIndex, state.Requirements, Path]:
     """Build a run whose four check_venv_dir arguments are all distinguishable.
 
     Every value the call site has to wire is given a different shape, so a
@@ -811,7 +978,7 @@ def _a_run_with_a_pinned_package(
     is in neither, and `tag` is the run's own interpreter tag.
 
     Returns:
-        The Options, the Requirements and the cached venv directory.
+        The StdlibIndex, the Requirements and the cached venv directory.
     """
     folder_name = venv_cache.build_folder_name(
         venv_name="myenv",
@@ -824,16 +991,15 @@ def _a_run_with_a_pinned_package(
         folder_name,
         [venv_cache.PackageRecord("thing", "thing-pkg", "2.5.0", None)],
     )
-    options = an_options({ResolvedImport("thing", "thing-pkg")})
+    stdlib = a_stdlib()
     requirements = a_reqs({ResolvedImport("thing", "thing-pkg")})
-    options.my_dir = tmp_path
     requirements = dataclasses.replace(
         requirements, all_imports=frozenset({"thing", "other"})
     )
     requirements = dataclasses.replace(
         requirements, extra_requirements={"thing-pkg": ">=2.0"}
     )
-    return options, requirements, venv_dir
+    return stdlib, requirements, venv_dir
 
 
 @pytest.mark.parametrize(
@@ -890,8 +1056,8 @@ def test_every_branch_hands_check_venv_dir_the_same_description_of_the_run(
     cheap folder-name prefilter cannot catch, so it is the one that proves
     `wanted` and `tag` are actually consulted rather than merely passed.
     """
-    options, requirements, venv_dir = _a_run_with_a_pinned_package(tmp_path)
-    options.args = argparse.Namespace(**flags)
+    stdlib, requirements, venv_dir = _a_run_with_a_pinned_package(tmp_path)
+    args = argparse.Namespace(**flags)
     calls: list[dict[str, object]] = []
 
     def spy(venv_dir_arg, **kwargs):
@@ -900,23 +1066,24 @@ def test_every_branch_hands_check_venv_dir_the_same_description_of_the_run(
 
     real_check_venv_dir = cache_search.check_venv_dir
     monkeypatch.setattr(cache_search, "check_venv_dir", spy)
-    last_used_options = ek.Options()
-    last_used_options.venv_dir = venv_dir  # type: ignore[attr-defined]
+    last_used_record = state.LastUsed(
+        venv_dir, venv_dir / "bin" / "python", "20260202-020202"
+    )
 
     result = cache_search.find_match_dir_in_cache(
-        options.args,
-        my_dir=options.my_dir,
+        args,
+        my_dir=tmp_path,
         venv_name="myenv",
         uninstalled=set(requirements.uninstalled),
         extra_requirements=requirements.extra_requirements,
         source_names=verify.source_import_names(
             set(requirements.all_imports),
             requirements.extra_requirements,
-            getattr(options.args, "reqs", False),
+            getattr(args, "reqs", False),
         ),
-        tag=cache_search.interpreter_tag(options.stdlib),
+        tag=cache_search.interpreter_tag(stdlib),
         rawlog=True,
-        load_last_used=lambda: last_used_options,
+        load_last_used=lambda: last_used_record,
     )
 
     assert result == venv_dir
@@ -956,13 +1123,12 @@ def test_every_branch_hands_check_venv_dir_the_same_description_of_the_run(
         ),
         [venv_cache.PackageRecord("other", "other-pkg", "1.0.0", None)],
     )
-    liar_last_used = ek.Options()
-    liar_last_used.venv_dir = liar  # type: ignore[attr-defined]
-    options.args = argparse.Namespace(**flags)
+    liar_last_used = state.LastUsed(liar, liar / "bin" / "python", "20260202-020202")
+    args = argparse.Namespace(**flags)
 
     assert (
         cache_search.find_match_dir_in_cache(
-            options.args,
+            args,
             my_dir=liar_dir,
             venv_name="myenv",
             uninstalled=set(requirements.uninstalled),
@@ -970,10 +1136,10 @@ def test_every_branch_hands_check_venv_dir_the_same_description_of_the_run(
             source_names=verify.source_import_names(
                 set(requirements.all_imports),
                 requirements.extra_requirements,
-                getattr(options.args, "reqs", False),
+                getattr(args, "reqs", False),
             ),
-            tag=cache_search.interpreter_tag(options.stdlib),
-            rawlog=options.rawlog,
+            tag=cache_search.interpreter_tag(stdlib),
+            rawlog=False,
             load_last_used=lambda: liar_last_used,
         )
         is None
@@ -1007,7 +1173,7 @@ def test_the_cache_search_lets_cache_candidates_explain_a_rejected_folder(
         "myenv-py3.12-20260814-091500-thing-pkg",
         [venv_cache.PackageRecord("other", "other-pkg", "1.0.0", None)],
     )
-    options = an_options({ResolvedImport("thing", "thing-pkg")})
+    stdlib = a_stdlib()
     requirements = a_reqs({ResolvedImport("thing", "thing-pkg")})
     requirements = dataclasses.replace(requirements, all_imports=frozenset({"thing"}))
 
@@ -1021,7 +1187,7 @@ def test_the_cache_search_lets_cache_candidates_explain_a_rejected_folder(
             uninstalled=set(requirements.uninstalled),
             extra_requirements=requirements.extra_requirements,
             source_names={"thing"},
-            tag=cache_search.interpreter_tag(options.stdlib),
+            tag=cache_search.interpreter_tag(stdlib),
             rawlog=rawlog,
             load_last_used=_never_called,
         )
@@ -1081,10 +1247,10 @@ def test_every_branch_lets_check_venv_dir_report_a_venv_that_vanished(
         "myenv-py3.12-20260814-091500-thing-pkg",
         [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
     )
-    options = an_options({ResolvedImport("thing", "thing-pkg")})
+    stdlib = a_stdlib()
     requirements = a_reqs({ResolvedImport("thing", "thing-pkg")})
     requirements = dataclasses.replace(requirements, all_imports=frozenset({"thing"}))
-    already_found = candidates(options, requirements, [venv_dir])
+    already_found = candidates(stdlib, requirements, [venv_dir])
     assert [c.folder for c in already_found] == [venv_dir]
 
     shutil.rmtree(venv_dir)
@@ -1092,8 +1258,9 @@ def test_every_branch_lets_check_venv_dir_report_a_venv_that_vanished(
         monkeypatch.setattr(
             cache_search, "cache_candidates", lambda *a, **k: already_found
         )
-    last_used_options = ek.Options()
-    last_used_options.venv_dir = venv_dir  # type: ignore[attr-defined]
+    last_used_record = state.LastUsed(
+        venv_dir, venv_dir / "bin" / "python", "20260202-020202"
+    )
 
     def run(rawlog: bool) -> Path | None:
         return cache_search.find_match_dir_in_cache(
@@ -1103,9 +1270,9 @@ def test_every_branch_lets_check_venv_dir_report_a_venv_that_vanished(
             uninstalled=set(requirements.uninstalled),
             extra_requirements=requirements.extra_requirements,
             source_names={"thing"},
-            tag=cache_search.interpreter_tag(options.stdlib),
+            tag=cache_search.interpreter_tag(stdlib),
             rawlog=rawlog,
-            load_last_used=lambda: last_used_options,
+            load_last_used=lambda: last_used_record,
         )
 
     with caplog.at_level(logging.INFO):
@@ -1135,8 +1302,8 @@ def test_the_cache_search_filters_the_folders_against_this_run_not_a_blank_one(
     name-and-tag-shaped folder in ~/veny becomes a candidate and the first
     one wins.
     """
-    options, requirements, venv_dir = _a_run_with_a_pinned_package(tmp_path)
-    options.args = argparse.Namespace(
+    stdlib, requirements, venv_dir = _a_run_with_a_pinned_package(tmp_path)
+    args = argparse.Namespace(
         latest=True, oldest=False, last_used=False, smallest=False
     )
     seen: list[dict[str, object]] = []
@@ -1149,17 +1316,17 @@ def test_the_cache_search_filters_the_folders_against_this_run_not_a_blank_one(
 
     assert (
         cache_search.find_match_dir_in_cache(
-            options.args,
-            my_dir=options.my_dir,
+            args,
+            my_dir=tmp_path,
             venv_name="myenv",
             uninstalled=set(requirements.uninstalled),
             extra_requirements=requirements.extra_requirements,
             source_names=verify.source_import_names(
                 set(requirements.all_imports),
                 requirements.extra_requirements,
-                getattr(options.args, "reqs", False),
+                getattr(args, "reqs", False),
             ),
-            tag=cache_search.interpreter_tag(options.stdlib),
+            tag=cache_search.interpreter_tag(stdlib),
             rawlog=True,
             load_last_used=_never_called,
         )
@@ -1191,7 +1358,7 @@ def test_check_venv_dir_probes_the_interpreter_inside_the_venv_it_was_given(
     veny (or from a previous candidate), so a venv missing the package is
     reused whenever veny's own environment happens to provide it.
     """
-    options, requirements, venv_dir = _a_run_with_a_pinned_package(tmp_path)
+    _, requirements, venv_dir = _a_run_with_a_pinned_package(tmp_path)
     probed: list[str] = []
 
     def spy(venv_python, **kwargs):

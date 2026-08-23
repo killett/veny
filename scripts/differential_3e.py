@@ -30,10 +30,11 @@ compares two trees, only one of which exists inside any given checkout.
 
 The two trees are differently shaped, and the driver reaches the same behaviour
 through different module paths in each: ``cli.list_packages`` /
-``cli.setup_virtualenv`` / ``cli.Options`` before, ``pipeline.*`` and
-``run_options.Options`` after. ``Tree`` below carries that bridge, the way 3d's
-did. Everything is driven through ``cli.main()``, so the bridge is only needed
-for installing stand-ins, never for calling veny.
+``cli.setup_virtualenv`` / the god-object class ``cli`` used to export as
+``Options`` before, ``pipeline.*`` and ``run_options.Options`` after. ``Tree``
+below carries that bridge, the way 3d's did. Everything is driven through
+``cli.main()``, so the bridge is only needed for installing stand-ins, never
+for calling veny.
 
 Seven layers are captured, each a separate ``cli.main()`` call with its own
 argv, its own ``$HOME`` and its own working directory:

@@ -40,50 +40,50 @@ LAYERS: list[frozenset[str]] = [
             "venv_cache",
             "stdlib_index",
             "pypi_client",
-            "json_types",
         }
     ),
     # state.py carries the products one stage hands to the next. It sits
     # above the index layer because Requirements annotates its members with
     # alias_index.ResolvedImport, and in a layer of its own below classify
     # because classify -- and, later, verify and cache_search -- all need to
-    # import it without a same-layer exception. run_options.py joins it as a
-    # peer: it is the transitional per-run state object, it imports only
-    # alias_index and stdlib_index from the layer below, and nothing at or
-    # below this layer imports it. Phase 4 deletes it.
-    frozenset({"state", "run_options"}),
+    # import it without a same-layer exception. It is alone here: phase 4b
+    # deleted run_options.py, the transitional per-run state object that used
+    # to sit beside it, so nothing else occupies this layer.
+    frozenset({"state"}),
     # environment.py is the only module that invokes uv; classify.py decides
     # which imports are installed, missing or unusable. They are peers: neither
     # imports the other (classify takes its probe environment as an injected
     # context manager rather than building one), so each forbids the other by
     # default. Both sit above the index layer because they need nothing from
-    # each other, and below cli because cli drives them -- and neither has ever
-    # heard of Options, so both can be exercised without building the CLI's
-    # state object. last_used.py joins them as a third peer: it imports
-    # nothing from veny at all (only stdlib and emmykit), so it forbids
-    # everything at or above its layer and needs nothing from its peers.
+    # each other, and below cli because cli drives them -- and neither is
+    # handed a per-run state object, so both can be exercised without
+    # building the run first. last_used.py joins them as a third peer: it
+    # imports only state from veny (for LastUsed), which is why its layer
+    # must sit above state's -- and, like its peers, it needs nothing from
+    # classify or environment.
     frozenset({"classify", "environment", "last_used"}),
     # verify.py proves what a venv really provides and repairs what it does
     # not. It is NOT a peer of environment: it installs candidates,
     # uninstalls rejected ones and rewrites requirements.txt, and every one
     # of those goes through environment (design amendment 10) -- routing
     # through the single uv owner is the point, so verify sits one layer
-    # above it. It stays below cli because it has never heard of Options.
+    # above it. It stays below cli because it takes only the paths, names and
+    # flags it reads.
     frozenset({"verify"}),
     # cache_search.py picks which cached venv this run gets to reuse. It sits
     # above verify because a selection is not final until the chosen venv's
     # imports really import: check_venv_dir confirms every candidate through
     # verify.check_packages_in_venv rather than trusting the manifest alone.
     # It is a layer of its own rather than a peer of verify for the same
-    # reason -- the dependency is real and one-way. Like verify, it has never
-    # heard of Options, so it stays below cli.
+    # reason -- the dependency is real and one-way. Like verify, it takes only
+    # the values it reads, so it stays below cli.
     frozenset({"cache_search"}),
     # pipeline.py owns the run's sequencing and is the only module that knows
     # the order: analyze -> classify -> acquire an environment -> run the
-    # script. It sits directly below cli because it is handed the Options
-    # object cli builds and hands back an exit status, and above everything
-    # 3a-3d extracted because it drives all of them. Phase 4 removes the
-    # Options carrier; the layer position does not change with it.
+    # script. It sits directly below cli because it is handed the Settings,
+    # namespace and Target cli builds and hands back an exit status, and above
+    # everything 3a-3d extracted because it drives all of them. Phase 4b
+    # removed the last per-run carrier; the layer position did not change.
     frozenset({"pipeline"}),
     frozenset({"cli"}),
 ]
@@ -95,9 +95,6 @@ SANCTIONED_EXCEPTIONS: dict[str, frozenset[str]] = {
     # alias_index -> pypi_client: alias resolution ranks candidates by
     # confirming them against PyPI.
     "alias_index": frozenset({"pypi_client"}),
-    # json_types -> alias_index and json_types -> stdlib_index: it registers
-    # both modules' types for JSON serialization.
-    "json_types": frozenset({"alias_index", "stdlib_index"}),
 }
 
 
@@ -309,8 +306,8 @@ def test_veny_imports_recognizes_every_spelling_of_a_veny_import(
 
 
 def test_analysis_never_rebinds_an_importscan_field() -> None:
-    """The pipeline.py bridge hands scan.py the seven live objects options holds
-    and relies on them being mutated in place, with no copy-back. A rebind
+    """The pipeline.py bridge hands scan.py one live ImportScan and relies on
+    its members being mutated in place, with no copy-back. A rebind
     of one of ImportScan's fields anywhere under analysis/ would silently
     detach the caller's object mid-scan -- a rebind of `all_imports`,
     `custom_modules`, `loaded_custom_modules` or `seen_stdlib_imports` would
@@ -345,7 +342,7 @@ def test_analysis_never_rebinds_an_importscan_field() -> None:
 
 
 def test_split_imports_writes_nothing_back_onto_options() -> None:
-    """pipeline.split_imports must return its product, not write it onto Options.
+    """pipeline.split_imports must return its product, not write it onto a carrier.
 
     Behaviour under test: the absence of the copy-back. Phase 4a's Task 5
     deleted it -- classification's product is a Requirements the caller

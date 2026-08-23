@@ -64,17 +64,30 @@ def test_module_entry_point_reports_the_package_version():
 
 
 def test_state_directory_ignores_argv0(monkeypatch, tmp_path):
-    # Catches: restoring my_name = Path(sys.argv[0]).stem, which under
-    # `python -m veny` yields "__main__" and moves every venv, log and pickle
-    # veny owns from ~/veny to ~/__main__. No other test would notice: they
-    # all build Options under pytest, where argv[0] is already arbitrary.
-    monkeypatch.setenv("HOME", os.fspath(tmp_path))
-    monkeypatch.setattr(sys, "argv", ["/tmp/anywhere/__main__.py"])
+    """The run's identity is the fixed name "veny", never argv[0]'s stem.
 
-    options = cli.Options()
+    Behaviour under test: the my_name and my_dir cli.main stamps onto the
+    Settings every stage below it reads. Phase 4b Task 6 deleted the Options
+    class that used to compute them, so this pin -- which is a live
+    behaviour assertion, not a drain assertion -- now reads them off the
+    Settings the run really builds.
 
-    assert options.my_name == "veny"
-    assert options.my_dir == tmp_path / "veny"
+    Concrete bug this catches: restoring my_name = Path(sys.argv[0]).stem,
+    which under `python -m veny` yields "__main__" and moves every venv, log
+    and record veny owns from ~/veny to ~/__main__. No other test would
+    notice: every other run driven here spells argv[0] "veny" already.
+    """
+    captured, _ = _drive_main(
+        monkeypatch, tmp_path, ["--justprint"], uninstalled=set(), all_imports=set()
+    )
+    # _drive_main spells argv[0] "veny"; replacing it with what
+    # `python -m veny` really passes is the whole point of this test.
+    monkeypatch.setattr(sys, "argv", ["/tmp/anywhere/__main__.py", *sys.argv[1:]])
+
+    cli.main()
+
+    assert captured.settings[0].my_name == "veny"
+    assert captured.settings[0].my_dir == tmp_path / "home" / "veny"
 
 
 @pytest.mark.parametrize(
@@ -87,10 +100,9 @@ def test_retired_alias_flags_are_rejected(argv_tail, monkeypatch):
     # parser while the functions behind them are gone -- an AttributeError at
     # the moment the flag is typed, rather than a clean argparse rejection.
     monkeypatch.setattr(sys, "argv", ["veny", *argv_tail])
-    options = cli.Options()
 
     with pytest.raises(SystemExit) as excinfo:
-        cli.parse_arguments(options)
+        cli.parse_arguments()
 
     assert excinfo.value.code == 2
 
@@ -151,11 +163,6 @@ class _CapturedRun(list):  # type: ignore[type-arg]
         self.settings: list[settings_module.Settings] = []
         self.targets: list[state.Target] = []
         self.requirements: list[state.Requirements] = []
-        # The Options main() built. Phase 4a drained it out of every hook the
-        # run passes through, so the only place left to catch it is
-        # parse_arguments -- which is also the only thing that still writes to
-        # it before the persistence save.
-        self.options: list[cli.Options] = []
 
 
 def _drive_main(
@@ -181,13 +188,14 @@ def _drive_main(
             a separate argument rather than part of `argv`.
 
     Returns:
-        A pair: the one-element list that receives the Options object main()
-        built, so a test can assert against the very fields main() wired from,
-        and a list that receives one entry per script launch -- the exact
-        command main() handed subprocess.run, as strings. The second is what
-        lets a branch test tell "ran under sys.executable" apart from "ran
-        under the venv's interpreter"; the old stub discarded its arguments,
-        so no test could see which interpreter ran the script.
+        A pair: the _CapturedRun that receives the parsed namespace and its
+        Settings/Target/Requirements side channels, so a test can assert
+        against the very values main() wired through, and a list that
+        receives one entry per script launch -- the exact command main()
+        handed subprocess.run, as strings. The second is what lets a branch
+        test tell "ran under sys.executable" apart from "ran under the
+        venv's interpreter"; the old stub discarded its arguments, so no test
+        could see which interpreter ran the script.
     """
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
@@ -216,20 +224,11 @@ def _drive_main(
         return _offline_index()
 
     monkeypatch.setattr(pipeline, "build_alias_index", capture_the_run)
-
-    real_parse = cli.parse_arguments
-
-    def parse_spy(options):
-        real_parse(options)
-        captured.options.append(options)
-
-    monkeypatch.setattr(cli, "parse_arguments", parse_spy)
     monkeypatch.setattr(
         custom_modules, "dict_of_custom_modules", lambda settings, use_cache: {}
     )
     monkeypatch.setattr(ek, "configure_logging", lambda *a, **k: None)
     monkeypatch.setattr(ek, "print_all_errors", lambda *a, **k: None)
-    monkeypatch.setattr(ek, "save_options_to_json", lambda options: None)
     monkeypatch.setattr(logging, "shutdown", lambda: None)
     launched: list[list[str]] = []
 
@@ -278,7 +277,8 @@ def test_main_describes_the_run_to_the_cache_search(monkeypatch, tmp_path):
         all_imports={"thing", "other"},
     )
     seen: list[dict[str, object]] = []
-    loaded: list[cli.Options] = []
+    loaded: list[dict[str, object]] = []
+    loaded_targets: list[state.Target] = []
 
     load_last_used_callbacks: list[Callable[[], object]] = []
 
@@ -287,8 +287,9 @@ def test_main_describes_the_run_to_the_cache_search(monkeypatch, tmp_path):
         load_last_used_callbacks.append(load_last_used)
         return None
 
-    def load_last_used_spy(options, target, **kwargs):
-        loaded.append(options)
+    def load_last_used_spy(target, **kwargs):
+        loaded_targets.append(target)
+        loaded.append(dict(kwargs))
         return None
 
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", find_spy)
@@ -316,13 +317,14 @@ def test_main_describes_the_run_to_the_cache_search(monkeypatch, tmp_path):
     assert call["rawlog"] is True
     # The callback must reach this run's own last-used loader, not a constant.
     assert load_last_used_callbacks[0]() is None
-    # One call, and with the run's OWN Options by identity -- the template
-    # emmykit's loader fills in. A fresh one would still yield a record
-    # (load_last_used_options loads *into* whatever it is handed), so only
-    # identity can tell the two apart. It is the last thing in run() that
-    # still takes an Options; phase 4b replaces it with a LastUsed record.
+    # One call, and about THIS run's script: the adapter now takes the run's
+    # Target and the program's own name instead of an Options template, and
+    # those three values are the whole of what decides which record file is
+    # read.
     assert len(loaded) == 1
-    assert loaded[0] is captured.options[0]
+    assert loaded_targets[0].python_script == tmp_path / "script.py"
+    assert loaded[0]["my_name"] == "veny"
+    assert loaded[0]["rawlog"] is True
 
 
 def test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs(
@@ -368,9 +370,9 @@ def test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs
         "Checking the cache for a virtual environment with all the required packages"
         in caplog.text
     )
-    # From last_used.load_last_used_options, reached through _load_last_used --
-    # the cache search's default branch asks for the last-used record first.
-    assert "No previous JSON files found in the script directory." in caplog.text
+    # From last_used.load, reached through _load_last_used -- the cache
+    # search's default branch asks for the last-used record first.
+    assert "No usable last-used record for" in caplog.text
 
     # The other direction: --rawlog must reach both, so a hardcoded
     # `rawlog=False` at either site is caught too.
@@ -391,7 +393,7 @@ def test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs
         cli.main()
 
     assert "Checking the cache for a virtual environment" not in caplog.text
-    assert "No previous JSON files found" not in caplog.text
+    assert "No usable last-used record" not in caplog.text
 
 
 def test_main_lets_the_feeling_lucky_loader_speak_on_a_run_that_did_not_ask_for_raw_logs(
@@ -399,7 +401,7 @@ def test_main_lets_the_feeling_lucky_loader_speak_on_a_run_that_did_not_ask_for_
 ):
     """--feeling-lucky's loader gets its own rawlog argument, and its own hole.
 
-    Measured 2026-08-19: `rawlog=True` at the load_last_used_venv_python call
+    Measured 2026-08-19: `rawlog=True` at the load_venv_python call
     site left all 360 tests green. The cache search is stubbed out here on
     purpose -- main()'s other last-used call site (_load_last_used, reached
     from find_match_dir_in_cache) logs the identical line, so leaving it live
@@ -426,7 +428,7 @@ def test_main_lets_the_feeling_lucky_loader_speak_on_a_run_that_did_not_ask_for_
     with caplog.at_level(logging.INFO):
         cli.main()
 
-    assert "No previous JSON files found in the script directory." in caplog.text
+    assert "No usable last-used record for" in caplog.text
 
     caplog.clear()
     _drive_main(
@@ -445,7 +447,7 @@ def test_main_lets_the_feeling_lucky_loader_speak_on_a_run_that_did_not_ask_for_
     with caplog.at_level(logging.INFO):
         cli.main()
 
-    assert "No previous JSON files found" not in caplog.text
+    assert "No usable last-used record" not in caplog.text
 
 
 def test_main_loads_the_requirements_file_and_keeps_its_names_out_of_the_import_check(
@@ -615,8 +617,8 @@ def test_main_asks_the_last_used_loader_about_this_script(monkeypatch, tmp_path)
     which record is consulted. Measured by substitution: all five could be
     replaced with all 338 tests green.
 
-    Concrete bug this catches: a wrong `python_script` matches another
-    script's last-used JSON in the same directory, and --feeling-lucky runs
+    Concrete bug this catches: a wrong `python_script` names another
+    script's last-used record in the same directory, and --feeling-lucky runs
     this script under an environment built for a different one.
     """
     _drive_main(
@@ -627,14 +629,12 @@ def test_main_asks_the_last_used_loader_about_this_script(monkeypatch, tmp_path)
         all_imports=set(),
     )
     seen: list[dict[str, object]] = []
-    passed_options: list[cli.Options] = []
 
-    def spy(options, **kwargs):
+    def spy(**kwargs):
         seen.append(kwargs)
-        passed_options.append(options)
         return None
 
-    monkeypatch.setattr(last_used, "load_last_used_venv_python", spy)
+    monkeypatch.setattr(last_used, "load_venv_python", spy)
     monkeypatch.setattr(
         pipeline,
         "setup_virtualenv",
@@ -650,17 +650,13 @@ def test_main_asks_the_last_used_loader_about_this_script(monkeypatch, tmp_path)
     assert len(seen) == 1
     assert seen[0]["script_dir"] == tmp_path
     assert seen[0]["python_script"] == script
-    assert seen[0]["pathlibcutoff"] == cli.Options().pathlibcutoff
+    assert seen[0]["my_name"] == "veny"
     assert seen[0]["rawlog"] is True
-    # The run's own Options, not a fresh one: a fresh emmykit Options carries
-    # an empty Namespace, so --feeling-lucky would read back as False and the
-    # loader would be answering about a different (empty) run. The script
-    # itself is checked through seen[0] above rather than off the Options --
-    # phase 4a moved it onto the Target, and Options only receives it again
-    # at the save, which this run never reaches.
-    passed = passed_options[0]
-    assert getattr(passed.args, "feeling_lucky", False) is True
-    assert passed.rawlog is True
+    # Four arguments, not five: the Options template the emmykit-typed reader
+    # needed is gone, and so is the pathlibcutoff it compared timestamps
+    # against. That the loader was reached at all is what proves the run read
+    # --feeling-lucky off its own parsed arguments -- a run that did not would
+    # never call it.
 
 
 def test_main_runs_the_script_under_the_running_interpreter_when_nothing_is_missing(
@@ -844,7 +840,7 @@ def test_blank_slate_deletes_the_state_directory_and_leaves_other_files_alone(
     The confirmation prompt is stubbed rather than answered by -y, because
     measured 2026-08-19 the flag does not reach this branch: argparse gives
     `-y/--yes` the dest `yes`, while the branch reads
-    `getattr(options.args, "y", False)`, which is never set and so is always
+    `getattr(args, "y", False)`, which is never set and so is always
     False. That is a pre-existing bug, recorded here rather than fixed,
     because this phase is behaviour-preserving; -y is kept in argv so this
     test keeps working unchanged once the dest is corrected and the prompt
@@ -909,9 +905,31 @@ def test_the_full_flag_is_gone(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "argv", ["veny", "--full", os.fspath(script)])
 
     with pytest.raises(SystemExit) as exit_info:
-        cli.parse_arguments(cli.Options())
+        cli.parse_arguments()
 
     assert exit_info.value.code == 2
+
+
+def test_parse_arguments_returns_the_parsed_command_line(monkeypatch):
+    """parse_arguments hands its namespace back to the caller.
+
+    Behaviour under test: the return value the signature change introduced.
+
+    Concrete bug this catches: a parse_arguments that still writes onto a
+    passed-in object and returns None. Every caller would then read a
+    namespace that is never filled -- main() would die on the first getattr.
+    The two shapes it has to carry back are asserted together: the `script`
+    positional and a store_true flag. `--rawlog` is spelled before the
+    script because `script_args` is an argparse.REMAINDER, which swallows
+    everything typed after the script path.
+    """
+    monkeypatch.setattr(sys, "argv", ["veny", "--rawlog", "thing.py", "-x"])
+
+    parsed = cli.parse_arguments()
+
+    assert parsed.script == "thing.py"
+    assert parsed.rawlog is True
+    assert parsed.script_args == ["-x"]
 
 
 def test_a_run_with_no_script_is_a_usage_error(monkeypatch, tmp_path, caplog):
@@ -959,7 +977,7 @@ def test_main_maps_a_missing_uv_to_status_one(monkeypatch, tmp_path, capsys):
         all_imports={"thing"},
     )
 
-    def unavailable(settings, args, options, target, start_time=None):
+    def unavailable(settings, args, target, start_time=None):
         raise environment.UvUnavailable(
             "veny requires uv, which is not installed and is not on PATH.\n"
             "Reinstall veny with:  uv tool install veny"
@@ -999,7 +1017,7 @@ def test_main_maps_a_failed_venv_build_to_status_one(monkeypatch, tmp_path, capl
         all_imports={"thing"},
     )
 
-    def refused(settings, args, options, target, start_time=None):
+    def refused(settings, args, target, start_time=None):
         raise pipeline.VenvBuildFailed(
             "Could not build the throwaway environment used to check which "
             "imports are already available."
@@ -1079,7 +1097,7 @@ def test_configure_logging_is_told_this_runs_name_level_and_raw_output_choice(
     This is the one site in the phase pinned by an argument spy rather than by
     a log record, and the index says so: the effect lives in emmykit, so
     there is no veny-visible record to read. Expected values come from the
-    flags' contracts -- Options.my_name is fixed at "veny", no --debug means
+    flags' contracts -- cli.MY_NAME is fixed at "veny", no --debug means
     logging.INFO, --rawlog means rawlog=True.
     """
     seen: list[tuple[str, int, bool]] = []
@@ -1107,11 +1125,12 @@ def test_configure_logging_is_told_when_the_run_wants_normal_output_and_debug(
     catches: a hardcoded `rawlog=True` strips timestamps and INFO prefixes
     from every ordinary run and suppresses veny's own commentary -- the exact
     inverse failure, invisible to a test that only ever drives --rawlog. A
-    second bug it catches: parse_arguments reading the wrong flag name (or
-    defaulting to True) when it decides whether to raise options.log_mode to
-    DEBUG, which would either silence --debug entirely or make every run
-    debug-verbose. Expected values come from Options.rawlog's default (False)
-    and from --debug's contract (logging.DEBUG).
+    second bug it catches: cli.main reading the wrong flag name (or
+    defaulting to True) when it decides whether to raise its local log_mode
+    to DEBUG, which would either silence --debug entirely or make every run
+    debug-verbose. Expected values come from --rawlog's default (False, the
+    store_true default parse_arguments gives it) and from --debug's contract
+    (logging.DEBUG).
     """
     seen: list[tuple[str, int, bool]] = []
     _drive_main(monkeypatch, tmp_path, ["-d"], uninstalled=set(), all_imports={"os"})
@@ -1327,9 +1346,7 @@ def _a_lucky_run(monkeypatch, tmp_path, argv, script_args=()):
         all_imports=set(),
         script_args=script_args,
     )
-    monkeypatch.setattr(
-        last_used, "load_last_used_venv_python", lambda options, **kwargs: lucky_python
-    )
+    monkeypatch.setattr(last_used, "load_venv_python", lambda **kwargs: lucky_python)
     return lucky_python, launched
 
 
@@ -1610,7 +1627,7 @@ def test_blank_slate_with_no_state_directory_still_completes(monkeypatch, tmp_pa
     Concrete bug this catches: any first-ever --blank-slate that fails --
     a traceback, or a non-zero status, for a request that was already
     satisfied before it was made. It does not pin `ignore_errors=True` on the
-    removal itself: pipeline.run creates options.my_dir a few lines before it
+    removal itself: pipeline.run creates settings.my_dir a few lines before it
     reaches this branch, so the removal never sees a missing directory. The
     wiring index records that as an open hole with this as its reason.
     """
@@ -1651,12 +1668,10 @@ def test_build_alias_index_reads_this_runs_own_directory_and_interpreter(
     read off the returned index rather than from a spy: the cache's own path
     and the tag the probe produced.
     """
-    options = cli.Options()
-    options.my_dir = tmp_path
-    options.args = argparse.Namespace(offline=True)
+    args = argparse.Namespace(offline=True)
 
     index = pipeline.build_alias_index(
-        _a_settings(my_dir=tmp_path), options.args, sys.executable
+        _a_settings(my_dir=tmp_path), args, sys.executable
     )
 
     assert index.cache.path == tmp_path / "module_aliases_cache.json"
@@ -1706,18 +1721,19 @@ def test_the_run_is_timed_from_the_moment_veny_started(monkeypatch, tmp_path, ca
     handed: list[dt.datetime | None] = []
     real_run = pipeline.run
 
-    def run_spy(settings, args, options, target, start_time=None):
+    def run_spy(settings, args, target, start_time=None):
         handed.append(start_time)
-        return real_run(settings, args, options, target, start_time=start_time)
+        return real_run(settings, args, target, start_time=start_time)
 
     monkeypatch.setattr(pipeline, "run", run_spy)
 
     parsed_at: list[dt.datetime] = []
     real_parse_arguments = cli.parse_arguments
 
-    def parse_arguments_spy(options):
-        real_parse_arguments(options)
+    def parse_arguments_spy():
+        parsed = real_parse_arguments()
         parsed_at.append(dt.datetime.now())
+        return parsed
 
     monkeypatch.setattr(cli, "parse_arguments", parse_arguments_spy)
 
