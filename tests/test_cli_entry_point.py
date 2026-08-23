@@ -882,16 +882,16 @@ def test_blank_slate_deletes_the_state_directory_and_leaves_other_files_alone(
     matches the fourth (dot prefix, "-veny-" inside, ".json" suffix);
     keep.json does not start with a dot and so matches none of them.
 
-    The confirmation prompt is stubbed rather than answered by -y, because
-    measured 2026-08-19 the flag does not reach this branch: argparse gives
-    `-y/--yes` the dest `yes`, while the branch reads
-    `getattr(args, "y", False)`, which is never set and so is always
-    False. That is a pre-existing bug, recorded here rather than fixed,
-    because this phase is behaviour-preserving; -y is kept in argv so this
-    test keeps working unchanged once the dest is corrected and the prompt
-    stops being reached at all. Stubbing the
-    prompt is a stdin boundary stub, not a stub of the code under test: the
-    deletion loop below still runs for real, against real files.
+    The confirmation prompt is stubbed as a regression trap, not because it
+    is expected to fire: as of phase 4c Task 3, -y suppresses this branch's
+    prompt entirely, because blank_slate now reads args.yes, the dest
+    argparse actually writes for `-y`/`--yes` (until this task it read
+    `getattr(args, "y", False)`, an attribute that never existed, so every
+    --blank-slate -y run prompted anyway). Leaving the stub in place means a
+    future regression that reintroduces a getattr-based read would surface
+    here as a prompt call, not as a silent revert. Stubbing the prompt is a
+    stdin boundary stub, not a stub of the code under test: the deletion
+    loop below still runs for real, against real files.
     """
     home = tmp_path / "home"
     state_dir = home / "veny"
@@ -922,14 +922,9 @@ def test_blank_slate_deletes_the_state_directory_and_leaves_other_files_alone(
     status = cli.main()
 
     assert status == 0
-    # The prompt must name what is about to be deleted, in this run's own
-    # terms: measured 2026-08-19, replacing it with any other string left the
-    # whole suite green, and a prompt that does not say what it will destroy
-    # is a prompt nobody can answer responsibly.
-    assert prompts == [
-        "Are you sure you want to delete everything in ~/veny/ and all veny"
-        " .json files in the current directory? (y/n) "
-    ]
+    # -y means the prompt is never asked at all: phase 4c Task 3 fixed the
+    # dest read that used to make this branch prompt regardless of -y.
+    assert prompts == []
     assert not state_dir.exists()
     assert not (workdir / ".veny-run.out").exists()
     assert not (workdir / ".script.py-veny-last-used-on-20260101-000000.json").exists()
@@ -1698,6 +1693,44 @@ def test_the_state_directory_is_only_announced_when_it_has_to_be_created(
         cli.main()
 
     assert "does not exist yet" not in caplog.text
+
+
+def test_yes_skips_the_blank_slate_confirmation(monkeypatch, tmp_path):
+    """--yes means veny must not stop to ask.
+
+    Behaviour under test: the flag documented as "automatically say yes to
+    any prompts to allow this program to run without the need for user
+    interaction" must suppress the only prompt veny has.
+
+    Concrete bug this catches: reading `getattr(args, "y", False)`, which is
+    what veny did until phase 4c. argparse writes the dest `yes` for
+    "-y", "--yes", so the read was of an attribute that never existed and
+    the default False always won: every --blank-slate -y run blocked on a
+    prompt, which is exactly the unattended use the flag exists for.
+    """
+    state_dir = tmp_path / "home" / "veny"
+    _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--blank-slate", "-y"],
+        uninstalled=set(),
+        all_imports=set(),
+    )
+    monkeypatch.setattr(sys, "argv", ["veny", "--blank-slate", "-y"])
+    state_dir.mkdir(parents=True)
+    asked: list[str] = []
+
+    def confirm_spy(prompt):
+        asked.append(prompt)
+        return True
+
+    monkeypatch.setattr(ek, "prompt_then_confirm", confirm_spy)
+
+    status = cli.main()
+
+    assert status == 0
+    assert asked == []
+    assert not state_dir.exists()
 
 
 def test_blank_slate_with_no_state_directory_still_completes(monkeypatch, tmp_path):

@@ -453,13 +453,13 @@ def blank_slate(settings: Settings, args: argparse.Namespace) -> int:
 
     Args:
         settings: The run's invariants; reads my_name, my_dir and cwd.
-        args: The parsed command line; reads the -y flag.
+        args: The parsed command line; reads the --yes flag.
 
     Returns:
         0, whether the user confirmed or declined -- both are a complete run
         that was never going to launch a script.
     """
-    if not getattr(args, "y", False):
+    if not args.yes:
         if not ek.prompt_then_confirm(
             f"Are you sure you want to delete everything in ~/{settings.my_name}/"
             f" and all {settings.my_name} .json files in the current directory? (y/n) "

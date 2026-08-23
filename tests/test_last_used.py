@@ -453,6 +453,6 @@ def test_blank_slate_deletes_the_new_last_used_record(tmp_path, monkeypatch):
     assert record.exists()
     settings_for_run = a_settings(my_dir=tmp_path / "veny-home", cwd=tmp_path)
 
-    pipeline.blank_slate(settings_for_run, argparse.Namespace(y=True))
+    pipeline.blank_slate(settings_for_run, argparse.Namespace(yes=True))
 
     assert not record.exists()
