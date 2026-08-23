@@ -420,7 +420,7 @@ def feeling_lucky(
         The script's exit status if the lucky path ran it, or None meaning
         "no luck, carry on with the normal run".
     """
-    if not getattr(args, "feeling_lucky", False) or target is None:
+    if not args.feeling_lucky or target is None:
         return None
     last_used_venv_python = last_used.load_venv_python(
         script_dir=target.script_dir,
@@ -888,7 +888,7 @@ def run(
                 source_names=verify.source_import_names(
                     set(requirements.all_imports),
                     requirements.extra_requirements,
-                    getattr(args, "reqs", False),
+                    args.reqs,
                 ),
                 tag=cache_search.interpreter_tag(stdlib),
                 rawlog=settings.rawlog,

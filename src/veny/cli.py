@@ -208,10 +208,10 @@ def main() -> int:
     """
     start_time = dt.datetime.now()
     args = parse_arguments()
-    rawlog = getattr(args, "rawlog", False)
+    rawlog = args.rawlog
     # Only ek.configure_logging below reads this, so it is a local rather
     # than a field on anything.
-    log_mode = logging.DEBUG if getattr(args, "debug", False) else logging.INFO
+    log_mode = logging.DEBUG if args.debug else logging.INFO
     # The run's invariants, built exactly once and handed down. Home is a
     # construction detail rather than a field: it exists only to derive
     # my_dir.
