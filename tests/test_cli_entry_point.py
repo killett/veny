@@ -1443,7 +1443,13 @@ def test_every_launch_announces_the_command_it_is_about_to_run(
     assert f"Running command: {os.fspath(lucky_python)} {script}" in caplog.text
 
     # --rawlog silences every one of them: run_script's rawlog argument is
-    # this run's own, at all four sites.
+    # this run's own, at all four sites. Case 3 above left VIRTUAL_ENV set
+    # (monkeypatch.setenv, function-scoped, never undone until the test
+    # ends) -- without clearing it here, the first setup below would still
+    # find an "activated" environment and take that branch instead of the
+    # cache-hit branch it is meant to drive, leaving the venv-launch site's
+    # own rawlog handling unexercised under --rawlog.
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
     for setup in (
         lambda: _a_cache_hit(monkeypatch, tmp_path, ["--rawlog"]),
         lambda: _drive_main(
