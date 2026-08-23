@@ -838,10 +838,9 @@ def run(
         elapsed_raw_time = dt.datetime.now() - start_raw_time
         if not settings.rawlog:
             logging.info("Runtime: %s", elapsed_raw_time)
-    elif last_used.is_virtualenv():
+    elif (active_venv := last_used.active_virtualenv_dir()) is not None:
         if not settings.rawlog:
             logging.info("Already in a virtual environment.")
-        active_venv = last_used.active_virtualenv_dir()
         if verify.check_packages_in_venv(
             environment.venv_python_for(active_venv),
             uninstalled=set(requirements.uninstalled),

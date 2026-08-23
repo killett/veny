@@ -542,7 +542,6 @@ def test_main_checks_the_surrounding_virtualenv_against_this_runs_imports(
         "parse_extra_requirements",
         lambda path, *, rawlog: {"extra-pkg": ">=2.0"},
     )
-    monkeypatch.setattr(last_used, "is_virtualenv", lambda: True)
     seen: list[dict[str, object]] = []
 
     def check_spy(venv_python, **kwargs):
@@ -562,6 +561,53 @@ def test_main_checks_the_surrounding_virtualenv_against_this_runs_imports(
             "source_names": {"thing"},
         }
     ]
+
+
+def test_main_ignores_venys_own_virtualenv_and_goes_to_the_cache(monkeypatch, tmp_path):
+    """veny installed in a venv is not the user standing in one.
+
+    Behaviour under test: with no VIRTUAL_ENV exported, a run with a missing
+    import must reach the cache search, whatever sys.prefix says about veny's
+    own interpreter.
+
+    Concrete bug this catches: the pre-4c guard, `sys.prefix !=
+    sys.base_prefix`. veny's documented install is `uv tool install veny`,
+    which puts veny in a venv, so that guard was True on every such install:
+    the run import-checked veny's own tool environment, failed, logged
+    "Please deactivate the current virtual environment and run the script
+    again." and returned 1 -- with find_match_dir_in_cache never called.
+    """
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setattr(sys, "prefix", "/fake/venv")
+    monkeypatch.setattr(sys, "base_prefix", "/fake/base")
+    _drive_main(
+        monkeypatch,
+        tmp_path,
+        [],
+        uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
+        all_imports={"thing"},
+    )
+    seen: list[dict[str, object]] = []
+
+    def search_spy(args, **kwargs):
+        seen.append({"args": args, **kwargs})
+        return None
+
+    monkeypatch.setattr(cache_search, "find_match_dir_in_cache", search_spy)
+    # A cache miss would otherwise fall through to a real setup_virtualenv,
+    # which shells out to uv -- unrelated to this test, which only pins that
+    # the search is reached once. The established pattern for this exact
+    # cache-miss shape (see test_main_describes_the_run_to_the_cache_search
+    # above) stubs it out.
+    monkeypatch.setattr(
+        pipeline,
+        "setup_virtualenv",
+        lambda settings, target, requirements, **kwargs: (requirements, None, False),
+    )
+
+    cli.main()
+
+    assert len(seen) == 1
 
 
 def test_main_drops_the_failed_prefix_from_the_venv_it_just_built(
@@ -780,7 +826,6 @@ def test_main_checks_the_virtualenv_it_is_running_inside(monkeypatch, tmp_path):
         uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing")},
         all_imports={"thing"},
     )
-    monkeypatch.setattr(last_used, "is_virtualenv", lambda: True)
     checked: list[object] = []
 
     def check_spy(interpreter, **kwargs):
@@ -1329,7 +1374,6 @@ def _an_active_virtualenv_that_satisfies_the_run(
         all_imports={"thing"},
         script_args=script_args,
     )
-    monkeypatch.setattr(last_used, "is_virtualenv", lambda: True)
     monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: True)
     return launched
 
