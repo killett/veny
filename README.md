@@ -150,9 +150,9 @@ src/veny/
                     # repairs what it does not (import checks, candidate
                     # resolution, attributable confirmation).
 scripts/            # smoke-install.sh: wheel + console-script verification.
-                    # differential_3d/3e/4a/4b.py: the per-phase old-vs-new
+                    # differential_3d/3e/4a/4b/4c.py: the per-phase old-vs-new
                     # behavioural differentials, each reusing the one before.
-                    # wiring_sweep_4a/4b.py: the per-phase STANDING CHECK,
+                    # wiring_sweep_4a/4b/4c.py: the per-phase STANDING CHECK,
                     # which mutates every argument at every call site the
                     # phase touched and names the test that dies.
 tests/              # pytest test suite; wheels.py builds the wheel the live
@@ -162,3 +162,7 @@ docs/               # Design docs and implementation plans.
 
 Note that `alias_index.py` is about *import-name aliases* — it is unrelated to
 the shell alias this work removed, and it stays.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
