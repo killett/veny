@@ -293,6 +293,14 @@ def scoped_calls() -> list[tuple[str, ast.Call]]:
     for call in _calls_under(defs["run"]):
         if _func_name(call) == "run_script":
             out += [("src/veny/pipeline.py", c) for c in _calls_under(call)]
+    # String match on the unparsed test, not a structural one: there is no
+    # AST shape that means "the elif Task 1 rewrote" other than what its
+    # condition happens to call. Fragile on purpose in one specific way --
+    # a future rewording of this branch's condition (dropping the call to
+    # active_virtualenv_dir, or renaming it) would silently stop matching
+    # here rather than erroring, and this rule would go quietly narrower
+    # than intended. Re-run --list and check for the elif's calls (e.g.
+    # "Already in a virtual environment.") whenever this branch changes.
     elif_node = next(
         node
         for node in ast.walk(defs["run"])

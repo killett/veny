@@ -186,9 +186,15 @@ exactly as expected: that test drives all four launch paths and asserts the
    not have all the required packages.')`** and **`pipeline.py:873`
    `logging.info('Please deactivate the current virtual environment and run
    the script again.')`** — the mismatch branch, reached when the activated
-   virtualenv fails the package check. No test in scope drives this specific
-   sub-branch (every test that reaches the elif stubs `check_packages_in_venv`
-   to return `True`), so these two lines' exact text is unobserved.
+   virtualenv fails the package check. This branch **is** exercised:
+   `test_main_checks_the_virtualenv_it_is_running_inside`
+   (`tests/test_cli_entry_point.py:809-841`) stubs `check_packages_in_venv`
+   to return `False`, reaches this exact branch, and asserts `status == 1`
+   and `launched == []`. What is missing is narrower than "untested
+   sub-branch": nothing asserts on either log line's *text* — the same gap
+   as items 3, 4 and 8 above, not a driving gap. A future task can close
+   this cheaply by adding a `caplog` assertion to the existing test rather
+   than writing a new one.
 10. **`cli.py:221` `Path.cwd().expanduser().resolve(strict=True)`.** `strict`
     only bites on a working directory deleted out from under the process; no
     portable way to construct that in a test, and the failure it would
