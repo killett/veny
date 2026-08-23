@@ -1389,68 +1389,80 @@ def _a_lucky_run(monkeypatch, tmp_path, argv, script_args=()):
     return lucky_python, launched
 
 
-def test_only_the_venv_launch_announces_the_command_it_is_about_to_run(
+def test_every_launch_announces_the_command_it_is_about_to_run(
     monkeypatch, tmp_path, caplog
 ):
-    """`announce` is set at exactly one of run_script's four call sites.
+    """All four of run_script's call sites announce, and --rawlog silences all four.
 
-    Behaviour under test: which launches log "Running command: ...". The venv
-    launch has always announced itself; the three bare-interpreter launches
-    never have, and run_script's `announce` argument is what preserves that
-    difference now that all four go through one function.
+    Behaviour under test: which launches log "Running command: ...". Until
+    phase 4c only the venv launch did; the other three passed run_script a
+    `rawlog` argument that nothing could read, because `announce` was False
+    there and `rawlog` guards only the announce line.
 
-    Measured by substitution: adding `announce=True` at any of the other
-    three sites, and removing it from the venv site, left the whole suite
-    green -- the driver records the argv a launch produced, not the lines it
-    logged. Concrete bug this catches: `announce=True` everywhere prints a
-    command line before every run, including the one that needed no
-    environment at all, which is exactly the noise --rawlog exists to remove
-    and which veny has never emitted on those paths; dropping it from the
-    venv site removes the only record of which interpreter a cached
-    environment actually launched, which is the first thing anyone debugging
-    a wrong-venv run looks for.
+    Concrete bug this catches: dropping announce=True from any one site,
+    which removes the only record of which interpreter that path launched --
+    the first thing anyone debugging a wrong-environment run looks for, and
+    the one thing the differential cannot recover after the fact. A second
+    bug this catches: announcing regardless of rawlog, which puts veny's own
+    commentary into output whose contract is "the same output you would see
+    without veny".
     """
+    script = os.fspath(tmp_path / "script.py")
+
+    # 1. The venv launch.
     venv_dir, _ = _a_cache_hit(monkeypatch, tmp_path, [])
-
     with caplog.at_level(logging.INFO):
         cli.main()
-
-    expected = (
-        f"Running command: {os.fspath(venv_dir / 'bin' / 'python')} "
-        f"{os.fspath(tmp_path / 'script.py')}"
+    assert (
+        f"Running command: {os.fspath(venv_dir / 'bin' / 'python')} {script}"
+        in caplog.text
     )
-    assert expected in caplog.text
 
-    # --rawlog silences it: run_script's rawlog argument must be this run's own.
-    caplog.clear()
-    _a_cache_hit(monkeypatch, tmp_path, ["--rawlog"])
-    with caplog.at_level(logging.INFO):
-        cli.main()
-
-    assert "Running command" not in caplog.text
-
-    # The three launches that must stay quiet, each on a run that did not ask
-    # for raw logs -- so silence is the announce argument, not the flag.
+    # 2. Nothing to install: the bare interpreter launch.
     caplog.clear()
     _drive_main(monkeypatch, tmp_path, [], uninstalled=set(), all_imports={"os"})
     with caplog.at_level(logging.INFO):
         cli.main()
+    assert f"Running command: {sys.executable} {script}" in caplog.text
 
-    assert "Running command" not in caplog.text
-
+    # 3. The activated virtualenv satisfied the run.
     caplog.clear()
     _an_active_virtualenv_that_satisfies_the_run(monkeypatch, tmp_path, [])
     with caplog.at_level(logging.INFO):
         cli.main()
+    assert f"Running command: {sys.executable} {script}" in caplog.text
 
-    assert "Running command" not in caplog.text
-
+    # 4. --feeling-lucky, which reports with print() rather than logging for
+    #    everything else it says, because it runs before logging is
+    #    configured -- but run_script's announce line is a log line on every
+    #    path, and caplog sees it.
     caplog.clear()
-    _a_lucky_run(monkeypatch, tmp_path, [])
+    lucky_python, _ = _a_lucky_run(monkeypatch, tmp_path, [])
     with caplog.at_level(logging.INFO):
         cli.main()
+    assert f"Running command: {os.fspath(lucky_python)} {script}" in caplog.text
 
-    assert "Running command" not in caplog.text
+    # --rawlog silences every one of them: run_script's rawlog argument is
+    # this run's own, at all four sites.
+    for setup in (
+        lambda: _a_cache_hit(monkeypatch, tmp_path, ["--rawlog"]),
+        lambda: _drive_main(
+            monkeypatch,
+            tmp_path,
+            ["--rawlog"],
+            uninstalled=set(),
+            all_imports={"os"},
+        ),
+        lambda: _an_active_virtualenv_that_satisfies_the_run(
+            monkeypatch, tmp_path, ["--rawlog"]
+        ),
+        lambda: _a_lucky_run(monkeypatch, tmp_path, ["--rawlog"]),
+    ):
+        caplog.clear()
+        setup()
+        with caplog.at_level(logging.INFO):
+            cli.main()
+        assert "Running command" not in caplog.text
 
 
 def test_every_launch_path_passes_the_scripts_own_arguments_through(

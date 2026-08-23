@@ -324,8 +324,9 @@ def run_script(
         script_args: Everything after the script on veny's command line.
         rawlog: True suppresses veny's own commentary, so the output is what
             the user would have seen without veny.
-        announce: True logs the command before running it, as the venv path
-            has always done and the bare-interpreter paths never have.
+        announce: True logs the command before running it. Every call site
+            passes True since phase 4c; the default stays False so a new
+            caller has to say what it wants.
 
     Returns:
         The child's returncode, negative if it was killed by a signal.
@@ -433,6 +434,7 @@ def feeling_lucky(
             target.python_script,
             list(target.script_args),
             rawlog=rawlog,
+            announce=True,
         )
         if returncode != 0 and not rawlog:
             print(f"Script exited with status {returncode}")
@@ -834,6 +836,7 @@ def run(
             target.python_script,
             list(target.script_args),
             rawlog=settings.rawlog,
+            announce=True,
         )
         elapsed_raw_time = dt.datetime.now() - start_raw_time
         if not settings.rawlog:
@@ -856,6 +859,7 @@ def run(
                 target.python_script,
                 list(target.script_args),
                 rawlog=settings.rawlog,
+                announce=True,
             )
             elapsed_raw_time = dt.datetime.now() - start_raw_time
             if not settings.rawlog:
