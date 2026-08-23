@@ -431,9 +431,15 @@ through `main()`, invisibly to every in-process test.
 > `last-used-persistence`; the ledger of commits is in `PROGRESS.md`'s
 > phase-4b entry.
 
-> **AMENDED 2026-08-23 by phase 4c.** Four behaviour changes — the only phase
-> of the program that is not behaviour-preserving — plus the four user
-> decisions that authorized them, quoted from the plan's header
+> **AMENDED 2026-08-23 by phase 4c.** Four behaviour changes — the first
+> phase whose *purpose* is behaviour change, not the only phase that ever made
+> one: 4a already made two of its own by user ruling (folder scanning
+> deleted; a missing script turned into a usage error with exit status 2),
+> each folded as a deliberate exception into an otherwise structural phase.
+> Corrected 2026-08-23 at phase 4c's Task 10 review, which found the
+> original "only phase... not behaviour-preserving" framing checkably false
+> against `PROGRESS.md`'s own phase-4a entries — plus the four user
+> decisions that authorized 4c's changes, quoted from the plan's header
 > (`docs/superpowers/plans/2026-08-23-behaviour-changes-4c.md`).
 >
 > 1. **The in-virtualenv guard reads `VIRTUAL_ENV`, not veny's own prefix**

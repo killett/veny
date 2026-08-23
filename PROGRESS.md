@@ -91,9 +91,19 @@ below that no code records, and it must **not** run its live check under
 `pixi run`.
 
 **Phase 4c is finished on branch `behaviour-changes-4c`, not yet merged.**
-This is the first phase in the program that is not behaviour-preserving —
-four sanctioned behaviour changes, each a user ruling recorded in the plan's
-header and quoted again in the design doc's 4c amendment block.
+**Correction (2026-08-23, Task 10 review finding):** 4c is not the first
+phase to make a sanctioned behaviour change — checked against this file's own
+phase-4a entries rather than trusted: 4a already made two, both by user
+ruling. Folder scanning was deleted rather than revived (recorded above in
+the phase-4 table and again under "What phase 4a closed"). A missing script
+became a `UsageError` with exit status 2 instead of an uncaught traceback
+(recorded in 4a's own live-run paragraph: `python -m veny no_such_script.py`
+→ **exit status 2**, no traceback). What is actually true of 4c, and only
+4c: it is the first phase whose *purpose* is behaviour change rather than
+structure — its four tasks exist to change what a user sees, where 4a's two
+changes were each a deliberate exception folded into an otherwise structural
+phase. Four sanctioned behaviour changes, each a user ruling recorded in the
+plan's header and quoted again in the design doc's 4c amendment block.
 
 **Gates measured on this branch in this closing session, 2026-08-23 — every
 number below was run here, now, not copied from a task report or from this
