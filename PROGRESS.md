@@ -44,7 +44,56 @@ gotchas ledger.
   | **4b** `docs/superpowers/plans/2026-08-21-last-used-persistence.md` (executed, complete on branch `last-used-persistence`) | The `LastUsed` persistence change (design amendment 9), which breaks the `ek.Options` coupling and deletes `run_options.py`, the `cli.Options` re-export, `pathlibcutoff` and its two readers, and the test references in both spellings. Also deletes `json_types.py` and the pickle `PATHLIB_CUTOFF`, and stops `find_match_dir_in_cache` mutating the `argparse.Namespace` (user rulings, 2026-08-21). |
   | **4c** `docs/superpowers/plans/2026-08-23-behaviour-changes-4c.md` (executed, complete on branch `behaviour-changes-4c`) | The remaining behaviour changes: the in-virtualenv guard (USER RULING 2026-08-20), `--feeling-lucky`'s missing signal normalization, latent defects 1 and 3, and the residual dead arguments. |
 
-**Next action:** **phase 4 (4a + 4b + 4c) is complete and merged to `main`
+**Next action:** **publication.** The re-architecture program is closed (see
+below); the active work is putting veny on GitHub and PyPI via
+`/publish-repo`, tracked in the "Publication (2026-08-23)" block immediately
+following this one. Everything from "phase 4 (4a + 4b + 4c) is complete"
+downwards is the closed program's record, kept for its decisions and gotchas.
+
+### Publication (2026-08-23)
+
+Target `github.com/killett/veny`, public, then PyPI as `veny` 0.2.2.
+conda-forge is declined -- `emmykit` has no conda-forge package, so a veny
+recipe would require authoring and co-maintaining an `emmykit` feedstock too.
+`uv`, the other runtime dependency, is already on conda-forge.
+
+Done, on `main`:
+
+- **History rewritten** with `git-filter-repo --mailmap`, folding
+  `EmmyKillett@gmail.com` (118 of 452 commits) into
+  `57272627+killett@users.noreply.github.com`, so no personal address becomes
+  public. Every commit SHA changed; the tree is byte-identical (`8bf03c7e`
+  before and after). Mirror backup at
+  `/home/claudeuser/veny-backup-20260823.git` (30 MB, `main` @ `1c22c97`) --
+  delete it once the push is confirmed good.
+- **Secret audit CLEAN** (gitleaks 8.30.1, 437 commits, 6.01 MB). The only
+  three findings are the string `lib2to3.pygram` inside a stdlib module-name
+  list, flagged on entropy alone; affirmed individually as false positives and
+  allowlisted in `.gitleaksignore`. No sensitive filenames in history, largest
+  blob 458 KB.
+- **Apache-2.0** licensed (`LICENSE`, canonical text, © 2024 Emmy Killett).
+- **Packaging metadata completed**: PEP 639 license expression, authors,
+  classifiers, `[project.urls]`, `py.typed`. `requires-python` dropped its
+  `<3.14` cap -- emmykit's own cap already enforces the ceiling.
+- **`RELEASING.md`**, and CI in `.github/`: `test.yml` (ruff + pytest on
+  ubuntu 3.12/3.13 and macos 3.13) and `release.yml` (tag-driven, PyPI
+  Trusted Publishing, asserts tag == `veny.__version__`).
+
+Blocked on, before the first push: the local `GH_TOKEN` lacks the `workflow`
+scope, so GitHub will reject a push that creates `.github/workflows/`. Fix
+with `gh auth refresh -h github.com -s workflow`.
+
+Two things deliberately left undone, both recorded in comments in
+`test.yml` beside the code: **mypy is not a CI job** (it does not pass -- 23
+errors in 6 files -- so gating would leave `main` permanently red), and
+**windows-latest is not in the matrix** (`state.py` builds its venv
+interpreter path as `bin/python` unconditionally, so the suite cannot pass
+there; `environment.py` already handles `Scripts/python.exe`). Both are in
+Deferred items.
+
+---
+
+**phase 4 (4a + 4b + 4c) is complete and merged to `main`
 at `2289af2`** (a `--no-ff` merge; branch `behaviour-changes-4c`, off `main`
 @ `9af1f09`, deleted after merging -- it was at `804f4de`) on 2026-08-23.
 Gates re-measured on `main` after the merge: `pixi run test` **477 passed**,
@@ -2239,6 +2288,24 @@ wiring rationale and for two Minors deliberately left unfixed.
   behaviour change.
 
 ## Deferred items
+
+- **Windows is claimed nowhere and supported nowhere, but the code is half
+  ready for it** (recorded 2026-08-23, publication). `environment.py:110`
+  resolves `Scripts/python.exe` under `sys.platform == "win32"`, but
+  `state.py:132` builds `venv_python=p / "bin" / "python"` unconditionally, so
+  the two disagree and the suite would fail on Windows. No test carries a
+  platform skip, so nothing currently detects this. Consequences already
+  taken: `windows-latest` is absent from `test.yml`'s matrix and
+  `Operating System :: OS Independent` is absent from the classifiers (which
+  name POSIX/Linux and MacOS instead). Fixing `state.py:132` and adding one
+  matrix line is the whole job, if Windows is ever wanted.
+
+- **mypy is not gated anywhere** (recorded 2026-08-23, publication).
+  `pixi run typecheck` reports 23 errors in 6 files, so `test.yml`
+  deliberately has no mypy job -- gating would leave `main` permanently red
+  and train everyone to ignore CI. The pre-commit hook still runs mypy on
+  changed files, so this is a backlog of existing errors, not an open door.
+  Clear the 23 and add the job.
 
 - **The 4b wiring index goes stale if any later phase edits one of the four
   swept modules** (recorded 2026-08-22, phase 4b Task 8; **scope widened and
