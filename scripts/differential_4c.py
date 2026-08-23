@@ -246,15 +246,12 @@ are this phase's own additions.
    one- and two-import scripts.
 5. **Manifest content.** The folder *name* is compared; the JSON inside the
    venv is not.
-6. **Two of the three latent defects 3e recorded were still live at 4b's
-   close; both are closed now.** ``-y``/``--yes`` not reaching
-   ``blank_slate`` was defect 1, closed by this phase's Task 3. ``run_script``'s
-   dead ``rawlog`` at three of its four call sites was defect 3, closed by
-   this phase's Task 4. Defect 2 -- a missing script leaving
-   ``FileNotFoundError`` uncaught -- was already fixed by phase 4a's Task 1,
-   before 4b's own docstring was written; 4b's list said "three ... still
-   live" and named two, which double-counted the closed one. This phase
-   started with **two** live, not three, and closes both.
+6. **Two latent defects were live at this phase's start; both are closed
+   now.** ``-y``/``--yes`` not reaching ``blank_slate`` was defect 1, closed
+   by this phase's Task 3. ``run_script``'s dead ``rawlog`` at three of its
+   four call sites was defect 3, closed by this phase's Task 4. Defect 2 --
+   a missing script leaving ``FileNotFoundError`` uncaught -- was already
+   fixed by phase 4a's Task 1, before this phase began.
 7. **Concurrency.** One process, one run at a time.
 8. **A degraded record.** ``last_used.load`` has five "no record" branches --
    unreadable, not JSON, not an object, either path missing, either path
@@ -409,6 +406,40 @@ def install_repair_switch_and_parse_spy(
 # ---------------------------------------------------------------------------
 
 
+def _spy_on_active_virtualenv_dir(tree: Any, harness: Any) -> Any:
+    """Wrap ``active_virtualenv_dir`` to note its answer and the answer's type.
+
+    Shared by layers 19 and 20, the only two that need the type half of the
+    probe M2 requires. The caller installs this around one ``harness.drive()``
+    call and restores the returned original afterwards -- this function does
+    not restore it itself, so it can be reused by callers with different
+    cleanup needs.
+
+    Args:
+        tree:    3e's Tree.
+        harness: 3e's Harness, already wired.
+
+    Returns:
+        The real ``active_virtualenv_dir``, for the caller to restore.
+    """
+    real = tree.last_used.active_virtualenv_dir
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        """Answer for real, then note the answer and its type.
+
+        Returns:
+            Whatever the real function returned, unchanged.
+        """
+        result = real(*args, **kwargs)
+        harness.note(
+            f"last_used.active_virtualenv_dir() -> {D4B.describe(harness, result)}"
+        )
+        return result
+
+    tree.last_used.active_virtualenv_dir = spy
+    return real
+
+
 def layer_nineteen_activated_environment(
     harness: Any, tree: Any, workdir: Path
 ) -> None:
@@ -444,25 +475,14 @@ def layer_nineteen_activated_environment(
     print(f"  argv: {[harness.scrub(part) for part in argv]}")
     print(f"  VIRTUAL_ENV: {harness.scrub(os.environ['VIRTUAL_ENV'])}")
 
-    real_active_dir = tree.last_used.active_virtualenv_dir
-
-    def spy_active_dir(*args: Any, **kwargs: Any) -> Any:
-        """Answer for real, then note the answer and its type.
-
-        Returns:
-            Whatever the real function returned, unchanged.
-        """
-        result = real_active_dir(*args, **kwargs)
-        harness.note(
-            f"last_used.active_virtualenv_dir() -> {D4B.describe(harness, result)}"
-        )
-        return result
-
-    tree.last_used.active_virtualenv_dir = spy_active_dir
+    real_active_dir = _spy_on_active_virtualenv_dir(tree, harness)
     try:
         print(f"  main(): {harness.drive(argv)}")
     finally:
         tree.last_used.active_virtualenv_dir = real_active_dir
+        # Unset locally rather than relying on layer 20's harness.begin() to
+        # pop it -- this layer's own environment should not outlive it.
+        os.environ.pop("VIRTUAL_ENV", None)
     harness.dump()
 
 
@@ -535,22 +555,9 @@ def layer_twenty_tool_install_shape(
     stub_is_virtualenv = getattr(tree.last_used, "is_virtualenv", None)
     if real_is_virtualenv is not None:
         tree.last_used.is_virtualenv = real_is_virtualenv
-    real_active_dir = tree.last_used.active_virtualenv_dir
     real_find_match = tree.cache_search.find_match_dir_in_cache
     real_check_packages = tree.verify.check_packages_in_venv
     reached: list[str] = []
-
-    def spy_active_dir(*args: Any, **kwargs: Any) -> Any:
-        """Answer for real, then note the answer and its type.
-
-        Returns:
-            Whatever the real function returned, unchanged.
-        """
-        result = real_active_dir(*args, **kwargs)
-        harness.note(
-            f"last_used.active_virtualenv_dir() -> {D4B.describe(harness, result)}"
-        )
-        return result
 
     def spy_find_match(*args: Any, **kwargs: Any) -> Any:
         """Record that the cache search was reached, then search for real.
@@ -580,7 +587,7 @@ def layer_twenty_tool_install_shape(
             return False
         return real_check_packages(venv_python, **kwargs)
 
-    tree.last_used.active_virtualenv_dir = spy_active_dir
+    real_active_dir = _spy_on_active_virtualenv_dir(tree, harness)
     tree.cache_search.find_match_dir_in_cache = spy_find_match
     tree.verify.check_packages_in_venv = only_the_borrowed_venv_lacks_packages
     original_prefix = sys.prefix
