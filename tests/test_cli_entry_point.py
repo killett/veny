@@ -1578,6 +1578,26 @@ def test_a_lucky_run_killed_by_a_signal_reports_the_shell_status(monkeypatch, tm
     assert cli.main() == 137
 
 
+def test_an_ordinary_run_killed_by_a_signal_reports_the_shell_status(
+    monkeypatch, tmp_path
+):
+    """The ordinary path normalizes a signal death too, not just --feeling-lucky.
+
+    Behaviour under test: main()'s tail, which is the other of the two call
+    sites _shell_status must cover. Concrete bug this catches: dropping the
+    _shell_status call from the tail and returning script_exit_code bare --
+    which would leave this suite green everywhere else, since no other test
+    in this file drives an ordinary run's child to a negative returncode and
+    checks the status main() returns. That regression would recreate the
+    exact asymmetry this task removed, just with the two paths swapped:
+    --feeling-lucky normalized and the ordinary path not.
+    """
+    _a_cache_hit(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(pipeline, "run_script", lambda *args, **kwargs: -9)
+
+    assert cli.main() == 137
+
+
 def test_the_run_reports_the_imports_it_decided_are_missing(
     monkeypatch, tmp_path, caplog
 ):
