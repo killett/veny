@@ -42,13 +42,28 @@ gotchas ledger.
   |---|---|
   | **4a** `docs/superpowers/plans/2026-08-21-state-model-values.md` (written 2026-08-21, branch `state-model-values`) | The value objects: `Target`, the widened `Settings`, `ImportScan` as a returned product, `Requirements` as a returned product, `VenvHandle` replacing `set_venv_dir`. Also deletes folder scanning (user ruling) and makes a directory or missing script a usage error. |
   | **4b** `docs/superpowers/plans/2026-08-21-last-used-persistence.md` (executed, complete on branch `last-used-persistence`) | The `LastUsed` persistence change (design amendment 9), which breaks the `ek.Options` coupling and deletes `run_options.py`, the `cli.Options` re-export, `pathlibcutoff` and its two readers, and the test references in both spellings. Also deletes `json_types.py` and the pickle `PATHLIB_CUTOFF`, and stops `find_match_dir_in_cache` mutating the `argparse.Namespace` (user rulings, 2026-08-21). |
-  | **4c** (not yet written) | The remaining behaviour changes: the in-virtualenv guard (USER RULING 2026-08-20), `--feeling-lucky`'s missing signal normalization, latent defects 1 and 3, and the residual dead arguments. |
+  | **4c** `docs/superpowers/plans/2026-08-23-behaviour-changes-4c.md` (executed, complete on branch `behaviour-changes-4c`) | The remaining behaviour changes: the in-virtualenv guard (USER RULING 2026-08-20), `--feeling-lucky`'s missing signal normalization, latent defects 1 and 3, and the residual dead arguments. |
 
-**Next action:** **write plan 4c.** Plan 4b is **finished and merged to
-`main` at `99f5320`** (a `--no-ff` merge; branch `last-used-persistence`, off
-`main` @ `240767b`, deleted after merging -- it was at `5e81355`) on
-2026-08-22. Its ten tasks are all committed and its tracker
-(`docs/superpowers/plans/2026-08-21-last-used-persistence.md.tasks.json`)
+**Next action:** **phase 4 (4a + 4b + 4c) is complete on `behaviour-changes-4c`
+but not yet merged.** Checked against the design doc, not asserted: § Phase 4
+carries no remaining amendment slot (4a, 4b and 4c's blocks all say
+"Executed ... and closed"), and ledger items 1-5 in "Ledger items closed by
+this design" are all struck or corrected. The next session's first job is the
+whole-branch review this phase's own plan calls for ("the whole-branch review
+matters more here than usual — per-task review structurally cannot see a
+phase-wide claim"), then `git merge --no-ff behaviour-changes-4c` into `main`,
+then a follow-up commit recording the merge SHA and this file's phase-4c
+entry's final gate numbers, the same shape 4a's and 4b's merge-recording
+commits used. **Do not start a "phase 5"** — nothing in the design doc names
+one. Once merged, the genuinely unowned candidates for whatever comes next
+are the two items this program has carried since phase 3 and never assigned:
+**removing the probe venv from classification** (design amendment 3) and
+**the single-file reachability gap** (see Deferred items below for both).
+
+Plan 4b is **finished and merged to `main` at `99f5320`** (a `--no-ff` merge;
+branch `last-used-persistence`, off `main` @ `240767b`, deleted after merging
+-- it was at `5e81355`) on 2026-08-22. Its ten tasks are all committed and its
+tracker (`docs/superpowers/plans/2026-08-21-last-used-persistence.md.tasks.json`)
 matches. Gates re-measured on `main` after the merge: `pixi run test`
 **455 passed**, `pixi run lint` zero, `ruff format --check .` **58 files**,
 `pixi run typecheck` **23 errors in 6 files** over 55 source files.
@@ -74,6 +89,214 @@ arguments — which are now **two lists that must be reconciled into one**, 4a's
 five and 4b's eight (see Deferred items). 4c also inherits the two findings
 below that no code records, and it must **not** run its live check under
 `pixi run`.
+
+**Phase 4c is finished on branch `behaviour-changes-4c`, not yet merged.**
+This is the first phase in the program that is not behaviour-preserving —
+four sanctioned behaviour changes, each a user ruling recorded in the plan's
+header and quoted again in the design doc's 4c amendment block.
+
+**Gates measured on this branch in this closing session, 2026-08-23 — every
+number below was run here, now, not copied from a task report or from this
+brief.** `pixi run test` **477 passed, 1 warning in 10.56s**; `pixi run lint`
+**All checks passed!**; `pixi run python -m ruff format --check .` **60 files
+already formatted**; `pixi run typecheck` **23 errors in 6 files (checked 57
+source files)**.
+
+**The mypy ceiling did not move, and the denominator moved by exactly the
+files this phase added.** 23 errors in 6 files before (4b's baseline) and
+after. Per-file breakdown, measured here: `tests/test_verify.py` **15**,
+`src/veny/analysis/imports.py` **3**, `tests/test_split_imports.py` **2**,
+`src/veny/cli.py` **1**, `src/veny/analysis/literals.py` **1**,
+`src/veny/analysis/call_graph.py` **1** — the identical six files and
+identical per-file counts as 4b's close. The checked-file count went
+55 → **57**: `git diff --name-status 9af1f09..HEAD` shows two files added
+(`scripts/differential_4c.py`, `scripts/wiring_sweep_4c.py`) and none
+deleted; neither new file contributes an error, so the ceiling held exactly.
+
+**Twelve commits, not eleven.** The task-10 brief's summary table under-counts
+by one; re-verified against `git log --oneline 9af1f09..HEAD` rather than
+trusted: `d162cc6` (Task 1, the guard reads `VIRTUAL_ENV` — `last_used.
+is_virtualenv` deleted, `active_virtualenv_dir() -> Path | None`,
+`pipeline.run`'s middle branch takes it by walrus), `c0867cb` (Task 2,
+`cli._shell_status` owns the `128 - returncode` arithmetic, both of `main`'s
+exit paths use it) + `bf55b1f` (the fix commit, pinning the ordinary path's
+use of it — the lucky path alone had been pinned), `7d5adad` (Task 3,
+`blank_slate` reads `args.yes`) + `6af273f` (the fix commit, covering the
+decline path a review found unpinned), `b6c7782` (Task 4, `announce=True` at
+all four `run_script` sites), `5834a82` (Task 5, the dead-argument lists
+reconciled into one, five `getattr` defaults converted to direct attribute
+access, the redundant `last_used` term deleted from `explicit`), `9110e33`
+(Task 7, `scripts/differential_4c.py` and its mutation evidence) + `0765258`
+(the fix commit, correcting a false claim the driver's docstring made about
+4b's own docstring wording), `a6ca117` (Task 6, `scripts/wiring_sweep_4c.py`
+and the 4c wiring index) + `9ef5a14` (the fix commit, correcting OPEN HOLE
+item 9's false reason — the branch it named as untested is in fact reached by
+`test_main_checks_the_virtualenv_it_is_running_inside`), `f24bee3` (Task 9,
+the issubset ledger correction and the design doc's 4c amendment block).
+Task 8 produced no commit — it is live evidence only, in
+`.superpowers/sdd/2026-08-23-behaviour-changes-4c/task-8-report.md`. Task 10
+is this entry.
+
+**The four behaviour changes, stated as what a user now sees differently:**
+
+1. **A `uv tool install`ed veny no longer dead-ends on its own virtualenv.**
+   Before: any veny installed the documented way lives inside a virtualenv
+   permanently, so `sys.prefix != sys.base_prefix` was always true and a run
+   with a missing import always hit "Please deactivate the current virtual
+   environment and run the script again." and exited 1 — the cache search and
+   the venv builder were unreachable. Now: veny asks the shell what the user
+   actually activated (`$VIRTUAL_ENV`). With nothing activated, a missing
+   import reaches the cache search / venv build exactly as it does for a
+   `pixi`- or `pip`-installed veny. With a virtualenv genuinely activated,
+   veny still checks that environment and still prints the deactivate message
+   if it is missing packages — nothing changes for that user. **Accepted
+   cost** (the user's own ruling): a virtualenv entered by invoking its
+   interpreter directly, without activating it (so `VIRTUAL_ENV` is unset),
+   stops being checked and gets a cached environment instead.
+2. **`--feeling-lucky` reports the same exit status as every other path when
+   the script dies to a signal.** Before: a lucky run whose child was killed
+   by SIGKILL returned a raw `-9` (the shell then shows 247); the ordinary
+   path already normalized this to 137. Now both paths agree: 137.
+3. **`veny --blank-slate -y` finally skips the confirmation prompt.** Before:
+   `-y`/`--yes` was silently ignored on this path — argparse writes the dest
+   `yes`, but the read checked `args.y`, which never existed — so the prompt
+   appeared regardless and scripting `--blank-slate` unattended was
+   impossible. Now `-y` suppresses the prompt and the deletion proceeds;
+   `--blank-slate` alone still prompts and still returns 0 on decline,
+   deleting nothing.
+4. **Every launch tells the user what it is about to run.** Before: only the
+   "reuse a cached environment" launch logged `Running command: …`; the other
+   three (an ordinary fresh install, an already-activated virtualenv, and
+   `--feeling-lucky`) launched silently. Now all four log the line — unless
+   `--rawlog` is given, which now silences all four instead of only one.
+   **Accepted cost** (the user's own ruling): three extra INFO lines on runs
+   that did not pass `--rawlog` and previously saw none.
+
+**The differential.** `scripts/differential_4c.py` reuses 4b's eighteen-layer
+harness wholesale and adds four layers, one per sanctioned change (19-22).
+Re-derived from the script's own docstring and `task-7-report.md`, not copied
+from this brief: clean run against `9af1f09` — **132 lines, 9 hunks**. Every
+hunk is one of five sanctioned things (the `__file__` header; the
+deactivate-dead-end becoming a cache search; the lucky status, `-9` →
+`137`; the blank-slate prompt disappearing under `-y`; the new announce
+lines at the three sites that lacked them). Mutation-tested five ways, kill
+signal is the second column (a mutation can shrink the diff by making the
+new tree look more like the old one at the spot it touches):
+
+| Regression | Diff | vs clean |
+|---|---|---|
+| Clean tree | 132 | 0 |
+| M1 the guard reads `sys.prefix` again | 540 | 508 |
+| M2 `active_virtualenv_dir` returns a `str` | 141 | 9 |
+| M3 `_shell_status` skipped on the lucky return | 124 | 10 |
+| M4 `-y` read from the wrong dest again | 101 | 39 |
+| M5 `announce=True` dropped from the three new sites | 98 | 44 |
+| Reverted | 132 | 0 |
+
+**The sweep.** `scripts/wiring_sweep_4c.py` and
+`docs/superpowers/plans/2026-08-23-behaviour-changes-4c-wiring-index.md`:
+**189 arguments across 55 distinct callees** in `last_used.py`, `pipeline.py`
+(`feeling_lucky`, `blank_slate`, `run_script`, the rewritten middle branch of
+`run`), `cache_search.py`'s last-used pass, and `cli.main`/`cli._shell_status`.
+The harness itself printed **155 KILLED, 14 OPEN HOLE, 2 MULTILINE
+(measured by driving instead), 18 NO SUBSTITUTE, 0 DEAD** — the harness never
+emits a DEAD verdict on its own. One of the 14 raw OPEN HOLE rows
+(`pipeline.py:853`'s `getattr(args, "reqs", False)` default) was
+hand-reclassified DEAD during the index's writing because it is unreachable
+by construction, the same reasoning that closed its sibling in Task 5; the
+index's own table therefore reads **13 OPEN HOLE, 1 DEAD ARGUMENT**, and
+155 + 2 + 18 + 1 + 13 = 189. All four `run_script(announce=True)` sites came
+back KILLED by one test that drives all four launch paths.
+
+**The live check, and the install shape that makes it new evidence.** Quoted
+from `task-8-report.md`, not summarized: a throwaway virtualenv was built at
+`/tmp/veny-live-4c` using the pixi env's own `python3.13` **by direct path,
+never via `pixi run`**, as the base interpreter only; `python -m venv`
+produced a real nested virtualenv where `sys.prefix` (`/tmp/veny-live-4c`)
+differs from `sys.base_prefix` (`/workspace/.pixi/envs/default`) — printed
+`True` for `sys.prefix != sys.base_prefix`, confirming this is the exact
+shape the pre-4c guard broke on, the shape both 4a's and 4b's live runs (both
+under `pixi run`, where `sys.prefix == sys.base_prefix`) were blind to.
+**Unactivated** (`env -u VIRTUAL_ENV /tmp/veny-live-4c/bin/python -m veny
+live.py`): no "Please deactivate…" message, veny reached the cache/venv-build
+path, the script's own stdout `live 4c ok yaml` reached the terminal, `echo
+$?` → **0**. **Activated** (`VIRTUAL_ENV=/tmp/veny-live-4c … -m veny
+live.py`): veny logged "Already in a virtual environment.", import-checked
+*that* environment (confirmed separately that `yaml` is genuinely absent from
+`/tmp/veny-live-4c`), logged the deactivate message, `echo $?` → **1**. Both
+outcomes are the correct ones the acceptance criteria named, and both are
+this program's first end-to-end evidence for this branch of `pipeline.run` —
+4a's and 4b's live runs never exercised it.
+
+**The STANDING CHECK.** The 4c wiring index is keyed on `file:line` in
+exactly the four modules 4c touched (`last_used.py`, `pipeline.py`,
+`cache_search.py`, `cli.py`) and `scripts/wiring_sweep_4c.py` rewrites
+expressions by source position — any later edit to a line in one of those
+four files invalidates every row below it, and the index must be
+regenerated (`pixi run python scripts/wiring_sweep_4c.py`, about twelve
+minutes per Task 6's report) before whatever phase makes that edit closes.
+Restated here in the same words 4b's carried, because 4c is the phase that
+would otherwise let it go unsaid a second time.
+
+**What 4c did NOT do, with its owner named:**
+
+- **`pipeline.py:853`'s `getattr(args, "reqs", False)` default is dead** —
+  found by Task 6's sweep (the `elif` branch's sibling of the site Task 5
+  closed in the `else` branch), never swept by 4b, outside the five sites the
+  user ruled on for Task 5. **Recorded, unowned.** Already in Deferred items
+  above (added by Task 9's commit `f24bee3`) — this is a pointer to that
+  entry, not a second copy of it.
+- **The 13 OPEN HOLEs in the 4c index** (plus the 2 MULTILINE rows measured
+  by driving instead) are coverage gaps, not defects — nine of them are
+  "reachable but the log line's exact text is never asserted on," in
+  `blank_slate` and the activated-virtualenv mismatch branch. Full list in
+  `docs/superpowers/plans/2026-08-23-behaviour-changes-4c-wiring-index.md`.
+  **No owner assigned**; a future test-coverage pass, not a defect fix.
+- **The residual risks in `scripts/differential_4c.py`'s docstring.** 4b's
+  docstring carried sixteen; one of them ("the in-virtualenv branch under a
+  tool install") is exactly what this phase's layer 20 now drives and is
+  retired rather than renumbered, so **fifteen carry forward unchanged**
+  (renumbered 1-15), plus **four new** (16-19: `args` still not round-tripped
+  onto disk, `sys.prefix` monkeypatching being process-global to layer 20,
+  layer 19/20's stubbed `check_packages_in_venv` never probing a real
+  `site-packages`, and message ordering already covered by 4b's item 21 —
+  see the script for exact wording). **Nineteen residual risks total**,
+  inherited by whatever phase next touches this code.
+- **The two OPEN rows in
+  `docs/superpowers/plans/2026-08-23-behaviour-changes-4c-dead-arguments.md`
+  stay open, with their reasons, unchanged by this phase:** the probe
+  environment's `ResolvedImport(pip_name=import_name)` (the two fields are
+  the same string by construction; no substitution can distinguish them —
+  not a test gap, not deletable), and `state.VenvHandle.for_dir(
+  record_venv_state(...))` (mis-filed as dead; it is measured by driving, not
+  actually dead).
+- **Still unowned from earlier phases, and still not phase 4's:** removing
+  the probe venv from classification (design amendment 3) and the
+  single-file reachability gap. See Deferred items below.
+- **Four minors this phase's reviews raised and left deferred, carried here
+  from the now-deleted SDD ledger
+  (`.superpowers/sdd/2026-08-23-behaviour-changes-4c/progress.md`) since that
+  file does not survive the phase's close:**
+  1. Task 1's new cache-search test asserts only the call count, not the
+     arguments `check_packages_in_venv` was actually called with — the
+     plan's own text mandated this body verbatim.
+  2. Task 4's mutation evidence covers one of the four announce sites and
+     none of the four rawlog-silencing paths — again the plan's own
+     mandated test body, not a gap this task introduced.
+  3. Task 4's announce test is monolithic and halts at its first failing
+     assertion, so a second broken site would not be individually reported.
+  4. Task 8's "the cache path was reached cold, not only from a pre-warmed
+     cache" claim rests on a discarded transcript (an earlier attempt whose
+     `$?` capture was corrupted by an intervening `echo`) that was not
+     pasted into the report — the claim is stated but its evidence is
+     described rather than shown.
+  None of the four block anything; recorded so a future coverage pass has a
+  starting list instead of needing to re-read three review diffs.
+
+**Design doc correction made true by this entry:** the design doc's 4c
+amendment block (added by Task 9, `f24bee3`) ends "the ledger of commits is
+in `PROGRESS.md`'s phase-4c entry" — this block, opening "**Phase 4c is
+finished**", is that entry.
 
 **Phase 4b is finished.**
 
@@ -2008,6 +2231,17 @@ wiring rationale and for two Minors deliberately left unfixed.
   around it, and removing only the argument would break the hand-built
   `argparse.Namespace()` objects the unit tests pass.
 
+  > **CLOSED 2026-08-23 by phase 4c's Task 5** (`5834a82`). One list now
+  > exists — `docs/superpowers/plans/2026-08-23-behaviour-changes-4c-dead-arguments.md`
+  > — giving every row from both prior indexes a single disposition: the four
+  > `run_script(rawlog=…)` sites (3 from 4a, 1 from 4b) and the five
+  > unreachable `getattr` defaults are CLOSED (converted or made live by
+  > `announce=True`); the `last_used` term inside `explicit` is CLOSED
+  > (deleted); the probe venv's `ResolvedImport` row and the mis-filed
+  > `VenvHandle.for_dir` row stay OPEN, exactly the two the reconciled list
+  > was scoped to leave open. See PROGRESS.md's phase-4c entry above for the
+  > full ledger.
+
   **Arithmetic correction (found and fixed by phase 4c's Task 9,
   2026-08-23): the combined count was 12 distinct sites, not 13.** 4b's
   headline in the index above reads "DEAD ARGUMENT | **6 + 2** = **8**",
@@ -2856,13 +3090,25 @@ wiring rationale and for two Minors deliberately left unfixed.
     moved into `pipeline.py` as `_probe_venv`, still injected, still building
     a real environment. **Owner: whichever phase owns that user-visible
     change** — still not assigned.
+    > **CHECKED AT PHASE 4's CLOSE (2026-08-23, phase 4c Task 10): phase 4
+    > (4a + 4b + 4c) is now complete and never claimed this.** Confirmed
+    > against the design doc rather than assumed — nothing in its Phase 4
+    > section names `_probe_venv`. Candidate for whatever phase comes next.
   - **The single-file reachability gap.** **Owner: a later `analysis/` plan.**
+    > Same check, same date: phase 4 is complete and did not touch this
+    > either. Still a candidate for a later `analysis/` plan.
   - **The third pre-existing `AssertionError`.** `veny -y` with no script was
     fixed (deviation 2); nothing else in the crash ledger was.
 
 > **DEFECT 2 FIXED 2026-08-21 by phase 4a Task 1** (a missing script is now a
-> usage error, exit 2). **DEFECTS 1 AND 3 ARE STILL OPEN and are phase 4c's**;
-> both were re-confirmed unchanged by 4a's Task 8 sweep.
+> usage error, exit 2). **DEFECTS 1 AND 3 WERE STILL OPEN through 4a and 4b**;
+> both were re-confirmed unchanged by 4a's and 4b's Task 8 sweeps.
+> **DEFECT 1 FIXED 2026-08-23 by phase 4c's Task 3** (`7d5adad`; decline path
+> covered by `6af273f`) — `blank_slate` reads `args.yes`, the dest argparse
+> actually writes. **DEFECT 3 FIXED 2026-08-23 by phase 4c's Task 4**
+> (`b6c7782`) — all four `run_script` call sites pass `announce=True`, so
+> `rawlog` is live everywhere it is read. All three latent defects the
+> program's STANDING CHECKs surfaced are now closed.
 
 - **Three latent defects 3e's STANDING CHECK surfaced, recorded and NOT
   fixed** — the phase was behaviour-preserving, and each is pre-existing at
@@ -3019,7 +3265,8 @@ wiring rationale and for two Minors deliberately left unfixed.
 
 > **FINDING 1 DECIDED AND EXECUTED 2026-08-21 by phase 4a Task 1** (user
 > ruling: delete the branch, do not revive it; the 16 rows are retired).
-> **FINDING 2 (the in-virtualenv guard) is still open and is phase 4c's.**
+> **FINDING 2 (the in-virtualenv guard) was open through 4a and 4b; CLOSED
+> 2026-08-23 by phase 4c's Task 1 — see the fuller closure note below.**
 
 - **Two findings from 3e's whole-branch review (2026-08-20) that phase 4 owns.
   Both are behaviour questions, not test gaps, and neither was fixed on the
@@ -3080,6 +3327,19 @@ wiring rationale and for two Minors deliberately left unfixed.
      entirely. Any future live run meant to exercise this branch must not use
      `pixi run`.
 
+     > **CLOSED 2026-08-23 by phase 4c's Task 1** (`d162cc6`). The minimal fix
+     > the review identified is exactly what shipped: `last_used.
+     > is_virtualenv()` is deleted; `active_virtualenv_dir() -> Path | None`
+     > reads `os.environ.get("VIRTUAL_ENV")` only, and `pipeline.run`'s middle
+     > branch takes it by walrus. Both directions have tests
+     > (`test_main_ignores_venys_own_virtualenv_and_goes_to_the_cache`;
+     > `test_main_checks_the_surrounding_virtualenv_against_this_runs_imports`).
+     > The live run this note demanded — from a tool-install shape, not `pixi
+     > run` — is Task 8's, quoted in PROGRESS.md's phase-4c entry above: a
+     > throwaway virtualenv with `sys.prefix != sys.base_prefix`, unactivated
+     > → cache path reached, exit 0; activated → that environment
+     > import-checked, exit 1.
+
 - **`--feeling-lucky` skips the signal normalization, and that is deliberate
   only by accident** (recorded by 3e's whole-branch review, 2026-08-20; not
   fixed). `cli.main` normalizes a signal death to 128 + signal at its tail, but
@@ -3092,6 +3352,12 @@ wiring rationale and for two Minors deliberately left unfixed.
   promising the normalization unconditionally. The docstring now states the
   asymmetry; the behaviour is untouched. Whoever fixes it should route the
   lucky status through the same tail rather than duplicating the arithmetic.
+
+  > **CLOSED 2026-08-23 by phase 4c's Task 2** (`c0867cb`; ordinary-path
+  > normalization pinned at `bf55b1f`). `cli._shell_status` is now the only
+  > place `128 - script_exit_code` is written, and both of `main`'s exit
+  > paths call it — a lucky run killed by SIGKILL now returns `137`, matching
+  > the ordinary path exactly.
 
 - **3e's deferred minors, none blocking.** Recorded because the per-task
   reports are scratch and are deleted with the phase.
