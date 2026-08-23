@@ -44,21 +44,40 @@ gotchas ledger.
   | **4b** `docs/superpowers/plans/2026-08-21-last-used-persistence.md` (executed, complete on branch `last-used-persistence`) | The `LastUsed` persistence change (design amendment 9), which breaks the `ek.Options` coupling and deletes `run_options.py`, the `cli.Options` re-export, `pathlibcutoff` and its two readers, and the test references in both spellings. Also deletes `json_types.py` and the pickle `PATHLIB_CUTOFF`, and stops `find_match_dir_in_cache` mutating the `argparse.Namespace` (user rulings, 2026-08-21). |
   | **4c** `docs/superpowers/plans/2026-08-23-behaviour-changes-4c.md` (executed, complete on branch `behaviour-changes-4c`) | The remaining behaviour changes: the in-virtualenv guard (USER RULING 2026-08-20), `--feeling-lucky`'s missing signal normalization, latent defects 1 and 3, and the residual dead arguments. |
 
-**Next action:** **phase 4 (4a + 4b + 4c) is complete on `behaviour-changes-4c`
-but not yet merged.** Checked against the design doc, not asserted: § Phase 4
-carries no remaining amendment slot (4a, 4b and 4c's blocks all say
-"Executed ... and closed"), and ledger items 1-5 in "Ledger items closed by
-this design" are all struck or corrected. The next session's first job is the
-whole-branch review this phase's own plan calls for ("the whole-branch review
-matters more here than usual — per-task review structurally cannot see a
-phase-wide claim"), then `git merge --no-ff behaviour-changes-4c` into `main`,
-then a follow-up commit recording the merge SHA and this file's phase-4c
-entry's final gate numbers, the same shape 4a's and 4b's merge-recording
-commits used. **Do not start a "phase 5"** — nothing in the design doc names
-one. Once merged, the genuinely unowned candidates for whatever comes next
-are the two items this program has carried since phase 3 and never assigned:
-**removing the probe venv from classification** (design amendment 3) and
-**the single-file reachability gap** (see Deferred items below for both).
+**Next action:** **phase 4 (4a + 4b + 4c) is complete and merged to `main`
+at `2289af2`** (a `--no-ff` merge; branch `behaviour-changes-4c`, off `main`
+@ `9af1f09`, deleted after merging -- it was at `804f4de`) on 2026-08-23.
+Gates re-measured on `main` after the merge: `pixi run test` **477 passed**,
+`pixi run lint` **All checks passed!**, `ruff format --check .` **60 files**,
+`pixi run typecheck` **23 errors in 6 files (checked 57 source files)**.
+
+The whole-branch review ran before the merge and returned **two blocking
+findings**, both of the class per-task review cannot see, plus four minors
+and one observation. Both blockers are fixed on the branch: (1) the announce
+test's `--rawlog` loop leaked `VIRTUAL_ENV` from an earlier case, so its
+first iteration took the in-virtualenv branch instead of the cache-hit
+branch and the venv launch's `rawlog` was never exercised under `--rawlog` --
+demonstrated by a mutation that left all 477 tests passing, and fixed at
+`3767cc5` with the mutation now failing; (2) this file cited "4b's item 21",
+which does not exist (4b's docstring carries sixteen items) and misdescribed
+4c's own residual item 18, fixed at `804f4de` along with three miscounts.
+The observation it raised is recorded, unowned, in Deferred items:
+`pipeline.py`'s activated-virtualenv branch import-checks
+`environment.venv_python_for(active_venv)` and then launches
+`run_script(sys.executable, ...)`, which are the same interpreter only when
+veny is installed inside the activated venv.
+
+**Do not start a "phase 5"** -- nothing in the design doc names one. Checked
+against the design doc rather than asserted: § Phase 4 carries no remaining
+amendment slot (4a, 4b and 4c's blocks all say "Executed ... and closed"),
+and ledger items 1-5 are all struck or corrected. The genuinely unowned
+candidates for whatever comes next are the two items this program has
+carried since phase 3 and never assigned -- **removing the probe venv from
+classification** (design amendment 3) and **the single-file reachability
+gap** -- plus what 4c itself left: the dead `getattr(args, "reqs", False)`
+defaults at `pipeline.py:853` and its three siblings, the 14 OPEN HOLEs in
+the 4c wiring index, and the interpreter mismatch above. All are in Deferred
+items below.
 
 Plan 4b is **finished and merged to `main` at `99f5320`** (a `--no-ff` merge;
 branch `last-used-persistence`, off `main` @ `240767b`, deleted after merging
@@ -90,7 +109,8 @@ five and 4b's eight (see Deferred items). 4c also inherits the two findings
 below that no code records, and it must **not** run its live check under
 `pixi run`.
 
-**Phase 4c is finished on branch `behaviour-changes-4c`, not yet merged.**
+**Phase 4c is finished and merged to `main` at `2289af2`** on 2026-08-23;
+the branch was deleted after merging.
 **Correction (2026-08-23, Task 10 review finding):** 4c is not the first
 phase to make a sanctioned behaviour change — checked against this file's own
 phase-4a entries rather than trusted: 4a already made two, both by user
