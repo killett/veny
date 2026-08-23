@@ -1,5 +1,7 @@
 # Phase 4b wiring index — every argument, measured
 
+**SUPERSEDED for `last_used.py`, `pipeline.py`, `cache_search.py` and `cli.py` by the 4c index (2026-08-23); its line numbers predate phase 4c and no longer resolve.**
+
 **What was swept.** Every argument at every call site phase 4b created or
 changed — **172 arguments across 39 distinct callees** in
 `src/veny/last_used.py`, `src/veny/pipeline.py`, `src/veny/cache_search.py`
