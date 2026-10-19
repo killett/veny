@@ -62,8 +62,9 @@ The PyPI account needs 2FA enabled. This is a PyPI requirement, not ours.
    ```
 
 6. Watch it: `gh run watch`. The workflow builds the sdist and wheel,
-   runs `twine check --strict`, **asserts that the tag equals
-   `veny.__version__`**, and only then publishes.
+   **asserts that the tag equals `veny.__version__`**, asserts that the
+   wheel is pure Python, runs `twine check --strict`, and only then
+   publishes.
 
 7. Verify from the outside, in a throwaway environment:
 
@@ -83,7 +84,7 @@ The PyPI account needs 2FA enabled. This is a PyPI requirement, not ours.
 veny's version is a static string, not derived from git tags, so the two
 *can* disagree — tag `v0.2.3` while `__init__.py` still says `0.2.2` and the
 build happily produces `veny-0.2.2`, overwriting nothing and publishing the
-wrong thing. The `Assert tag matches __version__` step in `release.yml`
+wrong thing. The `Assert the tag matches __version__` step in `release.yml`
 fails the build in that case, before the publish job ever runs.
 
 The alternative — deriving the version from the tag with `hatch-vcs` — was
