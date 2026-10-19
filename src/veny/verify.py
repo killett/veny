@@ -626,11 +626,10 @@ def verify_and_repair_imports(
         object, because the design's mutation direction is that each stage
         returns its product.
     """
-    from_source = source_names
     records = [
         record
         for record in sorted(uninstalled, key=lambda r: r.import_name)
-        if record.import_name in from_source
+        if record.import_name in source_names
     ]
     if not records:
         return frozenset(uninstalled)
