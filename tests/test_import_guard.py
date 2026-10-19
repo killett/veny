@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import veny
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -34,10 +36,13 @@ def test_veny_exits_with_an_install_message_when_emmykit_is_missing():
 
 
 def test_veny_imports_normally_when_emmykit_is_present():
+    # Compared against the version this process imported rather than a
+    # literal: src/veny/__init__.py is the only place the number lives
+    # (RELEASING.md), so a literal here turned red on every release bump.
     result = run_python("import veny.cli; import veny; print(veny.__version__)")
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "0.2.2"
+    assert result.stdout.strip() == veny.__version__
 
 
 def test_veny_exits_with_an_upgrade_message_when_emmykit_is_too_old():
