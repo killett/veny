@@ -93,6 +93,7 @@ bugs and should change with the fix, not before it:
   `tests/test_venv_naming.py` and `tests/test_alias_index.py` saying
   `find_preferred_python_version()` returns `""` or is passed "straight
   into build()" — all part of the empty-interpreter alias-probe bug.
+  **Corrected with that fix** (audit bug-fix plan, Task 2).
 - `verify.check_packages_in_venv`'s "This function does not raise
   exceptions" — part of the dangling-interpreter `FileNotFoundError` bug.
 

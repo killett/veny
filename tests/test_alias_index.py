@@ -399,13 +399,30 @@ def test_probe_without_a_target_interpreter_spawns_nothing(monkeypatch):
     assert packages == {}
 
 
+def test_probe_with_an_empty_interpreter_name_reports_the_running_interpreter(
+    monkeypatch,
+):
+    # pipeline.run spells "no preferred Python on PATH" as "" at its
+    # str-typed boundaries, so "" must mean what None means here: no target,
+    # answered for the running interpreter, with nothing executed. A bug that
+    # would make this fail: treating only None as "no target", so the probe
+    # tries to run "" and comes back with no tag.
+    def _boom(*args, **kwargs):
+        raise AssertionError("an empty name is not an interpreter to run")
+
+    monkeypatch.setattr("veny.alias_index.subprocess.run", _boom)
+    tag, packages = alias_index.probe_interpreter("")
+    assert tag == f"{sys.version_info.major}.{sys.version_info.minor}"
+    assert packages == {}
+
+
 def test_build_without_a_target_interpreter_returns_a_usable_index(
     tmp_path, monkeypatch
 ):
-    # veny.py passes ek.find_preferred_python_version() straight into build(),
-    # so build(None) is reached on exactly the machine that has no preferred
-    # Python installed. It must degrade to the running interpreter -- which is
-    # the one veny will build the venv with -- not raise.
+    # No target interpreter -- None here, "" from pipeline.run, see the test
+    # above -- is reached on exactly the machine that has no preferred Python
+    # installed. It must degrade to the running interpreter -- which is the
+    # one veny will build the venv with -- not raise.
     def _boom(*args, **kwargs):
         raise AssertionError("there is no interpreter to probe")
 

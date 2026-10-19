@@ -119,8 +119,9 @@ def venv_build_interpreter(python_command: str) -> str:
     python_command is what stdlib and alias resolution were probed
     against, so it is what the venv must be built with; building with
     sys.executable instead classifies imports for one Python and installs them
-    for another. find_preferred_python_version() returns "" when the preferred
-    Python is absent from PATH, and only then does the running interpreter serve.
+    for another. pipeline.run passes "" when the preferred Python is absent
+    from PATH (emmykit returns None, spelled "" at this str-typed boundary),
+    and only then does the running interpreter serve.
 
     The result is resolved to an absolute path with shutil.which() before it is
     returned. A bare command name like "python3" is not safe to hand to `uv

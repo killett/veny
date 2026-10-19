@@ -734,10 +734,12 @@ def run(
     start_time = start_time or dt.datetime.now()
     script_exit_code = 0
 
-    # emmykit annotates this as str | None while documenting "" for "absent";
-    # `or ""` pins the documented spelling at the two boundaries that are
-    # typed str, and stdlib_index.resolve below still gets the raw value,
-    # because it maps None and the running interpreter to the same index.
+    # emmykit returns None when the preferred Python is absent. `or ""` spells
+    # that as "" at the two boundaries typed str -- the Target and
+    # build_alias_index -- where "" means "no target": venv_build_interpreter
+    # falls back to sys.executable and the alias probe answers for the running
+    # interpreter. stdlib_index.resolve below still gets the raw value, because
+    # it maps None and the running interpreter to the same index.
     python_command = ek.find_preferred_python_version()
     if target is not None:
         target = dataclasses.replace(target, python_command=python_command or "")

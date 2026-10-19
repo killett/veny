@@ -506,11 +506,13 @@ def probe_interpreter(
     probed. veny reaches it when the preferred Python is absent from PATH, and
     it then builds the venv with the interpreter running veny itself, so the
     running tag is the correct answer rather than a degraded guess. This
-    mirrors stdlib_index.resolve(None).
+    mirrors stdlib_index.resolve(None). An empty name means the same: it is
+    how pipeline.run spells "absent" at its str-typed boundaries, and there
+    is nothing to execute.
 
     Args:
-        python:  Path or command name of the interpreter to probe, or None when
-            no target interpreter has been chosen.
+        python:  Path or command name of the interpreter to probe, or None (or
+            an empty name) when no target interpreter has been chosen.
         timeout: Seconds to wait before giving up.
 
     Returns:
@@ -518,7 +520,7 @@ def probe_interpreter(
         mapping. With no target, the running interpreter's tag and an empty
         mapping.
     """
-    if python is None:
+    if python is None or python == "":
         return _running_tag(), {}
     command = [os.fspath(python), "-c", _PROBE_CODE]
     try:
