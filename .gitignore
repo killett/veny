@@ -33,3 +33,7 @@ build/
 # happens to be driving the agent, not something this project ships. CLAUDE.md
 # at the repo root IS tracked: it is the project's own instructions.
 .claude/
+
+# Scratch copies of the user's older, pre-repo veny.py, univ_defs.py and a
+# client script, kept locally for bug archaeology. Never committed.
+tempy/
