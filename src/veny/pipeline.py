@@ -116,8 +116,8 @@ def find_imports_in_script(
 
     The scan is mutated in place rather than returned: analysis/scan.py only
     ever calls .add / .append / `d[k] = v` on it and never rebinds a field,
-    and it recurses through the script's local modules relying on all seven
-    fields carrying across those calls.
+    and it walks the script's local modules relying on all seven fields
+    accumulating across that walk.
 
     Seeding is why the scan is passed in rather than built here.
     dict_of_custom_modules() fills scan.custom_modules before list_packages
