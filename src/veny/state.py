@@ -78,16 +78,6 @@ class Requirements:
     seen_stdlib: frozenset[str]
     extra_requirements: Mapping[str, str | None]
 
-    @property
-    def total_imports(self) -> int:
-        """The number of imports classification had to account for.
-
-        Returns:
-            The size of all_imports, which is what the progress display
-            counts towards.
-        """
-        return len(self.all_imports)
-
 
 @dataclass(frozen=True)
 class VenvHandle:

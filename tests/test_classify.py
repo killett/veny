@@ -439,8 +439,7 @@ def test_total_imports_equals_the_size_of_all_imports_when_split_imports_returns
     import, a bad import and a --reqs requirement. Concrete bug this catches:
     any later step that mutates all_imports after the count is taken -- adding
     the requirement names after ``total_imports`` is read, or subtracting bad
-    imports there -- makes the progress display count to the wrong total and
-    breaks the equality task 4 turns into a property.
+    imports there -- makes the progress display count to the wrong total.
     """
     aliases = _RecordingIndex({"uninst": "uninst-pypi"})
     scan = ImportScan(
