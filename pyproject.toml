@@ -84,19 +84,12 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["ANN", "D", "S"]  # Otherwise Claude would either over-annotate every test or fight ruff constantly.
-# cli.py's asserts are internal invariants, not input validation; its
-# subprocess calls are the whole point of the program (it builds venvs and
-# runs the user's script). Scoped to this one file so a genuinely unsafe call
-# elsewhere still gets flagged. (The pickle.load call this used to also cover
-# moved to analysis/custom_modules.py in plan 3a, which carries its own
-# inline `# noqa: S301` instead.)
-"src/veny/cli.py" = ["S101", "S603"]
-# pipeline.py carries the asserts and the subprocess call moved out of
-# cli.py: list_packages' and setup_virtualenv's internal-invariant asserts,
-# and run_script's launch of the user's own script -- which is the whole
-# point of the program, the same reasoning cli.py's entry carried. Scoped to
-# this one file so a genuinely unsafe call elsewhere still gets flagged.
-"src/veny/pipeline.py" = ["S101", "S603"]
+# pipeline.py's one subprocess call is run_script's launch of the user's own
+# script -- the whole point of the program. It moved here from cli.py, which
+# now has no subprocess calls and no asserts and so needs no entry. pipeline.py
+# carries no asserts either, so S101 stays enforced here. Scoped to this one
+# file so a genuinely unsafe call elsewhere still gets flagged.
+"src/veny/pipeline.py" = ["S603"]
 # environment.py is the one module that invokes uv: its subprocess calls
 # are its entire purpose. It carries no asserts, so S101 stays enforced here.
 "src/veny/environment.py" = ["S603"]
