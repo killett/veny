@@ -44,11 +44,12 @@ gotchas ledger.
   | **4b** `docs/superpowers/plans/2026-08-21-last-used-persistence.md` (executed, complete on branch `last-used-persistence`) | The `LastUsed` persistence change (design amendment 9), which breaks the `ek.Options` coupling and deletes `run_options.py`, the `cli.Options` re-export, `pathlibcutoff` and its two readers, and the test references in both spellings. Also deletes `json_types.py` and the pickle `PATHLIB_CUTOFF`, and stops `find_match_dir_in_cache` mutating the `argparse.Namespace` (user rulings, 2026-08-21). |
   | **4c** `docs/superpowers/plans/2026-08-23-behaviour-changes-4c.md` (executed, complete on branch `behaviour-changes-4c`) | The remaining behaviour changes: the in-virtualenv guard (USER RULING 2026-08-20), `--feeling-lucky`'s missing signal normalization, latent defects 1 and 3, and the residual dead arguments. |
 
-**Next action:** **the audit bug fixes** -- plan
-`docs/superpowers/plans/2026-10-19-audit-bug-fixes.md` (eight tasks, status
-checklist at its end), branch `audit-bug-fixes` off `main` @ `d3e5883`.
-Resume at the first unchecked task. The hygiene branch is merged and pushed
-(`main` @ `d3e5883`, CI green on all four jobs).
+**Next action:** **decide on branch `audit-bug-fixes`** -- all eight
+tasks of `docs/superpowers/plans/2026-10-19-audit-bug-fixes.md` are done
+(execution record and live end-to-end runs at the end of the plan), gates
+green, **not merged or pushed**. After that, the next piece of work is a free
+choice from Deferred items. The hygiene branch is merged and pushed (`main`
+@ `d3e5883`, CI green on all four jobs).
 veny 0.2.2 is published:
 <https://github.com/killett/veny> (public) and
 <https://pypi.org/project/veny/0.2.2/>. The re-architecture program was
@@ -1606,6 +1607,19 @@ wiring rationale and for two Minors deliberately left unfixed.
 
 ## Gotchas
 
+- **Every test runs with a throwaway `HOME` and working directory**
+  (`tests/conftest.py`, since 2026-10-19). veny keeps its state under
+  `Path.home() / "veny"` and writes its custom-module pickle into the cwd,
+  so before that the suite created `~/veny`, read the developer's real
+  `module_aliases.toml` and littered the repository root. A test that needs
+  the repository as its cwd must say so (`cwd=REPO_ROOT` on a subprocess,
+  as `test_import_guard` does); a relative path in a test now resolves in a
+  temporary directory.
+- **A sweep's copy must hold everything the suite reads.**
+  `scripts/sweep_sandbox.COPIED` (src, tests, scripts, pyproject.toml):
+  any test that fails in an unmutated copy is scored as a kill for every
+  substitution. If a test starts reading another top-level path, add it
+  there, and re-check that an unmutated copy runs green.
 - **`safe_eval` used to silently drop every `sys.path` entry built with
   pathlib's `/` operator.** Fixed 2026-08-16 by plan 3a's Task 2, commit
   `598e690`; the code now lives in `src/veny/analysis/literals.py`, not

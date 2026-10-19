@@ -122,6 +122,48 @@ see it.
   to sweep over) before doing anything else.
 - Red: a test that drives the recovery path against a scratch file.
 
+## Execution record (2026-10-19)
+
+All eight tasks done on `audit-bug-fixes`, one `fix:` commit each, red
+first in every case (each commit message names its failing test and the
+failure it showed). Suite 478 -> 493; mypy held at 23; the CI gate green on
+every commit.
+
+| Task | Commit | Note |
+|---|---|---|
+| 1 | `78d211d` | `tests/conftest.py` autouse fixture: throwaway HOME and cwd per test |
+| 2 | `1c17dd9` | `probe_interpreter("")` means "no target", like `None` |
+| 3 | `f8ea2a3` | `OSError` caught at the two callers; repair path reports `import_unavailable` |
+| 4 | `101f5d8` | empty top-level name skipped, module level and inside functions |
+| 5 | `c0d6c7a` | first-pass queue loop extracted as `_process_queue`; the second pass uses it |
+| 6 | `1ac177f` | `_module_file`: packages queued as directories, keyed by `__init__.py`; closes the recorded single-file reachability gap |
+| 7 | `7ecfd06` | prompt names `.out`, `.err`, `.json` and `.pkl`, as the log line and `--help` do |
+| 8 | `b4e30e1` | mutations go into a copy (`scripts/sweep_sandbox.py`), not a journal as first planned |
+
+**Deviation from the plan, Task 8:** the plan proposed a crash-recovery
+journal beside the repository; a throwaway copy was chosen instead, because
+it removes the hazard rather than repairing after it. The copy must hold
+everything the suite reads -- the first version left out `scripts/`, and the
+new sweep test failed inside it, which would have scored as a kill for every
+substitution. Verified by running the whole suite in an unmutated copy (493
+passed) and one real 4c substitution there while `git status -- src` stayed
+clean.
+
+**Live end-to-end, 2026-10-19** (the environment's own interpreter, a
+throwaway HOME, PyPI reachable; `python3.12`, the preferred version, absent
+from PATH). A scratch project whose `main.py` imports a local package `pkg`
+(whose `__init__.py` imports `six`), does a guarded `from . import sibling`,
+and calls a function that imports `helper`, which imports `inner`, which
+imports `six`:
+- run 1: the scan processed `main.py`, `pkg`, `helper.py` and `inner.py`;
+  no "Could not run" warning and no false ERROR; the alias cache recorded
+  `six` under `3.13`; the venv was built and the script printed
+  `six is 1.17.0`, exit 0.
+- run 2, with the cached venv's `bin/python` replaced by a dangling link:
+  "Could not run ... to check its imports" warnings, the cached venv
+  treated as invalid, a fresh venv built, the script ran, exit 0 -- where
+  the same input used to end in a `FileNotFoundError` traceback.
+
 ## Status
 
 - [x] Task 1 — test isolation (bug 6)
