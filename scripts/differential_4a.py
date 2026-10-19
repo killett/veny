@@ -27,14 +27,22 @@ observable surface did not move. What this file adds is:
   showing a difference. This one reads the requirements file off disk, which
   both trees can answer.
 
+NO LONGER RUNS against a tree after phase 4b: it builds 3e's ``Tree``, which
+imports the ``veny.run_options`` module phase 4b deleted, and unlike
+``scripts/differential_4b.py`` it carries no stand-in for it.
+
+Commit hashes: ``3f03cbc`` below was ``4d1846c`` before the 2026-08-23 history
+rewrite, which changed every hash. Other hashes in this file predate the
+rewrite and are found by the commit subjects quoted beside them.
+
 How to run it, and against what base::
 
-    git archive 4d1846c src/veny | tar -x -C /tmp/old-veny
+    git archive 3f03cbc src/veny | tar -x -C /tmp/old-veny
     pixi run python scripts/differential_4a.py /tmp/old-veny > /tmp/old.txt
     pixi run python scripts/differential_4a.py /workspace    > /tmp/new.txt
     diff -u /tmp/old.txt /tmp/new.txt
 
-``4d1846c`` is the phase-4a branch point ("Merge branch
+``3f03cbc`` is the phase-4a branch point ("Merge branch
 'pipeline-and-cli-slimming': phase 3e of the veny re-architecture"). The
 argument is a *tree root* holding ``src/veny``; it is inserted with
 ``sys.path.insert``, never through ``PYTHONPATH``, because ``pixi.toml``'s

@@ -47,14 +47,18 @@ them rewritten. What this file adds is:
   warning about layer 4, one phase later. Layer 2 reports the record the run
   wrote instead; layer 4's folder is already named in its requirements report.
 
+Commit hashes: ``8b3dc76`` below was ``cf2ded4`` before the 2026-08-23 history
+rewrite, which changed every hash. Other hashes in this file predate the
+rewrite and are found by the commit subjects quoted beside them.
+
 How to run it, and against what base::
 
-    git archive cf2ded4 src/veny | tar -x -C /tmp/old-veny
+    git archive 8b3dc76 src/veny | tar -x -C /tmp/old-veny
     pixi run python scripts/differential_4b.py /tmp/old-veny > /tmp/old.txt
     pixi run python scripts/differential_4b.py /workspace    > /tmp/new.txt
     diff -u /tmp/old.txt /tmp/new.txt
 
-``cf2ded4`` is the phase-4b branch point ("Merge branch 'state-model-values':
+``8b3dc76`` is the phase-4b branch point ("Merge branch 'state-model-values':
 phase 4a of the veny re-architecture"). The argument is a *tree root* holding
 ``src/veny``; it is inserted with ``sys.path.insert``, never through
 ``PYTHONPATH``, because ``pixi.toml``'s ``[activation.env]`` sets

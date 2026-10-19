@@ -7,19 +7,23 @@ regression in that kind of move, because the tests move with the code. This
 driver runs the *same* three observable behaviours against two source trees and
 prints them in a fixed, sorted form, so ``diff`` is the whole verdict.
 
-HISTORICAL: this driver compares trees at or before 08622a8. Phase 3e
-moved list_packages, setup_virtualenv and _load_last_used to pipeline.py,
-so it does not run against a tree after that commit. scripts/differential_3e.py
-supersedes it.
+HISTORICAL: this driver compares trees at or before fa22bc7 (08622a8 before
+the 2026-08-23 history rewrite). Phase 3e moved list_packages,
+setup_virtualenv and _load_last_used to pipeline.py, so it does not run
+against a tree after that commit. scripts/differential_3e.py supersedes it.
+
+Commit hashes: ``d33ed21`` below was ``313e800`` before the 2026-08-23 history
+rewrite, which changed every hash. Other hashes in this file predate the
+rewrite and are found by the commit subjects quoted beside them.
 
 How to run it, and against what base::
 
-    git archive 313e800 src/veny | tar -x -C /tmp/old-veny
+    git archive d33ed21 src/veny | tar -x -C /tmp/old-veny
     pixi run python scripts/differential_3d.py /tmp/old-veny > /tmp/old.txt
     pixi run python scripts/differential_3d.py /workspace    > /tmp/new.txt
     diff /tmp/old.txt /tmp/new.txt
 
-``313e800`` is the phase-3d branch point ("docs: record 3c's merge to main and
+``d33ed21`` is the phase-3d branch point ("docs: record 3c's merge to main and
 the whole-branch review's findings"), NOT ``dc1c3c4`` -- that was 3c's. The
 argument is a *tree root* holding ``src/veny``; it is inserted with
 ``sys.path.insert``, never through ``PYTHONPATH``, because ``pixi.toml``'s
