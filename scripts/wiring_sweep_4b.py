@@ -47,6 +47,8 @@ import sys
 import tempfile
 from typing import Any
 
+import sweep_sandbox
+
 REPO = pathlib.Path("/workspace")
 OUT = pathlib.Path(os.environ.get("WIRING_SWEEP_OUT", tempfile.gettempdir()))
 # `pixi run` sets PYTHONPATH=src, and tests/test_import_guard.py spawns its own
@@ -397,6 +399,9 @@ def main() -> None:
         print(len(sites), "arguments")
         return
     originals = {f: (REPO / f).read_text() for f in FILES}
+    # Mutations go into a copy, never into REPO: a sweep killed mid-run must
+    # not leave a mutated source file in the working tree. See sweep_sandbox.
+    root = sweep_sandbox.sandbox(REPO)
     results = []
     for number, site in enumerate(sites, 1):
         if site["sub"] is None:
@@ -410,9 +415,9 @@ def main() -> None:
             results.append(site)
             print(f"{number}/{len(sites)} MULTILINE     {site['call']}({site['arg']})")
             continue
-        target = REPO / site["file"]
-        target.write_text(mutated)
+        target = root / site["file"]
         try:
+            target.write_text(mutated)
             # A mutation that breaks import is not a kill: test_import_guard
             # re-imports veny in a subprocess and would report every NameError
             # as though the wiring had been caught. Check first.
@@ -423,7 +428,7 @@ def main() -> None:
                     "import sys; sys.path.insert(0, 'src'); import veny.cli, "
                     "veny.pipeline, veny.state, veny.last_used, veny.cache_search",
                 ],
-                cwd=REPO,
+                cwd=root,
                 capture_output=True,
                 text=True,
                 timeout=120,
@@ -450,7 +455,7 @@ def main() -> None:
                     "-p",
                     "no:cacheprovider",
                 ],
-                cwd=REPO,
+                cwd=root,
                 capture_output=True,
                 text=True,
                 timeout=900,

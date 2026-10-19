@@ -131,4 +131,4 @@ see it.
 - [x] Task 5 — function-local module imports (bug 1)
 - [x] Task 6 — local packages (bug 2)
 - [x] Task 7 — `--blank-slate` prompt (bug 8)
-- [ ] Task 8 — wiring-sweep crash safety (bug 7)
+- [x] Task 8 — wiring-sweep crash safety (bug 7)
