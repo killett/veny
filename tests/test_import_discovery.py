@@ -563,3 +563,41 @@ def test_a_relative_import_never_becomes_an_empty_import_name(tmp_path: Path) ->
     )
 
     assert scan.all_imports == set()
+
+
+def _scan_script(tmp_path: Path, source: str) -> ImportScan:
+    """Scan tmp_path/s.py, holding source, the way a run scans its script."""
+    script = tmp_path / "s.py"
+    script.write_text(source)
+    scan = ImportScan()
+    pipeline.find_imports_in_script(
+        _a_settings(cwd=tmp_path, rawlog=True),
+        scan,
+        script,
+        is_stdlib=stdlib_index.for_running_interpreter().__contains__,
+    )
+    return scan
+
+
+def test_a_local_module_imported_inside_a_called_function_is_followed(
+    tmp_path: Path,
+) -> None:
+    """A module reached only from inside a function must have its imports followed.
+
+    Concrete bug this catches: the scan's second pass analysed the newly
+    reached helper, queued helper's own local imports onto the first pass's
+    queue -- already drained, and never read again -- and then mistook
+    "queued" for "already parsed", so inner was never analysed.
+
+    Expected value: requests. Running s.py calls load(), which imports helper,
+    which imports inner, which imports requests; the script cannot run without
+    it.
+    """
+    (tmp_path / "inner.py").write_text("import requests\n")
+    (tmp_path / "helper.py").write_text("import inner\n")
+
+    scan = _scan_script(
+        tmp_path, "def load():\n    import helper\n    return helper\n\nload()\n"
+    )
+
+    assert scan.all_imports == {"requests"}
