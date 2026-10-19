@@ -3,7 +3,7 @@
 Nothing here is handed a per-run state object: each function takes the paths,
 names and flags it actually reads. It sits above ``environment`` because it installs,
 uninstalls and rewrites ``requirements.txt`` through that module, and below
-``cli``, which drives it.
+``pipeline``, which drives it.
 """
 
 from __future__ import annotations
