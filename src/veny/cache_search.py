@@ -98,6 +98,28 @@ def installed_state_in_venv(
     )
 
 
+def _requirements_by_normalized_name(
+    extra_requirements: Mapping[str, str | None],
+) -> dict[str, str | None]:
+    """Key the --reqs entries by normalized pip name.
+
+    extra_requirements is keyed by whatever spelling the user typed on the
+    command line, which need not match a record's pip_name spelling, so a
+    lookup into it must normalize both sides. Built once per call rather than
+    once per record.
+
+    Args:
+        extra_requirements: The --reqs entries, as the user spelled them.
+
+    Returns:
+        The same entries, keyed by venv_cache.normalize_pip_name.
+    """
+    return {
+        venv_cache.normalize_pip_name(name): spec
+        for name, spec in extra_requirements.items()
+    }
+
+
 def manifest_for(
     *,
     uninstalled: AbstractSet[ResolvedImport],
@@ -129,14 +151,9 @@ def manifest_for(
     Returns:
         The manifest to write into the venv.
     """
-    # extra_requirements is keyed by whatever spelling the user typed on the
-    # command line, which need not match record.pip_name's spelling -- the
-    # versions dict a line below is already keyed normalized, so this lookup
-    # must be too. Normalized once here rather than per record.
-    normalized_requirements = {
-        venv_cache.normalize_pip_name(name): spec
-        for name, spec in extra_requirements.items()
-    }
+    # The versions dict a line below is already keyed normalized; the --reqs
+    # lookup must be too.
+    normalized_requirements = _requirements_by_normalized_name(extra_requirements)
     packages = tuple(
         venv_cache.PackageRecord(
             import_name=record.import_name,
@@ -355,13 +372,7 @@ def wanted_packages(
     Returns:
         One entry per record, carrying its pip name and any --reqs spec.
     """
-    # See manifest_for: extra_requirements' keys are user-typed spellings, not
-    # necessarily record.pip_name's spelling, so the lookup must normalize both
-    # sides. Built once per call rather than inside the list comprehension.
-    normalized_requirements = {
-        venv_cache.normalize_pip_name(name): spec
-        for name, spec in extra_requirements.items()
-    }
+    normalized_requirements = _requirements_by_normalized_name(extra_requirements)
     return [
         venv_cache.Wanted(
             pip_name=record.pip_name,
