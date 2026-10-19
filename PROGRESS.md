@@ -2390,7 +2390,16 @@ wiring rationale and for two Minors deliberately left unfixed.
   `install_succeeded`, so doing the rename and the save *before* the launch
   would change nothing about which venvs get renamed. That would close the
   leak for SIGKILL and power loss too, which a `KeyboardInterrupt`/SIGTERM
-  handler would not. **No owner yet; needs a user ruling.**
+  handler would not. Three more facts from the follow-up, all shown live.
+  (1) The gate never sees the script's outcome: a script that dies with
+  `ModuleNotFoundError` on a dynamic import exits 1 and is still renamed and
+  recorded. (2) A rename breaks the venv's console scripts and `activate`,
+  which keep the `failed-` path (`bin/unidecode` fails with
+  `.../failed-…/bin/python: not found`); `uv venv --relocatable` (uv 0.12.3)
+  fixes both. (3) Renaming a venv while a script runs from it breaks every
+  import that script has not done yet, so a rename may happen only before
+  launch or after exit, never mid-run. **Design under discussion with the
+  user (2026-10-19); no code changed.**
 
 - **Windows is claimed nowhere and supported nowhere, but the code is half
   ready for it** (recorded 2026-08-23, publication). `environment.py:110`
