@@ -2982,6 +2982,10 @@ wiring rationale and for two Minors deliberately left unfixed.
   by this branch, just a pre-existing gap the review happened to notice.
   Left for a later plan (3d or after) to decide whether single-file scans
   should also enqueue submodules reached this way.
+  > **CLOSED 2026-10-19 by the audit bug-fix plan's Task 6**: the scan now
+  > queues a local package as its directory, whose existing branch parses
+  > `__init__.py` and queues the package's modules. Pinned by
+  > `test_a_submodule_imported_from_a_local_package_is_followed`.
 - **Five more design-doc amendments 3c records** (a fourth through eighth,
   after 3b's three). The last two were added by the whole-branch review on
   2026-08-18; each is a consequence of a correct, behaviour-preserving move,
@@ -3287,6 +3291,8 @@ wiring rationale and for two Minors deliberately left unfixed.
   - **The single-file reachability gap.** **Owner: a later `analysis/` plan.**
     > Same check, same date: phase 4 is complete and did not touch this
     > either. Still a candidate for a later `analysis/` plan.
+    > **CLOSED 2026-10-19** by the audit bug-fix plan's Task 6 (see its
+    > own entry in Deferred items).
   - **The third pre-existing `AssertionError`.** `veny -y` with no script was
     fixed (deviation 2); nothing else in the crash ledger was.
 

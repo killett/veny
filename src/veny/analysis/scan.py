@@ -91,6 +91,24 @@ def _analyze_module(
     return module_key, module_info
 
 
+def _module_file(path: Path) -> Path | None:
+    """The file a local import actually runs.
+
+    Args:
+        path: A local module's file, or a local package's directory.
+
+    Returns:
+        The file itself, a package directory's __init__.py, or None when
+        path is neither.
+    """
+    if ek.safe_is_file(path):
+        return path
+    init_py = path / "__init__.py"
+    if ek.safe_is_dir(path) and ek.safe_is_file(init_py):
+        return init_py
+    return None
+
+
 def _enqueue_top_level_imports(
     scan: ImportScan,
     module_path: Path,
@@ -102,7 +120,8 @@ def _enqueue_top_level_imports(
 ) -> None:
     """Resolve a module's top-level imports and enqueue any new local modules.
 
-    Newly found local modules and packages go onto the first-pass queue.
+    Newly found local modules and packages go onto the queue; a package goes
+    on as its directory, which the queue opens through its __init__.py.
     """
     for import_name in import_names:
         if is_stdlib(import_name):
@@ -116,7 +135,7 @@ def _enqueue_top_level_imports(
         if possible_module_file_path is None:
             continue
         actual_module_file_path = ek.ensure_path(possible_module_file_path)
-        if ek.safe_is_file(actual_module_file_path):
+        if _module_file(actual_module_file_path) is not None:
             if (
                 actual_module_file_path not in processed_paths
                 and actual_module_file_path not in modules_to_process
@@ -209,13 +228,14 @@ def _alias_map(scan: ImportScan) -> dict[str, str]:
         scan: The scan whose custom_modules to map.
 
     Returns:
-        Import name to the resolved file path the call graph keys modules by.
+        Import name to the resolved file path the call graph keys modules by
+        -- for a package, its __init__.py.
     """
     alias_to_key: dict[str, str] = {}
     for mod_name, mod_path in scan.custom_modules.items():
-        path = ek.ensure_path(mod_path)
-        if ek.safe_is_file(path):
-            alias_to_key[mod_name] = os.fspath(path.resolve())
+        module_file = _module_file(ek.ensure_path(mod_path))
+        if module_file is not None:
+            alias_to_key[mod_name] = os.fspath(module_file.resolve())
     return alias_to_key
 
 
@@ -347,12 +367,13 @@ def find_imports_in_script(
             if import_name in scan.custom_modules:
                 # It's a known local module that we haven't processed yet
                 module_file_path = ek.ensure_path(scan.custom_modules[import_name])
-                if not ek.safe_is_file(module_file_path):
+                module_file = _module_file(module_file_path)
+                if module_file is None:
                     logging.error(
-                        f"Custom module path for {import_name} is not a file: {module_file_path}"
+                        f"Custom module path for {import_name} is neither a file nor a package: {module_file_path}"
                     )
                     continue
-                new_module_key = os.fspath(module_file_path.resolve())
+                new_module_key = os.fspath(module_file.resolve())
                 if new_module_key not in modules_info:
                     # Reached for the first time, from inside a function:
                     # analyze it and every local module it imports, as the

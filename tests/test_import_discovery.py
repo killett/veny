@@ -601,3 +601,88 @@ def test_a_local_module_imported_inside_a_called_function_is_followed(
     )
 
     assert scan.all_imports == {"requests"}
+
+
+def _a_package(tmp_path: Path, init: str = "", **modules: str) -> None:
+    """Write tmp_path/pkg, a local package, with the given module sources."""
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "__init__.py").write_text(init)
+    for name, source in modules.items():
+        (package / f"{name}.py").write_text(source)
+
+
+def test_a_local_package_s_own_imports_are_followed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A local package's __init__.py imports are the script's imports too.
+
+    Concrete bug this catches: the scan queued local modules only when they
+    were files, so a package -- a directory -- was never analysed, and the
+    second pass logged a false ERROR ("Custom module path for pkg is not a
+    file") on every run that imported one.
+
+    Expected value: requests. `import pkg` runs pkg/__init__.py, which
+    imports requests.
+    """
+    _a_package(tmp_path, init="import requests\n")
+
+    with caplog.at_level(logging.ERROR):
+        scan = _scan_script(tmp_path, "import pkg\n\npkg\n")
+
+    assert scan.all_imports == {"requests"}
+    assert caplog.records == []
+
+
+def test_a_submodule_imported_from_a_local_package_is_followed(tmp_path: Path) -> None:
+    """`from pkg import sub` reaches sub.py, so sub.py's imports count.
+
+    Concrete bug this catches: the single-file reachability gap PROGRESS.md
+    recorded -- only a directory scan ever enqueued a package's modules, and
+    phase 4a deleted directory scanning.
+
+    Expected value: requests, which running sub.py imports.
+    """
+    _a_package(tmp_path, sub="import requests\n")
+
+    scan = _scan_script(tmp_path, "from pkg import sub\n\nsub\n")
+
+    assert scan.all_imports == {"requests"}
+
+
+def test_a_local_package_imported_inside_a_called_function_is_followed(
+    tmp_path: Path,
+) -> None:
+    """A package first reached from inside a function is followed like a module.
+
+    Concrete bug this catches: the scan's second pass accepted only files as
+    local modules, so a package imported inside a reachable function was
+    skipped with an ERROR instead of analysed.
+
+    Expected value: requests, which pkg/__init__.py imports when load() runs.
+    """
+    _a_package(tmp_path, init="import requests\n")
+
+    scan = _scan_script(
+        tmp_path, "def load():\n    import pkg\n    return pkg\n\nload()\n"
+    )
+
+    assert scan.all_imports == {"requests"}
+
+
+def test_a_function_called_on_a_local_package_has_its_imports_followed(
+    tmp_path: Path,
+) -> None:
+    """Calling pkg.g() reaches the imports inside g's body.
+
+    Concrete bug this catches: the call graph mapped local import names only
+    to files, so a call through a package's name never resolved to its
+    __init__.py, and an import inside the called function went unseen.
+
+    Expected value: requests, which pkg.g() imports when the script calls it.
+    """
+    _a_package(tmp_path, init="def g():\n    import requests\n    return requests\n")
+
+    scan = _scan_script(tmp_path, "import pkg\n\npkg.g()\n")
+
+    assert scan.all_imports == {"requests"}
