@@ -269,7 +269,11 @@ def record_venv_state(
         timestamp=timestamp,
         pip_names=[record.pip_name for record in uninstalled],
     )
-    prefix = "failed-" if venv_dir.name.startswith("failed-") else ""
+    prefix = (
+        venv_cache.FAILED_PREFIX
+        if venv_dir.name.startswith(venv_cache.FAILED_PREFIX)
+        else ""
+    )
     if venv_dir.name != prefix + wanted_name:
         if not rawlog:
             logging.info(

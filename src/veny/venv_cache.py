@@ -25,6 +25,10 @@ _CLAUSE_RE = re.compile(r"(==|!=|>=|<=|~=|>|<)(.+)\Z", re.DOTALL)
 MAX_NAMED_PACKAGES: int = 5
 
 MANIFEST_FILENAME: str = "veny_manifest.json"
+# A venv folder carries this prefix from the moment it is built until a run
+# has verified it; the prefix is stripped only then. A folder still carrying
+# it is a provisional build, not necessarily a failed one.
+FAILED_PREFIX: str = "failed-"
 SCHEMA_VERSION: int = 1
 
 _NORMALIZE_RE = re.compile(r"[-_.]+")

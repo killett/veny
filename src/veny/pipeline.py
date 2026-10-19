@@ -601,7 +601,9 @@ def setup_virtualenv(
         pip_names=[record.pip_name for record in requirements.uninstalled],
     )
     # Create a virtual environment directory that starts with "failed" in case the process fails. Only remove the "failed" part if this process completes successfully.
-    handle = state.VenvHandle.for_dir(settings.my_dir / f"failed-{folder_name}")
+    handle = state.VenvHandle.for_dir(
+        settings.my_dir / f"{venv_cache.FAILED_PREFIX}{folder_name}"
+    )
 
     if not settings.rawlog:
         logging.info("Creating virtual environment...")
@@ -954,12 +956,15 @@ def run(
                 )
             if script_exit_code != 0 and not settings.rawlog:
                 logging.error("Script exited with status %d", script_exit_code)
-            if handle.venv_dir.name.startswith("failed-") and install_succeeded:
+            if (
+                handle.venv_dir.name.startswith(venv_cache.FAILED_PREFIX)
+                and install_succeeded
+            ):
                 # If the program has made it to this point, it has run successfully, so the venv directory can be renamed because it DIDN'T fail.
                 handle = state.VenvHandle.for_dir(
                     cache_search.rename_venv(
                         handle.venv_dir,
-                        handle.venv_dir.name.removeprefix("failed-"),
+                        handle.venv_dir.name.removeprefix(venv_cache.FAILED_PREFIX),
                     )
                 )
 
