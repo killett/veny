@@ -15,15 +15,18 @@ from typing import Final
 from . import __version__ as __version__
 from . import alias_index
 
+# The oldest emmykit veny runs on, and its spelling in the two messages below.
+# Keep in step with pyproject.toml's `emmykit>=` dependency.
+_MINIMUM_EMMYKIT: Final[tuple[int, int, int]] = (0, 4, 0)
+_MINIMUM_EMMYKIT_TEXT: Final[str] = ".".join(map(str, _MINIMUM_EMMYKIT))
+
 try:
     import emmykit as ek
 except ImportError as exc:  # stdlib only: none of emmykit's helpers exist yet.
     raise SystemExit(
-        "veny requires the emmykit package (>=0.4.0), which is not installed.\n"
-        "Install it with:  pip install 'emmykit>=0.4.0'"
+        f"veny requires the emmykit package (>={_MINIMUM_EMMYKIT_TEXT}), which is not installed.\n"
+        f"Install it with:  pip install 'emmykit>={_MINIMUM_EMMYKIT_TEXT}'"
     ) from exc
-
-_MINIMUM_EMMYKIT: Final[tuple[int, int, int]] = (0, 4, 0)
 
 
 def _emmykit_version() -> tuple[int, ...]:
@@ -49,8 +52,8 @@ def _emmykit_version() -> tuple[int, ...]:
 
 if _emmykit_version() < _MINIMUM_EMMYKIT:
     raise SystemExit(
-        f"veny requires emmykit >= 0.4.0; found {getattr(ek, '__version__', 'unknown')}.\n"
-        f"Upgrade it with:  pip install -U 'emmykit>=0.4.0'"
+        f"veny requires emmykit >= {_MINIMUM_EMMYKIT_TEXT}; found {getattr(ek, '__version__', 'unknown')}.\n"
+        f"Upgrade it with:  pip install -U 'emmykit>={_MINIMUM_EMMYKIT_TEXT}'"
     )
 # Below the version guard on purpose: an emmykit too old to trust should not
 # even see the rest of veny's modules imported.
