@@ -725,6 +725,9 @@ def run(
         environment.UvUnavailable: veny has no uv to build an environment
             with. Raised below this layer and left to travel: `cli.main` owns
             what it costs.
+        alias_index.AliasOverrideError: The user's module_aliases.toml
+            override file exists but cannot be read. Raised by
+            build_alias_index and left to travel.
     """
     start_time = start_time or dt.datetime.now()
     script_exit_code = 0
