@@ -1,4 +1,8 @@
-"""Pin how veny locates the uv binary it drives its environment layer with."""
+"""Pin how veny drives uv.
+
+Finding the uv binary, create_venv's success contract, and the wiring of every
+argument setup_virtualenv hands its subprocess-backed steps.
+"""
 
 import argparse
 import dataclasses
@@ -75,7 +79,7 @@ def test_create_venv_reports_failure_instead_of_raising(monkeypatch, tmp_path):
     """A uv that exits non-zero makes create_venv return False.
 
     Concrete bug this catches: letting CalledProcessError escape means a
-    failed build reaches the user as a traceback, and setup_virtualenv's
+    failed build reaches the user as a traceback, and pipeline.run's
     "Failed to create a virtual environment" path -- which exists and is
     tested -- is unreachable. Expected value obtained from the new contract:
     False means "no environment", the same shape run_uv_pip already uses.
@@ -180,7 +184,7 @@ def test_setup_virtualenv_writes_the_extra_requirements_version_specifiers(
     pins `-r requirements.txt` in the uv argv but never that file's contents.
 
     Concrete bug this catches: pass `{}` (or any other mapping) instead of
-    `options.extra_requirements` here and requirements.txt reads a bare
+    `requirements.extra_requirements` here and requirements.txt reads a bare
     `thing-pkg`. uv then resolves whatever the newest release is, silently
     discarding the `thing-pkg>=2.0` pin the user wrote in their requirements
     file -- the one thing --reqs exists to honour. The expected text comes from
@@ -330,7 +334,7 @@ def test_create_venv_is_given_a_resolved_interpreter_path_not_a_bare_command(
 
 
 def _a_wired_run(tmp_path):
-    """Build the Settings, args, aliases, stdlib index and Target whose every setup_virtualenv argument is distinguishable.
+    """Build the Settings, args, aliases, stdlib index, Target and Requirements whose every setup_virtualenv argument is distinguishable.
 
     Each field carries a value no other field could supply -- a venv name, a
     timestamp, an interpreter tag, a pip name, an import name and a --reqs
@@ -373,7 +377,7 @@ def _a_wired_run(tmp_path):
 
 
 def _stub_the_venv_away(monkeypatch, uninstalled_after_repair=None):
-    """Stub every subprocess-backed step of setup_virtualenv, returning the spies."""
+    """Stub setup_virtualenv's subprocess-backed steps; return the create_venv spy."""
     created: list[tuple[object, str]] = []
 
     def fake_create_venv(target: object, python: str = "") -> bool:
@@ -482,7 +486,7 @@ def test_verify_and_repair_imports_is_handed_the_whole_description_of_the_run(
         is not None
     )
 
-    # Literal paths, not handle.venv_python / options.requirements_file:
+    # Literal paths, not handle.venv_python / handle.requirements_file:
     # setup_virtualenv derives those two paths itself (via VenvHandle.for_dir), so
     # asserting against them would compare the call site to its own output and
     # pass however the folder name was built.
@@ -557,7 +561,7 @@ def test_the_manifest_and_the_final_check_describe_the_venv_after_repair(
     # Literal paths, not handle.venv_dir / handle.venv_python, for the same
     # reason the sibling test above spells them out: record_spy echoes its
     # venv_dir argument back and setup_virtualenv assigns that echo to
-    # handle.venv_dir (via VenvHandle.for_dir), so asserting against options.* here
+    # handle.venv_dir (via VenvHandle.for_dir), so asserting against handle.* here
     # would compare the call site to its own output and pass however the
     # folder name was built. Measured: a wrong `timestamp=` at
     # setup_virtualenv's build_folder_name left this test green before this
@@ -613,7 +617,9 @@ def _a_repair_that_succeeds(monkeypatch):
         cache_search, "record_venv_state", lambda venv_dir, **kwargs: venv_dir
     )
     monkeypatch.setattr(verify, "check_packages_in_venv", lambda *a, **k: False)
-    monkeypatch.setattr(alias_index, "probe_interpreter", lambda venv_python: ({}, {}))
+    monkeypatch.setattr(
+        alias_index, "probe_interpreter", lambda venv_python: (None, {})
+    )
     monkeypatch.setattr(
         verify,
         "import_outcome_in_venv",

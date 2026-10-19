@@ -136,8 +136,11 @@ def test_small_wheel_is_accepted_when_range_is_ignored():
 
 def test_central_directory_outside_the_first_window_is_still_found():
     # A long archive comment pushes the end-of-central-directory record out of
-    # the initial suffix read; a single-window parser would silently return None.
-    wheel = _wheel_bytes(["pkg/__init__.py"], comment=b"c" * 70_000)
+    # the first 64 KiB read window; a single-window parser would silently return
+    # None. 0xFFFF is the longest comment a zip allows (zipfile truncates and
+    # warns past it), and it is also the shortest that does the job: the record
+    # then sits 65,557 bytes from the end, 21 bytes outside the window.
+    wheel = _wheel_bytes(["pkg/__init__.py"], comment=b"c" * 0xFFFF)
     fetcher = _FakeFetcher(_json_for(wheel), wheel)
     assert PyPIClient(fetcher).top_levels("pkg") == frozenset({"pkg"})
 
@@ -191,8 +194,9 @@ def test_missing_project_result_is_cached_too():
 
 def test_dist_info_only_wheel_yields_empty_frozenset_not_none():
     # A wheel that genuinely provides nothing importable is a real (if odd)
-    # answer, distinct from "could not determine" -- Task 5 treats None and
-    # frozenset() differently and must not see one where the other belongs.
+    # answer, distinct from "could not determine" -- PyPIClient's contract keeps
+    # None and frozenset() apart, even though alias resolution today skips both
+    # alike.
     wheel = _wheel_bytes(["pkg-1.0.dist-info/METADATA", "pkg-1.0.dist-info/RECORD"])
     fetcher = _FakeFetcher(_json_for(wheel), wheel)
     assert PyPIClient(fetcher).top_levels("pkg") == frozenset()
