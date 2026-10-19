@@ -461,11 +461,11 @@ def check_venv_dir(
 ) -> bool:
     """Check whether a cached venv directory can serve this run.
 
-    The venv's own manifest is the authority. An options JSON written by an
-    earlier run says what that run wanted, not what the venv holds, and its
-    records compare by exact spelling -- so a venv built when "yaml" resolved to
-    "PyYAML" was rejected by a run spelling it "pyyaml". Asking the manifest puts
-    every candidate, last-used or not, through one comparison.
+    The venv's own manifest is the authority. The options JSON earlier versions
+    of veny wrote said what that run wanted, not what the venv held, and its
+    records compared by exact spelling -- so a venv built when "yaml" resolved
+    to "PyYAML" was rejected by a run spelling it "pyyaml". Asking the manifest
+    puts every candidate, last-used or not, through one comparison.
 
     Args:
         venv_dir:         The cached virtual environment directory.
@@ -740,7 +740,7 @@ def find_match_dir_in_cache(
                     "The smallest venv in the cache is invalid. Giving up on the cache and starting from scratch."
                 )
             return None
-        else:  # This should never happen
+        else:  # Reached when the flags name two policies, e.g. --latest --oldest
             logging.error(
                 f"Invalid combination of flags!\n"
                 f"{prefer_latest = }\n"
