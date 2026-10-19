@@ -11,13 +11,12 @@ import logging
 class FunctionInfo:
     """Class to hold information about a function."""
 
-    def __init__(self, function_name: str) -> None:
+    def __init__(self) -> None:
         """Initialize the function information.
 
-        Args:
-            function_name: The name of the function this tracks.
+        The function's name is the key it is stored under in
+        ModuleInfo.functions; nothing reads it off the object itself.
         """
-        self.function_name: str = function_name
         self.imports_in_function: set[str] = set()
         self.function_calls: set[str] = set()
 
