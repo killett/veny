@@ -40,7 +40,7 @@ def _analyze_module(
 
     Args:
         settings:         Settings object containing the run's fixed configuration. Contains:
-            - settings.rawlog:        Boolean indicating whether to log raw file contents.
+            - settings.rawlog:        Whether to suppress veny's own commentary.
         scan:             ImportScan accumulating what this run has discovered. Contains:
             - scan.custom_modules:    Dictionary mapping custom module names to their file paths.
             - scan.sys_path_hints:    Set of Path objects representing directories to add to sys.path.
