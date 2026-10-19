@@ -42,13 +42,15 @@ _SEP: str = "::"  # Path-safe separator to distinguish class methods
 def split_function_name(called_func: str, default_module: str) -> tuple[str, str]:
     """Split a fully qualified function id into (module_key, func_part).
 
-    Preferred separator is _SEP (path-safe). Fall back to the first dot
-    for legacy strings that still look like 'module.func'.
+    A call qualified within its own module carries _SEP (path-safe). A call
+    into another module is recorded as 'module.func' -- the collector stores
+    `helper.h()` as "helper.h" -- so the first dot splits those. That dotted
+    branch is not legacy: cross-module reachability depends on it.
     """
     if _SEP in called_func:
         m, f = called_func.split(_SEP, 1)
         return m, f
-    # legacy fallback
+    # A call into another module: 'module.func'.
     parts = called_func.split(".")
     if len(parts) > 1:
         return parts[0], ".".join(parts[1:])
