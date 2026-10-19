@@ -44,17 +44,48 @@ gotchas ledger.
   | **4b** `docs/superpowers/plans/2026-08-21-last-used-persistence.md` (executed, complete on branch `last-used-persistence`) | The `LastUsed` persistence change (design amendment 9), which breaks the `ek.Options` coupling and deletes `run_options.py`, the `cli.Options` re-export, `pathlibcutoff` and its two readers, and the test references in both spellings. Also deletes `json_types.py` and the pickle `PATHLIB_CUTOFF`, and stops `find_match_dir_in_cache` mutating the `argparse.Namespace` (user rulings, 2026-08-21). |
   | **4c** `docs/superpowers/plans/2026-08-23-behaviour-changes-4c.md` (executed, complete on branch `behaviour-changes-4c`) | The remaining behaviour changes: the in-virtualenv guard (USER RULING 2026-08-20), `--feeling-lucky`'s missing signal normalization, latent defects 1 and 3, and the residual dead arguments. |
 
-**Next action:** **none — veny 0.2.2 is published.**
+**Next action:** **decide on branch `hygiene-2026-10-19`** (the 2026-10-19
+hygiene pass, below — complete, gates green, **not merged**), then pick from
+Deferred items; the eight bugs that pass found are the first entry there.
+veny 0.2.2 is published:
 <https://github.com/killett/veny> (public) and
 <https://pypi.org/project/veny/0.2.2/>. The re-architecture program was
 already closed; publication is now closed too, recorded in the "Publication
-(2026-08-23)" block immediately following this one. Everything from
+(2026-08-23)" block below. Everything from
 "phase 4 (4a + 4b + 4c) is complete" downwards is the closed program's
-record, kept for its decisions and gotchas. The next piece of work is a
-free choice from Deferred items.
+record, kept for its decisions and gotchas.
 
 Future releases need only: bump `__version__` in `src/veny/__init__.py`,
 commit, tag `vX.Y.Z`, push the tag. See `RELEASING.md`.
+
+### Hygiene pass (2026-10-19) — complete on branch `hygiene-2026-10-19`, not merged
+
+A whole-repo hygiene audit (five parallel read-only auditors, every finding
+re-checked against the tree), then the approved "fix now" set: low-risk,
+behaviour-preserving changes only, one logical change per commit, on branch
+`hygiene-2026-10-19` off `main` @ `247aec9` (`git log main..hygiene-2026-10-19`).
+Every commit passed the CI gate as `test.yml` runs it (ruff check, ruff format
+--check, pytest) with mypy held at its 23-error ceiling. Suite 477 → **478**
+(one new test), and the suite's one UserWarning is gone.
+
+- **Refactors** were each guarded first: the code about to change was
+  deliberately broken in place (scratch copy, restored from it -- never
+  `git checkout`/`git stash`) and a named test had to fail; where none did,
+  a test was added or tightened and shown to fail on the mutant before the
+  refactor. Two tests were strengthened that way: the emmykit guard's
+  messages are now asserted whole (a pip hint naming the wrong floor passed
+  before), and the import check's DEBUG stdout/stderr lines are pinned.
+- **Dead code** (an unreachable collector branch, `FunctionInfo.function_name`,
+  `Requirements.total_imports`) was deleted on coverage evidence.
+- **Comments, docstrings, config and docs** that the tree contradicts were
+  corrected; the differentials' run instructions now name post-rewrite
+  commits, and the 4c wiring index is marked line-stale (not re-run).
+
+What was deliberately left, and why, is in **`docs/hygiene-notes.md`** --
+read it before the next hygiene pass. It also lists the PROGRESS.md entries
+the audit found false (not corrected here) and a load-sensitive pair of live
+probe tests: on a loaded host they can time out at 10 s, unrelated to the
+change under test, and pass on re-run.
 
 ### Publication (2026-08-23) — complete
 
@@ -2316,6 +2347,62 @@ wiring rationale and for two Minors deliberately left unfixed.
 
 ## Deferred items
 
+- **Eight bugs found by the 2026-10-19 hygiene audit, recorded not fixed**
+  (each needs its own failing test first; none is a regression of that
+  pass, which was behaviour-preserving). Locations by symbol.
+  1. **A local module imported only inside a function never has its own
+     imports scanned.** `analysis/scan.py`'s second pass appends the new
+     module's top-level imports to `modules_to_process` after that queue has
+     been drained, and nothing reads it again. Reproduced: `main.py` with
+     `def f(): import helper; helper.g()`, `helper.py` importing `inner`,
+     `inner.py` importing `requests` -> `all_imports == []`; with `import
+     helper` at top level instead -> `['requests']`.
+  2. **A local package's `__init__.py` imports are never scanned, and every
+     local package logs a false ERROR** ("Custom module path for pkg is not a
+     file"): `_enqueue_top_level_imports` and the second pass accept files
+     only. Reproduced: `pkg/__init__.py` importing `requests`, `main.py`
+     doing `import pkg` -> `all_imports == []` plus the ERROR. Wider than the
+     recorded single-file reachability gap below. The package-directory
+     branch in `find_imports_in_script` looks dead but is what a fix needs --
+     do not delete it.
+  3. **`from . import x` records `""` as an import name**
+     (`ImportFunctionCollector.visit_ImportFrom`: `node.module` is `None`),
+     which flows through classification to a record with an empty pip name.
+     Reproduced: `all_imports == ['']`. `_register_import_name` already
+     guards empty names; this path does not.
+  4. **With the preferred Python missing, the alias cache is inert for the
+     run and a bogus warning prints.** `pipeline.run` passes
+     `python_command or ""` to `build_alias_index`, and
+     `alias_index.probe_interpreter` short-circuits only on `None`, so it
+     tries to execute `""`: "Could not run  to list its installed
+     distributions ([Errno 13] Permission denied: '')", tag `None`, and the
+     cache neither reads nor records. Introduced by `71d27d3`. Several
+     comments repeat the false premise that emmykit returns `""` (it returns
+     `None`); `docs/hygiene-notes.md` lists them, to change with the fix.
+  5. **A cached venv whose `bin/python` points nowhere crashes veny** instead
+     of counting as a cache miss: `verify.run_import_check_in_venv`'s
+     `subprocess.run` has no `OSError` guard (its siblings all do) and no
+     timeout, and `check_packages_in_venv`'s docstring says it never raises.
+     Realistic trigger: the base interpreter a cached venv links to is
+     uninstalled or upgraded.
+  6. **Two tests write to the real home directory.**
+     `tests/test_state_values.py::test_the_run_builds_exactly_one_settings`
+     (and the not-a-Python-file case in `tests/test_import_discovery.py`)
+     drive `cli.main` without isolating `HOME` or stubbing
+     `build_alias_index`, so the suite creates `~/veny` and reads the user's
+     real `module_aliases.toml` -- a malformed one fails unrelated tests.
+     The suite also leaves a `.veny_custom_modules_*.pkl` in the working
+     directory (gitignored).
+  7. **`scripts/wiring_sweep_4{a,b,c}.py` mutate `/workspace/src` in place**
+     and restore in a `finally`; a killed session (SIGKILL, a dead
+     container) leaves a mutated source file that the suite passes by
+     construction. `write_text(mutated)` also runs one line before the
+     `try`. Dev tooling only.
+  8. **`--blank-slate`'s prompt understates what it deletes**: it asks about
+     "all veny .json files" and then also deletes `.veny-*.out`, `.err` and
+     `.veny_custom_modules_*.pkl` (which its log line and `--help` do list).
+     A user-facing text change, so it needs a ruling.
+
 - **Windows is claimed nowhere and supported nowhere, but the code is half
   ready for it** (recorded 2026-08-23, publication). `environment.py:110`
   resolves `Scripts/python.exe` under `sys.platform == "win32"`, but
@@ -4079,10 +4166,12 @@ wiring rationale and for two Minors deliberately left unfixed.
     it is a test-only alias since `json_types` died.
   - `tests/test_alias_index.py:651` still says "Options() is constructed
     before the target interpreter is known"; the class no longer exists. Its
-    mirror in `alias_index.py`'s docstring was already fixed.
+    mirror in `alias_index.py`'s docstring was already fixed. **CLOSED
+    2026-10-19 by the hygiene pass (`d459cbd`).**
   - `scripts/differential_3e.py` was reworded this phase but carries no note
     that it is no longer runnable against HEAD, unlike `differential_3d.py`,
-    which this branch did annotate.
+    which this branch did annotate. **CLOSED 2026-10-19 by the hygiene pass
+    (`12b739c`), which annotated 4a too.**
 
 - **The activated-virtualenv branch's success path launches under veny's own
   interpreter, not necessarily the activated environment's** (found in
