@@ -26,7 +26,7 @@ def test_venv_build_interpreter_prefers_the_classified_interpreter() -> None:
 
 
 def test_venv_build_interpreter_falls_back_when_no_preferred_python_was_found() -> None:
-    """find_preferred_python_version() returns "" when the preferred Python is absent."""
+    """ "" is how pipeline.run passes "no preferred Python on PATH" (emmykit's None)."""
     assert environment.venv_build_interpreter("") == sys.executable
 
 

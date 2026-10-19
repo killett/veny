@@ -135,9 +135,25 @@ def import_outcome_in_venv(
     Returns:
         The outcome, carrying the rejection kind any failure warrants.
     """
-    imported, output = run_import_check_in_venv(
-        venv_python, [[import_name]], report_providers=True
-    )
+    try:
+        imported, output = run_import_check_in_venv(
+            venv_python, [[import_name]], report_providers=True
+        )
+    except OSError as exc:
+        # The venv's own interpreter would not start (e.g. the base
+        # interpreter it links to is gone). That says nothing about the
+        # package, so it is machine-scoped: never import_failed, which the
+        # alias cache would persist against a package that did nothing wrong.
+        logging.warning(
+            "Could not run %s to check its imports (%s); %s will not be held "
+            "against the package.",
+            venv_python,
+            exc,
+            import_name,
+        )
+        return ImportOutcome(
+            imported=False, rejection_kind="import_unavailable", detail=str(exc)
+        )
     if imported:
         return ImportOutcome(
             imported=True,
@@ -287,6 +303,12 @@ def run_import_check_in_venv(
         does not contain the module from one that is present but unusable on this
         machine. Discarding that text is what made a missing system library look
         like a fault of the package.
+
+    Raises:
+        OSError: The interpreter could not be started. Left to the caller,
+            because what it means differs: a cache miss for
+            check_packages_in_venv, a machine-scoped outcome for
+            import_outcome_in_venv -- never the package's fault.
     """
     python_code = f"""
 import sys
@@ -459,7 +481,19 @@ def check_packages_in_venv(
                 alternatives.append([entry.import_name])
     if logging.getLogger().isEnabledFor(logging.DEBUG):
         logging.debug("Packages to check in venv: %s", alternatives)
-    imported, _ = run_import_check_in_venv(venv_python, alternatives)
+    try:
+        imported, _ = run_import_check_in_venv(venv_python, alternatives)
+    except OSError as exc:
+        # A venv whose interpreter will not start (its base interpreter
+        # uninstalled or upgraded away) cannot provide anything: for a cached
+        # venv that is a cache miss, not a reason to end the run.
+        logging.warning(
+            "Could not run %s to check its imports (%s); treating this "
+            "environment as unable to provide them.",
+            venv_python,
+            exc,
+        )
+        return False
     return imported
 
 

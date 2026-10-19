@@ -99,6 +99,32 @@ def test_debug_logging_carries_the_import_checks_stdout_and_stderr(
     assert stream_logs[1] == "check_packages_in_venv stderr:\nMARKER-on-stderr\n"
 
 
+def test_an_interpreter_that_cannot_start_is_not_held_against_the_package(
+    tmp_path, caplog
+):
+    """A venv whose interpreter will not start gives a machine-scoped outcome.
+
+    A bug that would make this fail: letting the OSError from starting the
+    check escape, which ends the repair loop -- and the run -- with a
+    traceback; or classifying it as import_failed, the one kind the alias
+    cache persists, which would hold a package that did nothing wrong
+    against it on every later run.
+
+    Expected value: import_unavailable, the in-session kind PROGRESS.md
+    prescribes for failures that belong to this machine, not to the package.
+    """
+    python = tmp_path / "venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.symlink_to(tmp_path / "uninstalled" / "python3.12")
+
+    with caplog.at_level(logging.WARNING):
+        outcome = verify.import_outcome_in_venv(python, "thing")
+
+    assert outcome.imported is False
+    assert outcome.rejection_kind == "import_unavailable"
+    assert f"Could not run {python} to check its imports" in caplog.text
+
+
 def test_source_import_names_returns_all_imports_when_reqs_is_off():
     """Without --reqs nothing is subtracted, even if extra_requirements is set.
 

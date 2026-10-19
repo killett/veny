@@ -91,6 +91,24 @@ def _analyze_module(
     return module_key, module_info
 
 
+def _module_file(path: Path) -> Path | None:
+    """The file a local import actually runs.
+
+    Args:
+        path: A local module's file, or a local package's directory.
+
+    Returns:
+        The file itself, a package directory's __init__.py, or None when
+        path is neither.
+    """
+    if ek.safe_is_file(path):
+        return path
+    init_py = path / "__init__.py"
+    if ek.safe_is_dir(path) and ek.safe_is_file(init_py):
+        return init_py
+    return None
+
+
 def _enqueue_top_level_imports(
     scan: ImportScan,
     module_path: Path,
@@ -102,7 +120,8 @@ def _enqueue_top_level_imports(
 ) -> None:
     """Resolve a module's top-level imports and enqueue any new local modules.
 
-    Newly found local modules and packages go onto the first-pass queue.
+    Newly found local modules and packages go onto the queue; a package goes
+    on as its directory, which the queue opens through its __init__.py.
     """
     for import_name in import_names:
         if is_stdlib(import_name):
@@ -116,12 +135,108 @@ def _enqueue_top_level_imports(
         if possible_module_file_path is None:
             continue
         actual_module_file_path = ek.ensure_path(possible_module_file_path)
-        if ek.safe_is_file(actual_module_file_path):
+        if _module_file(actual_module_file_path) is not None:
             if (
                 actual_module_file_path not in processed_paths
                 and actual_module_file_path not in modules_to_process
             ):
                 modules_to_process.append(actual_module_file_path)
+
+
+def _process_queue(
+    settings: Settings,
+    scan: ImportScan,
+    modules_to_process: collections.deque[Path],
+    processed_paths: set[Path],
+    modules_info: dict[str, ModuleInfo],
+    *,
+    is_stdlib: Callable[[str], bool],
+    do_sys_path_scan: bool,
+) -> None:
+    """Analyze every module on the queue, and every local module they import.
+
+    Each module's top-level local imports are queued as it is analyzed, so the
+    queue drains to a fixed point: everything local that the queued modules
+    reach through top-level imports gets analyzed too. Both of the scan's
+    passes use this, so a module first reached from inside a function is
+    followed exactly as one reached from the top level is.
+
+    Args:
+        settings:           The run's fixed configuration.
+        scan:               ImportScan accumulating what this run discovers.
+        modules_to_process: The queue to drain: module files, or package
+                            directories whose __init__.py is parsed.
+        processed_paths:    Paths already analyzed this scan; updated.
+        modules_info:       Module key to ModuleInfo; updated.
+        is_stdlib:          Predicate returning True for standard-library names.
+        do_sys_path_scan:   Whether to scan each module for sys.path mutations.
+    """
+    while modules_to_process:
+        module_path = modules_to_process.popleft()  # first in, first out
+        if not settings.rawlog:
+            logging.info(
+                "Processing module: %s where %s", module_path, type(module_path)
+            )
+        if ek.safe_is_dir(module_path):
+            pkg_dir = module_path
+            init_py = pkg_dir / "__init__.py"
+            if ek.safe_is_file(init_py):
+                # 1) Parse the package __init__.py
+                module_path = init_py
+                # 2) Also enqueue all other .py modules in that same folder
+                for p in pkg_dir.iterdir():
+                    if ek.is_python_script(p) and p.name != "__init__.py":
+                        if p not in modules_to_process and p not in processed_paths:
+                            modules_to_process.append(p)
+            else:
+                logging.error(
+                    f"No __init__.py in package directory {pkg_dir}, skipping."
+                )
+                continue
+        elif not ek.safe_is_file(module_path):
+            logging.error(
+                f"Skipping {module_path} because it is not a file or directory."
+            )
+            continue
+        if module_path in processed_paths:
+            continue
+        processed_paths.add(module_path)
+        result = _analyze_module(
+            settings,
+            scan,
+            module_path,
+            modules_info,
+            do_sys_path_scan=do_sys_path_scan,
+        )
+        if result is None:
+            continue
+        module_key, module_info = result
+        _enqueue_top_level_imports(
+            scan,
+            module_path,
+            module_info.top_level_imports,
+            processed_paths,
+            modules_to_process,
+            is_stdlib=is_stdlib,
+        )
+
+
+def _alias_map(scan: ImportScan) -> dict[str, str]:
+    """Map each local module's import name to its module key.
+
+    Args:
+        scan: The scan whose custom_modules to map.
+
+    Returns:
+        Import name to the resolved file path the call graph keys modules by
+        -- for a package, its __init__.py.
+    """
+    alias_to_key: dict[str, str] = {}
+    for mod_name, mod_path in scan.custom_modules.items():
+        module_file = _module_file(ek.ensure_path(mod_path))
+        if module_file is not None:
+            alias_to_key[mod_name] = os.fspath(module_file.resolve())
+    return alias_to_key
 
 
 def find_imports_in_script(
@@ -165,54 +280,15 @@ def find_imports_in_script(
     processed_paths: set[Path] = set()
     modules_info: dict[str, ModuleInfo] = {}
     modules_to_process: deque[Path] = deque([first_path])
-    while modules_to_process:
-        module_path = modules_to_process.popleft()  # first in, first out
-        if not settings.rawlog:
-            logging.info(
-                "Processing module: %s where %s", module_path, type(module_path)
-            )
-        if ek.safe_is_dir(module_path):
-            pkg_dir = module_path
-            init_py = pkg_dir / "__init__.py"
-            if ek.safe_is_file(init_py):
-                # 1) Parse the package __init__.py
-                module_path = init_py
-                # 2) Also enqueue all other .py modules in that same folder
-                for p in pkg_dir.iterdir():
-                    if ek.is_python_script(p) and p.name != "__init__.py":
-                        if p not in modules_to_process and p not in processed_paths:
-                            modules_to_process.append(p)
-            else:
-                logging.error(
-                    f"No __init__.py in package directory {pkg_dir}, skipping."
-                )
-                continue
-        elif not ek.safe_is_file(module_path):
-            logging.error(
-                f"Skipping {module_path} because it is not a file or directory."
-            )
-            continue
-        if module_path in processed_paths:
-            continue
-        processed_paths.add(module_path)
-        result = _analyze_module(
-            settings,
-            scan,
-            module_path,
-            modules_info,
-            do_sys_path_scan=True,
-        )
-        if result is None:
-            continue
-        module_key, module_info = result
-        _enqueue_top_level_imports(
-            scan,
-            module_path,
-            module_info.top_level_imports,
-            processed_paths,
-            modules_to_process,
-            is_stdlib=is_stdlib,
-        )
+    _process_queue(
+        settings,
+        scan,
+        modules_to_process,
+        processed_paths,
+        modules_info,
+        is_stdlib=is_stdlib,
+        do_sys_path_scan=True,
+    )
     if logging.getLogger().isEnabledFor(logging.DEBUG):
         logging.debug("Modules processed so far:")
     for module_key, m_info in modules_info.items():
@@ -225,11 +301,7 @@ def find_imports_in_script(
             )
 
     # Build alias → file-path-key mapping for local modules
-    _alias_to_key: dict[str, str] = {}
-    for _mod_name, _mod_path in scan.custom_modules.items():
-        _p = ek.ensure_path(_mod_path)
-        if ek.safe_is_file(_p):
-            _alias_to_key[_mod_name] = os.fspath(_p.resolve())
+    _alias_to_key = _alias_map(scan)
 
     # Now build the call graph
     call_graph = build_call_graph(modules_info, alias_to_key=_alias_to_key)
@@ -295,50 +367,39 @@ def find_imports_in_script(
             if import_name in scan.custom_modules:
                 # It's a known local module that we haven't processed yet
                 module_file_path = ek.ensure_path(scan.custom_modules[import_name])
-                if not ek.safe_is_file(module_file_path):
+                module_file = _module_file(module_file_path)
+                if module_file is None:
                     logging.error(
-                        f"Custom module path for {import_name} is not a file: {module_file_path}"
+                        f"Custom module path for {import_name} is neither a file nor a package: {module_file_path}"
                     )
                     continue
-                new_module_key = os.fspath(module_file_path.resolve())
-                if (
-                    new_module_key in modules_info
-                    or module_file_path in processed_paths
-                    or module_file_path in modules_to_process
-                ):
-                    # Already parsed, but still trace its top-level calls
-                    if new_module_key in modules_info:
-                        old_size = len(used_imports)
-                        collect_imports_from_module(new_module_key)
-                        if len(used_imports) > old_size:
-                            new_modules_found = True
-                    continue  # don't re-analyze
-                modules_to_process.append(module_file_path)
-                new_modules_found = True
-                result = _analyze_module(
-                    settings,
-                    scan,
-                    module_file_path,
-                    modules_info,
-                    do_sys_path_scan=False,
-                )
-                if result is None:
-                    continue
-                new_module_key, module_info = result
-                # Rebuild alias map and call graph with the new module included
-                _p = ek.ensure_path(module_file_path)
-                if ek.safe_is_file(_p):
-                    _alias_to_key[import_name] = os.fspath(_p.resolve())
-                call_graph = build_call_graph(modules_info, _alias_to_key)
+                new_module_key = os.fspath(module_file.resolve())
+                if new_module_key not in modules_info:
+                    # Reached for the first time, from inside a function:
+                    # analyze it and every local module it imports, as the
+                    # first pass would have. (The first pass's queue is empty
+                    # by now, so "queued" can never stand in for "analyzed".)
+                    modules_to_process.append(module_file_path)
+                    _process_queue(
+                        settings,
+                        scan,
+                        modules_to_process,
+                        processed_paths,
+                        modules_info,
+                        is_stdlib=is_stdlib,
+                        do_sys_path_scan=False,
+                    )
+                    if new_module_key not in modules_info:
+                        continue  # It would not parse.
+                    # Rebuild alias map and call graph with the new modules included
+                    _alias_to_key = _alias_map(scan)
+                    call_graph = build_call_graph(modules_info, _alias_to_key)
+                    new_modules_found = True
+                # Trace its top-level calls
+                old_size = len(used_imports)
                 collect_imports_from_module(new_module_key)
-                _enqueue_top_level_imports(
-                    scan,
-                    module_file_path,
-                    module_info.top_level_imports,
-                    processed_paths,
-                    modules_to_process,
-                    is_stdlib=is_stdlib,
-                )
+                if len(used_imports) > old_size:
+                    new_modules_found = True
             else:
                 # If not a local module, add to scan.all_imports
                 scan.all_imports.add(import_name)

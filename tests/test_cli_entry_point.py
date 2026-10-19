@@ -1787,9 +1787,12 @@ def test_declining_the_blank_slate_confirmation_deletes_nothing(monkeypatch, tmp
     status = cli.main()
 
     assert status == 0
+    # The prompt names every kind of file a "y" deletes -- the same list the
+    # deletion's own log line and --help give. It used to name only .json,
+    # then deleted .out, .err and .pkl files too.
     assert asked == [
         "Are you sure you want to delete everything in ~/veny/ and all veny"
-        " .json files in the current directory? (y/n) "
+        " .out and .err and .json and .pkl files in the current directory? (y/n) "
     ]
     assert state_dir.exists()
 
@@ -1858,6 +1861,57 @@ def test_build_alias_index_reads_this_runs_own_directory_and_interpreter(
         f"{sys.version_info[0]}.{sys.version_info[1]}"
     )
     assert "pytest" in index.installed
+
+
+def test_a_run_without_its_preferred_python_tags_the_alias_cache_for_the_running_one(
+    tmp_path, monkeypatch, caplog
+):
+    """With no preferred Python on PATH, the alias index serves veny's own interpreter.
+
+    Behaviour under test: what the run hands build_alias_index when
+    ek.find_preferred_python_version() finds nothing. veny then builds the
+    venv with the interpreter it is running on (venv_build_interpreter falls
+    back to sys.executable), so that interpreter's tag is the one the alias
+    cache must carry.
+
+    Concrete bug this catches: handing the probe the empty string as though it
+    named an interpreter. The probe then tries to execute "", warns "Could not
+    run  to list its installed distributions", and returns no tag -- and an
+    untagged cache neither reads nor records anything for the whole run.
+
+    Expected value: the running interpreter's major.minor, from
+    sys.version_info. The real build_alias_index runs, offline.
+    """
+    script = tmp_path / "script.py"
+    script.write_text("import os\n")
+    monkeypatch.setattr(
+        sys, "argv", ["veny", "--justprint", "--offline", os.fspath(script)]
+    )
+    monkeypatch.setattr(ek, "find_preferred_python_version", lambda: None)
+    monkeypatch.setattr(
+        custom_modules, "dict_of_custom_modules", lambda settings, use_cache: {}
+    )
+    monkeypatch.setattr(ek, "configure_logging", lambda *a, **k: None)
+    monkeypatch.setattr(ek, "print_all_errors", lambda *a, **k: None)
+    monkeypatch.setattr(logging, "shutdown", lambda: None)
+    built: list[alias_index.AliasIndex] = []
+    real_build = pipeline.build_alias_index
+
+    def keep_the_index(settings, args, python_command):
+        index = real_build(settings, args, python_command)
+        built.append(index)
+        return index
+
+    monkeypatch.setattr(pipeline, "build_alias_index", keep_the_index)
+
+    with caplog.at_level(logging.WARNING):
+        assert cli.main() == 0
+
+    assert len(built) == 1
+    assert built[0].cache.interpreter_tag == (
+        f"{sys.version_info[0]}.{sys.version_info[1]}"
+    )
+    assert "Could not run" not in caplog.text
 
 
 def test_the_run_is_timed_from_the_moment_veny_started(monkeypatch, tmp_path, caplog):
