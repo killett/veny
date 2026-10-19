@@ -124,6 +124,9 @@ see it.
 
 ## Execution record (2026-10-19)
 
+**Merged to `main` at `6026948` (`--no-ff`) and pushed; CI green on all
+four jobs (lint; ubuntu 3.12 and 3.13; macos 3.13).**
+
 All eight tasks done on `audit-bug-fixes`, one `fix:` commit each, red
 first in every case (each commit message names its failing test and the
 failure it showed). Suite 478 -> 493; mypy held at 23; the CI gate green on

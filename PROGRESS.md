@@ -44,12 +44,15 @@ gotchas ledger.
   | **4b** `docs/superpowers/plans/2026-08-21-last-used-persistence.md` (executed, complete on branch `last-used-persistence`) | The `LastUsed` persistence change (design amendment 9), which breaks the `ek.Options` coupling and deletes `run_options.py`, the `cli.Options` re-export, `pathlibcutoff` and its two readers, and the test references in both spellings. Also deletes `json_types.py` and the pickle `PATHLIB_CUTOFF`, and stops `find_match_dir_in_cache` mutating the `argparse.Namespace` (user rulings, 2026-08-21). |
   | **4c** `docs/superpowers/plans/2026-08-23-behaviour-changes-4c.md` (executed, complete on branch `behaviour-changes-4c`) | The remaining behaviour changes: the in-virtualenv guard (USER RULING 2026-08-20), `--feeling-lucky`'s missing signal normalization, latent defects 1 and 3, and the residual dead arguments. |
 
-**Next action:** **decide on branch `audit-bug-fixes`** -- all eight
-tasks of `docs/superpowers/plans/2026-10-19-audit-bug-fixes.md` are done
-(execution record and live end-to-end runs at the end of the plan), gates
-green, **not merged or pushed**. After that, the next piece of work is a free
-choice from Deferred items. The hygiene branch is merged and pushed (`main`
-@ `d3e5883`, CI green on all four jobs).
+**Next action:** **none -- a free choice from Deferred items.** The audit
+bug fixes (`docs/superpowers/plans/2026-10-19-audit-bug-fixes.md`, all eight
+tasks, execution record and live runs at its end) are merged to `main` at
+`6026948` and pushed, CI green on all four jobs; the hygiene pass before them
+at `d3e5883`, likewise. Pushes from this container go over HTTPS with the
+`gh` token (`git -c credential.helper='!gh auth git-credential' push
+https://github.com/killett/veny.git main`): SSH now fails host-key
+verification here, and HTTPS works for any push that does not touch
+`.github/workflows/` (the token lacks the `workflow` scope).
 veny 0.2.2 is published:
 <https://github.com/killett/veny> (public) and
 <https://pypi.org/project/veny/0.2.2/>. The re-architecture program was
