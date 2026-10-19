@@ -2370,6 +2370,28 @@ wiring rationale and for two Minors deliberately left unfixed.
   `docs/superpowers/plans/2026-10-19-audit-bug-fixes.md`, which is now the one
   place they are tracked.
 
+- **Every interrupted run leaks a `failed-` venv and the next run builds
+  another** (recorded 2026-10-19, reproduced live on `main` at `6346830`;
+  also present in the user's pre-repo `veny.py`). In `pipeline.run`, both
+  the `failed-` rename (`pipeline.py:963`) and `last_used.save`
+  (`pipeline.py:978`) run only *after* `run_script` (`pipeline.py:946`)
+  returns. A script that never exits on its own (a monitor loop, ended with
+  Ctrl-C or a reboot) kills veny too: SIGINT reaches the whole foreground
+  process group, `subprocess.run` re-raises `KeyboardInterrupt`, and
+  nothing in `src/veny` catches it or any signal. So the new venv keeps its
+  `failed-` prefix and no last-used record is written, and the cache scan
+  (`cache_search.py:651`, `startswith(venv_name)`) never sees `failed-`
+  folders. The next run finds nothing and builds another one, every time.
+  Repro: three runs of a `while True: sleep` script that imports
+  `unidecode`, killed with group SIGINT, SIGINT, then SIGTERM, left three
+  `failed-myenv-py3.13-…-unidecode` folders and no last-used JSON. A control
+  script that exits normally got renamed and recorded as designed. The
+  rename's condition never consults the script's exit status, only
+  `install_succeeded`, so doing the rename and the save *before* the launch
+  would change nothing about which venvs get renamed. That would close the
+  leak for SIGKILL and power loss too, which a `KeyboardInterrupt`/SIGTERM
+  handler would not. **No owner yet; needs a user ruling.**
+
 - **Windows is claimed nowhere and supported nowhere, but the code is half
   ready for it** (recorded 2026-08-23, publication). `environment.py:110`
   resolves `Scripts/python.exe` under `sys.platform == "win32"`, but
