@@ -55,9 +55,9 @@ LAYERS: list[frozenset[str]] = [
     # imports the other (classify takes its probe environment as an injected
     # context manager rather than building one), so each forbids the other by
     # default. Both sit above the index layer because they need nothing from
-    # each other, and below cli because cli drives them -- and neither is
-    # handed a per-run state object, so both can be exercised without
-    # building the run first. last_used.py joins them as a third peer: it
+    # each other, and below pipeline because pipeline drives them -- and
+    # neither is handed a per-run state object, so both can be exercised
+    # without building the run first. last_used.py joins them as a third peer: it
     # imports only state from veny (for LastUsed), which is why its layer
     # must sit above state's -- and, like its peers, it needs nothing from
     # classify or environment.

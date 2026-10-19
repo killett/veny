@@ -648,10 +648,11 @@ def test_build_wires_the_pieces_together(tmp_path, monkeypatch):
 
 
 def test_empty_spawns_no_probe_and_touches_no_network(tmp_path, monkeypatch):
-    # Options() is constructed before the target interpreter is known, and in
-    # every test, so empty() must not pay for a probe subprocess or a
-    # network call. Both potential culprits are made to raise, so any code
-    # path that reaches either fails the test instead of silently degrading.
+    # empty() is for callers that need an index before the target interpreter
+    # is known -- today only tests -- so it must not pay for a probe
+    # subprocess or a network call. Both potential culprits are made to raise,
+    # so any code path that reaches either fails the test instead of silently
+    # degrading.
     def _boom(*args, **kwargs):
         raise AssertionError("empty() must not run a probe or touch the network")
 

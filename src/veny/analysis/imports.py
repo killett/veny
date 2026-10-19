@@ -219,7 +219,7 @@ class ImportFunctionCollector(ast.NodeVisitor):
         func_name = node.name
         if self.current_class:
             func_name = f"{self.current_class}.{func_name}"
-        self.module_info.functions[func_name] = FunctionInfo(func_name)
+        self.module_info.functions[func_name] = FunctionInfo()
         if logging.getLogger().isEnabledFor(logging.DEBUG):
             logging.debug(
                 "Added function: %s to module %s",
@@ -366,9 +366,6 @@ class ImportFunctionCollector(ast.NodeVisitor):
             else:
                 if logging.getLogger().isEnabledFor(logging.DEBUG):
                     logging.debug("%s is not a class, leaving as-is.", func_name)
-            # If func_name corresponds to a class in this module, treat it as calling __init__
-            if func_name in self.module_info.classes:
-                func_name = f"{func_name}.__init__"
             # Handle dynamic imports
             if func_name == "__import__":
                 module_name = self.extract_module_name_from_import(node)

@@ -3,7 +3,7 @@
 Nothing here is handed a per-run state object: each function takes the paths,
 names and flags it actually reads. It sits above ``environment`` because it installs,
 uninstalls and rewrites ``requirements.txt`` through that module, and below
-``cli``, which drives it.
+``pipeline``, which drives it.
 """
 
 from __future__ import annotations
@@ -336,7 +336,6 @@ else:
     result = subprocess.run(the_command, capture_output=True, text=True, check=False)
     if logging.getLogger().isEnabledFor(logging.DEBUG):
         logging.debug("check_packages_in_venv stdout:\n%s", result.stdout)
-    if logging.getLogger().isEnabledFor(logging.DEBUG):
         logging.debug("check_packages_in_venv stderr:\n%s", result.stderr)
     return "packages imported successfully" in result.stdout, result.stdout
 
@@ -626,11 +625,10 @@ def verify_and_repair_imports(
         object, because the design's mutation direction is that each stage
         returns its product.
     """
-    from_source = source_names
     records = [
         record
         for record in sorted(uninstalled, key=lambda r: r.import_name)
-        if record.import_name in from_source
+        if record.import_name in source_names
     ]
     if not records:
         return frozenset(uninstalled)

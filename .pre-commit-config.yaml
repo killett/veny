@@ -37,7 +37,7 @@ repos:
         language: system
 
       # Local reimplementation of pre-commit-hooks' check-toml. tomllib is
-      # stdlib in 3.11+; this template requires 3.12+. Routed through
+      # stdlib in 3.11+; this project requires 3.12+. Routed through
       # `pixi run python` so the env (and its Python) is the same one the
       # other hooks use.
       - id: check-toml

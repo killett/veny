@@ -10,14 +10,23 @@ with the code. Phase 3d's driver could not see it either: it called
 which is exactly why 27 of ``main()``'s arguments went unpinned there. This
 driver drives ``veny.cli.main()`` itself, through argv, in both trees.
 
+NO LONGER RUNS against a tree after phase 4b: ``Tree`` imports
+``veny.run_options`` from any tree that has ``veny.pipeline``, and phase 4b
+deleted that module, so the driver fails before its first layer.
+``scripts/differential_4b.py`` stubs the module to reuse this harness.
+
+Commit hashes: ``fa22bc7`` below was ``08622a8`` before the 2026-08-23 history
+rewrite, which changed every hash. Other hashes in this file predate the
+rewrite and are found by the commit subjects quoted beside them.
+
 How to run it, and against what base::
 
-    git archive 08622a8 src/veny | tar -x -C /tmp/old-veny
+    git archive fa22bc7 src/veny | tar -x -C /tmp/old-veny
     pixi run python scripts/differential_3e.py /tmp/old-veny > /tmp/old.txt
     pixi run python scripts/differential_3e.py /workspace    > /tmp/new.txt
     diff /tmp/old.txt /tmp/new.txt
 
-``08622a8`` is the phase-3e branch point ("docs: record 3d's merge to main and
+``fa22bc7`` is the phase-3e branch point ("docs: record 3d's merge to main and
 the whole-branch review's fix wave"). The argument is a *tree root* holding
 ``src/veny``; it is inserted with ``sys.path.insert``, never through
 ``PYTHONPATH``, because ``pixi.toml``'s ``[activation.env]`` sets

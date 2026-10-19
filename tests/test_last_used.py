@@ -149,10 +149,10 @@ def test_active_virtualenv_dir_answers_with_a_path_not_a_string(
 ) -> None:
     """The answer is a Path, because its caller joins bin/python onto it.
 
-    A bug that would make this fail: returning the raw environment string.
-    environment.venv_python_for does `venv_dir / "bin" / "python"`, which
-    raises TypeError on a str -- but only on the branch this value reaches,
-    which no other test in this file drives.
+    A bug that would make this fail: returning the raw environment string,
+    contrary to the `Path | None` annotation. Today's only caller,
+    environment.venv_python_for, would tolerate it -- it converts through
+    ek.ensure_dir -- so this test is what holds the annotation to its word.
     """
     monkeypatch.setenv("VIRTUAL_ENV", os.fspath(tmp_path / "activated"))
 

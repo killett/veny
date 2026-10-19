@@ -225,9 +225,11 @@ def run_uv_pip(
 ) -> subprocess.CompletedProcess[str] | None:
     """Run one uv pip command against the venv without ever raising.
 
-    Every caller is on a verification path, where the point is to report what
-    happened rather than to end the run, so a missing interpreter or an
-    unrunnable uv is reported as "no result" instead of an exception.
+    No caller wants a failure to end the run: the verification path's
+    per-package installs and uninstalls report what happened, and
+    setup_virtualenv's batch install decides from the result whether the venv
+    keeps its "failed-" prefix. So a missing interpreter or an unrunnable uv
+    is reported as "no result" instead of an exception.
 
     Args:
         venv_python: The venv's interpreter, or None if none is set yet.

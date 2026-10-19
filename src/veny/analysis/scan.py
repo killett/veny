@@ -40,7 +40,7 @@ def _analyze_module(
 
     Args:
         settings:         Settings object containing the run's fixed configuration. Contains:
-            - settings.rawlog:        Boolean indicating whether to log raw file contents.
+            - settings.rawlog:        Whether to suppress veny's own commentary.
         scan:             ImportScan accumulating what this run has discovered. Contains:
             - scan.custom_modules:    Dictionary mapping custom module names to their file paths.
             - scan.sys_path_hints:    Set of Path objects representing directories to add to sys.path.
@@ -141,9 +141,8 @@ def find_imports_in_script(
         is_stdlib:  Predicate returning True for names in the target
                     interpreter's standard library.
         scan:       Prior state to keep scanning into, e.g. a caller's
-                    already-populated custom_modules map, or accumulated
-                    results from scanning earlier files in the same run.
-                    Defaults to a fresh, empty ImportScan.
+                    already-populated custom_modules map. Defaults to a
+                    fresh, empty ImportScan.
 
     Returns:
         The scan argument (or a fresh ImportScan if none was given),

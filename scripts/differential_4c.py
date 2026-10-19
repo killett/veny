@@ -92,16 +92,21 @@ something. What this file adds is:
   last-used layers (14-18) and this phase's own layer 21 still need, and a
   plain record of the parsed ``Namespace`` for layer 2's flag report.
 
+Commit hashes: ``e787bc1`` and its parent ``0cdec1f`` below were ``9af1f09``
+and ``f7b11fc`` before the 2026-08-23 history rewrite, which changed every
+hash. Other hashes in this file predate the rewrite and are found by the
+commit subjects quoted beside them.
+
 How to run it, and against what base::
 
-    git archive 9af1f09 src/veny | tar -x -C /tmp/old-veny-4c
+    git archive e787bc1 src/veny | tar -x -C /tmp/old-veny-4c
     pixi run python scripts/differential_4c.py /tmp/old-veny-4c > /tmp/old.txt
     pixi run python scripts/differential_4c.py /workspace      > /tmp/new.txt
     diff -u /tmp/old.txt /tmp/new.txt
 
-``9af1f09`` is ``main`` immediately before this phase ("docs: write plan 4c,
+``e787bc1`` is ``main`` immediately before this phase ("docs: write plan 4c,
 the last of the phase-4 behaviour changes"; a docs-only commit -- the branch
-point for source is identical to its parent, ``f7b11fc``). ``git archive``
+point for source is identical to its parent, ``0cdec1f``). ``git archive``
 into a scratch directory, never ``git checkout`` inside this working tree:
 a prior session's checkout-and-back sequence left files from an intermediate
 commit stuck in the tree, restoring content HEAD had already deleted. The

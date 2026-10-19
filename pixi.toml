@@ -1,41 +1,9 @@
-# Project pixi manifest.
+# pixi manifest for veny's development environment.
 #
-# This file is the TEMPLATE that sandboxed-claude.sh runs through
-# hooks/generate-pixi-toml.py to produce each new project's pixi.toml.
-# Eight placeholder strings (each starts and ends with a double-
-# underscore) are substituted at scaffold time:
-#
-#   PROJECT_NAME placeholder    → project directory's basename (or --name)
-#   GROUPS_CONDA_DEPS placeholder → one `name = "*"` line per
-#                                   pixi_packages entry across selected
-#                                   groups (conda-forge)
-#   GROUPS_CONDA_DEPS_LINUX_ONLY placeholder
-#                                 → one `name = "*"` line per
-#                                   pixi_packages_linux_only entry;
-#                                   lives in [target.linux-64.dependencies]
-#                                   for packages with no osx-arm64 build
-#   GROUPS_PYPI_DEPS placeholder  → one `name = "*"` line per
-#                                   pixi_pypi_packages entry (PyPI)
-#   GROUPS_EXTRA_CHANNELS placeholder → comma-separated quoted channel
-#                                   names (e.g. "robostack-jazzy") from
-#                                   pixi_channels entries in selected
-#                                   groups, appended after "conda-forge"
-#   SCAFFOLD_BASELINE_CONDA / _CONDA_LINUX_ONLY / _PYPI placeholders →
-#                                   one `name = "<spec>"` line per package
-#                                   declared in templates/scaffold-baseline.toml.
-#                                   That file is the single source of truth for
-#                                   packages every scaffolded project installs
-#                                   regardless of group selection — edit it,
-#                                   not this template, to change the baseline.
-#
-# (The literal placeholder strings are deliberately not written out in
-# this comment, because the generator does plain text replacement and
-# would substitute them here too.)
-#
-# Anything outside the placeholders passes through verbatim. Adjust
-# channels / platforms / tasks / features / activation as you like —
-# they'll appear in every scaffolded project. Edit the dependency
-# *contents* in groups.toml or templates/scaffold-baseline.toml, not here.
+# Generated from a project-scaffolding template, which is where the
+# "scaffold baseline" block in [dependencies] comes from. veny's own runtime
+# dependencies are emmykit and uv (pyproject.toml); nothing in this file is
+# needed to run veny -- see README.md, "Working on veny itself".
 
 [workspace]
 name = "veny"
@@ -71,7 +39,8 @@ mypy = "*"
 pytest = "*"
 pytest-cov = "*"
 pre-commit = "*"
-# Group-derived conda packages are inserted on the line below.
+# Scaffold baseline, carried over from the template. None of it is a runtime
+# dependency of veny.
 python-dotenv = "*"
 httpx = "*"
 pydantic = "*"
@@ -98,9 +67,6 @@ twine = "*"
 [pypi-dependencies]
 emmykit = ">=0.4.0, <1.0"
 uv = ">=0.9, <1.0"
-
-# Group-derived PyPI-only packages.
-
 
 # Conda deps that only resolve on linux-64. Use this section when a
 # package or one of its conda-forge dependencies has no osx-arm64 build,
@@ -135,8 +101,10 @@ build = "python -m build"
 smoke = "bash scripts/smoke-install.sh"
 # pre-commit lives in the pixi env (see [dependencies] above) so its tools
 # stay pinned and exclude-newer-governed like everything else. Same `python -m`
-# shebang dodge as the tasks above. -install is what `docker-entrypoint.sh`
-# runs on first launch to wire .git/hooks/pre-commit; idempotent on rerun.
+# shebang dodge as the tasks above. -install wires .git/hooks/pre-commit, but
+# read PROGRESS.md's Gotchas before running it here: the mypy hook checks the
+# whole tree, so with its standing errors an installed hook refuses every
+# commit that stages a .py file.
 #
 # `pre-commit` is a pure pass-through: `pixi run pre-commit <args>` is
 # identical to invoking the upstream `pre-commit <args>` CLI, since pixi

@@ -30,7 +30,7 @@ TIMESTAMP = "20260814-091500"
 
 
 def a_stdlib() -> stdlib_index.StdlibIndex:
-    """Build the StdlibIndex manifest_for still reads.
+    """Build the StdlibIndex the run's interpreter tag is derived from.
 
     Phase 4a moved uninstalled_imports and extra_requirements onto
     Requirements; a_reqs below builds the matching value. Only the stdlib
@@ -81,10 +81,10 @@ def manifest_kwargs(
     versions: dict[str, str],
     venv_tag: str = "",
 ) -> ManifestKwargs:
-    """The arguments cli.py hands cache_search.manifest_for.
+    """The arguments cache_search.record_venv_state hands manifest_for.
 
     manifest_for takes no Options any more -- every field it used to reach for
-    is an explicit argument now. This mirrors setup_virtualenv's call so the
+    is an explicit argument now. This mirrors record_venv_state's call so the
     fixture above stays the single description of the run under test; it is
     not a second implementation of anything manifest_for does.
 

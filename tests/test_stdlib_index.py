@@ -11,12 +11,9 @@ from veny.stdlib_index import StdlibIndex
 
 @pytest.fixture(autouse=True)
 def clear_probe_cache():
-    """Keep lru_cache state from leaking between tests (used from Task 2 onward)."""
+    """Keep for_interpreter's lru_cache from leaking probe results between tests."""
     yield
-    if hasattr(stdlib_index, "for_interpreter") and hasattr(
-        stdlib_index.for_interpreter, "cache_clear"
-    ):
-        stdlib_index.for_interpreter.cache_clear()
+    stdlib_index.for_interpreter.cache_clear()
 
 
 def _index(*names):

@@ -103,6 +103,7 @@ and a script installing into it is working against that.
 src/veny/
     __init__.py     # Version literal.
     __main__.py     # python -m veny.
+    py.typed        # PEP 561 marker: veny's type hints ship with it.
     cli.py          # Argument parsing and exit-status policy. Nothing else:
                     # the run itself belongs to pipeline.py.
     pipeline.py     # The run: analyze -> classify -> acquire an environment
@@ -151,7 +152,9 @@ src/veny/
                     # resolution, attributable confirmation).
 scripts/            # smoke-install.sh: wheel + console-script verification.
                     # differential_3d/3e/4a/4b/4c.py: the per-phase old-vs-new
-                    # behavioural differentials, each reusing the one before.
+                    # behavioural differentials of the finished
+                    # re-architecture, kept as its record. 4a builds on 3e's
+                    # harness, 4b on 4a's and 4c on 4b's; 3d stands alone.
                     # wiring_sweep_4a/4b/4c.py: the per-phase STANDING CHECK,
                     # which mutates every argument at every call site the
                     # phase touched and names the test that dies.

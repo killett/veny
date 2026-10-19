@@ -8,8 +8,9 @@ metadata, a small curated seed, a user override file, and a cache of results
 that were verified by actually installing and importing them. See
 docs/superpowers/specs/2026-08-12-module-alias-resolver-design.md.
 
-This module deliberately imports nothing from veny or emmykit, so it can be
-tested on its own and so the dependency direction stays one-way. It never
+This module deliberately imports nothing from emmykit, and nothing of veny's
+except the leaf pypi_client, so it can be tested on its own and so the
+dependency direction stays one-way. It never
 installs anything: it produces ranked candidates and veny verifies them.
 """
 
@@ -82,8 +83,8 @@ class ResolvedImport:
     guess which kind of string it was holding.
 
     This lives here rather than in veny.cli because alias_index imports
-    nothing of veny's, so it stays free to be imported from anywhere without
-    risking a cycle back through veny.cli.
+    nothing of veny's but the leaf pypi_client, so it stays free to be
+    imported from anywhere without risking a cycle back through veny.cli.
 
     Attributes:
         import_name: The name as written in the user's source.

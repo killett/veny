@@ -25,6 +25,10 @@ _CLAUSE_RE = re.compile(r"(==|!=|>=|<=|~=|>|<)(.+)\Z", re.DOTALL)
 MAX_NAMED_PACKAGES: int = 5
 
 MANIFEST_FILENAME: str = "veny_manifest.json"
+# A venv folder carries this prefix from the moment it is built until a run
+# has verified it; the prefix is stripped only then. A folder still carrying
+# it is a provisional build, not necessarily a failed one.
+FAILED_PREFIX: str = "failed-"
 SCHEMA_VERSION: int = 1
 
 _NORMALIZE_RE = re.compile(r"[-_.]+")
@@ -33,9 +37,10 @@ _NORMALIZE_RE = re.compile(r"[-_.]+")
 def normalize_pip_name(name: str) -> str:
     """Reduce a pip project name to its PEP 503 normalized form.
 
-    This duplicates alias_index.normalize_pip_name deliberately: this module may
-    not import alias_index, because veny.cli imports both and the dependency must
-    stay one-way. The two implementations must be kept identical -- a second,
+    This duplicates alias_index.normalize_pip_name deliberately: this module is
+    standard-library only (see the module docstring), and alias_index is its
+    peer in tests/test_layering.py's index layer, where neither may import the
+    other. The two implementations must be kept identical -- a second,
     silent implementation of a comparison rule is exactly the kind of thing that
     drifts apart.
 

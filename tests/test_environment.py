@@ -248,7 +248,8 @@ def test_venv_build_interpreter_falls_back_to_the_unresolved_command_and_warns_w
 ):
     """venv_build_interpreter degrades to the bare command, with a warning, when unresolvable.
 
-    PROGRESS.md calls this branch untested and believed practically dead. If
+    PROGRESS.md once recorded this branch as untested and believed practically
+    dead; this test is what made it tested. If
     it instead raised, a `python_command` that shutil.which cannot resolve
     (a typo, a not-yet-installed interpreter) would crash veny outright
     instead of degrading -- to the behaviour that predates the resolved-path

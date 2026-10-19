@@ -98,6 +98,28 @@ def installed_state_in_venv(
     )
 
 
+def _requirements_by_normalized_name(
+    extra_requirements: Mapping[str, str | None],
+) -> dict[str, str | None]:
+    """Key the --reqs entries by normalized pip name.
+
+    extra_requirements is keyed by whatever spelling the user typed on the
+    command line, which need not match a record's pip_name spelling, so a
+    lookup into it must normalize both sides. Built once per call rather than
+    once per record.
+
+    Args:
+        extra_requirements: The --reqs entries, as the user spelled them.
+
+    Returns:
+        The same entries, keyed by venv_cache.normalize_pip_name.
+    """
+    return {
+        venv_cache.normalize_pip_name(name): spec
+        for name, spec in extra_requirements.items()
+    }
+
+
 def manifest_for(
     *,
     uninstalled: AbstractSet[ResolvedImport],
@@ -129,14 +151,9 @@ def manifest_for(
     Returns:
         The manifest to write into the venv.
     """
-    # extra_requirements is keyed by whatever spelling the user typed on the
-    # command line, which need not match record.pip_name's spelling -- the
-    # versions dict a line below is already keyed normalized, so this lookup
-    # must be too. Normalized once here rather than per record.
-    normalized_requirements = {
-        venv_cache.normalize_pip_name(name): spec
-        for name, spec in extra_requirements.items()
-    }
+    # The versions dict a line below is already keyed normalized; the --reqs
+    # lookup must be too.
+    normalized_requirements = _requirements_by_normalized_name(extra_requirements)
     packages = tuple(
         venv_cache.PackageRecord(
             import_name=record.import_name,
@@ -252,7 +269,11 @@ def record_venv_state(
         timestamp=timestamp,
         pip_names=[record.pip_name for record in uninstalled],
     )
-    prefix = "failed-" if venv_dir.name.startswith("failed-") else ""
+    prefix = (
+        venv_cache.FAILED_PREFIX
+        if venv_dir.name.startswith(venv_cache.FAILED_PREFIX)
+        else ""
+    )
     if venv_dir.name != prefix + wanted_name:
         if not rawlog:
             logging.info(
@@ -355,13 +376,7 @@ def wanted_packages(
     Returns:
         One entry per record, carrying its pip name and any --reqs spec.
     """
-    # See manifest_for: extra_requirements' keys are user-typed spellings, not
-    # necessarily record.pip_name's spelling, so the lookup must normalize both
-    # sides. Built once per call rather than inside the list comprehension.
-    normalized_requirements = {
-        venv_cache.normalize_pip_name(name): spec
-        for name, spec in extra_requirements.items()
-    }
+    normalized_requirements = _requirements_by_normalized_name(extra_requirements)
     return [
         venv_cache.Wanted(
             pip_name=record.pip_name,
@@ -461,11 +476,11 @@ def check_venv_dir(
 ) -> bool:
     """Check whether a cached venv directory can serve this run.
 
-    The venv's own manifest is the authority. An options JSON written by an
-    earlier run says what that run wanted, not what the venv holds, and its
-    records compare by exact spelling -- so a venv built when "yaml" resolved to
-    "PyYAML" was rejected by a run spelling it "pyyaml". Asking the manifest puts
-    every candidate, last-used or not, through one comparison.
+    The venv's own manifest is the authority. The options JSON earlier versions
+    of veny wrote said what that run wanted, not what the venv held, and its
+    records compared by exact spelling -- so a venv built when "yaml" resolved
+    to "PyYAML" was rejected by a run spelling it "pyyaml". Asking the manifest
+    puts every candidate, last-used or not, through one comparison.
 
     Args:
         venv_dir:         The cached virtual environment directory.
@@ -740,7 +755,7 @@ def find_match_dir_in_cache(
                     "The smallest venv in the cache is invalid. Giving up on the cache and starting from scratch."
                 )
             return None
-        else:  # This should never happen
+        else:  # Reached when the flags name two policies, e.g. --latest --oldest
             logging.error(
                 f"Invalid combination of flags!\n"
                 f"{prefer_latest = }\n"

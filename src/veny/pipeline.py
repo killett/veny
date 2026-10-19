@@ -116,8 +116,8 @@ def find_imports_in_script(
 
     The scan is mutated in place rather than returned: analysis/scan.py only
     ever calls .add / .append / `d[k] = v` on it and never rebinds a field,
-    and it recurses through the script's local modules relying on all seven
-    fields carrying across those calls.
+    and it walks the script's local modules relying on all seven fields
+    accumulating across that walk.
 
     Seeding is why the scan is passed in rather than built here.
     dict_of_custom_modules() fills scan.custom_modules before list_packages
@@ -601,7 +601,9 @@ def setup_virtualenv(
         pip_names=[record.pip_name for record in requirements.uninstalled],
     )
     # Create a virtual environment directory that starts with "failed" in case the process fails. Only remove the "failed" part if this process completes successfully.
-    handle = state.VenvHandle.for_dir(settings.my_dir / f"failed-{folder_name}")
+    handle = state.VenvHandle.for_dir(
+        settings.my_dir / f"{venv_cache.FAILED_PREFIX}{folder_name}"
+    )
 
     if not settings.rawlog:
         logging.info("Creating virtual environment...")
@@ -725,6 +727,9 @@ def run(
         environment.UvUnavailable: veny has no uv to build an environment
             with. Raised below this layer and left to travel: `cli.main` owns
             what it costs.
+        alias_index.AliasOverrideError: The user's module_aliases.toml
+            override file exists but cannot be read. Raised by
+            build_alias_index and left to travel.
     """
     start_time = start_time or dt.datetime.now()
     script_exit_code = 0
@@ -951,12 +956,15 @@ def run(
                 )
             if script_exit_code != 0 and not settings.rawlog:
                 logging.error("Script exited with status %d", script_exit_code)
-            if handle.venv_dir.name.startswith("failed-") and install_succeeded:
+            if (
+                handle.venv_dir.name.startswith(venv_cache.FAILED_PREFIX)
+                and install_succeeded
+            ):
                 # If the program has made it to this point, it has run successfully, so the venv directory can be renamed because it DIDN'T fail.
                 handle = state.VenvHandle.for_dir(
                     cache_search.rename_venv(
                         handle.venv_dir,
-                        handle.venv_dir.name.removeprefix("failed-"),
+                        handle.venv_dir.name.removeprefix(venv_cache.FAILED_PREFIX),
                     )
                 )
 

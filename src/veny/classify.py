@@ -44,6 +44,22 @@ def _compute_bad_imports(
     return bad
 
 
+def _primary_pip_name(resolution: alias_index.Resolution, import_name: str) -> str:
+    """The pip name an import is installed as: its top-ranked candidate.
+
+    A name the index cannot resolve keeps its own spelling, because no
+    evidence is not the same as contrary evidence -- pip gets its say.
+
+    Args:
+        resolution:  What the alias index found for the import name.
+        import_name: The name as written in the user's source.
+
+    Returns:
+        The first candidate's pip name, or import_name when there is none.
+    """
+    return resolution.candidates[0].pip_name if resolution.candidates else import_name
+
+
 def resolve_records(
     aliases: alias_index.AliasIndex, import_names: Iterable[str]
 ) -> set[ResolvedImport]:
@@ -61,7 +77,7 @@ def resolve_records(
     records: set[ResolvedImport] = set()
     for name in import_names:
         resolution = aliases.resolve(name)
-        primary = resolution.candidates[0].pip_name if resolution.candidates else name
+        primary = _primary_pip_name(resolution, name)
         records.add(ResolvedImport(import_name=name, pip_name=primary))
     return records
 
@@ -229,11 +245,7 @@ def split_imports(
                 # two ranged wheel reads -- for local modules and already
                 # installed packages that never needed one.
                 resolution = aliases.resolve(imp)
-                # No candidate at all means no evidence either way, not a bad
-                # name, so fall back to the import name and let pip have its say.
-                primary = (
-                    resolution.candidates[0].pip_name if resolution.candidates else imp
-                )
+                primary = _primary_pip_name(resolution, imp)
                 if logging.getLogger().isEnabledFor(logging.DEBUG):
                     logging.debug(
                         "Resolved import %s to candidates %s",

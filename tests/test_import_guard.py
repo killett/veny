@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import veny
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -18,20 +20,29 @@ def run_python(source):
 
 
 def test_veny_exits_with_an_install_message_when_emmykit_is_missing():
+    # Bug caught: either half of the message naming a floor other than the
+    # one veny enforces -- an install hint left at an old floor installs an
+    # emmykit veny then refuses. 0.4.0 is pyproject.toml's own
+    # `emmykit>=0.4.0`; the message is asserted whole because the floor
+    # appears in it twice and a substring check passes with one copy wrong.
     result = run_python("import sys; sys.modules['emmykit'] = None; import veny.cli")
 
     assert result.returncode != 0
-    assert "emmykit" in result.stderr
-    assert "pip install" in result.stderr
-    assert "0.4.0" in result.stderr
+    assert result.stderr == (
+        "veny requires the emmykit package (>=0.4.0), which is not installed.\n"
+        "Install it with:  pip install 'emmykit>=0.4.0'\n"
+    )
     assert result.stdout == ""
 
 
 def test_veny_imports_normally_when_emmykit_is_present():
+    # Compared against the version this process imported rather than a
+    # literal: src/veny/__init__.py is the only place the number lives
+    # (RELEASING.md), so a literal here turned red on every release bump.
     result = run_python("import veny.cli; import veny; print(veny.__version__)")
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "0.2.2"
+    assert result.stdout.strip() == veny.__version__
 
 
 def test_veny_exits_with_an_upgrade_message_when_emmykit_is_too_old():
@@ -52,8 +63,11 @@ def test_veny_exits_with_an_upgrade_message_when_emmykit_is_too_old():
     result = run_python(source)
 
     assert result.returncode != 0
-    assert "0.4.0" in result.stderr
-    assert "pip install" in result.stderr
+    # Whole message, for the reason given in the missing-emmykit test above.
+    assert result.stderr == (
+        "veny requires emmykit >= 0.4.0; found 0.3.4.\n"
+        "Upgrade it with:  pip install -U 'emmykit>=0.4.0'\n"
+    )
     assert result.stdout == ""
 
 
@@ -73,5 +87,8 @@ def test_veny_exits_when_emmykit_reports_no_version():
     result = run_python(source)
 
     assert result.returncode != 0
-    assert "0.4.0" in result.stderr
+    assert result.stderr == (
+        "veny requires emmykit >= 0.4.0; found unknown.\n"
+        "Upgrade it with:  pip install -U 'emmykit>=0.4.0'\n"
+    )
     assert result.stdout == ""

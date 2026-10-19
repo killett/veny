@@ -76,9 +76,6 @@ def a_settings(**overrides: object) -> settings_module.Settings:
     return dataclasses.replace(base, **overrides)  # type: ignore[arg-type]
 
 
-_a_settings = a_settings
-
-
 def a_requirements(**overrides: object) -> state.Requirements:
     """A Requirements with every field set, for tests that vary one of them.
 
@@ -102,9 +99,6 @@ def a_requirements(**overrides: object) -> state.Requirements:
         extra_requirements={},
     )
     return dataclasses.replace(base, **overrides)  # type: ignore[arg-type]
-
-
-_a_requirements = a_requirements
 
 
 def test_settings_collections_cannot_be_mutated_by_a_consumer() -> None:

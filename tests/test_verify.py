@@ -10,13 +10,15 @@ The rest of the file is the verification suite that used to live in
 tests/test_split_imports.py, moved here with the twelve symbols it exercises
 when they became veny.verify. None of it constructs an Options any more:
 verify's functions take the paths, names and flags they actually read, so the
-tests hand them the same things cli.py does.
+tests hand them the same things pipeline.py does.
 """
 
 import contextlib
 import logging
+import os
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -58,6 +60,43 @@ def test_a_live_import_check_reports_the_distribution_that_provided_it(tmp_path)
     assert after.imported is False
     assert after.rejection_kind == "import_failed"
     assert "venytest" in after.detail
+
+
+def test_debug_logging_carries_the_import_checks_stdout_and_stderr(
+    tmp_path, monkeypatch, caplog
+):
+    """At DEBUG, the check's stdout and its stderr are each logged once, in order.
+
+    A bug that would make this fail: dropping either debug line, logging one
+    stream twice, or swapping result.stdout and result.stderr -- each loses the
+    child's own diagnostics from a --debug run, where they are the only record
+    of why an import check said what it said.
+
+    Expected values: the stderr text is written by a module this test creates,
+    so it can only reach the log through the child's stderr; "All 1 (out of 1)"
+    is the check script's summary for exactly one group that imports.
+    """
+    (tmp_path / "venytest_stderr_marker.py").write_text(
+        "import sys\nsys.stderr.write('MARKER-on-stderr\\n')\n"
+    )
+    monkeypatch.setenv("PYTHONPATH", os.fspath(tmp_path))
+
+    with caplog.at_level(logging.DEBUG):
+        imported, _ = verify.run_import_check_in_venv(
+            sys.executable, [["venytest_stderr_marker"]]
+        )
+
+    assert imported is True
+    stream_logs = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("check_packages_in_venv std")
+    ]
+    assert len(stream_logs) == 2
+    assert stream_logs[0].startswith("check_packages_in_venv stdout:\n")
+    assert "All 1 (out of 1) packages imported successfully." in stream_logs[0]
+    assert "MARKER-on-stderr" not in stream_logs[0]
+    assert stream_logs[1] == "check_packages_in_venv stderr:\nMARKER-on-stderr\n"
 
 
 def test_source_import_names_returns_all_imports_when_reqs_is_off():
@@ -850,10 +889,11 @@ def _verify_and_repair(
         index:              The AliasIndex to resolve against and record in.
         records:            The uninstalled records the install was asked for.
         source_names:       The user's own source imports. Defaults to every
-                            record's import name, which is what Options carries
+                            record's import name, which is what pipeline passes
                             for a run with no --reqs entries.
         extra_requirements: The --reqs entries kept in a rewritten
                             requirements.txt. Defaults to none.
+        rawlog:             Whether the run suppresses informational logging.
 
     Returns:
         The final uninstalled records verify_and_repair_imports produced.
@@ -1392,7 +1432,7 @@ def test_every_venv_facing_call_in_the_repair_pass_addresses_the_same_venv(
         "uninstall": [],
     }
 
-    def recording(channel, inner, positional_is_python=True):
+    def recording(channel, inner):
         def wrapper(python_or_command, *args, **kwargs):
             seen[channel].append(python_or_command)
             return inner(python_or_command, *args, **kwargs)

@@ -1,5 +1,7 @@
 # Phase 4c wiring index — every argument, measured
 
+**Line numbers STALE since the 2026-10-19 hygiene pass** (branch `hygiene-2026-10-19`, from `bcc60b6`), which edited `pipeline.py`, `cache_search.py` and `cli.py`; rows below an edit no longer resolve by line, so resolve them by symbol. The sweep was not re-run. The pass was behaviour-preserving, and the commits that rewrote a call-site argument — the `"failed-"` literals that became `venv_cache.FAILED_PREFIX` (`832a7da`), argparse's `prog` (`08ca538`) — each record the named test that a deliberate mutation of that argument failed.
+
 **What was swept.** Every argument at every call site phase 4c created or
 changed — **189 arguments across 55 distinct callees** in
 `src/veny/last_used.py`, `src/veny/pipeline.py`, `src/veny/cache_search.py`
