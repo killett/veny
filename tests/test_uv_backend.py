@@ -694,7 +694,7 @@ def test_setup_virtualenv_lets_the_repair_pass_name_the_package_it_settled_on(
     assert "provides the import" not in caplog.text
 
 
-def _a_manifest_pass_that_renames(monkeypatch, tmp_path, repaired):
+def _a_manifest_pass_that_renames(monkeypatch, repaired):
     """Wire setup_virtualenv so the real record_venv_state runs and renames.
 
     The repair replaces the pip name the folder was named after, so the name
@@ -747,7 +747,7 @@ def test_setup_virtualenv_lets_the_manifest_pass_explain_a_rename(
         tmp_path / "normal"
     )
     settings = dataclasses.replace(settings, rawlog=False)
-    _a_manifest_pass_that_renames(monkeypatch, tmp_path, repaired)
+    _a_manifest_pass_that_renames(monkeypatch, repaired)
 
     with caplog.at_level(logging.INFO):
         _, handle, _ = pipeline.setup_virtualenv(
@@ -771,7 +771,7 @@ def test_setup_virtualenv_lets_the_manifest_pass_explain_a_rename(
         _a_wired_run(tmp_path / "raw")
     )
     quiet_settings = dataclasses.replace(quiet_settings, rawlog=True)
-    _a_manifest_pass_that_renames(monkeypatch, tmp_path, repaired)
+    _a_manifest_pass_that_renames(monkeypatch, repaired)
 
     with caplog.at_level(logging.INFO):
         _, handle, _ = pipeline.setup_virtualenv(

@@ -1431,7 +1431,7 @@ def test_every_venv_facing_call_in_the_repair_pass_addresses_the_same_venv(
         "uninstall": [],
     }
 
-    def recording(channel, inner, positional_is_python=True):
+    def recording(channel, inner):
         def wrapper(python_or_command, *args, **kwargs):
             seen[channel].append(python_or_command)
             return inner(python_or_command, *args, **kwargs)
