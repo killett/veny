@@ -57,8 +57,8 @@ if _emmykit_version() < _MINIMUM_EMMYKIT:
 from . import environment, pipeline, settings  # noqa: E402
 
 # An import name paired with the pip package that provides it. Defined in
-# alias_index, which imports nothing of veny's, and re-exported here because
-# veny is where it is used.
+# alias_index, which imports nothing of veny's but the leaf pypi_client, and
+# re-exported here because veny is where it is used.
 ResolvedImport = alias_index.ResolvedImport
 
 # The installed command's name, fixed rather than derived from argv[0]: under
