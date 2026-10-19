@@ -528,3 +528,38 @@ def test_a_file_that_is_not_python_is_a_usage_error_not_a_traceback(
     monkeypatch.setattr(sys, "argv", ["veny", os.fspath(not_python)])
 
     assert cli.main() == 2
+
+
+def test_a_relative_import_never_becomes_an_empty_import_name(tmp_path: Path) -> None:
+    """`from . import sibling` names local code; it must not add "" to the imports.
+
+    Concrete bug this catches: the collector took the top-level package from
+    the ImportFrom node's module, which is None for `from . import sibling`,
+    and recorded "" -- an import name classification turns into a record whose
+    pip name is the empty string. The called function's own relative import
+    catches a fix that guards only the top level.
+
+    Expected value: no imports at all. A relative import names the script's
+    own package's code, never a distribution, and os is standard library.
+    """
+    script = tmp_path / "s.py"
+    script.write_text(
+        "import os\n"
+        "from . import sibling\n"
+        "\n"
+        "def load():\n"
+        "    from . import other\n"
+        "    return other\n"
+        "\n"
+        "os, sibling, load()\n"
+    )
+    scan = ImportScan()
+
+    pipeline.find_imports_in_script(
+        _a_settings(cwd=tmp_path, rawlog=True),
+        scan,
+        script,
+        is_stdlib=stdlib_index.for_running_interpreter().__contains__,
+    )
+
+    assert scan.all_imports == set()

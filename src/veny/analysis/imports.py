@@ -206,6 +206,10 @@ class ImportFunctionCollector(ast.NodeVisitor):
             full_name = f"{module}.{alias.name}" if module else alias.name
             name = alias.asname or alias.name
             self.aliases[name] = full_name
+            # `from . import x` has no module, so no top-level package: it
+            # names the script's own package, never a distribution.
+            if not top_level_package:
+                continue
             if self.current_function:
                 self.module_info.functions[
                     self.current_function
