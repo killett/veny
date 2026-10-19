@@ -1787,9 +1787,12 @@ def test_declining_the_blank_slate_confirmation_deletes_nothing(monkeypatch, tmp
     status = cli.main()
 
     assert status == 0
+    # The prompt names every kind of file a "y" deletes -- the same list the
+    # deletion's own log line and --help give. It used to name only .json,
+    # then deleted .out, .err and .pkl files too.
     assert asked == [
         "Are you sure you want to delete everything in ~/veny/ and all veny"
-        " .json files in the current directory? (y/n) "
+        " .out and .err and .json and .pkl files in the current directory? (y/n) "
     ]
     assert state_dir.exists()
 

@@ -464,7 +464,8 @@ def blank_slate(settings: Settings, args: argparse.Namespace) -> int:
     if not args.yes:
         if not ek.prompt_then_confirm(
             f"Are you sure you want to delete everything in ~/{settings.my_name}/"
-            f" and all {settings.my_name} .json files in the current directory? (y/n) "
+            f" and all {settings.my_name} .out and .err and .json and .pkl files"
+            " in the current directory? (y/n) "
         ):
             logging.info("Exiting without deleting anything.")
             return 0
