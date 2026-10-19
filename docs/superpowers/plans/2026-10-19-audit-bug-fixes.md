@@ -126,7 +126,7 @@ see it.
 
 - [x] Task 1 — test isolation (bug 6)
 - [x] Task 2 — empty interpreter to the alias probe (bug 4)
-- [ ] Task 3 — dangling venv interpreter (bug 5)
+- [x] Task 3 — dangling venv interpreter (bug 5)
 - [ ] Task 4 — empty relative-import name (bug 3)
 - [ ] Task 5 — function-local module imports (bug 1)
 - [ ] Task 6 — local packages (bug 2)

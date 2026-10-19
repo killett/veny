@@ -96,6 +96,7 @@ bugs and should change with the fix, not before it:
   **Corrected with that fix** (audit bug-fix plan, Task 2).
 - `verify.check_packages_in_venv`'s "This function does not raise
   exceptions" — part of the dangling-interpreter `FileNotFoundError` bug.
+  **Made true by that fix** (audit bug-fix plan, Task 3).
 
 ### Candidates for a later pass
 

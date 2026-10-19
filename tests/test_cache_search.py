@@ -394,6 +394,53 @@ def test_check_venv_dir_checks_the_name_the_user_wrote_not_the_distributions_oth
     assert check(stdlib, requirements, venv_dir) is False
 
 
+def test_a_cached_venv_whose_interpreter_is_gone_is_a_cache_miss(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A matching venv that cannot start its interpreter must lose, not crash.
+
+    A cached venv's bin/python is a link to a base interpreter, and that
+    interpreter can be uninstalled or upgraded away while the manifest still
+    matches this run. Nothing is stubbed below the cache search: the real
+    import check meets the dangling link.
+
+    Concrete bug this catches: the FileNotFoundError from starting the check
+    travelled out of find_match_dir_in_cache, so the run died with a traceback
+    instead of building a fresh venv. Expected value: None, a cache miss --
+    the one answer that lets the run go on to build.
+    """
+    venv_dir = a_cached_venv(
+        tmp_path,
+        "myenv-py3.12-20260814-091500-thing-pkg",
+        [venv_cache.PackageRecord("thing", "thing-pkg", "1.0.0", None)],
+    )
+    python = venv_dir / "bin" / "python"
+    python.parent.mkdir()
+    python.symlink_to(tmp_path / "uninstalled" / "python3.12")
+    stdlib = a_stdlib()
+    requirements = a_reqs({ResolvedImport("thing", "thing-pkg")})
+    requirements = dataclasses.replace(requirements, all_imports=frozenset({"thing"}))
+    args = argparse.Namespace(
+        latest=True, oldest=False, last_used=False, smallest=False
+    )
+
+    with caplog.at_level(logging.WARNING):
+        chosen = cache_search.find_match_dir_in_cache(
+            args,
+            my_dir=tmp_path,
+            venv_name="myenv",
+            uninstalled=set(requirements.uninstalled),
+            extra_requirements=requirements.extra_requirements,
+            source_names=frozenset({"thing"}),
+            tag=cache_search.interpreter_tag(stdlib),
+            rawlog=True,
+            load_last_used=_never_called,
+        )
+
+    assert chosen is None
+    assert f"Could not run {python} to check its imports" in caplog.text
+
+
 def _never_called() -> state.LastUsed | None:
     """A load_last_used the --latest path must never reach.
 
