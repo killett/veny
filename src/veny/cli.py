@@ -82,7 +82,7 @@ def parse_arguments() -> argparse.Namespace:
         SystemExit: --version or a bare invocation; argparse's own behaviour.
     """
     parser = argparse.ArgumentParser(
-        prog="veny", description="Run a python script with optional flags."
+        prog=MY_NAME, description="Run a python script with optional flags."
     )
     parser.add_argument(
         "-v", "--version", action="version", version=f"%(prog)s {__version__}"
