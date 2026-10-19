@@ -336,7 +336,6 @@ else:
     result = subprocess.run(the_command, capture_output=True, text=True, check=False)
     if logging.getLogger().isEnabledFor(logging.DEBUG):
         logging.debug("check_packages_in_venv stdout:\n%s", result.stdout)
-    if logging.getLogger().isEnabledFor(logging.DEBUG):
         logging.debug("check_packages_in_venv stderr:\n%s", result.stderr)
     return "packages imported successfully" in result.stdout, result.stdout
 
