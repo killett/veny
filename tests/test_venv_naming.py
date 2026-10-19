@@ -38,8 +38,6 @@ def test_interpreter_tag_comes_from_the_stdlib_index() -> None:
     so "3.12" can only have come from the stdlib index.
     """
     stdlib = a_stdlib()
-    assert stdlib.python_version == (
-        3,
-        12,
-    )  # sanity: the two sources really disagree
+    # The index's version is the only source the tag can come from.
+    assert stdlib.python_version == (3, 12)
     assert cache_search.interpreter_tag(stdlib) == "3.12"

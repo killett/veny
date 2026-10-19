@@ -10,7 +10,7 @@ The rest of the file is the verification suite that used to live in
 tests/test_split_imports.py, moved here with the twelve symbols it exercises
 when they became veny.verify. None of it constructs an Options any more:
 verify's functions take the paths, names and flags they actually read, so the
-tests hand them the same things cli.py does.
+tests hand them the same things pipeline.py does.
 """
 
 import contextlib
@@ -889,10 +889,11 @@ def _verify_and_repair(
         index:              The AliasIndex to resolve against and record in.
         records:            The uninstalled records the install was asked for.
         source_names:       The user's own source imports. Defaults to every
-                            record's import name, which is what Options carries
+                            record's import name, which is what pipeline passes
                             for a run with no --reqs entries.
         extra_requirements: The --reqs entries kept in a rewritten
                             requirements.txt. Defaults to none.
+        rawlog:             Whether the run suppresses informational logging.
 
     Returns:
         The final uninstalled records verify_and_repair_imports produced.

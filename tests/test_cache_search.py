@@ -81,7 +81,7 @@ def check(
 ) -> bool:
     """check_venv_dir wired the way find_match_dir_in_cache wires it.
 
-    source_names is computed once by main() now and passed down, rather than
+    source_names is computed by pipeline.run and passed down, rather than
     rebuilt inside check_venv_dir; this reproduces that one wiring. No caller
     here ever sets --reqs, so the getattr(args, "reqs", False) this used to
     read off an Options is always False -- inlined rather than threaded
@@ -934,8 +934,8 @@ def test_a_last_used_hit_still_reads_and_matches_its_own_manifest(
 ) -> None:
     """The satisfies skip must not leak into the last-used path.
 
-    The last-used path has no CacheCandidate -- the folder comes from a
-    previous run's options JSON, not from cache_candidates' scan -- so it has
+    The last-used path has no CacheCandidate -- the folder comes from the
+    previous run's last-used record, not from cache_candidates' scan -- so it has
     no manifest that has already passed venv_cache.satisfies. It must keep
     reading its own manifest and keep calling satisfies on it, exactly as
     before the candidate parameter existed.
@@ -1086,7 +1086,7 @@ def test_every_branch_hands_check_venv_dir_the_same_description_of_the_run(
     PROGRESS records for the bulk check.
 
     The expected values are derived from the run's own inputs (the same
-    wanted_packages/source_import_names calls main() makes), not read back
+    wanted_packages/source_import_names calls the run makes), not read back
     off the production call.
 
     A spy proves the wiring but not that the wiring does anything, so the test
