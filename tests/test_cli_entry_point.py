@@ -171,15 +171,15 @@ def _drive_main(
     """Run cli.main() in process with every subprocess and scan boundary stubbed.
 
     Phase 3e split the sequencing this helper drives out of main() and into
-    pipeline.run; main() is now argv, four exception handlers and an exit
+    pipeline.run; main() is now argv, three exception handlers and an exit
     status. The helper still drives the whole run through cli.main, because
     that is the wiring under test: it parses argv, resolves an interpreter,
     scans the script, classifies its imports, then picks one of four
     branches. Everything outside the branch under test is replaced -- the
     interpreter probe, the custom-module scan, the import classification, the
-    alias index, the subprocess that would run the user's script, and
-    emmykit's logging and options-file side effects -- leaving the wiring as
-    the only live code.
+    alias index, the subprocess that would run the user's script, emmykit's
+    logging setup and error dump, and logging.shutdown -- leaving the wiring
+    as the only live code.
 
     Args:
         script_args: Everything the user typed after the script itself.
@@ -365,7 +365,7 @@ def test_main_lets_the_cache_search_speak_on_a_run_that_did_not_ask_for_raw_logs
     with caplog.at_level(logging.INFO):
         cli.main()
 
-    # From cache_search.find_match_dir_in_cache (cli.py's rawlog argument to it).
+    # From cache_search.find_match_dir_in_cache (pipeline.run's rawlog argument to it).
     assert (
         "Checking the cache for a virtual environment with all the required packages"
         in caplog.text
@@ -656,12 +656,12 @@ def test_main_drops_the_failed_prefix_from_the_venv_it_just_built(
 
 
 def test_main_asks_the_last_used_loader_about_this_script(monkeypatch, tmp_path):
-    """--feeling-lucky's five arguments are wired in exactly one place.
+    """--feeling-lucky's arguments are wired in exactly one place.
 
     The lucky path skips analysis entirely and reruns the script under
     whichever interpreter the previous run recorded, so its arguments decide
-    which record is consulted. Measured by substitution: all five could be
-    replaced with all 338 tests green.
+    which record is consulted. Measured by substitution in phase 3d, when
+    there were five: all five could be replaced with all 338 tests green.
 
     Concrete bug this catches: a wrong `python_script` names another
     script's last-used record in the same directory, and --feeling-lucky runs
@@ -1258,7 +1258,7 @@ def _run_with_the_real_custom_module_scan(monkeypatch, tmp_path, workdir, argv):
 def test_main_lets_the_custom_module_scan_explain_an_empty_cache(
     monkeypatch, tmp_path, caplog
 ):
-    """The Settings pipeline.run builds must carry this run's own name, cwd, rawlog and cache choice.
+    """The Settings cli.main builds must carry this run's own name, cwd, rawlog and cache choice.
 
     Behaviour under test: the third of phase 3d's five open `rawlog` holes --
     the `Settings(...)` handed to dict_of_custom_modules -- together with the
