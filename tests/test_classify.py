@@ -502,8 +502,9 @@ def test_add_dependencies_resolves_dependency_names_through_the_alias_index() ->
     ``ResolvedImport(import_name=name, pip_name=name)`` instead of routing it
     through resolve_records and veny runs ``pip install widgetlib`` for a
     package whose distribution is named ``widget-lib-pypi`` -- the exact
-    failure the import-name/pip-name split exists to prevent (Options'
-    also_needs comment states both keys and values are *import* names).
+    failure the import-name/pip-name split exists to prevent (the comment on
+    settings.DEFAULT_ALSO_NEEDS states both keys and values are *import*
+    names).
     """
     expanded = classify.add_dependencies(
         {ResolvedImport(import_name="toplevel", pip_name="toplevel")},
@@ -547,7 +548,7 @@ def test_split_imports_expands_also_needs_onto_the_uninstalled_records(
     """The run's also_needs table reaches classification through pipeline.split_imports.
 
     The three tests above drive ``classify.add_dependencies`` directly, so
-    none of them touches the wiring that hands it ``options.also_needs``.
+    none of them touches the wiring that hands it ``settings.also_needs``.
     This one goes the whole way through the adapter production uses.
 
     Concrete bug this catches: pass ``also_needs={}`` (or drop the argument)

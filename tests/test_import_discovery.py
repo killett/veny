@@ -81,14 +81,15 @@ def _scan(script: Path, custom_modules: dict[str, Path]) -> ImportScan:
 def test_the_scan_adapter_lets_the_scanner_name_the_files_it_opens(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """find_imports_in_script builds the Settings the scanner logs through.
+    """find_imports_in_script hands the scanner the Settings it logs through.
 
-    `rawlog` is one of five fields pipeline.find_imports_in_script copies onto the
-    Settings it hands analysis.scan. Measured 2026-08-19 across all 17
-    `rawlog=` sites in cli/cache_search/last_used/verify: substituting the
-    wrong-but-type-correct `True` left 16 of them with the whole suite green,
-    this one included -- every scan test here sets rawlog=True and asserts on
-    the imports found, never on a log record.
+    `rawlog` is the Settings field analysis.scan reads, and
+    pipeline.find_imports_in_script passes the run's own Settings straight
+    through (it once copied five fields onto a new one). Measured 2026-08-19
+    across all 17 `rawlog=` sites in cli/cache_search/last_used/verify:
+    substituting the wrong-but-type-correct `True` left 16 of them with the
+    whole suite green, this one included -- every scan test here sets
+    rawlog=True and asserts on the imports found, never on a log record.
 
     Concrete bug this catches: `rawlog=True` in that Settings and the
     "Processing module: X" line vanishes for every file the scan walks into.
@@ -353,10 +354,9 @@ def test_the_scan_records_the_local_files_folders_and_sys_path_it_followed(
     happily wrote its findings into an object the run then threw away.
 
     Concrete bug this catches: the accumulation those three fields exist for.
-    The scanner recurses through the script's local modules, calling itself
-    once per reachable file, and relies on all seven fields carrying across
-    those calls; a fresh container per call resets them, so a module already
-    resolved is resolved again -- and
+    The scanner walks the script's local modules breadth-first in one call,
+    writing every finding into the scan it was handed; hand it a fresh
+    container instead of the run's own and
     the report at the end of the run lists none of the local files or package
     folders the scan actually followed, which is the only place a user sees
     that veny read their own code rather than just their imports.
