@@ -52,8 +52,16 @@ the emmykit 0.7.0 bridge (below), is released:
 - Verified with `uv tool run --from veny==0.2.3 veny --version`; that run
   resolved emmykit 0.6.3.
 
-When emmykit 0.7.0 is out, the follow-up is to require `emmykit>=0.7`, call
-`ek.find_python` directly, and drop the bridge.
+emmykit 0.7.0 is on PyPI (2026-10-19), and the follow-up is on branch
+`emmykit-0.7-floor`, to ship as **0.2.4** together with the venv-bookkeeping fix
+below:
+- `a236e96` moves the import guard, pyproject and pixi.toml to `emmykit>=0.7.0`,
+  and the lock to emmykit 0.7.0 (the only package that changes). A new guard
+  test refuses 0.6.3.
+- `688392e` makes `pipeline.run` call `ek.find_python()` directly and log
+  `ek.MIN_PYTHON_VERSION`. The bridge and its five tests are gone.
+
+The suite gives 498 against the real emmykit 0.7.0, and mypy stays at 23.
 
 Branch `venv-bookkeeping-before-launch` (plan
 `docs/superpowers/plans/2026-10-19-venv-bookkeeping-before-launch.md`, all
@@ -111,8 +119,8 @@ An absolute path from `find_python` is safe downstream:
 `environment.venv_build_interpreter` and `stdlib_index._is_running_interpreter`
 both re-resolve with `shutil.which`.
 
-Later, once veny can require `emmykit>=0.7`: call `ek.find_python` directly
-and drop the bridge.
+That follow-up is done on branch `emmykit-0.7-floor` (see **Next action**):
+veny now requires `emmykit>=0.7.0` and calls `ek.find_python` directly.
 
 ### Hygiene pass (2026-10-19) — complete, merged to `main` at `d3e5883`, pushed
 
