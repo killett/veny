@@ -205,7 +205,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/virtualenv-21.7.1-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/wcwidth-0.8.2-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
-      - pypi: https://files.pythonhosted.org/packages/7d/95/f318326eeac4350228404dbdfd90bc82e0cc0c98548eaff214f0533db87d/emmykit-0.4.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/7f/cc/6e60af6738cc3dfa879f747acd59433bc7910e81f1a7ee6bdf22870be798/emmykit-0.7.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/8d/c4/97fdd4fca11d06633bb500849f70e4e6b201bcba3833894732e709be2d60/uv-0.12.3-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       linux-aarch64:
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/_openmp_mutex-4.5-20_gnu.conda
@@ -401,7 +401,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/virtualenv-21.7.1-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/wcwidth-0.8.2-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
-      - pypi: https://files.pythonhosted.org/packages/7d/95/f318326eeac4350228404dbdfd90bc82e0cc0c98548eaff214f0533db87d/emmykit-0.4.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/7f/cc/6e60af6738cc3dfa879f747acd59433bc7910e81f1a7ee6bdf22870be798/emmykit-0.7.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/c4/46/ab0906c8c3b6eeaf2412ab5af6077a38930db90e2c99c1b82e066f240a81/uv-0.12.3-py3-none-manylinux_2_28_aarch64.whl
       osx-64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_3.conda
@@ -541,7 +541,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/ukkonen-1.1.0-py313h252b9d7_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/yaml-0.2.5-h4132b18_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
-      - pypi: https://files.pythonhosted.org/packages/7d/95/f318326eeac4350228404dbdfd90bc82e0cc0c98548eaff214f0533db87d/emmykit-0.4.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/7f/cc/6e60af6738cc3dfa879f747acd59433bc7910e81f1a7ee6bdf22870be798/emmykit-0.7.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/ed/52/7d23602e140bdd5bb25ffa8bf3943a86688e8cd558a9894dfbb83728e943/uv-0.12.3-py3-none-macosx_10_12_x86_64.whl
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_3.conda
@@ -682,7 +682,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/ukkonen-1.1.0-py313h5c29297_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/yaml-0.2.5-h925e9cb_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
-      - pypi: https://files.pythonhosted.org/packages/7d/95/f318326eeac4350228404dbdfd90bc82e0cc0c98548eaff214f0533db87d/emmykit-0.4.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/7f/cc/6e60af6738cc3dfa879f747acd59433bc7910e81f1a7ee6bdf22870be798/emmykit-0.7.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/e4/66/ba257c91d69921d773f523c9e4c3ffb04e233694c415517f5ef797403a4f/uv-0.12.3-py3-none-macosx_11_0_arm64.whl
 packages:
 - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
@@ -6026,13 +6026,12 @@ packages:
     - zstd >=1.5.7,<1.6.0a0
   size: 433413
   timestamp: 1764777166076
-- pypi: https://files.pythonhosted.org/packages/7d/95/f318326eeac4350228404dbdfd90bc82e0cc0c98548eaff214f0533db87d/emmykit-0.4.0-py3-none-any.whl
+- pypi: https://files.pythonhosted.org/packages/7f/cc/6e60af6738cc3dfa879f747acd59433bc7910e81f1a7ee6bdf22870be798/emmykit-0.7.0-py3-none-any.whl
   name: emmykit
-  version: 0.4.0
-  sha256: 7ff8a2f8219f69bf2fa95433ae2e5a9a0e5795c6d3f8f8cd9f3dac5f2cab4aab
+  version: 0.7.0
+  sha256: 41d59579a4fcc0b7da4e80e5fb1c0b23aa66ba98ca1ca3777879b14639fccbf4
   requires_dist:
   - astropy ; extra == 'all'
-  - atomicwrites ; extra == 'all'
   - autopep8 ; extra == 'all'
   - beautifulsoup4 ; extra == 'all'
   - filelock ; extra == 'all'
@@ -6058,7 +6057,6 @@ packages:
   - numpy ; extra == 'datetime'
   - pandas ; extra == 'datetime'
   - python-dateutil ; extra == 'datetime'
-  - atomicwrites ; extra == 'files'
   - filelock ; extra == 'files'
   - requests ; extra == 'files'
   - beautifulsoup4 ; extra == 'html'
@@ -6075,7 +6073,7 @@ packages:
   - pulsectl ; extra == 'media'
   - ftfy ; extra == 'text'
   - unidecode ; extra == 'text'
-  requires_python: '>=3.12,<3.14'
+  requires_python: '>=3.12'
 - pypi: https://files.pythonhosted.org/packages/8d/c4/97fdd4fca11d06633bb500849f70e4e6b201bcba3833894732e709be2d60/uv-0.12.3-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
   name: uv
   version: 0.12.3

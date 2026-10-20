@@ -17,7 +17,7 @@ from . import alias_index
 
 # The oldest emmykit veny runs on, and its spelling in the two messages below.
 # Keep in step with pyproject.toml's `emmykit>=` dependency.
-_MINIMUM_EMMYKIT: Final[tuple[int, int, int]] = (0, 4, 0)
+_MINIMUM_EMMYKIT: Final[tuple[int, int, int]] = (0, 7, 0)
 _MINIMUM_EMMYKIT_TEXT: Final[str] = ".".join(map(str, _MINIMUM_EMMYKIT))
 
 try:
