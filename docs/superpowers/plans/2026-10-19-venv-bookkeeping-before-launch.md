@@ -39,7 +39,12 @@ stays unchanged.
     files` or fewer. The `--exclude` is required: `tempy/` is the user's
     untracked scratch directory (gitignored at `6346830`), and its `veny.py`
     makes plain `mypy .` stop with `Duplicate module named "veny"`.
-  - `pixi run pre-commit run --all-files` → every hook passes
+  - `pixi run pre-commit run --all-files` → every hook passes **except
+    `mypy`**. That hook is a whole-repo `mypy .` that cannot pass on the
+    existing errors (PROGRESS.md gotcha "`pixi run typecheck` still cannot
+    pass"), and with `tempy/` present it stops at `Duplicate module named
+    "veny"`. Its real count is the mypy line above. Do not run
+    `pre-commit install` (same gotcha).
 - **Baseline** on this branch: 493 passed, mypy 23, ruff and format clean.
   Expected after Task 1: 495 passed. After Task 2: 496 passed.
 - **Do not touch `tempy/`.**
@@ -523,7 +528,8 @@ cmp src/veny/pipeline.py "$SCRATCH/pipeline.py.orig" && echo restored
   `**Next action:** Task 2 of`.
 
 - [ ] **Step 8: Run the full gate** (Global Constraints). Expected: 495
-  passed, mypy 23 or fewer, ruff, format and pre-commit clean. `git status
+  passed, mypy 23 or fewer, ruff and format clean, every pre-commit hook
+  but the known `mypy` one passing. `git status
   --short` lists only the five files under **Files**.
 
 - [ ] **Step 9: Commit.**
@@ -808,7 +814,8 @@ def test_a_venv_veny_builds_keeps_working_scripts_after_it_is_renamed(
   `**Next action:** Task 3 of`.
 
 - [ ] **Step 8: Run the full gate** (Global Constraints). Expected: 496
-  passed, mypy 23 or fewer, ruff, format and pre-commit clean. `git status
+  passed, mypy 23 or fewer, ruff and format clean, every pre-commit hook
+  but the known `mypy` one passing. `git status
   --short` lists only the five files under **Files**.
 
 - [ ] **Step 9: Commit.**
@@ -853,7 +860,8 @@ next-action line describe the new behaviour.
 - [ ] The Execution record holds the commands run and their observed output
   for every criterion above, plus Tasks 1 and 2's red and green lines.
 - [ ] PROGRESS.md's gotcha and next-action line match Step 4 below.
-  `pixi run pre-commit run --all-files` passes.
+  `pixi run pre-commit run --all-files` passes every hook but the known
+  `mypy` one.
 
 **Verify:** the commands in Steps 2-3, with output pasted into the Execution record.
 
