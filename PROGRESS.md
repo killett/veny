@@ -44,7 +44,11 @@ gotchas ledger.
   | **4b** `docs/superpowers/plans/2026-08-21-last-used-persistence.md` (executed, complete on branch `last-used-persistence`) | The `LastUsed` persistence change (design amendment 9), which breaks the `ek.Options` coupling and deletes `run_options.py`, the `cli.Options` re-export, `pathlibcutoff` and its two readers, and the test references in both spellings. Also deletes `json_types.py` and the pickle `PATHLIB_CUTOFF`, and stops `find_match_dir_in_cache` mutating the `argparse.Namespace` (user rulings, 2026-08-21). |
   | **4c** `docs/superpowers/plans/2026-08-23-behaviour-changes-4c.md` (executed, complete on branch `behaviour-changes-4c`) | The remaining behaviour changes: the in-virtualenv guard (USER RULING 2026-08-20), `--feeling-lucky`'s missing signal normalization, latent defects 1 and 3, and the residual dead arguments. |
 
-**Next action:** **none -- a free choice from Deferred items.** The audit
+**Next action:** ship the emmykit 0.7.0 bridge (below) as veny 0.2.3
+**before emmykit 0.7.0 is uploaded to PyPI**. Merge `emmykit-0.7-compat` to
+`main`, push, let CI go green, then bump to 0.2.3, tag `v0.2.3`, and push the
+tag. Waiting on Emmy's go-ahead to push and release. After that, it's a free
+choice from Deferred items. The audit
 bug fixes (`docs/superpowers/plans/2026-10-19-audit-bug-fixes.md`, all eight
 tasks, execution record and live runs at its end) are merged to `main` at
 `6026948` and pushed, CI green on all four jobs; the hygiene pass before them
@@ -63,6 +67,38 @@ record, kept for its decisions and gotchas.
 
 Future releases need only: bump `__version__` in `src/veny/__init__.py`,
 commit, tag `vX.Y.Z`, push the tag. See `RELEASING.md`.
+
+### emmykit 0.7.0 bridge (2026-10-19): on branch `emmykit-0.7-compat`, not pushed
+
+emmykit 0.7.0 (breaking, not yet on PyPI) makes these changes:
+- `find_preferred_python_version` becomes `find_python`, which returns an
+  absolute path instead of a bare name.
+- The float `PY_VERSION` becomes the tuple `MIN_PYTHON_VERSION`.
+
+veny 0.2.2 allows `emmykit>=0.4.0,<1.0`. Once 0.7.0 is published, a fresh
+install would raise `AttributeError` at `pipeline.run` on every run. Against
+the 0.7.0 tree, 56 tests fail.
+
+The fix (`2faf46a`):
+- `pipeline._find_target_python()` and `_python_floor()` look up either API
+  with `getattr` and a default, so mypy is quiet against whichever emmykit is
+  installed and B009 doesn't fire.
+- Tests patch `pipeline._find_target_python` instead of the emmykit name.
+- The two differential scripts set both names, because the old trees they
+  drive call emmykit directly.
+- New test file: `tests/test_emmykit_python_lookup.py`.
+
+The suite is 493 → 498 and passes against both emmykit 0.4.0 (the lock) and
+the 0.7.0 tree (`PYTHONPATH=<emmykit>/src:src`). mypy stays at its 23-error
+ceiling. `465fd20` corrects pyproject's stale comment that emmykit caps
+Python at `<3.14`; 0.6.0 dropped that cap.
+
+An absolute path from `find_python` is safe downstream:
+`environment.venv_build_interpreter` and `stdlib_index._is_running_interpreter`
+both re-resolve with `shutil.which`.
+
+Later, once veny can require `emmykit>=0.7`: call `ek.find_python` directly
+and drop the bridge.
 
 ### Hygiene pass (2026-10-19) — complete, merged to `main` at `d3e5883`, pushed
 
