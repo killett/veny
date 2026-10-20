@@ -52,9 +52,14 @@ the emmykit 0.7.0 bridge (below), is released:
 - Verified with `uv tool run --from veny==0.2.3 veny --version`; that run
   resolved emmykit 0.6.3.
 
-emmykit 0.7.0 is on PyPI (2026-10-19), and the follow-up is on branch
-`emmykit-0.7-floor`, to ship as **0.2.4** together with the venv-bookkeeping fix
-below:
+**veny 0.2.4 is released (2026-10-19)** with the emmykit 0.7.0 follow-up and the
+venv-bookkeeping fix below:
+- PR #2 merged at `ccfe049`, with CI green.
+- Bump at `e2df479`, tagged `v0.2.4`.
+- The release workflow is green, and the GitHub Release has been cut.
+- Verified with `uv tool run --from veny==0.2.4`, which resolved emmykit 0.7.0.
+
+The follow-up's commits:
 - `a236e96` moves the import guard, pyproject and pixi.toml to `emmykit>=0.7.0`,
   and the lock to emmykit 0.7.0 (the only package that changes). A new guard
   test refuses 0.6.3.
@@ -67,8 +72,7 @@ Branch `venv-bookkeeping-before-launch` (plan
 `docs/superpowers/plans/2026-10-19-venv-bookkeeping-before-launch.md`, all
 three tasks and a final-review fix, with its execution record and live run
 at its end) is merged to `main` at `e6b4ab3` and pushed, CI green on all
-four jobs (run `39360396894`). It is **not yet released**: it lands after
-0.2.3. It fixes the interrupted-run `failed-` venv leak: the
+four jobs (run `39360396894`). It was **released in 0.2.4**. It fixes the interrupted-run `failed-` venv leak: the
 rename and last-used save now come before the launch, and venvs are built
 `--relocatable`. The audit
 bug fixes (`docs/superpowers/plans/2026-10-19-audit-bug-fixes.md`, all eight
@@ -119,7 +123,7 @@ An absolute path from `find_python` is safe downstream:
 `environment.venv_build_interpreter` and `stdlib_index._is_running_interpreter`
 both re-resolve with `shutil.which`.
 
-That follow-up is done on branch `emmykit-0.7-floor` (see **Next action**):
+That follow-up was released in 0.2.4 (see **Next action**):
 veny now requires `emmykit>=0.7.0` and calls `ek.find_python` directly.
 
 ### Hygiene pass (2026-10-19) — complete, merged to `main` at `d3e5883`, pushed
