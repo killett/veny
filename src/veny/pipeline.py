@@ -703,47 +703,6 @@ def setup_virtualenv(
     return requirements, (handle if all_importable else None), install_succeeded
 
 
-def _find_target_python() -> str | None:
-    """Return the interpreter emmykit picks for the user's script, or None.
-
-    emmykit 0.7.0 renamed find_preferred_python_version to find_python, which
-    returns an absolute path instead of a bare command name; everything
-    downstream re-resolves either with shutil.which(). veny allows
-    emmykit>=0.4.0, so both names are looked up by string, which also keeps
-    mypy quiet against whichever emmykit is installed.
-
-    Returns:
-        The interpreter emmykit found, or None if it found none.
-
-    Raises:
-        AttributeError: The installed emmykit has neither function.
-    """
-    find = getattr(ek, "find_python", None) or getattr(
-        ek, "find_preferred_python_version", None
-    )
-    if find is None:
-        raise AttributeError(
-            "emmykit has neither find_python nor find_preferred_python_version"
-        )
-    found: str | None = find()
-    return found
-
-
-def _python_floor() -> str:
-    """Return emmykit's minimum Python version as "X.Y", for log messages.
-
-    emmykit 0.7.0 replaced the float PY_VERSION (3.12) with the tuple
-    MIN_PYTHON_VERSION ((3, 12)); a float cannot spell 3.10.
-
-    Returns:
-        The floor as "major.minor", or "unknown" if emmykit has neither name.
-    """
-    floor = getattr(ek, "MIN_PYTHON_VERSION", None)
-    if floor is not None:
-        return f"{floor[0]}.{floor[1]}"
-    return str(getattr(ek, "PY_VERSION", "unknown"))
-
-
 def run(
     settings: Settings,
     args: argparse.Namespace,
@@ -786,17 +745,19 @@ def run(
     # falls back to sys.executable and the alias probe answers for the running
     # interpreter. stdlib_index.resolve below still gets the raw value, because
     # it maps None and the running interpreter to the same index.
-    python_command = _find_target_python()
+    python_command = ek.find_python()
     if target is not None:
         target = dataclasses.replace(target, python_command=python_command or "")
     if python_command:
         if logging.getLogger().isEnabledFor(logging.DEBUG):
             logging.debug(
-                "Python %s is available at: %s", _python_floor(), python_command
+                "Python %d.%d is available at: %s",
+                *ek.MIN_PYTHON_VERSION,
+                python_command,
             )
     else:
         if logging.getLogger().isEnabledFor(logging.DEBUG):
-            logging.debug("Python %s is not available.", _python_floor())
+            logging.debug("Python %d.%d is not available.", *ek.MIN_PYTHON_VERSION)
     stdlib = stdlib_index.resolve(python_command)
     if logging.getLogger().isEnabledFor(logging.DEBUG):
         logging.debug(

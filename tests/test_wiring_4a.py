@@ -93,7 +93,7 @@ def _a_run(monkeypatch, tmp_path, argv=("--rawlog", "--no-cache")):
     script.write_text("import thing\n")
     monkeypatch.setenv("HOME", os.fspath(home))
     monkeypatch.setattr(sys, "argv", ["veny", *argv, os.fspath(script)])
-    monkeypatch.setattr(pipeline, "_find_target_python", lambda: "python3")
+    monkeypatch.setattr(ek, "find_python", lambda: "python3")
     monkeypatch.setattr(ek, "configure_logging", lambda *a, **k: None)
     monkeypatch.setattr(ek, "print_all_errors", lambda *a, **k: None)
     monkeypatch.setattr(logging, "shutdown", lambda: None)
