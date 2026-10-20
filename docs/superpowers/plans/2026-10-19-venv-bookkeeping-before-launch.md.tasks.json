@@ -10,7 +10,7 @@
     {
       "id": 1,
       "subject": "Task 2: Build relocatable venvs",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** `environment.create_venv` builds with `uv venv --relocatable`, so a\nvenv's console scripts and `bin/activate` keep working after the `failed-`\nrename moves it.\n\n**Files:**\n- Modify: `src/veny/environment.py` \u2014 `create_venv` (around lines 72-97)\n- Modify: `tests/wheels.py` \u2014 `build_wheel` gains `console_script`\n- Test: `tests/test_environment.py` \u2014 one new live test\n- Test: `tests/test_uv_backend.py` \u2014\n  `test_create_venv_is_given_a_resolved_interpreter_path_not_a_bare_command`'s\n  expected argv (around line 325)\n- Modify: `PROGRESS.md` \u2014 **Next action**, `Task 2 of` \u2192 `Task 3 of`\n\n**Acceptance Criteria:**\n- [ ] `test_a_venv_veny_builds_keeps_working_scripts_after_it_is_renamed`\n  fails on the unmodified `create_venv` at\n  `assert script.returncode == 0`, and passes after the fix, with real uv,\n  `UV_OFFLINE=1`, and no subprocess stubbing.\n- [ ] The updated argv test fails before the fix and passes after it.\n- [ ] `build_wheel` called without `console_script` writes exactly what it\n  wrote before (no `entry_points.txt`, the same `__init__.py`). The existing\n  live round-trip test in `tests/test_environment.py` still passes.\n- [ ] The full gate passes. `pixi run python -m pytest` reports 496 passed.\n\n**Verify:** `pixi run python -m pytest tests/test_environment.py tests/test_uv_backend.py -q` \u2192 all passed; then the full gate.\n\n```json:metadata\n{\"files\": [\"src/veny/environment.py\", \"tests/wheels.py\", \"tests/test_environment.py\", \"tests/test_uv_backend.py\", \"PROGRESS.md\"], \"verifyCommand\": \"pixi run python -m pytest tests/test_environment.py tests/test_uv_backend.py -q\", \"modelTier\": \"standard\", \"acceptanceCriteria\": [\"`test_a_venv_veny_builds_keeps_working_scripts_after_it_is_renamed` fails on the unmodified `create_venv` at `assert script.returncode == 0`, and passes after the fix, with real uv, `UV_OFFLINE=1`, and no subprocess stubbing.\", \"The updated argv test fails before the fix and passes after it.\", \"`build_wheel` called without `console_script` writes exactly what it wrote before (no `entry_points.txt`, the same `__init__.py`). The existing live round-trip test in `tests/test_environment.py` still passes.\", \"The full gate passes. `pixi run python -m pytest` reports 496 passed.\"]}\n```"
     },
     {
@@ -24,5 +24,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-10-20T01:47:10+00:00"
+  "lastUpdated": "2026-10-20T01:53:06+00:00"
 }
