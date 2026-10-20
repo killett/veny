@@ -58,9 +58,9 @@ When emmykit 0.7.0 is out, the follow-up is to require `emmykit>=0.7`, call
 Branch `venv-bookkeeping-before-launch` (plan
 `docs/superpowers/plans/2026-10-19-venv-bookkeeping-before-launch.md`, all
 three tasks and a final-review fix, with its execution record and live run
-at its end) is merged to local `main` at `e6b4ab3` and **not yet pushed or
-released**; it
-lands after 0.2.3. It fixes the interrupted-run `failed-` venv leak: the
+at its end) is merged to `main` at `e6b4ab3` and pushed, CI green on all
+four jobs (run `39360396894`). It is **not yet released**: it lands after
+0.2.3. It fixes the interrupted-run `failed-` venv leak: the
 rename and last-used save now come before the launch, and venvs are built
 `--relocatable`. The audit
 bug fixes (`docs/superpowers/plans/2026-10-19-audit-bug-fixes.md`, all eight
