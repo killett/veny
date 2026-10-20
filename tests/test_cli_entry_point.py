@@ -203,7 +203,7 @@ def _drive_main(
     script.write_text("import thing\n")
     monkeypatch.setenv("HOME", os.fspath(home))
     monkeypatch.setattr(sys, "argv", ["veny", *argv, os.fspath(script), *script_args])
-    monkeypatch.setattr(pipeline, "_find_target_python", lambda: "python3")
+    monkeypatch.setattr(ek, "find_python", lambda: "python3")
     monkeypatch.setattr(
         stdlib_index,
         "resolve",
@@ -2052,7 +2052,7 @@ def test_a_run_without_its_preferred_python_tags_the_alias_cache_for_the_running
     monkeypatch.setattr(
         sys, "argv", ["veny", "--justprint", "--offline", os.fspath(script)]
     )
-    monkeypatch.setattr(pipeline, "_find_target_python", lambda: None)
+    monkeypatch.setattr(ek, "find_python", lambda: None)
     monkeypatch.setattr(
         custom_modules, "dict_of_custom_modules", lambda settings, use_cache: {}
     )

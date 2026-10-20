@@ -22,15 +22,15 @@ def run_python(source):
 def test_veny_exits_with_an_install_message_when_emmykit_is_missing():
     # Bug caught: either half of the message naming a floor other than the
     # one veny enforces -- an install hint left at an old floor installs an
-    # emmykit veny then refuses. 0.4.0 is pyproject.toml's own
-    # `emmykit>=0.4.0`; the message is asserted whole because the floor
+    # emmykit veny then refuses. 0.7.0 is pyproject.toml's own
+    # `emmykit>=0.7.0`; the message is asserted whole because the floor
     # appears in it twice and a substring check passes with one copy wrong.
     result = run_python("import sys; sys.modules['emmykit'] = None; import veny.cli")
 
     assert result.returncode != 0
     assert result.stderr == (
-        "veny requires the emmykit package (>=0.4.0), which is not installed.\n"
-        "Install it with:  pip install 'emmykit>=0.4.0'\n"
+        "veny requires the emmykit package (>=0.7.0), which is not installed.\n"
+        "Install it with:  pip install 'emmykit>=0.7.0'\n"
     )
     assert result.stdout == ""
 
@@ -46,7 +46,7 @@ def test_veny_imports_normally_when_emmykit_is_present():
 
 
 def test_veny_exits_with_an_upgrade_message_when_emmykit_is_too_old():
-    # The guard compares ek.__version__ against a (0, 4, 0) floor, so a stub
+    # The guard compares ek.__version__ against a (0, 7, 0) floor, so a stub
     # reporting an older version reproduces the old-emmykit shape regardless
     # of which attributes it happens to carry. `Options` is included anyway
     # because a real 0.3.x emmykit would have it too.
@@ -65,8 +65,8 @@ def test_veny_exits_with_an_upgrade_message_when_emmykit_is_too_old():
     assert result.returncode != 0
     # Whole message, for the reason given in the missing-emmykit test above.
     assert result.stderr == (
-        "veny requires emmykit >= 0.4.0; found 0.3.4.\n"
-        "Upgrade it with:  pip install -U 'emmykit>=0.4.0'\n"
+        "veny requires emmykit >= 0.7.0; found 0.3.4.\n"
+        "Upgrade it with:  pip install -U 'emmykit>=0.7.0'\n"
     )
     assert result.stdout == ""
 
@@ -88,7 +88,28 @@ def test_veny_exits_when_emmykit_reports_no_version():
 
     assert result.returncode != 0
     assert result.stderr == (
-        "veny requires emmykit >= 0.4.0; found unknown.\n"
-        "Upgrade it with:  pip install -U 'emmykit>=0.4.0'\n"
+        "veny requires emmykit >= 0.7.0; found unknown.\n"
+        "Upgrade it with:  pip install -U 'emmykit>=0.7.0'\n"
+    )
+    assert result.stdout == ""
+
+
+def test_veny_refuses_an_emmykit_without_find_python():
+    # Bug caught: a floor left below 0.7.0. emmykit 0.6.x passed the old 0.4.0
+    # guard, but it has no find_python, which pipeline.run calls on every run,
+    # so veny would get as far as a run and die there with an AttributeError.
+    source = (
+        "import sys, types\n"
+        "stub = types.ModuleType('emmykit')\n"
+        "stub.__version__ = '0.6.3'\n"
+        "sys.modules['emmykit'] = stub\n"
+        "import veny.cli\n"
+    )
+    result = run_python(source)
+
+    assert result.returncode != 0
+    assert result.stderr == (
+        "veny requires emmykit >= 0.7.0; found 0.6.3.\n"
+        "Upgrade it with:  pip install -U 'emmykit>=0.7.0'\n"
     )
     assert result.stdout == ""

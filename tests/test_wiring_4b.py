@@ -72,7 +72,7 @@ def _stub_boundaries(monkeypatch: pytest.MonkeyPatch, home: Path) -> list[list[s
         return subprocess.CompletedProcess(args=command, returncode=0)
 
     monkeypatch.setenv("HOME", os.fspath(home))
-    monkeypatch.setattr(pipeline, "_find_target_python", lambda: "python3")
+    monkeypatch.setattr(ek, "find_python", lambda: "python3")
     monkeypatch.setattr(ek, "configure_logging", lambda *a, **k: None)
     monkeypatch.setattr(ek, "print_all_errors", lambda *a, **k: None)
     monkeypatch.setattr(logging, "shutdown", lambda: None)

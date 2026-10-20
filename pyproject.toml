@@ -34,7 +34,7 @@ classifiers = [
 # Caps, not pins: `<1.0` on emmykit is a deliberate major-version guard on a
 # first-party dependency veny is coupled to, and uv's CLI surface is what veny
 # drives. Neither is an `==` pin.
-dependencies = ["emmykit>=0.4.0,<1.0", "uv>=0.9,<1.0"]
+dependencies = ["emmykit>=0.7.0,<1.0", "uv>=0.9,<1.0"]
 
 [project.urls]
 Homepage = "https://github.com/killett/veny"

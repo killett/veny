@@ -65,7 +65,7 @@ hatch-vcs = "*"
 twine = "*"
 
 [pypi-dependencies]
-emmykit = ">=0.4.0, <1.0"
+emmykit = ">=0.7.0, <1.0"
 uv = ">=0.9, <1.0"
 
 # Conda deps that only resolve on linux-64. Use this section when a
