@@ -588,8 +588,9 @@ def setup_virtualenv(
         build it, or a requirement could not be made importable in it, which
         is what `setup_virtualenv` returning False used to mean and what
         `pipeline.run` reports as status 1; and whether every requirement
-        installed, which `run` needs separately because it decides the
-        "failed-" rename even on the success path.
+        installed, which `run` needs separately because it gates the
+        "failed-" rename: a handle can be usable (every import verified)
+        while uv still reported an install error.
     """
     # The folder name is a cheap prefilter for the cache search; veny_manifest.json
     # inside the venv is the authority. venv_cache owns the encoding so a
@@ -601,7 +602,10 @@ def setup_virtualenv(
         timestamp=target.timestamp,
         pip_names=[record.pip_name for record in requirements.uninstalled],
     )
-    # Create a virtual environment directory that starts with "failed" in case the process fails. Only remove the "failed" part if this process completes successfully.
+    # Build under a "failed-" name. run() drops the prefix just before it
+    # launches the script, and only if every requirement installed and every
+    # import verified, so a build that is interrupted or does not verify is
+    # never offered by the cache scan.
     handle = state.VenvHandle.for_dir(
         settings.my_dir / f"{venv_cache.FAILED_PREFIX}{folder_name}"
     )
@@ -973,17 +977,70 @@ def run(
             if not settings.rawlog:
                 logging.info("Using existing virtual environment: %s", match_dir)
             handle = state.VenvHandle.for_dir(match_dir)
-            # A reused venv never carries a "failed-" prefix -- the cache
-            # search only offers folders that dropped it -- and
-            # setup_virtualenv never ran, which is what left
-            # install_succeeded False on the state object here before phase 4a.
+            # A reused venv is never renamed. The cache scan only offers
+            # folders that already dropped the "failed-" prefix; the last-used
+            # path can return a "failed-" folder (uv reported an install error
+            # but every import verified), and that one keeps its prefix, as it
+            # did on the run that built it. setup_virtualenv never ran, which
+            # is what left install_succeeded False on the state object here
+            # before phase 4a.
             install_succeeded = False
 
         if handle is not None:
+            # The bookkeeping comes BEFORE the launch. Its gate -- the prefix
+            # is present and every requirement installed -- is fully known
+            # here; the script's outcome never entered it. A script that never
+            # exits on its own ends with Ctrl-C or a reboot, which end veny
+            # too, so code after run_script never runs for it: the venv kept
+            # its "failed-" prefix, no record was written, and every next run
+            # built another venv (2026-10-19). Never rename during the run
+            # either: moving a venv under a running interpreter breaks every
+            # import it has not done yet.
+            if (
+                handle.venv_dir.name.startswith(venv_cache.FAILED_PREFIX)
+                and install_succeeded
+            ):
+                # The build installed and its imports verified, so the venv
+                # drops the prefix that marked it as provisional.
+                handle = state.VenvHandle.for_dir(
+                    cache_search.rename_venv(
+                        handle.venv_dir,
+                        handle.venv_dir.name.removeprefix(venv_cache.FAILED_PREFIX),
+                    )
+                )
+
+            # What the next run needs, and nothing else: which environment
+            # runs this script and which interpreter is inside it. Written
+            # after the failed- rename above, so the recorded folder is the
+            # one that exists on disk. A write that fails -- the script's
+            # directory is shared or read-only, or the disk is full -- must
+            # not stop the launch: the record is a shortcut, and without it
+            # the next run's cache scan finds this venv by its manifest.
+            try:
+                last_used.save(
+                    state.LastUsed(
+                        venv_dir=handle.venv_dir,
+                        venv_python=handle.venv_python,
+                        timestamp=target.timestamp,
+                    ),
+                    script_dir=target.script_dir,
+                    python_script=target.python_script,
+                    my_name=settings.my_name,
+                )
+            except OSError as exc:
+                logging.warning(
+                    "Could not save the last-used record for %s (%s); "
+                    "the next run will search the cache instead.",
+                    os.fspath(target.python_script),
+                    exc,
+                )
+
             start_venv_time = dt.datetime.now()
             elapsed_time = start_venv_time - start_time
             if not settings.rawlog:
                 logging.info("Elapsed time: %s", elapsed_time)
+            # The post-rename handle, so the script runs from the folder's
+            # final path.
             script_exit_code = run_script(
                 handle.venv_python,
                 target.python_script,
@@ -1000,31 +1057,5 @@ def run(
                 )
             if script_exit_code != 0 and not settings.rawlog:
                 logging.error("Script exited with status %d", script_exit_code)
-            if (
-                handle.venv_dir.name.startswith(venv_cache.FAILED_PREFIX)
-                and install_succeeded
-            ):
-                # If the program has made it to this point, it has run successfully, so the venv directory can be renamed because it DIDN'T fail.
-                handle = state.VenvHandle.for_dir(
-                    cache_search.rename_venv(
-                        handle.venv_dir,
-                        handle.venv_dir.name.removeprefix(venv_cache.FAILED_PREFIX),
-                    )
-                )
-
-            # What the next run needs, and nothing else: which environment
-            # ran this script and which interpreter is inside it. Written
-            # after the failed- rename above, so the recorded folder is the
-            # one that exists on disk.
-            last_used.save(
-                state.LastUsed(
-                    venv_dir=handle.venv_dir,
-                    venv_python=handle.venv_python,
-                    timestamp=target.timestamp,
-                ),
-                script_dir=target.script_dir,
-                python_script=target.python_script,
-                my_name=settings.my_name,
-            )
 
     return script_exit_code

@@ -75,6 +75,11 @@ def create_venv(target: str | os.PathLike[str], python: str = "") -> bool:
     No pip is seeded: veny drives installs through uv, and a script that
     installs into the environment veny built for it is working against veny.
 
+    The environment is relocatable: its console scripts and activate find it
+    relative to their own location instead of recording its absolute path.
+    pipeline.run builds every venv under a "failed-" name and renames it once
+    it verifies, and a plain venv's scripts would go on naming the old path.
+
     Args:
         target: Directory to create the environment in.
         python: Interpreter for uv to build against. Empty means uv chooses.
@@ -83,7 +88,7 @@ def create_venv(target: str | os.PathLike[str], python: str = "") -> bool:
         True if the environment was created. False means uv refused, and uv
         has already said why on stderr.
     """
-    command = [uv_binary(), "venv", os.fspath(target)]
+    command = [uv_binary(), "venv", "--relocatable", os.fspath(target)]
     if python:
         command += ["--python", python]
     if logging.getLogger().isEnabledFor(logging.DEBUG):

@@ -183,9 +183,9 @@ def rename_venv(venv_dir: Path, new_name: str) -> Path:
     A stdlib-built venv records its own location in pyvenv.cfg (uv-built venvs
     do not), so a rename that touches only the directory can leave a venv that
     points at a path that no longer exists. Two callers need this: dropping the
-    "failed-" prefix once a run succeeds, and re-naming a venv whose package
-    list changed when verify_and_repair_imports repaired a wrongly resolved pip
-    name.
+    "failed-" prefix once a build has installed and verified, and re-naming a
+    venv whose package list changed when verify_and_repair_imports repaired a
+    wrongly resolved pip name.
 
     Args:
         venv_dir: The virtual environment directory to rename.

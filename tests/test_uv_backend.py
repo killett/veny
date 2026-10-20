@@ -322,10 +322,14 @@ def test_create_venv_is_given_a_resolved_interpreter_path_not_a_bare_command(
     python = environment.venv_build_interpreter(target.python_command)
     environment.create_venv(tmp_path / "target", python)
 
+    # The exact argv also pins --relocatable: without it, the failed- rename
+    # leaves the venv's console scripts and activate naming a path that no
+    # longer exists (see test_environment's rename test).
     assert captured == [
         [
             "/packaged/uv",
             "venv",
+            "--relocatable",
             str(tmp_path / "target"),
             "--python",
             "/resolved/bin/python3",

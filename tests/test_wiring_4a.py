@@ -754,7 +754,7 @@ def test_the_saved_record_names_the_post_rename_venv_dir(monkeypatch, tmp_path):
 
     Behaviour under test: last_used.save runs after the "failed-" rename in
     pipeline.run, so the record it writes points at the directory that
-    actually exists on disk once the run has succeeded.
+    actually exists on disk once the build has verified.
 
     Concrete bug this catches: hoisting the last_used.save call above the
     rename block -- the exact regression this task's brief names -- would

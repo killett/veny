@@ -53,7 +53,15 @@ the emmykit 0.7.0 bridge (below), is released:
   resolved emmykit 0.6.3.
 
 When emmykit 0.7.0 is out, the follow-up is to require `emmykit>=0.7`, call
-`ek.find_python` directly, and drop the bridge. The audit
+`ek.find_python` directly, and drop the bridge.
+
+Branch `venv-bookkeeping-before-launch` (plan
+`docs/superpowers/plans/2026-10-19-venv-bookkeeping-before-launch.md`, all
+three tasks and a final-review fix, with its execution record and live run
+at its end) is merged to local `main` and **not yet pushed or released**; it
+lands after 0.2.3. It fixes the interrupted-run `failed-` venv leak: the
+rename and last-used save now come before the launch, and venvs are built
+`--relocatable`. The audit
 bug fixes (`docs/superpowers/plans/2026-10-19-audit-bug-fixes.md`, all eight
 tasks, execution record and live runs at its end) are merged to `main` at
 `6026948` and pushed, CI green on all four jobs; the hygiene pass before them
@@ -2335,12 +2343,15 @@ wiring rationale and for two Minors deliberately left unfixed.
   **says so in the row** rather than letting it pass as an equal pin. When no
   effect is reachable, record the weakness; do not launder it.
 - **`~/veny/failed-<name>` is the PROVISIONAL build folder, not a failure.**
-  Anyone re-running the phase-closing live runs will see `uv venv` create
-  `failed-myenv-py…-<pkgs>` and see the script launched from that path in the
-  log. The `failed-` prefix is stripped by the rename only after verification
-  succeeds, so the acceptance criterion "no `failed-` prefix" is a statement
-  about the folder on disk when the run ends, not about the log. Check with
-  `ls ~/veny/` after the run; do not read the log and conclude a regression.
+  Anyone re-running a live run will see `uv venv` create
+  `failed-myenv-py…-<pkgs>`. Since 2026-10-19
+  (`docs/superpowers/specs/2026-10-19-venv-bookkeeping-before-launch-design.md`)
+  the prefix is dropped, and the last-used record saved, just *before* the
+  script launches, so the log's `Running command:` line names the final,
+  unprefixed path. Before that date the script launched from the `failed-`
+  path and the rename came after it exited. A `failed-` folder left on disk
+  after a run now means the build was interrupted, or its install or imports
+  did not verify. Check with `ls ~/veny/` after the run.
 - **A differential that sorts its captured records cannot see a reordering.**
   3e's driver sorts log records in layers 1 and 7 (only), which makes those
   layers stable against incidental emission-order noise and simultaneously
@@ -2411,36 +2422,18 @@ wiring rationale and for two Minors deliberately left unfixed.
   `docs/superpowers/plans/2026-10-19-audit-bug-fixes.md`, which is now the one
   place they are tracked.
 
-- **Every interrupted run leaks a `failed-` venv and the next run builds
-  another** (recorded 2026-10-19, reproduced live on `main` at `6346830`;
-  also present in the user's pre-repo `veny.py`). In `pipeline.run`, both
-  the `failed-` rename (`pipeline.py:963`) and `last_used.save`
-  (`pipeline.py:978`) run only *after* `run_script` (`pipeline.py:946`)
-  returns. A script that never exits on its own (a monitor loop, ended with
-  Ctrl-C or a reboot) kills veny too: SIGINT reaches the whole foreground
-  process group, `subprocess.run` re-raises `KeyboardInterrupt`, and
-  nothing in `src/veny` catches it or any signal. So the new venv keeps its
-  `failed-` prefix and no last-used record is written, and the cache scan
-  (`cache_search.py:651`, `startswith(venv_name)`) never sees `failed-`
-  folders. The next run finds nothing and builds another one, every time.
-  Repro: three runs of a `while True: sleep` script that imports
-  `unidecode`, killed with group SIGINT, SIGINT, then SIGTERM, left three
-  `failed-myenv-py3.13-…-unidecode` folders and no last-used JSON. A control
-  script that exits normally got renamed and recorded as designed. The
-  rename's condition never consults the script's exit status, only
-  `install_succeeded`, so doing the rename and the save *before* the launch
-  would change nothing about which venvs get renamed. That would close the
-  leak for SIGKILL and power loss too, which a `KeyboardInterrupt`/SIGTERM
-  handler would not. Three more facts from the follow-up, all shown live.
-  (1) The gate never sees the script's outcome: a script that dies with
-  `ModuleNotFoundError` on a dynamic import exits 1 and is still renamed and
-  recorded. (2) A rename breaks the venv's console scripts and `activate`,
-  which keep the `failed-` path (`bin/unidecode` fails with
-  `.../failed-…/bin/python: not found`); `uv venv --relocatable` (uv 0.12.3)
-  fixes both. (3) Renaming a venv while a script runs from it breaks every
-  import that script has not done yet, so a rename may happen only before
-  launch or after exit, never mid-run. **Design under discussion with the
-  user (2026-10-19); no code changed.**
+- **Every interrupted run leaks a `failed-` venv** (recorded 2026-10-19) --
+  **migrated** to
+  `docs/superpowers/specs/2026-10-19-venv-bookkeeping-before-launch-design.md`,
+  which now holds the evidence, the rejected alternatives and the design.
+
+- **Ctrl-C of a never-exiting script still ends in a `KeyboardInterrupt`
+  traceback** (recorded 2026-10-19, final review of branch
+  `venv-bookkeeping-before-launch`). Nothing in `src/veny` catches
+  `KeyboardInterrupt`, so veny exits -2 with a traceback through
+  `pipeline.run_script`. The venv leak that branch fixed does not depend on
+  this. A clean exit with status 130 in `cli.main` would be its own small
+  change, with its own test. **No owner.**
 
 - **Windows is claimed nowhere and supported nowhere, but the code is half
   ready for it** (recorded 2026-08-23, publication). `environment.py:110`
