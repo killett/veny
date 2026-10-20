@@ -3,11 +3,11 @@ name = "veny"
 dynamic = ["version"]  # Single-sourced from src/veny/__init__.py by hatchling.
 description = "Run a Python script in a virtual environment built from its imports."
 readme = "README.md"
-# Floor only, deliberately no upper cap. The real ceiling today is 3.13,
-# because emmykit declares `requires-python = ">=3.12,<3.14"` and pip enforces
-# that when it resolves the dependency. Repeating the cap here would add
-# nothing and would make veny the thing that has to be re-released before a
-# 3.14-capable emmykit could be used. The floor is emmykit's, not veny's own:
+# Floor only, deliberately no upper cap. emmykit 0.4.x and 0.5.x declare
+# `requires-python = ">=3.12,<3.14"`, which pip enforces when it resolves them;
+# from 0.6.0 emmykit declares `>=3.12` with no cap, so nothing caps veny's
+# Python. A cap here would only make veny the thing that has to be re-released
+# before a newer Python could be used. The floor is emmykit's, not veny's own:
 # vermin puts this source tree at 3.11 (tomllib, in alias_index.py).
 requires-python = ">=3.12"
 license = "Apache-2.0"

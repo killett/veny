@@ -741,7 +741,9 @@ def install_stand_ins(tree: Tree, harness: Harness) -> None:
         "ek.save_options_to_json(venv_dir="
         f"{harness.scrub(os.fspath(options.venv_dir)) if options.venv_dir else None})"
     )
-    ek.find_preferred_python_version = lambda: ""
+    # Both names: emmykit 0.7.0 renamed it find_python, and the trees under
+    # comparison call whichever one their emmykit has.
+    ek.find_preferred_python_version = ek.find_python = lambda: ""
 
     def fake_confirm(prompt: str) -> bool:
         """Record the prompt the user would have seen and answer yes."""

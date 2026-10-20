@@ -19,7 +19,7 @@ class Target:
     Frozen because the target is decided once, at the argparse boundary, and
     only read after that. `python_command` is the one field discovered later:
     `pipeline.run` rebinds the whole value with dataclasses.replace once
-    ek.find_preferred_python_version() has answered, rather than leaving a
+    emmykit's interpreter lookup has answered, rather than leaving a
     mutable hole in an otherwise fixed value.
 
     script_args is a tuple rather than a list so that the run's own copy of
