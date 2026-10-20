@@ -44,12 +44,13 @@ gotchas ledger.
   | **4b** `docs/superpowers/plans/2026-08-21-last-used-persistence.md` (executed, complete on branch `last-used-persistence`) | The `LastUsed` persistence change (design amendment 9), which breaks the `ek.Options` coupling and deletes `run_options.py`, the `cli.Options` re-export, `pathlibcutoff` and its two readers, and the test references in both spellings. Also deletes `json_types.py` and the pickle `PATHLIB_CUTOFF`, and stops `find_match_dir_in_cache` mutating the `argparse.Namespace` (user rulings, 2026-08-21). |
   | **4c** `docs/superpowers/plans/2026-08-23-behaviour-changes-4c.md` (executed, complete on branch `behaviour-changes-4c`) | The remaining behaviour changes: the in-virtualenv guard (USER RULING 2026-08-20), `--feeling-lucky`'s missing signal normalization, latent defects 1 and 3, and the residual dead arguments. |
 
-**Next action:** Task 3 of
-`docs/superpowers/plans/2026-10-19-venv-bookkeeping-before-launch.md`
-(spec `docs/superpowers/specs/2026-10-19-venv-bookkeeping-before-launch-design.md`,
-approved 2026-10-19), on branch `venv-bookkeeping-before-launch`. It fixes the
-interrupted-run `failed-` venv leak: the rename and last-used save move before
-the launch, and venvs are built `--relocatable`. The audit
+**Next action:** the user decides whether to merge branch
+`venv-bookkeeping-before-launch` (plan
+`docs/superpowers/plans/2026-10-19-venv-bookkeeping-before-launch.md`, all
+three tasks done, with its execution record and live run at its end) into
+`main`, and whether to push. It fixes the interrupted-run `failed-` venv
+leak: the rename and last-used save now come before the launch, and venvs
+are built `--relocatable`. The audit
 bug fixes (`docs/superpowers/plans/2026-10-19-audit-bug-fixes.md`, all eight
 tasks, execution record and live runs at its end) are merged to `main` at
 `6026948` and pushed, CI green on all four jobs; the hygiene pass before them
@@ -2299,12 +2300,15 @@ wiring rationale and for two Minors deliberately left unfixed.
   **says so in the row** rather than letting it pass as an equal pin. When no
   effect is reachable, record the weakness; do not launder it.
 - **`~/veny/failed-<name>` is the PROVISIONAL build folder, not a failure.**
-  Anyone re-running the phase-closing live runs will see `uv venv` create
-  `failed-myenv-py…-<pkgs>` and see the script launched from that path in the
-  log. The `failed-` prefix is stripped by the rename only after verification
-  succeeds, so the acceptance criterion "no `failed-` prefix" is a statement
-  about the folder on disk when the run ends, not about the log. Check with
-  `ls ~/veny/` after the run; do not read the log and conclude a regression.
+  Anyone re-running a live run will see `uv venv` create
+  `failed-myenv-py…-<pkgs>`. Since 2026-10-19
+  (`docs/superpowers/specs/2026-10-19-venv-bookkeeping-before-launch-design.md`)
+  the prefix is dropped, and the last-used record saved, just *before* the
+  script launches, so the log's `Running command:` line names the final,
+  unprefixed path. Before that date the script launched from the `failed-`
+  path and the rename came after it exited. A `failed-` folder left on disk
+  after a run now means the build was interrupted, or its install or imports
+  did not verify. Check with `ls ~/veny/` after the run.
 - **A differential that sorts its captured records cannot see a reordering.**
   3e's driver sorts log records in layers 1 and 7 (only), which makes those
   layers stable against incidental emission-order noise and simultaneously

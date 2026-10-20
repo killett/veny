@@ -1013,10 +1013,142 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 ## Execution record
 
-Filled in during execution. Nothing below this line has happened yet.
+This record was filled in on 2026-10-19.
 
 ### Task 1
 
+Commit `53ff786`.
+
+Red (`pytest tests/test_cli_entry_point.py`, new tests only), the guard test
+passing by design:
+
+```text
+>       assert final.is_dir()
+E       AssertionError: assert False
+================== 1 failed, 1 passed, 44 deselected in 0.62s ==================
+```
+
+Green:
+
+```text
+======================= 2 passed, 44 deselected in 0.45s =======================
+```
+
+Mutation (deleting `and install_succeeded` from the rename gate; restored
+byte-identical afterwards). The guard test fails:
+
+```text
+>       assert built.is_dir()
+E       AssertionError: assert False
+FAILED tests/test_cli_entry_point.py::test_a_build_whose_install_failed_keeps_its_prefix_and_is_recorded_under_it
+======================= 1 failed, 45 deselected in 0.74s =======================
+```
+
+Gate at the commit:
+
+```text
+pixi run python -m pytest                      495 passed in 18.78s
+pixi run python -m pytest --cov                495 passed in 23.81s (TOTAL 86%)
+pixi run python -m mypy --exclude '^tempy/' .  Found 23 errors in 6 files
+pixi run ruff check .                          All checks passed!
+pixi run ruff format --check .                 65 files already formatted
+```
+
 ### Task 2
 
+Commit `d3e719b`.
+
+Red (`pytest tests/test_environment.py tests/test_uv_backend.py -k "keeps_working_scripts or resolved_interpreter_path"`):
+
+```text
+E       AssertionError: .../venv/bin/venytest-cli: line 1: .../venv/bin/venytest-cli: cannot execute: required file not found
+E
+E       assert 127 == 0
+E       At index 0 diff: ['/packaged/uv', 'venv', '<target>', '--python', '/resolved/bin/python3'] != ['/packaged/uv', 'venv', '--relocatable', '<target>', '--python', '/resolved/bin/python3']
+======================= 2 failed, 21 deselected in 2.91s =======================
+```
+
+Green (`pytest tests/test_environment.py tests/test_uv_backend.py`):
+
+```text
+============================== 23 passed in 2.00s ==============================
+```
+
+Gate at the commit:
+
+```text
+pixi run python -m pytest                      496 passed in 15.57s
+pixi run python -m pytest --cov                496 passed in 23.67s
+pixi run python -m mypy --exclude '^tempy/' .  Found 23 errors in 6 files
+pixi run ruff check .                          All checks passed!
+pixi run ruff format --check .                 65 files already formatted
+```
+
 ### Task 3 — live run
+
+Final gate, run on the tree before this commit (it changes only
+`PROGRESS.md` and this plan):
+
+```text
+pixi run python -m pytest                      496 passed in 22.95s
+pixi run python -m pytest --cov                496 passed in 28.25s (TOTAL 86%)
+pixi run python -m mypy --exclude '^tempy/' .  Found 23 errors in 6 files
+pixi run ruff check .                          All checks passed!
+pixi run ruff format --check .                 65 files already formatted
+```
+
+Setup: Step 1's `forever.py` and `drive.py`, with
+`S=/tmp/claude-1000/-workspace/aebab7f9-8205-41f1-8dbc-6cc8c5b95862/scratchpad/venv-leak-live`
+(a throwaway `HOME` of `$S/home`, veny from `/workspace/src`, network to PyPI
+for `unidecode`). Python 3.13.
+
+Step 2, from `/workspace`, each run ended with SIGINT to the whole process group:
+
+```bash
+pixi run python "$S/drive.py" "$S" 1 SIGINT
+pixi run python "$S/drive.py" "$S" 2 SIGINT
+```
+
+```text
+run 1: sent SIGINT; veny exit status -2
+run 2: sent SIGINT; veny exit status -2
+```
+
+Step 3:
+
+```bash
+ls "$S/home/veny" | rg myenv
+rg -o 'INFO - (Checking the cache|No matching|Found \d+ matching|Creating new|Using existing).*' "$S/run2.log"
+python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['venv_dir'])" "$S/proj/.forever.py-veny-last-used.json"
+"$S"/home/veny/myenv-py3.*-unidecode/bin/unidecode --help | head -1
+```
+
+```text
+myenv-py3.13-20261019-185414-unidecode
+INFO - Using existing virtual environment: /tmp/claude-1000/-workspace/aebab7f9-8205-41f1-8dbc-6cc8c5b95862/scratchpad/venv-leak-live/home/veny/myenv-py3.13-20261019-185414-unidecode
+/tmp/claude-1000/-workspace/aebab7f9-8205-41f1-8dbc-6cc8c5b95862/scratchpad/venv-leak-live/home/veny/myenv-py3.13-20261019-185414-unidecode
+usage: unidecode [-h] [-e ENCODING] [-c TEXT] [FILE]
+```
+
+The remaining acceptance checks:
+
+```bash
+ls -A "$S/home/veny"
+rg -c 'Creating new virtual environment' "$S/run2.log"; echo "rc=$?"
+rg -c 'Using existing virtual environment:' "$S/run2.log"
+"$S"/home/veny/myenv-py3.*-unidecode/bin/unidecode --help >/dev/null; echo "rc=$?"
+ls "$S/home/veny/" | rg '^myenv-py3\.\d+-\d{8}-\d{6}-unidecode$'
+```
+
+```text
+module_aliases_cache.json
+myenv-py3.13-20261019-185414-unidecode
+rc=1
+1
+rc=0
+myenv-py3.13-20261019-185414-unidecode
+```
+
+`rc=1` on the `Creating new virtual environment` count means no match: run 2
+built nothing. `run1.log` shows the build in `failed-myenv-py3.13-…` and its
+`Running command:` line already naming the unprefixed `myenv-…` path.
