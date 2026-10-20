@@ -770,6 +770,56 @@ def test_a_build_whose_install_failed_keeps_its_prefix_and_is_recorded_under_it(
     ]
 
 
+def test_a_record_that_cannot_be_saved_does_not_stop_the_script(
+    monkeypatch, tmp_path, caplog
+):
+    """A failed last-used write must not keep the script from running.
+
+    Behaviour under test: the record is saved before the launch, so its
+    write can now fail before the script starts -- a script directory veny
+    cannot write to (shared or read-only, or a full disk). The record is only
+    a shortcut: without it the next run's cache scan finds the renamed venv
+    by its manifest. So the failure is a warning, and the script still
+    launches from the renamed venv.
+
+    Concrete bug this catches: an unguarded last_used.save before the launch.
+    Its PermissionError escapes cli.main and the script never runs -- and
+    never runs on any later run either, because each one fails the same
+    write. Found by the branch's final review, reproduced with a read-only
+    script directory. last_used.save is replaced with one that raises,
+    because a read-only directory does not stop a process running as root.
+
+    Expected values by construction, as in the interrupted-run test above.
+    """
+    caplog.set_level(logging.WARNING)
+    _, launched = _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--rawlog", "--no-cache"],
+        uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
+        all_imports={"thing"},
+    )
+    built = tmp_path / "home" / "veny" / "failed-myenv-py3.12-20260101-010203-thing-pkg"
+    final = tmp_path / "home" / "veny" / "myenv-py3.12-20260101-010203-thing-pkg"
+
+    def fake_setup(settings, target, requirements, **kwargs):
+        return requirements, state.VenvHandle.for_dir(built), True
+
+    monkeypatch.setattr(pipeline, "setup_virtualenv", fake_setup)
+
+    def unwritable(record, **kwargs):
+        raise PermissionError(13, "Permission denied", os.fspath(kwargs["script_dir"]))
+
+    monkeypatch.setattr(last_used, "save", unwritable)
+
+    assert cli.main() == 0
+
+    assert launched == [
+        [os.fspath(final / "bin" / "python"), os.fspath(tmp_path / "script.py")]
+    ]
+    assert "Could not save the last-used record" in caplog.text
+
+
 def test_main_asks_the_last_used_loader_about_this_script(monkeypatch, tmp_path):
     """--feeling-lucky's arguments are wired in exactly one place.
 

@@ -2384,6 +2384,14 @@ wiring rationale and for two Minors deliberately left unfixed.
   `docs/superpowers/specs/2026-10-19-venv-bookkeeping-before-launch-design.md`,
   which now holds the evidence, the rejected alternatives and the design.
 
+- **Ctrl-C of a never-exiting script still ends in a `KeyboardInterrupt`
+  traceback** (recorded 2026-10-19, final review of branch
+  `venv-bookkeeping-before-launch`). Nothing in `src/veny` catches
+  `KeyboardInterrupt`, so veny exits -2 with a traceback through
+  `pipeline.run_script`. The venv leak that branch fixed does not depend on
+  this. A clean exit with status 130 in `cli.main` would be its own small
+  change, with its own test. **No owner.**
+
 - **Windows is claimed nowhere and supported nowhere, but the code is half
   ready for it** (recorded 2026-08-23, publication). `environment.py:110`
   resolves `Scripts/python.exe` under `sys.platform == "win32"`, but

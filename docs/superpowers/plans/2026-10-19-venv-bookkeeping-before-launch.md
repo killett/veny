@@ -1152,3 +1152,45 @@ myenv-py3.13-20261019-185414-unidecode
 `rc=1` on the `Creating new virtual environment` count means no match: run 2
 built nothing. `run1.log` shows the build in `failed-myenv-py3.13-…` and its
 `Running command:` line already naming the unprefixed `myenv-…` path.
+
+### Final review fix
+
+The final whole-branch review found that `last_used.save`, now done before the
+launch, raised `OSError` out of `cli.main` when the script's directory was not
+writable, so the script never ran.
+
+Red (`pytest tests/test_cli_entry_point.py -k cannot_be_saved`):
+
+```text
+E       PermissionError: [Errno 13] Permission denied: '/tmp/pytest-of-claudeuser/pytest-134/test_a_record_that_cannot_be_s0'
+======================= 1 failed, 46 deselected in 2.00s =======================
+```
+
+Green:
+
+```text
+======================= 1 passed, 46 deselected in 1.44s =======================
+```
+
+Gate at the commit:
+
+```text
+pixi run python -m pytest                      497 passed in 26.32s
+pixi run python -m pytest --cov                497 passed in 25.52s (TOTAL 86%)
+pixi run python -m mypy --exclude '^tempy/' .  Found 23 errors in 6 files
+pixi run ruff check .                          All checks passed!
+pixi run ruff format --check .                 65 files already formatted
+```
+
+```text
+pixi run pre-commit run --all-files
+ruff.....................................................................Passed
+ruff-format..............................................................Passed
+mypy.....................................................................Failed
+check-merge-conflict.....................................................Passed
+check-added-large-files (limit 500 KB)...................................Passed
+check-toml...............................................................Passed
+```
+
+The `mypy` hook is the known failure: with `tempy/` present it stops at
+`Duplicate module named "veny"`, and its real count is the mypy line above.

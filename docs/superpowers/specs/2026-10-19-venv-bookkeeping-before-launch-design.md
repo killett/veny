@@ -128,6 +128,14 @@ reused-venv comment, `setup_virtualenv`'s "Only remove the failed part if this
 process completes successfully" comment, and its docstring's account of why
 `run` needs `install_succeeded`.
 
+A last-used record that cannot be written — the script's directory is shared
+or read-only, or the disk is full — logs a warning, and the script still
+launches. The record is a shortcut: without it, the next run's cache scan
+finds the renamed venv by its manifest. The branch's final review found this
+gap. While the save came after the launch, a failed write cost only a
+traceback once the run was over. Before the launch, an unguarded write would
+stop the script from ever running.
+
 ### 2. Relocatable venvs — `src/veny/environment.py`, `create_venv`
 
 `create_venv` passes `--relocatable` to `uv venv`. With it, console scripts get
@@ -150,6 +158,10 @@ new path.
 - Caveat, which follows from the shim: an entry point *copied* out of the venv
   no longer works, because it looks for `python` next to itself. A symlink to
   one still works, because the shim resolves `$0` with `realpath` first.
+- The shim and the relocatable `activate` call the `realpath` command, which
+  macOS 12 and earlier do not ship. There, a venv's console scripts and
+  `activate` fail. veny's own launches are unaffected, because veny runs
+  `bin/python` directly.
 - Venvs built before this change are not retrofitted. Their console scripts
   stay broken, which does not affect veny's own launches (veny runs
   `bin/python` directly).

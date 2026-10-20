@@ -971,17 +971,28 @@ def run(
             # What the next run needs, and nothing else: which environment
             # runs this script and which interpreter is inside it. Written
             # after the failed- rename above, so the recorded folder is the
-            # one that exists on disk.
-            last_used.save(
-                state.LastUsed(
-                    venv_dir=handle.venv_dir,
-                    venv_python=handle.venv_python,
-                    timestamp=target.timestamp,
-                ),
-                script_dir=target.script_dir,
-                python_script=target.python_script,
-                my_name=settings.my_name,
-            )
+            # one that exists on disk. A write that fails -- the script's
+            # directory is shared or read-only, or the disk is full -- must
+            # not stop the launch: the record is a shortcut, and without it
+            # the next run's cache scan finds this venv by its manifest.
+            try:
+                last_used.save(
+                    state.LastUsed(
+                        venv_dir=handle.venv_dir,
+                        venv_python=handle.venv_python,
+                        timestamp=target.timestamp,
+                    ),
+                    script_dir=target.script_dir,
+                    python_script=target.python_script,
+                    my_name=settings.my_name,
+                )
+            except OSError as exc:
+                logging.warning(
+                    "Could not save the last-used record for %s (%s); "
+                    "the next run will search the cache instead.",
+                    os.fspath(target.python_script),
+                    exc,
+                )
 
             start_venv_time = dt.datetime.now()
             elapsed_time = start_venv_time - start_time
