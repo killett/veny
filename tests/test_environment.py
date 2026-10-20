@@ -262,3 +262,59 @@ def test_venv_build_interpreter_falls_back_to_the_unresolved_command_and_warns_w
 
     assert result == "definitely-not-a-real-interpreter-xyz"
     assert "Could not resolve interpreter" in caplog.text
+
+
+def test_a_venv_veny_builds_keeps_working_scripts_after_it_is_renamed(
+    monkeypatch, tmp_path
+):
+    """A venv's console scripts and activate must survive the failed- rename.
+
+    pipeline.run builds every venv as `failed-<name>` and renames it once it
+    verifies. A plain `uv venv` writes the venv's absolute path into each
+    console script and into bin/activate, so after the rename they still
+    name the `failed-` path, which no longer exists. Seen live on
+    2026-10-19: a renamed venv's bin/unidecode failed with
+    ".../failed-myenv-.../bin/python: not found". create_venv builds with
+    --relocatable, whose scripts find the venv relative to themselves.
+
+    Concrete bug this catches: create_venv without --relocatable. The console
+    script then exits nonzero, and activate sets VIRTUAL_ENV to the old
+    path. Nothing is stubbed -- real `uv venv`, a real `uv pip install` of a
+    hand-built wheel, a real rename -- so dropping or misspelling the flag
+    fails here.
+
+    Expected values: 42 is the fixture wheel's own `value`, and the
+    activated path is the rename target chosen below.
+    """
+    monkeypatch.setenv("UV_OFFLINE", "1")
+    python = shutil.which("python3")
+    assert python is not None, "test host must have a python3 on PATH"
+    built = tmp_path / "failed-venv"
+    assert environment.create_venv(built, python) is True
+    wheel_path = build_wheel(tmp_path, console_script="venytest-cli")
+    assert (
+        environment.install_into_venv(built / "bin" / "python", str(wheel_path)) is True
+    )
+
+    renamed = tmp_path / "venv"
+    built.rename(renamed)
+
+    # Through bash, so a dangling shebang shows up as a nonzero exit with
+    # bash's message on stderr, rather than as an exec error raised inside
+    # this process.
+    script = subprocess.run(
+        ["bash", "-c", '"$0"', os.fspath(renamed / "bin" / "venytest-cli")],
+        capture_output=True,
+        text=True,
+    )
+    assert script.returncode == 0, script.stderr
+    assert script.stdout.strip() == "42"
+
+    activate = renamed / "bin" / "activate"
+    activated = subprocess.run(
+        ["bash", "-c", f'source "{activate}" && printf %s "$VIRTUAL_ENV"'],
+        capture_output=True,
+        text=True,
+    )
+    assert activated.returncode == 0, activated.stderr
+    assert Path(activated.stdout).resolve() == renamed.resolve()
