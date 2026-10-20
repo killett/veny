@@ -44,7 +44,12 @@ gotchas ledger.
   | **4b** `docs/superpowers/plans/2026-08-21-last-used-persistence.md` (executed, complete on branch `last-used-persistence`) | The `LastUsed` persistence change (design amendment 9), which breaks the `ek.Options` coupling and deletes `run_options.py`, the `cli.Options` re-export, `pathlibcutoff` and its two readers, and the test references in both spellings. Also deletes `json_types.py` and the pickle `PATHLIB_CUTOFF`, and stops `find_match_dir_in_cache` mutating the `argparse.Namespace` (user rulings, 2026-08-21). |
   | **4c** `docs/superpowers/plans/2026-08-23-behaviour-changes-4c.md` (executed, complete on branch `behaviour-changes-4c`) | The remaining behaviour changes: the in-virtualenv guard (USER RULING 2026-08-20), `--feeling-lucky`'s missing signal normalization, latent defects 1 and 3, and the residual dead arguments. |
 
-**Next action:** **none -- a free choice from Deferred items.** The audit
+**Next action:** the user reviews the spec
+`docs/superpowers/specs/2026-10-19-venv-bookkeeping-before-launch-design.md`
+(approved in chat 2026-10-19, option A), then write its plan. Work is on
+branch `venv-bookkeeping-before-launch`. It fixes the interrupted-run
+`failed-` venv leak: the rename and last-used save move before the launch,
+and venvs are built `--relocatable`. The audit
 bug fixes (`docs/superpowers/plans/2026-10-19-audit-bug-fixes.md`, all eight
 tasks, execution record and live runs at its end) are merged to `main` at
 `6026948` and pushed, CI green on all four jobs; the hygiene pass before them
@@ -2370,36 +2375,10 @@ wiring rationale and for two Minors deliberately left unfixed.
   `docs/superpowers/plans/2026-10-19-audit-bug-fixes.md`, which is now the one
   place they are tracked.
 
-- **Every interrupted run leaks a `failed-` venv and the next run builds
-  another** (recorded 2026-10-19, reproduced live on `main` at `6346830`;
-  also present in the user's pre-repo `veny.py`). In `pipeline.run`, both
-  the `failed-` rename (`pipeline.py:963`) and `last_used.save`
-  (`pipeline.py:978`) run only *after* `run_script` (`pipeline.py:946`)
-  returns. A script that never exits on its own (a monitor loop, ended with
-  Ctrl-C or a reboot) kills veny too: SIGINT reaches the whole foreground
-  process group, `subprocess.run` re-raises `KeyboardInterrupt`, and
-  nothing in `src/veny` catches it or any signal. So the new venv keeps its
-  `failed-` prefix and no last-used record is written, and the cache scan
-  (`cache_search.py:651`, `startswith(venv_name)`) never sees `failed-`
-  folders. The next run finds nothing and builds another one, every time.
-  Repro: three runs of a `while True: sleep` script that imports
-  `unidecode`, killed with group SIGINT, SIGINT, then SIGTERM, left three
-  `failed-myenv-py3.13-…-unidecode` folders and no last-used JSON. A control
-  script that exits normally got renamed and recorded as designed. The
-  rename's condition never consults the script's exit status, only
-  `install_succeeded`, so doing the rename and the save *before* the launch
-  would change nothing about which venvs get renamed. That would close the
-  leak for SIGKILL and power loss too, which a `KeyboardInterrupt`/SIGTERM
-  handler would not. Three more facts from the follow-up, all shown live.
-  (1) The gate never sees the script's outcome: a script that dies with
-  `ModuleNotFoundError` on a dynamic import exits 1 and is still renamed and
-  recorded. (2) A rename breaks the venv's console scripts and `activate`,
-  which keep the `failed-` path (`bin/unidecode` fails with
-  `.../failed-…/bin/python: not found`); `uv venv --relocatable` (uv 0.12.3)
-  fixes both. (3) Renaming a venv while a script runs from it breaks every
-  import that script has not done yet, so a rename may happen only before
-  launch or after exit, never mid-run. **Design under discussion with the
-  user (2026-10-19); no code changed.**
+- **Every interrupted run leaks a `failed-` venv** (recorded 2026-10-19) --
+  **migrated** to
+  `docs/superpowers/specs/2026-10-19-venv-bookkeeping-before-launch-design.md`,
+  which now holds the evidence, the rejected alternatives and the design.
 
 - **Windows is claimed nowhere and supported nowhere, but the code is half
   ready for it** (recorded 2026-08-23, publication). `environment.py:110`
