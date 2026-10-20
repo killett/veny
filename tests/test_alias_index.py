@@ -384,7 +384,7 @@ def test_probe_degrades_on_nonzero_exit(monkeypatch):
 
 
 def test_probe_without_a_target_interpreter_spawns_nothing(monkeypatch):
-    # ek.find_preferred_python_version() returns None when the preferred Python
+    # emmykit's interpreter lookup returns None when the preferred Python
     # is absent from PATH -- the bare-machine bootstrap case veny exists to
     # serve. os.fspath(None) raises TypeError, and it is called *outside* the
     # try, so the crash escapes probe_interpreter and aborts the whole run
