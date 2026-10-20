@@ -615,10 +615,11 @@ def test_main_drops_the_failed_prefix_from_the_venv_it_just_built(
 ):
     """A venv that worked must lose its "failed-" prefix, under its own name.
 
-    setup_virtualenv builds into `failed-<name>` so an interrupted run leaves
-    an obviously unusable folder behind; main() renames it only once the run
-    has actually succeeded. Measured by substitution: both arguments of that
-    rename_venv call could be replaced with all 338 tests green.
+    setup_virtualenv builds into `failed-<name>` so an interrupted build leaves
+    an obviously unusable folder behind; main() renames it once the build has
+    installed and verified, just before launching the script. Measured by
+    substitution: both arguments of that rename_venv call could be replaced
+    with all 338 tests green.
 
     Concrete bug this catches: a hardcoded new name renames the venv to
     something parse_folder_name cannot read, which retires it from the cache
@@ -653,6 +654,120 @@ def test_main_drops_the_failed_prefix_from_the_venv_it_just_built(
     # rename_venv's return value, and VenvHandle.for_dir mkdirs it. A stale
     # return value would leave the "failed-" name on disk instead.
     assert (built.parent / "myenv-py3.12-20260101-010203-thing-pkg").is_dir()
+
+
+def test_an_interrupted_run_still_leaves_a_reusable_venv_and_a_last_used_record(
+    monkeypatch, tmp_path
+):
+    """Ctrl-C during the user's script must not orphan the venv just built.
+
+    Behaviour under test: a script that never exits on its own (a monitor
+    loop) ends with Ctrl-C, and SIGINT reaches veny too, so subprocess.run
+    raises KeyboardInterrupt inside run_script and nothing after that call
+    runs. The "failed-" rename and the last-used save therefore happen before
+    the launch. Their gate (prefix present, install succeeded) is fully known
+    by then, and the script's outcome never entered it.
+
+    Concrete bug this catches: the bookkeeping placed after run_script, where
+    it sat until 2026-10-19, leaves `failed-<name>` on disk and no record. The
+    next run's cache scan skips "failed-" folders, finds nothing and builds
+    another venv -- once per run, forever. Also catches a rename hoisted
+    above the launch while the script still launches from the old failed-
+    path: renaming a venv under a running interpreter breaks every import it
+    has not done yet.
+
+    Expected values by construction: the fake builder is the only source of
+    the folder name, the final name is that name without its literal
+    "failed-", and VenvHandle puts the interpreter at <venv>/bin/python.
+    """
+    _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--rawlog", "--no-cache"],
+        uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
+        all_imports={"thing"},
+    )
+    built = tmp_path / "home" / "veny" / "failed-myenv-py3.12-20260101-010203-thing-pkg"
+    final = tmp_path / "home" / "veny" / "myenv-py3.12-20260101-010203-thing-pkg"
+
+    def fake_setup(settings, target, requirements, **kwargs):
+        return requirements, state.VenvHandle.for_dir(built), True
+
+    monkeypatch.setattr(pipeline, "setup_virtualenv", fake_setup)
+    launched_with: list[str] = []
+
+    def interrupted_run(command, *args, **kwargs):
+        launched_with.append(os.fspath(command[0]))
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(subprocess, "run", interrupted_run)
+
+    with pytest.raises(KeyboardInterrupt):
+        cli.main()
+
+    assert final.is_dir()
+    assert not built.exists()
+    record = last_used.load(
+        script_dir=tmp_path,
+        python_script=tmp_path / "script.py",
+        my_name="veny",
+        rawlog=True,
+    )
+    assert record is not None
+    assert record.venv_dir == final
+    assert record.venv_python == final / "bin" / "python"
+    assert launched_with == [os.fspath(final / "bin" / "python")]
+
+
+def test_a_build_whose_install_failed_keeps_its_prefix_and_is_recorded_under_it(
+    monkeypatch, tmp_path
+):
+    """A build uv could not fully install keeps "failed-", before and after launch.
+
+    Behaviour under test: the rename's gate still includes install_succeeded
+    now that it runs before the launch. setup_virtualenv can hand back a
+    usable handle (every import verified) while uv reported an install error;
+    that venv runs the script, keeps its prefix so the cache scan never
+    offers it, and the last-used record names the folder as it is on disk.
+
+    Concrete bug this catches: dropping `and install_succeeded` while moving
+    the condition above run_script. Every partially failed build would then
+    lose its prefix and become a cache candidate for other scripts that need
+    the package uv could not install.
+
+    Expected values by construction, as in the interrupted-run test above.
+    """
+    _, launched = _drive_main(
+        monkeypatch,
+        tmp_path,
+        ["--rawlog", "--no-cache"],
+        uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
+        all_imports={"thing"},
+    )
+    built = tmp_path / "home" / "veny" / "failed-myenv-py3.12-20260101-010203-thing-pkg"
+
+    def fake_setup(settings, target, requirements, **kwargs):
+        return requirements, state.VenvHandle.for_dir(built), False
+
+    monkeypatch.setattr(pipeline, "setup_virtualenv", fake_setup)
+
+    assert cli.main() == 0
+
+    assert built.is_dir()
+    assert not (
+        tmp_path / "home" / "veny" / "myenv-py3.12-20260101-010203-thing-pkg"
+    ).exists()
+    record = last_used.load(
+        script_dir=tmp_path,
+        python_script=tmp_path / "script.py",
+        my_name="veny",
+        rawlog=True,
+    )
+    assert record is not None
+    assert record.venv_dir == built
+    assert launched == [
+        [os.fspath(built / "bin" / "python"), os.fspath(tmp_path / "script.py")]
+    ]
 
 
 def test_main_asks_the_last_used_loader_about_this_script(monkeypatch, tmp_path):
