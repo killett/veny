@@ -44,11 +44,16 @@ gotchas ledger.
   | **4b** `docs/superpowers/plans/2026-08-21-last-used-persistence.md` (executed, complete on branch `last-used-persistence`) | The `LastUsed` persistence change (design amendment 9), which breaks the `ek.Options` coupling and deletes `run_options.py`, the `cli.Options` re-export, `pathlibcutoff` and its two readers, and the test references in both spellings. Also deletes `json_types.py` and the pickle `PATHLIB_CUTOFF`, and stops `find_match_dir_in_cache` mutating the `argparse.Namespace` (user rulings, 2026-08-21). |
   | **4c** `docs/superpowers/plans/2026-08-23-behaviour-changes-4c.md` (executed, complete on branch `behaviour-changes-4c`) | The remaining behaviour changes: the in-virtualenv guard (USER RULING 2026-08-20), `--feeling-lucky`'s missing signal normalization, latent defects 1 and 3, and the residual dead arguments. |
 
-**Next action:** ship the emmykit 0.7.0 bridge (below) as veny 0.2.3
-**before emmykit 0.7.0 is uploaded to PyPI**. Merge `emmykit-0.7-compat` to
-`main`, push, let CI go green, then bump to 0.2.3, tag `v0.2.3`, and push the
-tag. Waiting on Emmy's go-ahead to push and release. After that, it's a free
-choice from Deferred items. The audit
+**Next action:** **none -- a free choice from Deferred items.** veny 0.2.3,
+the emmykit 0.7.0 bridge (below), is released:
+- PR #1 merged at `258bc74`, with CI green.
+- Bump at `6ecaa6b`, tagged `v0.2.3`.
+- The release workflow is green, and the GitHub Release has been cut.
+- Verified with `uv tool run --from veny==0.2.3 veny --version`; that run
+  resolved emmykit 0.6.3.
+
+When emmykit 0.7.0 is out, the follow-up is to require `emmykit>=0.7`, call
+`ek.find_python` directly, and drop the bridge. The audit
 bug fixes (`docs/superpowers/plans/2026-10-19-audit-bug-fixes.md`, all eight
 tasks, execution record and live runs at its end) are merged to `main` at
 `6026948` and pushed, CI green on all four jobs; the hygiene pass before them
@@ -68,7 +73,7 @@ record, kept for its decisions and gotchas.
 Future releases need only: bump `__version__` in `src/veny/__init__.py`,
 commit, tag `vX.Y.Z`, push the tag. See `RELEASING.md`.
 
-### emmykit 0.7.0 bridge (2026-10-19): on branch `emmykit-0.7-compat`, not pushed
+### emmykit 0.7.0 bridge (2026-10-19): merged at `258bc74`, released as 0.2.3
 
 emmykit 0.7.0 (breaking, not yet on PyPI) makes these changes:
 - `find_preferred_python_version` becomes `find_python`, which returns an
