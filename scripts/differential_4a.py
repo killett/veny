@@ -210,7 +210,8 @@ def tighten_stand_ins(tree: Any, harness: Any) -> None:
     """
     ek: Any = importlib.import_module("emmykit")
 
-    ek.find_preferred_python_version = lambda: "the-runs-own-python"
+    # Both names: emmykit 0.7.0 renamed it find_python.
+    ek.find_preferred_python_version = ek.find_python = lambda: "the-runs-own-python"
 
     real_repair = tree.verify.verify_and_repair_imports
 
