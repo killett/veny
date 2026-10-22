@@ -162,3 +162,130 @@ this pass's gate runs, all unrelated to the change under test, and more often
 under `pytest --cov`, which traces the child process too. A re-run passed
 each time. Treat a lone failure of these two, with "timed out after 10.0
 seconds" in the captured log, as load, and re-run before investigating.
+
+## 2026-10-21 — whole-repo audit, audit-only
+
+Scope chosen by the owner: the whole repository, audit only. No code was
+changed; this section is the pass's only edit. Baseline at `340e030` (veny
+0.2.4): `ruff check` and `ruff format` pass, pytest 498 passed, mypy at the
+23-error ceiling once `tempy/` is excluded (gate gotcha below). CI's gate
+(`test.yml`) is `ruff check`, `ruff format --check` and pytest on 3.12 and
+3.13 Linux plus 3.13 macOS; mypy is deliberately absent from it. No new bugs
+were found; the 2026-10-19 pass's eight are fixed and merged (`6026948`).
+
+### Closed since the last pass
+
+- Both entries under "Kept until the bug they describe is fixed" are closed.
+  The audit bug-fix plan's Task 2 rewrote the `pipeline.run` comment,
+  `environment.venv_build_interpreter`'s docstring and the two test comments
+  to describe `""` as `pipeline.run`'s own spelling of emmykit's `None`, and
+  Task 3 made `verify.check_packages_in_venv`'s "does not raise" docstring
+  true by catching the `OSError` from its import check.
+
+### Kept, awaiting a ruling
+
+- **The PROGRESS.md entries the 2026-10-19 pass found false are still
+  uncorrected.** Spot-checked: the `pixi run typecheck` gotcha's "46
+  pre-existing errors", the Cross-cutting decision quoting
+  `requires-python = ">=3.12,<3.14"`, and the mypy deferred item's "runs
+  mypy on changed files". It is the owner's notebook; the previous pass only
+  appended to it, and so did this one.
+- **`scan._process_queue`'s INFO line "Processing module: %s where %s"
+  prints `type(module_path)`** — `<class 'pathlib.PosixPath'>` — for every
+  module of every run without `--rawlog`. It reads as a debugging leftover.
+  Kept: user-facing log text, so changing it is a behaviour change.
+- **Two broad `except Exception` clauses carry no intent comment**: around
+  `ast.parse` in `scan._analyze_module`, and around the path resolution in
+  `analysis/imports.py` that turns a local module's path into a
+  `scan.custom_modules` entry. (The other two broad catches — the pickle
+  load in `custom_modules.dict_of_custom_modules`, which logs the exception
+  and states its fallback, and the `packages_distributions()` guard inside
+  `verify.run_import_check_in_venv`'s probe code — say what they degrade to
+  and were not flagged.) Kept: narrowing changes what propagates. A comment
+  alone is behaviour-preserving and is in the fix-now set below.
+- **Over-long functions**: `pipeline.run` (317 lines, 40 branches),
+  `cache_search.find_match_dir_in_cache` (195 lines, nine parameters),
+  `custom_modules.dict_of_custom_modules` (174), `scan.find_imports_in_script`
+  (166), `pipeline.setup_virtualenv` (139), `classify.split_imports` (136),
+  `ImportFunctionCollector.visit_Call` (135, 45 branches),
+  `literals._safe_eval_node` (130). Twenty functions take more than five
+  parameters, by the explicit-argument design that replaced `Options`. Kept:
+  splitting any of them is a design decision, and each is pinned by the
+  wiring sweeps and differentials, so it belongs to a plan, not to a
+  hygiene pass.
+- **`venv_cache.parse_folder_name`'s literal field widths** (five `-`
+  fields, an 8-digit date, a 6-digit time, the three-item `_and_N_more`
+  tail) stay literals: the format is spelled out in the README and in the
+  docstring, and named constants would only restate it.
+- **Scaffold comments in `pyproject.toml` that are not about veny**: the
+  commented-out `rasterio`/`netCDF4` mypy override and the "if you switch to
+  using uv" `exclude-newer` stub. Kept under the same ruling as
+  `pixi.toml`'s scaffold baseline: scaffold policy, the owner's call.
+- **Style-only hits from ruff rule families the project does not enable**
+  (`SIM102` ×9, `RET504`/`RET505` ×5, `PLR5501` ×4, one each of `SIM114`,
+  `SIM118`, `PERF401`, `PLW2901`, and 36 `PLR2004`). Kept: enabling a rule
+  family is a config decision, and hand-applying its fixes is churn. `RUF100`
+  reports eight unused `noqa` directives only under `--isolated`; under the
+  project's config every one of them is live.
+
+### Not applied (audit-only): the fix-now set
+
+Each is low-risk and strictly behaviour-preserving. None was applied because
+the owner chose audit-only; they are the candidate set for the next
+mutating pass.
+
+- `[tool.mypy]` has no `exclude`, so any gitignored scratch directory in the
+  tree that holds a `veny.py` stops mypy before it checks anything (gate
+  gotcha below). `exclude = ["^tempy/"]`, or an explicit `files` list.
+- `pypi_client._CONNECT_TIMEOUT` is never read — its definition is its only
+  occurrence in the tree. It arrived with the module: the 2026-08-12
+  alias-resolver plan listed both timeouts, `urlopen` takes one, and
+  `_READ_TIMEOUT` is the one used.
+- `scan.find_imports_in_script` still has the function-local
+  `from collections import deque` beside the module-level `import
+  collections` that `_process_queue`'s annotation already uses. PROGRESS.md's
+  deferred item says to collapse it "when a plan touches the file"; the
+  2026-10-19 bug-fix plan rewrote the file and did not.
+- `tests/test_call_graph.py::_analyze` and
+  `tests/test_import_collector.py::_analyze` are byte-identical, docstring
+  included. A shared helper module is the home (`tests/wheels.py` is the
+  precedent).
+- `tests/test_import_discovery.py::test_a_relative_import_never_becomes_an_empty_import_name`
+  hand-writes the scan that `_scan_script`, defined just below it, performs.
+- `tests/test_cli_entry_point.py`'s three bookkeeping tests from 2026-10-19
+  each define the same `fake_setup` closure, differing only in the final
+  bool, and repeat the `failed-myenv-py3.12-20260101-010203-thing-pkg` /
+  `myenv-...` names four and five times.
+- `pypi_client`'s `status != 206` reads better as
+  `http.HTTPStatus.PARTIAL_CONTENT`.
+- README, "Working on veny itself", still says `pip install
+  'emmykit>=0.4.0'`; `pyproject.toml` requires `>=0.7.0`. The `scripts/`
+  entry under "Project structure" does not list `sweep_sandbox.py`.
+- The project `CLAUDE.md` says the pre-commit config carries
+  `trailing-whitespace` and `end-of-file-fixer`; it carries neither (ruff,
+  ruff-format, mypy, check-merge-conflict, check-added-large-files,
+  check-toml).
+- An intent comment on each of the two uncommented broad excepts above.
+- Re-checked and still open from the 2026-10-19 "Candidates for a later
+  pass": `a_stdlib()` defined three times; the shebangs on `cli.py`,
+  `alias_index.py` and `stdlib_index.py` and `cli.py`'s "Python 3.7+
+  compatibility" comment; `alias_index.empty()` called only from tests;
+  `_register_import_name` called from four near-identical blocks in
+  `analysis/imports.py`; `test_probe_degrades_on_nonzero_exit` beside
+  `test_a_probe_failure_reports_an_unknown_interpreter_tag`; eleven
+  spelled-out `state.Requirements(...)` in `tests/test_wiring_4a.py`.
+
+### Gate gotcha
+
+- **`pixi run pre-commit run --all-files` fails at mypy before it checks a
+  single file** when `tempy/` — gitignored, holding a 6320-line `veny.py`
+  (the pre-package monolith) and other scratch files — sits in the working
+  tree: `Duplicate module named "veny" (also at "./src/veny/__init__.py")`,
+  "errors prevented further checking". ruff is unaffected because it honours
+  `.gitignore`; mypy does not. `pixi run python -m mypy . --exclude
+  '^tempy/'` reproduces the recorded 23 errors in 6 files (15 in
+  `tests/test_verify.py`, 3 in `analysis/imports.py`, 2 in
+  `tests/test_split_imports.py`, one each in `cli.py`,
+  `analysis/literals.py` and `analysis/call_graph.py`). The CI pin
+  `ruff==0.16.1` in `test.yml` matched the pixi environment's ruff on this
+  date.
