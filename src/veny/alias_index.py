@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Resolve an import name to the pip package name that provides it.
 
 veny needs to know that ``import cv2`` means ``pip install opencv-python``.
