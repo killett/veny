@@ -62,6 +62,9 @@ def _analyze_module(
     try:
         tree = ast.parse(file_content, module_key)
     except Exception:
+        # Deliberately broad: a file that will not parse (SyntaxError, a
+        # ValueError on a null byte, a RecursionError on pathological nesting)
+        # is logged and skipped. It must never end the scan.
         logging.error(f"Failed to parse the file: {module_path}")
         return None
 

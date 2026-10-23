@@ -596,6 +596,9 @@ class ImportFunctionCollector(ast.NodeVisitor):
                 else Path(path_str).expanduser().resolve()
             )
         except Exception as e:
+            # Deliberately broad: this is best-effort resolution of a string
+            # the script wrote, and whatever resolving it raises means only
+            # that the path cannot be mapped. The scan goes on without it.
             if logging.getLogger().isEnabledFor(logging.DEBUG):
                 logging.debug(
                     "Failed to resolve path %s given base_dir %s: %s",
