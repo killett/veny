@@ -162,7 +162,9 @@ scripts/            # smoke-install.sh: wheel + console-script verification.
                     # sweeps mutate, so a sweep killed mid-run never leaves
                     # a mutation in the working tree.
 tests/              # pytest test suite; wheels.py builds the wheel the live
-                    # environment/verify tests install.
+                    # environment/verify tests install, and module_analysis.py
+                    # analyzes a source string the way the scanner does, for
+                    # the collector and call-graph tests.
 docs/               # Design docs and implementation plans.
 ```
 
