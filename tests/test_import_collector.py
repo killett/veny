@@ -18,6 +18,8 @@ actually carries the resolved module name for an aliased import.
 
 from pathlib import Path
 
+from veny.analysis.scan_state import ImportScan
+
 from .module_analysis import analyze as _analyze
 
 
@@ -71,3 +73,86 @@ def test_an_aliased_import_records_the_real_module_name(tmp_path: Path) -> None:
     source = "import numpy as np\n"
     key, modules_info = _analyze(source, tmp_path)
     assert modules_info[key].top_level_imports == {"numpy"}
+
+
+def test_a_dunder_import_is_recorded_where_it_is_called(tmp_path: Path) -> None:
+    """Dropping the __import__ branch loses a module the script loads by name at runtime.
+
+    The top-level call must land in top_level_imports and the one inside go()
+    in go's imports_in_function, each under its top-level package name.
+    """
+    source = """\
+__import__("json.decoder")
+
+
+def go():
+    return __import__("csv")
+"""
+    key, modules_info = _analyze(source, tmp_path)
+    info = modules_info[key]
+    assert info.top_level_imports == {"json"}
+    assert info.functions["go"].imports_in_function == {"csv"}
+
+
+def test_a_module_loaded_from_a_file_location_is_recorded_with_its_path(
+    tmp_path: Path,
+) -> None:
+    """A spec_from_file_location load must register the name and map it to the file.
+
+    Losing either half breaks a later stage: the name is what classification
+    sees, and the custom_modules entry is what keeps it from being looked up
+    on PyPI.
+    """
+    (tmp_path / "helper.py").write_text("")
+    source = """\
+import importlib
+
+spec = importlib.util.spec_from_file_location("helper", "helper.py")
+"""
+    scan = ImportScan()
+    key, modules_info = _analyze(source, tmp_path, scan)
+    assert modules_info[key].top_level_imports == {"importlib", "helper"}
+    assert scan.custom_modules == {"helper": (tmp_path / "helper.py").resolve()}
+
+
+def test_a_module_loaded_by_sourcefileloader_is_recorded_with_its_path(
+    tmp_path: Path,
+) -> None:
+    """A SourceFileLoader(...) construction registers the name and maps it to the file."""
+    (tmp_path / "helper.py").write_text("")
+    source = """\
+import importlib
+
+loader = importlib.machinery.SourceFileLoader("helper", "helper.py")
+"""
+    scan = ImportScan()
+    key, modules_info = _analyze(source, tmp_path, scan)
+    assert modules_info[key].top_level_imports == {"importlib", "helper"}
+    assert scan.custom_modules == {"helper": (tmp_path / "helper.py").resolve()}
+
+
+def test_a_chained_sourcefileloader_load_module_is_recorded_with_its_path(
+    tmp_path: Path,
+) -> None:
+    """SourceFileLoader(...).load_module() inside a function registers like the constructor.
+
+    The chained form has a branch of its own, matched on the .load_module
+    attribute, but the constructor call nested inside it is visited on its own
+    too and registers the same name and path (measured: dropping the chained
+    branch's registration fails nothing). What this pins is the outcome --
+    the module loaded this way inside go() shows up in go's
+    imports_in_function with its path mapped -- against a visit_Call that
+    stops descending into the callee of a chained call.
+    """
+    (tmp_path / "helper.py").write_text("")
+    source = """\
+import importlib
+
+
+def go():
+    return importlib.machinery.SourceFileLoader("helper", "helper.py").load_module()
+"""
+    scan = ImportScan()
+    key, modules_info = _analyze(source, tmp_path, scan)
+    assert modules_info[key].functions["go"].imports_in_function == {"helper"}
+    assert scan.custom_modules == {"helper": (tmp_path / "helper.py").resolve()}
