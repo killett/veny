@@ -26,18 +26,7 @@ from veny import (
 from veny.alias_index import ResolvedImport
 
 from .test_state_values import a_requirements as _a_requirements
-
-
-def a_stdlib() -> stdlib_index.StdlibIndex:
-    """Build the StdlibIndex the cache search still reads.
-
-    Phase 4a moved uninstalled_imports, all_imports and extra_requirements
-    onto Requirements; a_reqs below builds the matching value. Only the
-    stdlib index is a bag of its own here.
-    """
-    return stdlib_index.StdlibIndex(
-        names=frozenset({"os"}), python_version=(3, 12), source="test"
-    )
+from .test_state_values import a_stdlib
 
 
 def a_reqs(records: set[ResolvedImport], **overrides: object) -> state.Requirements:

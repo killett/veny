@@ -39,6 +39,34 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # precisely because nothing ever ran the real one.
 _REAL_DICT_OF_CUSTOM_MODULES = custom_modules.dict_of_custom_modules
 
+# The venv a run driven by _drive_main builds for its one import, "thing":
+# the provisional name setup_virtualenv builds under, and the name it keeps
+# once the build has installed and verified.
+BUILT_VENV_NAME = "failed-myenv-py3.12-20260101-010203-thing-pkg"
+FINAL_VENV_NAME = "myenv-py3.12-20260101-010203-thing-pkg"
+
+
+def _setup_returning(
+    venv_dir: Path, *, install_succeeded: bool
+) -> Callable[..., tuple[state.Requirements, state.VenvHandle, bool]]:
+    """A setup_virtualenv stand-in that hands back venv_dir without building.
+
+    Args:
+        venv_dir: The directory the returned handle names. VenvHandle.for_dir
+            creates it.
+        install_succeeded: The third value of setup_virtualenv's triple --
+            whether uv installed every requirement -- which gates the
+            "failed-" rename in pipeline.run.
+
+    Returns:
+        A function with setup_virtualenv's signature.
+    """
+
+    def fake_setup(settings, target, requirements, **kwargs):
+        return requirements, state.VenvHandle.for_dir(venv_dir), install_succeeded
+
+    return fake_setup
+
 
 def run_module(*args):
     """Run `python -m veny <args>` with src/ importable, capturing output."""
@@ -633,12 +661,11 @@ def test_main_drops_the_failed_prefix_from_the_venv_it_just_built(
         uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
         all_imports={"thing"},
     )
-    built = tmp_path / "home" / "veny" / "failed-myenv-py3.12-20260101-010203-thing-pkg"
+    built = tmp_path / "home" / "veny" / BUILT_VENV_NAME
 
-    def fake_setup(settings, target, requirements, **kwargs):
-        return requirements, state.VenvHandle.for_dir(built), True
-
-    monkeypatch.setattr(pipeline, "setup_virtualenv", fake_setup)
+    monkeypatch.setattr(
+        pipeline, "setup_virtualenv", _setup_returning(built, install_succeeded=True)
+    )
     renamed: list[tuple[Path, str]] = []
 
     def rename_spy(venv_dir, new_name):
@@ -649,11 +676,11 @@ def test_main_drops_the_failed_prefix_from_the_venv_it_just_built(
 
     assert cli.main() == 0
 
-    assert renamed == [(built, "myenv-py3.12-20260101-010203-thing-pkg")]
+    assert renamed == [(built, FINAL_VENV_NAME)]
     # The renamed directory really exists -- run() rebuilt its handle from
     # rename_venv's return value, and VenvHandle.for_dir mkdirs it. A stale
     # return value would leave the "failed-" name on disk instead.
-    assert (built.parent / "myenv-py3.12-20260101-010203-thing-pkg").is_dir()
+    assert (built.parent / FINAL_VENV_NAME).is_dir()
 
 
 def test_an_interrupted_run_still_leaves_a_reusable_venv_and_a_last_used_record(
@@ -687,13 +714,12 @@ def test_an_interrupted_run_still_leaves_a_reusable_venv_and_a_last_used_record(
         uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
         all_imports={"thing"},
     )
-    built = tmp_path / "home" / "veny" / "failed-myenv-py3.12-20260101-010203-thing-pkg"
-    final = tmp_path / "home" / "veny" / "myenv-py3.12-20260101-010203-thing-pkg"
+    built = tmp_path / "home" / "veny" / BUILT_VENV_NAME
+    final = tmp_path / "home" / "veny" / FINAL_VENV_NAME
 
-    def fake_setup(settings, target, requirements, **kwargs):
-        return requirements, state.VenvHandle.for_dir(built), True
-
-    monkeypatch.setattr(pipeline, "setup_virtualenv", fake_setup)
+    monkeypatch.setattr(
+        pipeline, "setup_virtualenv", _setup_returning(built, install_succeeded=True)
+    )
     launched_with: list[str] = []
 
     def interrupted_run(command, *args, **kwargs):
@@ -744,19 +770,16 @@ def test_a_build_whose_install_failed_keeps_its_prefix_and_is_recorded_under_it(
         uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
         all_imports={"thing"},
     )
-    built = tmp_path / "home" / "veny" / "failed-myenv-py3.12-20260101-010203-thing-pkg"
+    built = tmp_path / "home" / "veny" / BUILT_VENV_NAME
 
-    def fake_setup(settings, target, requirements, **kwargs):
-        return requirements, state.VenvHandle.for_dir(built), False
-
-    monkeypatch.setattr(pipeline, "setup_virtualenv", fake_setup)
+    monkeypatch.setattr(
+        pipeline, "setup_virtualenv", _setup_returning(built, install_succeeded=False)
+    )
 
     assert cli.main() == 0
 
     assert built.is_dir()
-    assert not (
-        tmp_path / "home" / "veny" / "myenv-py3.12-20260101-010203-thing-pkg"
-    ).exists()
+    assert not (tmp_path / "home" / "veny" / FINAL_VENV_NAME).exists()
     record = last_used.load(
         script_dir=tmp_path,
         python_script=tmp_path / "script.py",
@@ -799,13 +822,12 @@ def test_a_record_that_cannot_be_saved_does_not_stop_the_script(
         uninstalled={cli.ResolvedImport(import_name="thing", pip_name="thing-pkg")},
         all_imports={"thing"},
     )
-    built = tmp_path / "home" / "veny" / "failed-myenv-py3.12-20260101-010203-thing-pkg"
-    final = tmp_path / "home" / "veny" / "myenv-py3.12-20260101-010203-thing-pkg"
+    built = tmp_path / "home" / "veny" / BUILT_VENV_NAME
+    final = tmp_path / "home" / "veny" / FINAL_VENV_NAME
 
-    def fake_setup(settings, target, requirements, **kwargs):
-        return requirements, state.VenvHandle.for_dir(built), True
-
-    monkeypatch.setattr(pipeline, "setup_virtualenv", fake_setup)
+    monkeypatch.setattr(
+        pipeline, "setup_virtualenv", _setup_returning(built, install_succeeded=True)
+    )
 
     def unwritable(record, **kwargs):
         raise PermissionError(13, "Permission denied", os.fspath(kwargs["script_dir"]))
@@ -957,11 +979,11 @@ def test_main_builds_an_environment_when_the_cache_misses(monkeypatch, tmp_path)
         all_imports={"thing"},
     )
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", lambda *a, **k: None)
-
-    def fake_setup(settings, target, requirements, **kwargs):
-        return requirements, state.VenvHandle.for_dir(built_dir), False
-
-    monkeypatch.setattr(pipeline, "setup_virtualenv", fake_setup)
+    monkeypatch.setattr(
+        pipeline,
+        "setup_virtualenv",
+        _setup_returning(built_dir, install_succeeded=False),
+    )
 
     status = cli.main()
 
@@ -1843,11 +1865,9 @@ def test_no_cache_skips_the_cache_search_entirely(monkeypatch, tmp_path):
         return built
 
     monkeypatch.setattr(cache_search, "find_match_dir_in_cache", find_spy)
-
-    def fake_setup(settings, target, requirements, **kwargs):
-        return requirements, state.VenvHandle.for_dir(built), False
-
-    monkeypatch.setattr(pipeline, "setup_virtualenv", fake_setup)
+    monkeypatch.setattr(
+        pipeline, "setup_virtualenv", _setup_returning(built, install_succeeded=False)
+    )
 
     assert cli.main() == 0
     assert searched == []

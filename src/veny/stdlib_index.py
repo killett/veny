@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Derive the standard-library module names of a given Python interpreter.
 
 veny needs to know whether an import must be installed with pip. That is a

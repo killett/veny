@@ -12,6 +12,7 @@ from veny import cli as veny
 from veny.alias_index import ResolvedImport
 
 from .test_state_values import a_requirements as _a_requirements
+from .test_state_values import a_stdlib
 
 # The interpreter the manifest records. Phase 4a moved python_command off
 # Options and onto the Target, and manifest_for takes it as an explicit
@@ -27,18 +28,6 @@ VENV_NAME = "myenv"
 # moved timestamp off Options and onto Target; these tests name it here
 # rather than staging it on an Options.
 TIMESTAMP = "20260814-091500"
-
-
-def a_stdlib() -> stdlib_index.StdlibIndex:
-    """Build the StdlibIndex the run's interpreter tag is derived from.
-
-    Phase 4a moved uninstalled_imports and extra_requirements onto
-    Requirements; a_reqs below builds the matching value. Only the stdlib
-    index is a bag of its own here -- the run stamp is TIMESTAMP above.
-    """
-    return stdlib_index.StdlibIndex(
-        names=frozenset({"os"}), python_version=(3, 12), source="test"
-    )
 
 
 def a_reqs() -> state.Requirements:

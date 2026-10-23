@@ -54,7 +54,7 @@ already exist and should NOT be recreated:
 
 - `pyproject.toml` — project metadata + ruff/mypy/pytest/coverage config
 - `pixi.toml` — pixi workspace with dev dependencies (ruff, mypy, pytest, pytest-cov, pre-commit)
-- `.pre-commit-config.yaml` — pre-commit hooks (ruff, ruff-format, mypy, trailing-whitespace, end-of-file-fixer, etc.)
+- `.pre-commit-config.yaml` — pre-commit hooks (ruff, ruff-format, mypy, check-merge-conflict, check-added-large-files, check-toml)
 - `.gitignore` — standard Python ignores
 
 **Do NOT run `pixi init` or `pre-commit sample-config`.**

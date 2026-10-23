@@ -11,7 +11,7 @@ from pathlib import Path
 import emmykit as ek
 import pytest
 
-from veny import alias_index, cli, pipeline, state
+from veny import alias_index, cli, pipeline, state, stdlib_index
 from veny import settings as settings_module
 from veny.alias_index import ResolvedImport
 from veny.analysis import custom_modules
@@ -99,6 +99,21 @@ def a_requirements(**overrides: object) -> state.Requirements:
         extra_requirements={},
     )
     return dataclasses.replace(base, **overrides)  # type: ignore[arg-type]
+
+
+def a_stdlib() -> stdlib_index.StdlibIndex:
+    """A StdlibIndex for Python 3.12 that knows one name, os.
+
+    Public for the same reason a_requirements is: the cache search, manifest
+    and venv-naming tests each need a stdlib index of their own to derive the
+    interpreter tag from, without probing an interpreter.
+
+    Returns:
+        A StdlibIndex tagged as test-built.
+    """
+    return stdlib_index.StdlibIndex(
+        names=frozenset({"os"}), python_version=(3, 12), source="test"
+    )
 
 
 def test_settings_collections_cannot_be_mutated_by_a_consumer() -> None:

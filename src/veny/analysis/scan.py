@@ -62,6 +62,9 @@ def _analyze_module(
     try:
         tree = ast.parse(file_content, module_key)
     except Exception:
+        # Deliberately broad: a file that will not parse (SyntaxError, a
+        # ValueError on a null byte, a RecursionError on pathological nesting)
+        # is logged and skipped. It must never end the scan.
         logging.error(f"Failed to parse the file: {module_path}")
         return None
 
@@ -268,10 +271,6 @@ def find_imports_in_script(
         IsADirectoryError: If the first_path exists but is a directory.
         ValueError:        If the first_path exists but is not a regular file.
     """
-    from collections import (
-        deque,
-    )  # Allows for efficient first in, first out processing of modules
-
     scan = scan if scan is not None else ImportScan()
     first_path = ek.ensure_file(first_path)
     if not ek.is_python_script(first_path) or not ek.compile_code(first_path):
@@ -279,7 +278,7 @@ def find_imports_in_script(
         return scan
     processed_paths: set[Path] = set()
     modules_info: dict[str, ModuleInfo] = {}
-    modules_to_process: deque[Path] = deque([first_path])
+    modules_to_process: collections.deque[Path] = collections.deque([first_path])
     _process_queue(
         settings,
         scan,

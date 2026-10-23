@@ -41,6 +41,8 @@ from veny import (
 from veny.analysis import custom_modules
 from veny.analysis.scan_state import ImportScan
 
+from .test_state_values import a_requirements as _a_requirements
+
 
 def _recording_walk(seen: list[Any]) -> Any:
     """A dict_of_custom_modules stub that records the Settings it was given."""
@@ -147,13 +149,9 @@ def test_the_run_hands_setup_virtualenv_its_own_six_values(monkeypatch, tmp_path
 
     def list_spy(settings, scan, target, **kwargs):
         scans.append(scan)
-        return scan, state.Requirements(
+        return scan, _a_requirements(
             all_imports=frozenset({"thing"}),
-            bad=frozenset(),
-            installed=frozenset(),
             uninstalled=frozenset({alias_index.ResolvedImport("thing", "thing-pkg")}),
-            seen_stdlib=frozenset(),
-            extra_requirements={},
         )
 
     def setup_spy(settings, target, requirements, *, args, aliases, stdlib):
@@ -232,14 +230,7 @@ def test_the_run_hands_list_packages_the_scan_it_seeded(monkeypatch, tmp_path):
                 "is_stdlib": is_stdlib,
             }
         )
-        return scan, state.Requirements(
-            all_imports=frozenset(),
-            bad=frozenset(),
-            installed=frozenset(),
-            uninstalled=frozenset(),
-            seen_stdlib=frozenset(),
-            extra_requirements={},
-        )
+        return scan, _a_requirements()
 
     monkeypatch.setattr(pipeline, "build_alias_index", index_spy)
     monkeypatch.setattr(pipeline, "list_packages", list_spy)
@@ -275,14 +266,7 @@ def test_the_run_reports_the_scan_it_filled(monkeypatch, tmp_path):
     filled = ImportScan(subfolders=["wiring_probe_pkg"])
 
     def list_spy(settings, scan, target, **kwargs):
-        return filled, state.Requirements(
-            all_imports=frozenset(),
-            bad=frozenset(),
-            installed=frozenset(),
-            uninstalled=frozenset(),
-            seen_stdlib=frozenset(),
-            extra_requirements={},
-        )
+        return filled, _a_requirements()
 
     seen: list[ImportScan] = []
     monkeypatch.setattr(pipeline, "list_packages", list_spy)
@@ -322,17 +306,7 @@ def test_the_run_builds_its_alias_index_from_its_own_settings(monkeypatch, tmp_p
     monkeypatch.setattr(
         pipeline,
         "list_packages",
-        lambda settings, scan, target, **kwargs: (
-            scan,
-            state.Requirements(
-                all_imports=frozenset(),
-                bad=frozenset(),
-                installed=frozenset(),
-                uninstalled=frozenset(),
-                seen_stdlib=frozenset(),
-                extra_requirements={},
-            ),
-        ),
+        lambda settings, scan, target, **kwargs: (scan, _a_requirements()),
     )
 
     cli.main()
@@ -376,15 +350,11 @@ def test_the_last_used_callback_carries_this_runs_target_and_name(
         "list_packages",
         lambda settings, scan, target, **kwargs: (
             scan,
-            state.Requirements(
+            _a_requirements(
                 all_imports=frozenset({"thing"}),
-                bad=frozenset(),
-                installed=frozenset(),
                 uninstalled=frozenset(
                     {alias_index.ResolvedImport("thing", "thing-pkg")}
                 ),
-                seen_stdlib=frozenset(),
-                extra_requirements={},
             ),
         ),
     )
@@ -428,17 +398,7 @@ def test_cli_builds_the_settings_from_the_shipped_defaults(monkeypatch, tmp_path
     monkeypatch.setattr(
         pipeline,
         "list_packages",
-        lambda settings, scan, target, **kwargs: (
-            scan,
-            state.Requirements(
-                all_imports=frozenset(),
-                bad=frozenset(),
-                installed=frozenset(),
-                uninstalled=frozenset(),
-                seen_stdlib=frozenset(),
-                extra_requirements={},
-            ),
-        ),
+        lambda settings, scan, target, **kwargs: (scan, _a_requirements()),
     )
 
     cli.main()
@@ -493,14 +453,7 @@ def test_split_imports_gets_this_runs_index_flags_and_pins(monkeypatch, tmp_path
                 "reqs": getattr(args, "reqs", False),
             }
         )
-        return state.Requirements(
-            all_imports=frozenset(),
-            bad=frozenset(),
-            installed=frozenset(),
-            uninstalled=frozenset(),
-            seen_stdlib=frozenset(),
-            extra_requirements=extra_requirements,
-        )
+        return _a_requirements(extra_requirements=extra_requirements)
 
     monkeypatch.setattr(pipeline, "build_alias_index", index_spy)
     monkeypatch.setattr(pipeline, "split_imports", split_spy)
@@ -627,17 +580,7 @@ def test_either_refresh_flag_turns_the_custom_module_cache_off(
     monkeypatch.setattr(
         pipeline,
         "list_packages",
-        lambda settings, scan, target, **kwargs: (
-            scan,
-            state.Requirements(
-                all_imports=frozenset(),
-                bad=frozenset(),
-                installed=frozenset(),
-                uninstalled=frozenset(),
-                seen_stdlib=frozenset(),
-                extra_requirements={},
-            ),
-        ),
+        lambda settings, scan, target, **kwargs: (scan, _a_requirements()),
     )
 
     cli.main()
@@ -667,17 +610,7 @@ def test_the_custom_module_cache_is_on_when_neither_flag_is_given(
     monkeypatch.setattr(
         pipeline,
         "list_packages",
-        lambda settings, scan, target, **kwargs: (
-            scan,
-            state.Requirements(
-                all_imports=frozenset(),
-                bad=frozenset(),
-                installed=frozenset(),
-                uninstalled=frozenset(),
-                seen_stdlib=frozenset(),
-                extra_requirements={},
-            ),
-        ),
+        lambda settings, scan, target, **kwargs: (scan, _a_requirements()),
     )
 
     cli.main()
@@ -711,15 +644,11 @@ def test_the_saved_record_carries_the_venv_the_run_actually_used(monkeypatch, tm
         "list_packages",
         lambda settings, scan, target, **kwargs: (
             scan,
-            state.Requirements(
+            _a_requirements(
                 all_imports=frozenset({"thing"}),
-                bad=frozenset(),
-                installed=frozenset(),
                 uninstalled=frozenset(
                     {alias_index.ResolvedImport("thing", "thing-pkg")}
                 ),
-                seen_stdlib=frozenset(),
-                extra_requirements={},
             ),
         ),
     )
@@ -780,15 +709,11 @@ def test_the_saved_record_names_the_post_rename_venv_dir(monkeypatch, tmp_path):
         "list_packages",
         lambda settings, scan, target, **kwargs: (
             scan,
-            state.Requirements(
+            _a_requirements(
                 all_imports=frozenset({"thing"}),
-                bad=frozenset(),
-                installed=frozenset(),
                 uninstalled=frozenset(
                     {alias_index.ResolvedImport("thing", "thing-pkg")}
                 ),
-                seen_stdlib=frozenset(),
-                extra_requirements={},
             ),
         ),
     )

@@ -1,9 +1,5 @@
-#!/usr/bin/env python3
-
 # Written by Emmy Killett (she/her), ChatGPT 4o (it/its), ChatGPT o1-preview (it/its), ChatGPT o3-mini-high (it/its), ChatGPT o4-mini-high (it/its), ChatGPT 5 Thinking (it/its), and GitHub Copilot (it/its).
-from __future__ import (
-    annotations,
-)  # For Python 3.7+ compatibility with type annotations
+from __future__ import annotations
 
 import argparse
 import datetime as dt

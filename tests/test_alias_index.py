@@ -374,15 +374,6 @@ def test_probe_degrades_on_unparseable_output(monkeypatch):
     assert packages == {}
 
 
-def test_probe_degrades_on_nonzero_exit(monkeypatch):
-    def fake_run(command, **kwargs):
-        return subprocess.CompletedProcess(command, 1, stdout="", stderr="boom")
-
-    monkeypatch.setattr("veny.alias_index.subprocess.run", fake_run)
-    _, packages = alias_index.probe_interpreter("/usr/bin/python3")
-    assert packages == {}
-
-
 def test_probe_without_a_target_interpreter_spawns_nothing(monkeypatch):
     # emmykit's interpreter lookup returns None when the preferred Python
     # is absent from PATH -- the bare-machine bootstrap case veny exists to

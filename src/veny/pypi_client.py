@@ -16,6 +16,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 from collections.abc import Iterable
+from http import HTTPStatus
 from typing import Final, Protocol
 
 
@@ -90,7 +91,6 @@ MAX_WHEEL_BYTES: Final[int] = 5 * 1024 * 1024
 MAX_METADATA_BYTES: Final[int] = 32 * 1024 * 1024
 _FIRST_WINDOW: Final[int] = 64 * 1024
 _WIDE_WINDOW: Final[int] = 1024 * 1024
-_CONNECT_TIMEOUT: Final[float] = 5.0
 _READ_TIMEOUT: Final[float] = 10.0
 _EXCLUDED_SUFFIXES: Final[tuple[str, ...]] = (".dist-info", ".data")
 
@@ -294,7 +294,7 @@ class PyPIClient:
                 headers={"Range": f"bytes={start}-{size - 1}"},
                 max_bytes=MAX_WHEEL_BYTES + 1,
             )
-            if status != 206:
+            if status != HTTPStatus.PARTIAL_CONTENT:
                 # size is PyPI's claim; len(chunk) is what was actually
                 # received. Both are checked -- a false or missing declared
                 # size must not let an oversized body slip past the cap that
