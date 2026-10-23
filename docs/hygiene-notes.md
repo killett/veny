@@ -163,10 +163,13 @@ under `pytest --cov`, which traces the child process too. A re-run passed
 each time. Treat a lone failure of these two, with "timed out after 10.0
 seconds" in the captured log, as load, and re-run before investigating.
 
-## 2026-10-21 — whole-repo audit, audit-only
+## 2026-10-21/22 — whole-repo audit, then the approved fix-now set
 
-Scope chosen by the owner: the whole repository, audit only. No code was
-changed; this section is the pass's only edit. Baseline at `340e030` (veny
+Scope chosen by the owner: the whole repository. The audit was recorded
+first (2026-10-21, audit-only); the owner then approved its fix-now set,
+applied 2026-10-22 on branch `hygiene-2026-10-22` off `main` @ `e91c9ef`,
+one change per commit, with `ruff check`, `ruff format`, mypy's 23-error
+ceiling and pytest confirmed after every commit. Baseline at `340e030` (veny
 0.2.4): `ruff check` and `ruff format` pass, pytest 498 passed, mypy at the
 23-error ceiling, and the CI pin `ruff==0.16.1` in `test.yml` matched the
 pixi environment's ruff. CI's gate
@@ -202,8 +205,19 @@ were found; the 2026-10-19 pass's eight are fixed and merged (`6026948`).
   load in `custom_modules.dict_of_custom_modules`, which logs the exception
   and states its fallback, and the `packages_distributions()` guard inside
   `verify.run_import_check_in_venv`'s probe code — say what they degrade to
-  and were not flagged.) Kept: narrowing changes what propagates. A comment
-  alone is behaviour-preserving and is in the fix-now set below.
+  and were not flagged.) Kept broad: narrowing changes what propagates. Each
+  got an intent comment on 2026-10-22.
+- **`ImportFunctionCollector.visit_Call`'s chained
+  `SourceFileLoader(...).load_module()` branch registers nothing its
+  constructor branch does not.** The constructor call nested in the chain is
+  visited on its own and records the same name and path; measured
+  2026-10-22, dropping the chained branch's registration fails no test,
+  including the one written for that form. Only its warning for a
+  non-constant argument is distinct. Kept: deleting the branch drops that
+  warning, a user-facing text change, so it is the owner's call.
+- **`alias_index.empty()` has no production caller**, only tests (carried
+  from 2026-10-19). Kept: it is a public function of the package, so whether
+  it moves into the tests is the owner's ruling, not a hygiene call.
 - **Over-long functions**: `pipeline.run` (317 lines, 40 branches),
   `cache_search.find_match_dir_in_cache` (195 lines, nine parameters),
   `custom_modules.dict_of_custom_modules` (174), `scan.find_imports_in_script`
@@ -229,11 +243,16 @@ were found; the 2026-10-19 pass's eight are fixed and merged (`6026948`).
   reports eight unused `noqa` directives only under `--isolated`; under the
   project's config every one of them is live.
 
-### Not applied (audit-only): the fix-now set
+### The fix-now set, applied 2026-10-22
 
-Each is low-risk and strictly behaviour-preserving. None was applied because
-the owner chose audit-only; they are the candidate set for the next
-mutating pass.
+Each was low-risk and strictly behaviour-preserving, and every one below was
+applied, with the exceptions the last bullet names. The bullets keep their
+audit wording: each describes the tree before its fix. The suite went
+498 → 501: one weaker duplicate test removed, four characterization tests
+added. The `visit_Call` consolidation was guarded first -- the four
+dynamic-load branches had no test, so each got one, shown to fail on a
+mutant that drops that branch's registration (the chained form excepted, as
+recorded above).
 
 - `pypi_client._CONNECT_TIMEOUT` is never read — its definition is its only
   occurrence in the tree. It arrived with the module: the 2026-08-12
@@ -271,4 +290,7 @@ mutating pass.
   `_register_import_name` called from four near-identical blocks in
   `analysis/imports.py`; `test_probe_degrades_on_nonzero_exit` beside
   `test_a_probe_failure_reports_an_unknown_interpreter_tag`; eleven
-  spelled-out `state.Requirements(...)` in `tests/test_wiring_4a.py`.
+  spelled-out `state.Requirements(...)` in `tests/test_wiring_4a.py`. All
+  applied 2026-10-22 except `alias_index.empty()`, kept above as a public
+  symbol. Not re-examined: the `_stub_the_venv_away` re-creation named by
+  the 2026-10-19 candidates.

@@ -44,7 +44,9 @@ gotchas ledger.
   | **4b** `docs/superpowers/plans/2026-08-21-last-used-persistence.md` (executed, complete on branch `last-used-persistence`) | The `LastUsed` persistence change (design amendment 9), which breaks the `ek.Options` coupling and deletes `run_options.py`, the `cli.Options` re-export, `pathlibcutoff` and its two readers, and the test references in both spellings. Also deletes `json_types.py` and the pickle `PATHLIB_CUTOFF`, and stops `find_match_dir_in_cache` mutating the `argparse.Namespace` (user rulings, 2026-08-21). |
   | **4c** `docs/superpowers/plans/2026-08-23-behaviour-changes-4c.md` (executed, complete on branch `behaviour-changes-4c`) | The remaining behaviour changes: the in-virtualenv guard (USER RULING 2026-08-20), `--feeling-lucky`'s missing signal normalization, latent defects 1 and 3, and the residual dead arguments. |
 
-**Next action:** **none -- a free choice from Deferred items.** veny 0.2.3,
+**Next action:** **decide on branch `hygiene-2026-10-22`** (the 2026-10-21/22
+hygiene pass, below -- complete, gates green, **not merged**), then a free
+choice from Deferred items. veny 0.2.3,
 the emmykit 0.7.0 bridge (below), is released:
 - PR #1 merged at `258bc74`, with CI green.
 - Bump at `6ecaa6b`, tagged `v0.2.3`.
@@ -83,6 +85,21 @@ at `d3e5883`, likewise. Pushes from this container go over HTTPS with the
 https://github.com/killett/veny.git main`): SSH now fails host-key
 verification here, and HTTPS works for any push that does not touch
 `.github/workflows/` (the token lacks the `workflow` scope).
+
+**Hygiene pass (2026-10-21/22) — complete on branch `hygiene-2026-10-22`,
+not merged.** A whole-repo audit off `main` @ `e91c9ef`, recorded first in
+`docs/hygiene-notes.md` (audit-only, 2026-10-21), then its owner-approved
+fix-now set (2026-10-22): one behaviour-preserving change per commit -- a dead
+constant, a redundant import, the three package-module shebangs, two intent
+comments, `HTTPStatus` for the 206 check, shared test helpers for `_analyze`
+and `a_stdlib`, `a_requirements` in `test_wiring_4a`, the `fake_setup`
+closures, the `visit_Call` dynamic-load consolidation guarded by four new
+characterization tests, and README / CLAUDE.md corrections. Every commit
+kept ruff, ruff format and pytest green with mypy at its 23-error ceiling;
+the suite is 498 → 501. No new bugs were found. What was kept and why --
+including the redundant chained `.load_module()` registration and
+`alias_index.empty()`, both awaiting a ruling -- is in
+`docs/hygiene-notes.md`.
 veny 0.2.2 is published:
 <https://github.com/killett/veny> (public) and
 <https://pypi.org/project/veny/0.2.2/>. The re-architecture program was
