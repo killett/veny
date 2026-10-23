@@ -374,12 +374,7 @@ class ImportFunctionCollector(ast.NodeVisitor):
             if func_name == "__import__":
                 module_name = self.extract_module_name_from_import(node)
                 if module_name:
-                    if self.current_function:
-                        self.module_info.functions[
-                            self.current_function
-                        ].imports_in_function.add(module_name)
-                    else:
-                        self.module_info.top_level_imports.add(module_name)
+                    self._register_import_name(module_name)
                 else:
                     logging.warning(
                         "Cannot resolve dynamic import: %s", ast.unparse(node)
@@ -398,19 +393,13 @@ class ImportFunctionCollector(ast.NodeVisitor):
             elif func_name == "importlib.util.spec_from_file_location":
                 res = self.extract_from_importlib_spec_from_file_location(node)
                 if res:
-                    mod, loc = res
-                    self._register_import_name(mod)
-                    if loc:
-                        self._register_constant_path_for_module(mod, loc)
+                    self._register_loaded_module(res)
             # Handle importlib.machinery.SourceFileLoader(...).load_module()
             # We match either the constructor itself or the chained .load_module():
             elif func_name == "importlib.machinery.SourceFileLoader":
                 res = self.extract_from_importlib_sourcefileloader(node)
                 if res:
-                    mod, loc = res
-                    self._register_import_name(mod)
-                    if loc:
-                        self._register_constant_path_for_module(mod, loc)
+                    self._register_loaded_module(res)
             # Also catch the chained call: importlib.machinery.SourceFileLoader(...).load_module()
             elif (
                 isinstance(node.func, ast.Attribute) and node.func.attr == "load_module"
@@ -422,10 +411,7 @@ class ImportFunctionCollector(ast.NodeVisitor):
                     if callee == "importlib.machinery.SourceFileLoader":
                         res = self.extract_from_importlib_sourcefileloader(loader_call)
                         if res:
-                            mod, loc = res
-                            self._register_import_name(mod)
-                            if loc:
-                                self._register_constant_path_for_module(mod, loc)
+                            self._register_loaded_module(res)
                         else:
                             logging.warning(
                                 "Cannot resolve SourceFileLoader(...).load_module() call: %s",
@@ -563,6 +549,17 @@ class ImportFunctionCollector(ast.NodeVisitor):
         base = ".".join(pkg_parts[: len(pkg_parts) - (i - 1)])
         tail = name[i:]
         return f"{base}.{tail}" if tail else base
+
+    def _register_loaded_module(self, found: tuple[str, str | None]) -> None:
+        """Record a dynamically loaded module and, when known, its file path.
+
+        The pair is what the importlib extractors return: the module name,
+        and the location argument when it was a constant string, else None.
+        """
+        mod, loc = found
+        self._register_import_name(mod)
+        if loc:
+            self._register_constant_path_for_module(mod, loc)
 
     def _register_import_name(self, module_name: str) -> None:
         """Record an import for the current function, or for top level.
