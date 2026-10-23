@@ -52,7 +52,7 @@ This installs the development tools (ruff, mypy, pytest, pre-commit) plus the
 scaffold baseline — none of it is a runtime dependency of veny. `pixi run veny`
 runs the working tree directly through `python -m veny`; no editable install is
 involved. veny's runtime dependencies are
-[emmykit](https://pypi.org/project/emmykit/) (`pip install 'emmykit>=0.4.0'`),
+[emmykit](https://pypi.org/project/emmykit/) (`pip install 'emmykit>=0.7.0'`),
 which provides its utility layer, and
 [uv](https://pypi.org/project/uv/), installed alongside it as a PyPI
 dependency and located through `uv.find_uv_bin()`; beyond that it must run on
@@ -158,6 +158,9 @@ scripts/            # smoke-install.sh: wheel + console-script verification.
                     # wiring_sweep_4a/4b/4c.py: the per-phase STANDING CHECK,
                     # which mutates every argument at every call site the
                     # phase touched and names the test that dies.
+                    # sweep_sandbox.py: the throwaway copy of the tree the
+                    # sweeps mutate, so a sweep killed mid-run never leaves
+                    # a mutation in the working tree.
 tests/              # pytest test suite; wheels.py builds the wheel the live
                     # environment/verify tests install.
 docs/               # Design docs and implementation plans.
