@@ -2,19 +2,9 @@
 
 import sys
 
-from veny import cache_search, environment, stdlib_index
+from veny import cache_search, environment
 
-
-def a_stdlib() -> stdlib_index.StdlibIndex:
-    """Build the StdlibIndex these helpers read.
-
-    It no longer takes a python_command: phase 4a moved that onto the Target,
-    and interpreter_tag never read it -- which is exactly what the test below
-    pins.
-    """
-    return stdlib_index.StdlibIndex(
-        names=frozenset({"os"}), python_version=(3, 12), source="test"
-    )
+from .test_state_values import a_stdlib
 
 
 def test_venv_build_interpreter_prefers_the_classified_interpreter() -> None:
