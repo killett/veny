@@ -168,7 +168,8 @@ seconds" in the captured log, as load, and re-run before investigating.
 Scope chosen by the owner: the whole repository, audit only. No code was
 changed; this section is the pass's only edit. Baseline at `340e030` (veny
 0.2.4): `ruff check` and `ruff format` pass, pytest 498 passed, mypy at the
-23-error ceiling once `tempy/` is excluded (gate gotcha below). CI's gate
+23-error ceiling, and the CI pin `ruff==0.16.1` in `test.yml` matched the
+pixi environment's ruff. CI's gate
 (`test.yml`) is `ruff check`, `ruff format --check` and pytest on 3.12 and
 3.13 Linux plus 3.13 macOS; mypy is deliberately absent from it. No new bugs
 were found; the 2026-10-19 pass's eight are fixed and merged (`6026948`).
@@ -234,9 +235,6 @@ Each is low-risk and strictly behaviour-preserving. None was applied because
 the owner chose audit-only; they are the candidate set for the next
 mutating pass.
 
-- `[tool.mypy]` has no `exclude`, so any gitignored scratch directory in the
-  tree that holds a `veny.py` stops mypy before it checks anything (gate
-  gotcha below). `exclude = ["^tempy/"]`, or an explicit `files` list.
 - `pypi_client._CONNECT_TIMEOUT` is never read — its definition is its only
   occurrence in the tree. It arrived with the module: the 2026-08-12
   alias-resolver plan listed both timeouts, `urlopen` takes one, and
@@ -274,18 +272,3 @@ mutating pass.
   `analysis/imports.py`; `test_probe_degrades_on_nonzero_exit` beside
   `test_a_probe_failure_reports_an_unknown_interpreter_tag`; eleven
   spelled-out `state.Requirements(...)` in `tests/test_wiring_4a.py`.
-
-### Gate gotcha
-
-- **`pixi run pre-commit run --all-files` fails at mypy before it checks a
-  single file** when `tempy/` — gitignored, holding a 6320-line `veny.py`
-  (the pre-package monolith) and other scratch files — sits in the working
-  tree: `Duplicate module named "veny" (also at "./src/veny/__init__.py")`,
-  "errors prevented further checking". ruff is unaffected because it honours
-  `.gitignore`; mypy does not. `pixi run python -m mypy . --exclude
-  '^tempy/'` reproduces the recorded 23 errors in 6 files (15 in
-  `tests/test_verify.py`, 3 in `analysis/imports.py`, 2 in
-  `tests/test_split_imports.py`, one each in `cli.py`,
-  `analysis/literals.py` and `analysis/call_graph.py`). The CI pin
-  `ruff==0.16.1` in `test.yml` matched the pixi environment's ruff on this
-  date.
